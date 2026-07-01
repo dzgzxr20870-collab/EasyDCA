@@ -1,6 +1,7 @@
 const userRepository = require('../repositories/user.repository');
 const commandParser = require('../services/commandParser.service');
 const transactionService = require('../services/transaction.service');
+const symbolRegistry = require('../services/symbolRegistry.service');
 const lineService = require('../services/line.service');
 const flexMessage = require('../utils/flexMessage.util');
 
@@ -12,18 +13,32 @@ const COMING_SOON_MESSAGE = {
   text: 'ฟีเจอร์นี้กำลังพัฒนาอยู่ 🚧 เร็วๆ นี้',
 };
 
+// DATABASE.md — users.display_name เป็น NOT NULL ใช้ชื่อชั่วคราวนี้แทน
+// จนกว่าจะดึง displayName จริงจาก LINE Profile API ได้ (pictureUrl nullable
+// อยู่แล้ว จึงยังส่ง null ได้ตามปกติ)
+const DEFAULT_DISPLAY_NAME = 'LINE User';
+
 async function resolveUser(lineUserId) {
   const existing = await userRepository.findByLineUserId(lineUserId);
   if (existing) return existing;
 
   // Auto-register ตาม SRS.md § 2.3 [1] — ยังไม่ดึง displayName/pictureUrl
-  // จาก LINE Profile API ในขั้นนี้ ใส่ null ไปก่อน
-  return userRepository.create(lineUserId, null, null);
+  // จาก LINE Profile API ในขั้นนี้
+  return userRepository.create(lineUserId, DEFAULT_DISPLAY_NAME, null);
 }
 
 async function routeCommand(user, parsed) {
   switch (parsed.command) {
     case COMMANDS.BUY: {
+      // Command Parser ไม่ Parse type ออกมา แต่ transaction.service ต้องใช้ type
+      // ตอนสร้าง Asset ใหม่ — เติมจาก Symbol Registry ให้ก่อน ถ้ารู้จัก Symbol นั้น
+      // ถ้าไม่รู้จัก (lookupType คืน null) ปล่อยให้ service throw VALIDATION_ERROR
+      // ตามเดิม ไม่เดา type มั่ว
+      if (!parsed.params.type) {
+        const type = symbolRegistry.lookupType(parsed.params.symbol);
+        if (type) parsed.params.type = type;
+      }
+
       const result = await transactionService.processBuyCommand(user.id, parsed.params, {
         plan: user.plan,
       });

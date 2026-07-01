@@ -54,10 +54,10 @@ describe('handleEvent — BUY', () => {
 
     await handleEvent(textEvent('ซื้อ PTT 50 หุ้น ราคา 34'));
 
-    // ส่ง plan ของ user เข้า service ด้วย
+    // ส่ง plan ของ user เข้า service ด้วย + เติม type จาก Symbol Registry (PTT = stock_th)
     expect(transactionService.processBuyCommand).toHaveBeenCalledWith(
       FREE_USER.id,
-      { symbol: 'PTT', quantity: 50, pricePerUnit: 34 },
+      { symbol: 'PTT', quantity: 50, pricePerUnit: 34, type: 'stock_th' },
       { plan: 'free' }
     );
     expect(lineService.replyMessage).toHaveBeenCalledTimes(1);
@@ -65,6 +65,79 @@ describe('handleEvent — BUY', () => {
     expect(reply).toContain('ยืนยันรายการซื้อ');
     expect(reply).toContain('PTT');
     expect(reply).toContain('1,700');
+  });
+});
+
+describe('handleEvent — BUY เติม type จาก Symbol Registry', () => {
+  test('ซื้อ Symbol ที่รู้จัก (ไม่มี type) → เติม type อัตโนมัติก่อนส่งเข้า service', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.BUY,
+      params: { symbol: 'PTT', quantity: 50, pricePerUnit: 34 },
+    });
+    transactionService.processBuyCommand.mockResolvedValue({
+      symbol: 'PTT',
+      quantity: 50,
+      pricePerUnit: 34,
+      amountThb: 1700,
+      newAssetCreated: true,
+    });
+
+    await handleEvent(textEvent('ซื้อ PTT 50 หุ้น ราคา 34'));
+
+    // Controller ต้องเติม type: 'stock_th' ให้ PTT ก่อนส่งต่อ
+    expect(transactionService.processBuyCommand).toHaveBeenCalledWith(
+      FREE_USER.id,
+      { symbol: 'PTT', quantity: 50, pricePerUnit: 34, type: 'stock_th' },
+      { plan: 'free' }
+    );
+    const reply = lastReplyText();
+    expect(reply).toContain('ยืนยันรายการซื้อ');
+  });
+
+  test('ซื้อ Symbol ที่มี type มาแล้ว → ไม่เขียนทับ type เดิม', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.BUY,
+      params: { symbol: 'BTC', quantity: 0.01, pricePerUnit: 3400000, type: 'fund' },
+    });
+    transactionService.processBuyCommand.mockResolvedValue({
+      symbol: 'BTC',
+      quantity: 0.01,
+      pricePerUnit: 3400000,
+      amountThb: 34000,
+      newAssetCreated: false,
+    });
+
+    await handleEvent(textEvent('ซื้อ BTC 0.01 หุ้น ราคา 3400000'));
+
+    expect(transactionService.processBuyCommand).toHaveBeenCalledWith(
+      FREE_USER.id,
+      { symbol: 'BTC', quantity: 0.01, pricePerUnit: 3400000, type: 'fund' },
+      { plan: 'free' }
+    );
+  });
+
+  test('ซื้อ Symbol ที่ไม่รู้จัก → ส่งต่อโดยไม่มี type, service throw VALIDATION_ERROR, ได้ข้อความแนะนำที่ชัดเจน', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.BUY,
+      params: { symbol: 'UNKNOWNCOIN', quantity: 1, pricePerUnit: 10 },
+    });
+    const err = new Error('Creating a new asset requires an asset type');
+    err.code = 'VALIDATION_ERROR';
+    transactionService.processBuyCommand.mockRejectedValue(err);
+
+    await handleEvent(textEvent('ซื้อ UNKNOWNCOIN 1 หุ้น ราคา 10'));
+
+    // Controller ไม่เดา type — ส่งต่อ params เดิมโดยไม่มี type
+    expect(transactionService.processBuyCommand).toHaveBeenCalledWith(
+      FREE_USER.id,
+      { symbol: 'UNKNOWNCOIN', quantity: 1, pricePerUnit: 10 },
+      { plan: 'free' }
+    );
+    const reply = lastReplyText();
+    expect(reply).toContain('ไม่รู้จักสินทรัพย์นี้');
+    expect(reply).toContain('ติดต่อทีมงาน');
+    expect(reply).not.toContain('VALIDATION_ERROR');
+    expect(reply).not.toContain('asset type');
   });
 });
 
@@ -118,14 +191,14 @@ describe('handleEvent — Error Translation', () => {
 });
 
 describe('handleEvent — User Auto-register', () => {
-  test('User ใหม่ → เรียก userRepository.create ด้วย (lineUserId, null, null) ก่อนดำเนินการ', async () => {
+  test('User ใหม่ → เรียก userRepository.create ด้วยชื่อ Default (ไม่ใช่ null เพราะ display_name เป็น NOT NULL) ก่อนดำเนินการ', async () => {
     userRepository.findByLineUserId.mockResolvedValue(null);
     userRepository.create.mockResolvedValue(FREE_USER);
     commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
 
     await handleEvent(textEvent('สวัสดี'));
 
-    expect(userRepository.create).toHaveBeenCalledWith('U123', null, null);
+    expect(userRepository.create).toHaveBeenCalledWith('U123', 'LINE User', null);
     expect(lineService.replyMessage).toHaveBeenCalledTimes(1);
   });
 
