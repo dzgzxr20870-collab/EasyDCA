@@ -1,13 +1,15 @@
 const userRepository = require('../repositories/user.repository');
 const commandParser = require('../services/commandParser.service');
 const transactionService = require('../services/transaction.service');
+const portfolioService = require('../services/portfolio.service');
+const historyService = require('../services/history.service');
 const symbolRegistry = require('../services/symbolRegistry.service');
 const lineService = require('../services/line.service');
 const flexMessage = require('../utils/flexMessage.util');
 
 const { COMMANDS } = commandParser;
 
-// ฟีเจอร์ที่ยังไม่ Implement ใน Phase นี้ (พอต/กำไร/ประวัติ)
+// ฟีเจอร์ที่ยังไม่ Implement ใน Phase นี้ (กำไร)
 const COMING_SOON_MESSAGE = {
   type: 'text',
   text: 'ฟีเจอร์นี้กำลังพัฒนาอยู่ 🚧 เร็วๆ นี้',
@@ -50,9 +52,17 @@ async function routeCommand(user, parsed) {
       return flexMessage.buildSellConfirmMessage(result);
     }
 
-    case COMMANDS.PORTFOLIO:
+    case COMMANDS.PORTFOLIO: {
+      const summary = await portfolioService.getPortfolioSummary(user.id);
+      return flexMessage.buildPortfolioMessage(summary);
+    }
+
+    case COMMANDS.HISTORY: {
+      const transactions = await historyService.getRecentHistory(user.id);
+      return flexMessage.buildHistoryMessage(transactions);
+    }
+
     case COMMANDS.PROFIT:
-    case COMMANDS.HISTORY:
       return COMING_SOON_MESSAGE;
 
     case COMMANDS.UNKNOWN:

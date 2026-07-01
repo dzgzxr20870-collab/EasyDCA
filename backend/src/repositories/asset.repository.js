@@ -56,6 +56,35 @@ async function create(userId, portfolioId, symbol, name, type) {
   return toAsset(data);
 }
 
+async function findActiveByUser(userId) {
+  const { data, error } = await supabaseAdmin
+    .from('assets')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('is_active', true)
+    .order('created_at', { ascending: true });
+
+  if (error) {
+    throw new Error(`Failed to find active assets for user ${userId}: ${error.message}`);
+  }
+
+  return data.map(toAsset);
+}
+
+// ดึง Asset หลายตัวพร้อมกันด้วย 1 Query (ใช้ตอนต้อง Map assetId → symbol
+// ของหลาย Transaction เช่นใน history.service — เลี่ยงการ Query ทีละตัว)
+async function findByIds(assetIds) {
+  if (!assetIds || assetIds.length === 0) return [];
+
+  const { data, error } = await supabaseAdmin.from('assets').select('*').in('id', assetIds);
+
+  if (error) {
+    throw new Error(`Failed to find assets by ids: ${error.message}`);
+  }
+
+  return data.map(toAsset);
+}
+
 async function countActiveByUser(userId) {
   const { count, error } = await supabaseAdmin
     .from('assets')
@@ -73,5 +102,7 @@ async function countActiveByUser(userId) {
 module.exports = {
   findByUserAndSymbol,
   create,
+  findActiveByUser,
+  findByIds,
   countActiveByUser,
 };

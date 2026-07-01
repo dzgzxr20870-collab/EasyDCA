@@ -1,5 +1,7 @@
 jest.mock('../src/repositories/user.repository');
 jest.mock('../src/services/transaction.service');
+jest.mock('../src/services/portfolio.service');
+jest.mock('../src/services/history.service');
 jest.mock('../src/services/line.service');
 
 // Mock parseCommand แต่คง COMMANDS จริงไว้ให้ Controller ใช้เทียบ
@@ -10,6 +12,8 @@ jest.mock('../src/services/commandParser.service', () => {
 
 const userRepository = require('../src/repositories/user.repository');
 const transactionService = require('../src/services/transaction.service');
+const portfolioService = require('../src/services/portfolio.service');
+const historyService = require('../src/services/history.service');
 const lineService = require('../src/services/line.service');
 const commandParser = require('../src/services/commandParser.service');
 const { handleEvent } = require('../src/controllers/webhook.controller');
@@ -138,6 +142,76 @@ describe('handleEvent — BUY เติม type จาก Symbol Registry', () =
     expect(reply).toContain('ติดต่อทีมงาน');
     expect(reply).not.toContain('VALIDATION_ERROR');
     expect(reply).not.toContain('asset type');
+  });
+});
+
+describe('handleEvent — PORTFOLIO', () => {
+  test('พอต → เรียก portfolioService จริงและ reply ด้วยสรุปพอร์ต (ไม่ใช่ "กำลังพัฒนา")', async () => {
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.PORTFOLIO, params: {} });
+    portfolioService.getPortfolioSummary.mockResolvedValue({
+      isEmpty: false,
+      holdings: [
+        { symbol: 'PTT', name: 'PTT', type: 'stock_th', heldQuantity: 40, totalInvested: 1300, averageCost: 32.5 },
+      ],
+      totalInvested: 1300,
+    });
+
+    await handleEvent(textEvent('พอต'));
+
+    expect(portfolioService.getPortfolioSummary).toHaveBeenCalledWith(FREE_USER.id);
+    expect(lineService.replyMessage).toHaveBeenCalledTimes(1);
+    const reply = lastReplyText();
+    expect(reply).toContain('พอร์ตของคุณ');
+    expect(reply).toContain('PTT');
+    expect(reply).toContain('1,300');
+    expect(reply).not.toContain('กำลังพัฒนา');
+  });
+
+  test('พอตว่างเปล่า → reply ด้วยข้อความแนะนำให้เริ่มบันทึกรายการแรก', async () => {
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.PORTFOLIO, params: {} });
+    portfolioService.getPortfolioSummary.mockResolvedValue({
+      isEmpty: true,
+      holdings: [],
+      totalInvested: 0,
+    });
+
+    await handleEvent(textEvent('พอต'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('ยังว่างอยู่');
+    expect(reply).not.toContain('กำลังพัฒนา');
+  });
+});
+
+describe('handleEvent — HISTORY', () => {
+  test('ประวัติ → เรียก historyService จริงและ reply ด้วยรายการล่าสุด (ไม่ใช่ "กำลังพัฒนา")', async () => {
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.HISTORY, params: {} });
+    historyService.getRecentHistory.mockResolvedValue([
+      { symbol: 'PTT', type: 'sell', quantity: 10, pricePerUnit: 40, amountThb: 400, date: '2026-07-03' },
+      { symbol: 'PTT', type: 'buy', quantity: 50, pricePerUnit: 34, amountThb: 1700, date: '2026-07-01' },
+    ]);
+
+    await handleEvent(textEvent('ประวัติ'));
+
+    expect(historyService.getRecentHistory).toHaveBeenCalledWith(FREE_USER.id);
+    expect(lineService.replyMessage).toHaveBeenCalledTimes(1);
+    const reply = lastReplyText();
+    expect(reply).toContain('ประวัติล่าสุด');
+    expect(reply).toContain('PTT');
+    expect(reply).toContain('400');
+    expect(reply).toContain('1,700');
+    expect(reply).not.toContain('กำลังพัฒนา');
+  });
+
+  test('ไม่มีประวัติเลย → reply ด้วยข้อความแนะนำให้เริ่มบันทึกรายการแรก', async () => {
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.HISTORY, params: {} });
+    historyService.getRecentHistory.mockResolvedValue([]);
+
+    await handleEvent(textEvent('ประวัติ'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('ยังไม่มีประวัติ');
+    expect(reply).not.toContain('กำลังพัฒนา');
   });
 });
 

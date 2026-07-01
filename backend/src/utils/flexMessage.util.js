@@ -131,6 +131,131 @@ function buildErrorMessage(code) {
   });
 }
 
+// เส้นคั่นบางๆ ระหว่างรายการสินทรัพย์กับสรุปรวม
+function separator() {
+  return { type: 'separator', margin: 'md' };
+}
+
+function buildPortfolioMessage(summary) {
+  // พอร์ตว่าง (ไม่มี Asset ที่ยังถืออยู่เลย) — แนะนำให้เริ่มบันทึกรายการแรก
+  if (summary.isEmpty) {
+    return bubble({
+      headerText: '📊 พอร์ตของคุณ',
+      headerColor: COLOR.info,
+      headerBg: COLOR.profitBg,
+      bodyContents: [
+        textLine('พอร์ตของคุณยังว่างอยู่', {
+          size: 'md',
+          weight: 'bold',
+          color: COLOR.textPrimary,
+        }),
+        textLine('เริ่มบันทึกรายการแรกได้เลย เช่น "ซื้อ PTT 50 หุ้น ราคา 34"', {
+          size: 'sm',
+          color: COLOR.textSecondary,
+        }),
+      ],
+    });
+  }
+
+  const body = [];
+
+  summary.holdings.forEach((h) => {
+    body.push(textLine(h.symbol, { size: 'md', weight: 'bold', color: COLOR.textPrimary }));
+    body.push(
+      textLine(`จำนวน: ${formatNumber(h.heldQuantity)} ${h.symbol}`, {
+        size: 'sm',
+        color: COLOR.textSecondary,
+      })
+    );
+    body.push(
+      textLine(
+        `ต้นทุนเฉลี่ย: ${h.averageCost === null ? '-' : formatNumber(h.averageCost)} บาท/หน่วย`,
+        { size: 'sm', color: COLOR.textSecondary }
+      )
+    );
+    body.push(
+      textLine(`เงินลงทุน: ${formatNumber(h.totalInvested)} บาท`, {
+        size: 'sm',
+        color: COLOR.textSecondary,
+      })
+    );
+    body.push(separator());
+  });
+
+  body.push(
+    textLine(`รวมเงินลงทุนทั้งพอร์ต: ${formatNumber(summary.totalInvested)} บาท`, {
+      size: 'md',
+      weight: 'bold',
+      color: COLOR.textPrimary,
+    })
+  );
+
+  // ระบุชัดเจนว่ายังไม่มี Current Value / กำไร-ขาดทุน (ไม่มี Price Feed)
+  body.push(
+    textLine('* ยังไม่รองรับราคาตลาดปัจจุบัน (Current Value/กำไร-ขาดทุน จะเพิ่มเมื่อมี Price Feed)', {
+      size: 'xs',
+      color: COLOR.textSecondary,
+    })
+  );
+
+  return bubble({
+    headerText: '📊 พอร์ตของคุณ',
+    headerColor: COLOR.info,
+    headerBg: COLOR.profitBg,
+    bodyContents: body,
+  });
+}
+
+function buildHistoryMessage(transactions) {
+  // ไม่มีประวัติเลย — แนะนำให้เริ่มบันทึกรายการแรก
+  if (transactions.length === 0) {
+    return bubble({
+      headerText: '🕒 ประวัติล่าสุด',
+      headerColor: COLOR.info,
+      headerBg: COLOR.profitBg,
+      bodyContents: [
+        textLine('ยังไม่มีประวัติธุรกรรม', { size: 'md', weight: 'bold', color: COLOR.textPrimary }),
+        textLine('เริ่มบันทึกรายการแรกได้เลย เช่น "ซื้อ PTT 50 หุ้น ราคา 34"', {
+          size: 'sm',
+          color: COLOR.textSecondary,
+        }),
+      ],
+    });
+  }
+
+  const body = [];
+
+  transactions.forEach((tx) => {
+    const isBuy = tx.type === 'buy';
+    const label = isBuy ? '🟢 ซื้อ' : '🔴 ขาย';
+    const color = isBuy ? COLOR.profit : COLOR.loss;
+
+    body.push(
+      textLine(`${label} ${tx.symbol}`, { size: 'md', weight: 'bold', color })
+    );
+    body.push(
+      textLine(
+        `จำนวน: ${formatNumber(tx.quantity)} ${tx.symbol} @ ${formatNumber(tx.pricePerUnit)} บาท`,
+        { size: 'sm', color: COLOR.textSecondary }
+      )
+    );
+    body.push(
+      textLine(`มูลค่ารวม: ${formatNumber(tx.amountThb)} บาท • ${tx.date}`, {
+        size: 'sm',
+        color: COLOR.textSecondary,
+      })
+    );
+    body.push(separator());
+  });
+
+  return bubble({
+    headerText: '🕒 ประวัติล่าสุด',
+    headerColor: COLOR.info,
+    headerBg: COLOR.profitBg,
+    bodyContents: body,
+  });
+}
+
 function buildUnknownCommandMessage() {
   return bubble({
     headerText: '🤔 ไม่เข้าใจคำสั่งนี้',
@@ -151,6 +276,8 @@ module.exports = {
   ERROR_MESSAGES,
   buildBuyConfirmMessage,
   buildSellConfirmMessage,
+  buildPortfolioMessage,
+  buildHistoryMessage,
   buildErrorMessage,
   buildUnknownCommandMessage,
 };
