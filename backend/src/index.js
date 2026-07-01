@@ -6,6 +6,7 @@ const express = require('express');
 const cors = require('cors');
 
 const webhookRoutes = require('./routes/webhook.routes');
+const { scheduleExpirePending, schedulePurgeOld } = require('./jobs/pendingCleanup.job');
 
 const app = express();
 
@@ -32,6 +33,11 @@ app.get('/health', (req, res) => {
 
 app.listen(config.app.port, () => {
   console.log(`EasyDCA API Server listening on port ${config.app.port} (${config.app.nodeEnv})`);
+
+  // Schedule Cron Job หลัง Server เริ่มรับ Webhook ได้แล้ว — ไม่ต้องรอ Cron
+  // พร้อมก่อน Server จะ Listen (pendingCleanup.job.js)
+  scheduleExpirePending();
+  schedulePurgeOld();
 });
 
 module.exports = app;
