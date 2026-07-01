@@ -1,6 +1,7 @@
 const config = require('../config/env');
 
 const LINE_REPLY_URL = 'https://api.line.me/v2/bot/message/reply';
+const LINE_PROFILE_URL = 'https://api.line.me/v2/bot/profile';
 
 // ส่งข้อความตอบกลับผ่าน LINE Reply API
 // สำคัญ: ห้าม throw ออกไป ไม่ว่า LINE จะตอบผิดพลาดอย่างไร เพราะ Webhook
@@ -30,6 +31,34 @@ async function replyMessage(replyToken, messages) {
   }
 }
 
+// ดึง LINE Profile (displayName/pictureUrl) ของ userId ด้วย Get Profile API
+// สำคัญ: ห้าม throw ออกไป — Auto-register ต้องทำงานต่อได้แม้ LINE API
+// จะล้มเหลว (Rate Limit, Network, User บล็อกบัญชี ฯลฯ) จึงคืน null แทน
+// เพื่อให้ Caller Fallback ไปใช้ค่า Default ได้เสมอ
+async function getProfile(userId) {
+  try {
+    const response = await fetch(`${LINE_PROFILE_URL}/${userId}`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${config.line.channelAccessToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      console.error(`[line] Get Profile API failed: ${response.status} ${detail}`);
+      return null;
+    }
+
+    const data = await response.json();
+    return { displayName: data.displayName, pictureUrl: data.pictureUrl ?? null };
+  } catch (err) {
+    console.error(`[line] Get Profile API request error: ${err.message}`);
+    return null;
+  }
+}
+
 module.exports = {
   replyMessage,
+  getProfile,
 };

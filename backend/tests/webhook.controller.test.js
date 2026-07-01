@@ -40,6 +40,9 @@ beforeEach(() => {
   jest.clearAllMocks();
   userRepository.findByLineUserId.mockResolvedValue(FREE_USER);
   lineService.replyMessage.mockResolvedValue(undefined);
+  // Default: จำลอง LINE Profile API ล้มเหลว — Test ที่ต้องการ Profile จริง
+  // จะ Override ค่านี้เอง
+  lineService.getProfile.mockResolvedValue(null);
 });
 
 describe('handleEvent — BUY', () => {
@@ -265,23 +268,44 @@ describe('handleEvent — Error Translation', () => {
 });
 
 describe('handleEvent — User Auto-register', () => {
-  test('User ใหม่ → เรียก userRepository.create ด้วยชื่อ Default (ไม่ใช่ null เพราะ display_name เป็น NOT NULL) ก่อนดำเนินการ', async () => {
+  test('User ใหม่ + LINE Profile API ล้มเหลว (getProfile คืน null) → Fallback เป็นชื่อ Default (ไม่ใช่ null เพราะ display_name เป็น NOT NULL)', async () => {
     userRepository.findByLineUserId.mockResolvedValue(null);
     userRepository.create.mockResolvedValue(FREE_USER);
     commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+    // beforeEach ตั้ง getProfile ให้คืน null (จำลอง API ล้มเหลว) อยู่แล้ว
 
     await handleEvent(textEvent('สวัสดี'));
 
+    expect(lineService.getProfile).toHaveBeenCalledWith('U123');
     expect(userRepository.create).toHaveBeenCalledWith('U123', 'LINE User', null);
     expect(lineService.replyMessage).toHaveBeenCalledTimes(1);
   });
 
-  test('User เดิม → ไม่เรียก create ซ้ำ', async () => {
+  test('User ใหม่ + LINE Profile API สำเร็จ → ใช้ displayName/pictureUrl จริงจาก LINE Profile', async () => {
+    userRepository.findByLineUserId.mockResolvedValue(null);
+    userRepository.create.mockResolvedValue(FREE_USER);
+    lineService.getProfile.mockResolvedValue({
+      displayName: 'สมชาย ใจดี',
+      pictureUrl: 'https://profile.line-scdn.net/abc123',
+    });
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+
+    await handleEvent(textEvent('สวัสดี'));
+
+    expect(userRepository.create).toHaveBeenCalledWith(
+      'U123',
+      'สมชาย ใจดี',
+      'https://profile.line-scdn.net/abc123'
+    );
+  });
+
+  test('User เดิม → ไม่เรียก create ซ้ำ และไม่ต้องเรียก getProfile', async () => {
     commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
 
     await handleEvent(textEvent('สวัสดี'));
 
     expect(userRepository.create).not.toHaveBeenCalled();
+    expect(lineService.getProfile).not.toHaveBeenCalled();
   });
 });
 

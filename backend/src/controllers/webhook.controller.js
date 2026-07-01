@@ -15,18 +15,23 @@ const COMING_SOON_MESSAGE = {
   text: 'ฟีเจอร์นี้กำลังพัฒนาอยู่ 🚧 เร็วๆ นี้',
 };
 
-// DATABASE.md — users.display_name เป็น NOT NULL ใช้ชื่อชั่วคราวนี้แทน
-// จนกว่าจะดึง displayName จริงจาก LINE Profile API ได้ (pictureUrl nullable
-// อยู่แล้ว จึงยังส่ง null ได้ตามปกติ)
+// DATABASE.md — users.display_name เป็น NOT NULL ใช้ชื่อชั่วคราวนี้เป็น
+// Fallback เมื่อดึง LINE Profile API ไม่สำเร็จ (pictureUrl nullable อยู่แล้ว
+// จึงยังส่ง null ได้ตามปกติ)
 const DEFAULT_DISPLAY_NAME = 'LINE User';
 
 async function resolveUser(lineUserId) {
   const existing = await userRepository.findByLineUserId(lineUserId);
   if (existing) return existing;
 
-  // Auto-register ตาม SRS.md § 2.3 [1] — ยังไม่ดึง displayName/pictureUrl
-  // จาก LINE Profile API ในขั้นนี้
-  return userRepository.create(lineUserId, DEFAULT_DISPLAY_NAME, null);
+  // Auto-register ตาม SRS.md § 2.3 [1] — พยายามดึง Profile จริงจาก LINE ก่อน
+  // แต่ getProfile ห้าม throw (คืน null แทนถ้า API ล้มเหลว) เพื่อไม่ให้
+  // การสมัครทั้งกระบวนการพังตาม จึง Fallback เป็นค่า Default ได้เสมอ
+  const profile = await lineService.getProfile(lineUserId);
+  const displayName = profile?.displayName ?? DEFAULT_DISPLAY_NAME;
+  const pictureUrl = profile?.pictureUrl ?? null;
+
+  return userRepository.create(lineUserId, displayName, pictureUrl);
 }
 
 async function routeCommand(user, parsed) {
