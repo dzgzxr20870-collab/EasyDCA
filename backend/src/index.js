@@ -5,9 +5,24 @@ const config = require('./config/env');
 const express = require('express');
 const cors = require('cors');
 
+const webhookRoutes = require('./routes/webhook.routes');
+
 const app = express();
 
 app.use(cors());
+
+// Route Webhook ต้องเก็บ Raw Body ไว้คำนวณ HMAC ก่อน Parse JSON เสมอ
+// (ดู docs/SECURITY.md § 4) จึงแยก JSON Parser เฉพาะ Route นี้ออกจาก Route อื่น
+app.use(
+  '/api/v1/webhook',
+  express.json({
+    verify: (req, res, buf) => {
+      req.rawBody = buf;
+    },
+  }),
+  webhookRoutes
+);
+
 app.use(express.json());
 
 // Railway Health Check (ดู docs/DEPLOYMENT.md § 3.1)
