@@ -1,0 +1,75 @@
+const userRepository = require('../repositories/user.repository');
+const commandParser = require('../services/commandParser.service');
+const transactionService = require('../services/transaction.service');
+const lineService = require('../services/line.service');
+const flexMessage = require('../utils/flexMessage.util');
+
+const { COMMANDS } = commandParser;
+
+// ฟีเจอร์ที่ยังไม่ Implement ใน Phase นี้ (พอต/กำไร/ประวัติ)
+const COMING_SOON_MESSAGE = {
+  type: 'text',
+  text: 'ฟีเจอร์นี้กำลังพัฒนาอยู่ 🚧 เร็วๆ นี้',
+};
+
+async function resolveUser(lineUserId) {
+  const existing = await userRepository.findByLineUserId(lineUserId);
+  if (existing) return existing;
+
+  // Auto-register ตาม SRS.md § 2.3 [1] — ยังไม่ดึง displayName/pictureUrl
+  // จาก LINE Profile API ในขั้นนี้ ใส่ null ไปก่อน
+  return userRepository.create(lineUserId, null, null);
+}
+
+async function routeCommand(user, parsed) {
+  switch (parsed.command) {
+    case COMMANDS.BUY: {
+      const result = await transactionService.processBuyCommand(user.id, parsed.params, {
+        plan: user.plan,
+      });
+      return flexMessage.buildBuyConfirmMessage(result);
+    }
+
+    case COMMANDS.SELL: {
+      const result = await transactionService.processSellCommand(user.id, parsed.params);
+      return flexMessage.buildSellConfirmMessage(result);
+    }
+
+    case COMMANDS.PORTFOLIO:
+    case COMMANDS.PROFIT:
+    case COMMANDS.HISTORY:
+      return COMING_SOON_MESSAGE;
+
+    case COMMANDS.UNKNOWN:
+    default:
+      return flexMessage.buildUnknownCommandMessage();
+  }
+}
+
+// ประมวลผล 1 Event จาก LINE — ต้องไม่ throw ออกไป เพื่อไม่ให้ Event อื่น
+// หรือ Webhook Handler ทั้งตัวพังตาม (SRS.md § 6.4)
+async function handleEvent(event) {
+  // รองรับเฉพาะ Text Message — Event อื่น (follow/unfollow/image) ข้ามไปก่อน
+  if (event.type !== 'message' || event.message?.type !== 'text') {
+    return;
+  }
+
+  const { replyToken } = event;
+
+  try {
+    const user = await resolveUser(event.source?.userId);
+    const parsed = commandParser.parseCommand(event.message.text);
+    const message = await routeCommand(user, parsed);
+    await lineService.replyMessage(replyToken, message);
+  } catch (err) {
+    // Error ที่มี code (เช่น TransactionServiceError) → แปลเป็นข้อความไทย
+    // Error อื่นที่ไม่คาดคิด → INTERNAL_ERROR (ไม่โชว์รายละเอียดดิบให้ผู้ใช้)
+    const code = err.code ?? 'INTERNAL_ERROR';
+    console.error(`[webhook] handleEvent failed (code=${code}): ${err.message}`);
+    await lineService.replyMessage(replyToken, flexMessage.buildErrorMessage(code));
+  }
+}
+
+module.exports = {
+  handleEvent,
+};
