@@ -1,0 +1,38 @@
+# ===== Dependencies =====
+# node_modules ของทุก Package ใน Monorepo (backend/, frontend/, admin/, line-bot/)
+node_modules/
+**/node_modules/
+
+# ===== Environment =====
+# ห้าม Commit ค่าจริงของ Environment Variable ลง Git เด็ดขาด (ดู ENV_VARIABLES.md)
+.env
+.env.local
+.env.*.local
+.env.development
+.env.staging
+.env.production
+
+# ===== Logs =====
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ===== OS Files =====
+.DS_Store
+Thumbs.db
+
+# ===== Build Output =====
+dist/
+build/
+.next/
+
+# ===== Test Coverage =====
+coverage/
+
+# ===== Editor =====
+# Ignore ไปก่อน — ถ้าทีมต้องการแชร์ settings ร่วมกันภายหลัง ค่อยเอาออกและ Commit เฉพาะไฟล์ที่ต้องการ
+.vscode/
+
+# ===== Local-only Files =====
+*.local
