@@ -702,6 +702,367 @@ CREATE TRIGGER set_updated_at
 
 ---
 
+## 5. ER Diagram (Mermaid)
+
+> Section นี้เพิ่มเติมจาก Section 1 (ER Diagram แบบข้อความเดิม) โดยใช้ Mermaid
+> syntax เพื่อให้ GitHub Render เป็นภาพได้จริง ครอบคลุมทุกตารางและ
+> ความสัมพันธ์เดียวกับ Section 1 ทุกประการ
+
+```mermaid
+erDiagram
+    users ||--o{ portfolios : "owns"
+    users ||--o{ assets : "owns"
+    users ||--o{ transactions : "owns"
+    users ||--o{ payments : "makes"
+    users ||--o{ goals : "sets"
+    users ||--o{ notifications : "receives"
+    users ||--|| user_settings : "has"
+    users ||--o{ watchlists : "tracks"
+    users ||--o{ portfolio_snapshots : "has"
+    users ||--o{ payments : "approves (admin)"
+    users ||--o{ audit_logs : "performs (admin)"
+    users ||--o{ system_logs : "related to"
+
+    portfolios ||--o{ assets : "contains"
+    portfolios ||--o{ portfolio_snapshots : "snapshots"
+
+    assets ||--o{ transactions : "has"
+
+    users {
+        uuid id PK
+        text line_user_id UK
+        text display_name
+        text plan
+        boolean is_locked
+    }
+    portfolios {
+        uuid id PK
+        uuid user_id FK
+        text name
+        text type
+        boolean is_default
+    }
+    assets {
+        uuid id PK
+        uuid user_id FK
+        uuid portfolio_id FK
+        text symbol
+        text type
+        boolean is_active
+    }
+    transactions {
+        uuid id PK
+        uuid user_id FK
+        uuid asset_id FK
+        text type
+        numeric quantity
+        date date
+    }
+    payments {
+        uuid id PK
+        uuid user_id FK
+        uuid approved_by FK
+        text status
+    }
+    goals {
+        uuid id PK
+        uuid user_id FK
+        text goal_name
+        date target_date
+    }
+    notifications {
+        uuid id PK
+        uuid user_id FK
+        text type
+        boolean is_read
+    }
+    user_settings {
+        uuid id PK
+        uuid user_id FK "UK"
+        text timezone
+    }
+    watchlists {
+        uuid id PK
+        uuid user_id FK
+        text symbol
+    }
+    portfolio_snapshots {
+        uuid id PK
+        uuid user_id FK
+        uuid portfolio_id FK
+        date snapshot_date
+    }
+    audit_logs {
+        uuid id PK
+        uuid admin_id FK
+        text action
+    }
+    system_logs {
+        uuid id PK
+        uuid user_id FK
+        text type
+    }
+```
+
+> หมายเหตุ: ในสคีมาจริง `admin_id` และ `approved_by` เป็น FK ไปที่ `users(id)`
+> (ไม่มีตาราง `admins` แยกต่างหาก) — Admin คือ user ที่มีสิทธิ์พิเศษผ่าน role
+> ที่ตรวจสอบใน Application layer ไดอะแกรม ASCII ใน Section 1 ใช้คำว่า
+> "admins" เพื่อสื่อความหมายเชิง Concept เท่านั้น
+
+---
+
+## 6. UUID Strategy
+
+ทุกตารางใช้ `id UUID PRIMARY KEY DEFAULT gen_random_uuid()` แทน
+auto-increment integer ด้วยเหตุผลดังนี้:
+
+1. **ป้องกันการเดา ID (ID Enumeration Attack)** — Integer ที่รันต่อเนื่อง
+   (1, 2, 3, ...) ทำให้ผู้ไม่หวังดีเดา ID ของ Record อื่นได้ง่าย (เช่น
+   ไล่ดู `payment_id` หรือ `transaction_id` ของผู้ใช้คนอื่น) UUID v4 สุ่ม
+   128-bit ทำให้เดาไม่ได้ในทางปฏิบัติ
+2. **รองรับ Distributed System ในอนาคต** — หากระบบขยายเป็น Multi-region
+   หรือมี Background Worker หลายตัวเขียนข้อมูลพร้อมกัน (เช่น Cron Job
+   คำนวณ Snapshot, Webhook รับข้อความจาก LINE พร้อมกันหลาย Instance)
+   การ Generate ID แบบ UUID ทำได้โดยไม่ต้องขอ Sequence จาก Database
+   กลางตัวเดียว จึงไม่มี Bottleneck หรือ Single Point of Failure
+3. **Merge ข้อมูลข้าม Environment ได้ปลอดภัย** — เวลา Import/Export ข้อมูล
+   ระหว่าง Staging กับ Production หรือทำ Data Migration จะไม่มี ID ชนกัน
+4. **สร้าง ID ฝั่ง Client/Backend ได้ก่อน Insert จริง** — มีประโยชน์เมื่อ
+   ต้องอ้างอิง ID ใน Object ที่ยังไม่ได้ Commit ลง Database (เช่น สร้าง
+   `transaction_id` ไว้ล่วงหน้าเพื่อผูกกับ Slip ที่ AI กำลังประมวลผล)
+
+**Trade-off ที่ยอมรับ:** UUID กิน Storage มากกว่า Integer (16 bytes vs
+4-8 bytes) และ Index ใหญ่กว่าเล็กน้อย แต่ในสเกลของ EasyDCA (ผู้ใช้ระดับ
+พัน-หมื่นคน) ไม่ใช่ปัญหาด้าน Performance เมื่อเทียบกับประโยชน์ด้านความ
+ปลอดภัยที่ได้มา
+
+---
+
+## 7. Timezone Standard
+
+**กฎหลัก: Backend เก็บทุกค่า `TIMESTAMPTZ` เป็น UTC เสมอ**
+
+- PostgreSQL เก็บ `TIMESTAMPTZ` เป็น UTC ภายในเสมอ (ไม่ว่า Session
+  Timezone จะตั้งเป็นอะไร) ดังนั้น `now()`, `created_at`, `updated_at`,
+  `sent_at`, `approved_at` ฯลฯ ทุก Field ที่เป็น `TIMESTAMPTZ` จะถูกส่งออก
+  มาเป็น UTC เสมอเมื่ออ่านผ่าน Backend/API
+- **ห้ามแปลง Timezone ที่ชั้น Backend หรือ Database Query** — การแปลงเป็น
+  `Asia/Bangkok` (UTC+7) ทำที่ **Frontend (Web) และ LINE Bot เท่านั้น**
+  ตอนแสดงผลให้ผู้ใช้เห็น
+- การแปลงฝั่ง Client ให้อ้างอิงค่าจาก `user_settings.timezone` (default
+  `Asia/Bangkok`) ที่มีอยู่แล้ว เพื่อรองรับผู้ใช้ที่อาจอยู่ต่างประเทศใน
+  อนาคต โดยไม่ต้องแก้ Backend
+- **Field ประเภท `DATE`** (เช่น `transactions.date`, `goals.target_date`,
+  `portfolio_snapshots.snapshot_date`) ไม่มี Timezone ในตัวเอง — วันที่
+  เหล่านี้ถูกกำหนดโดยผู้ใช้หรือ Cron Job ตาม Timezone ที่ตั้งใจไว้แล้ว
+  (เช่น Cron ที่สร้าง Snapshot ควรรันตามเวลา `Asia/Bangkok` เพื่อให้
+  `snapshot_date` ตรงกับ "วันนี้" ของผู้ใช้ส่วนใหญ่) จึงไม่ต้องแปลงซ้ำ
+- สรุป: **UTC in the database, local time only at the presentation layer**
+
+---
+
+## 8. Soft Delete Policy (สรุปภาพรวม)
+
+ตามกฎ "ห้ามลบข้อมูลผู้ใช้เด็ดขาด" สรุปวิธี Soft Delete ของแต่ละตารางเป็น
+ตารางเดียว (รายละเอียดอ้างอิงจาก Section 2 และ 4 ที่มีอยู่แล้ว):
+
+| ตาราง | กลไก | ค่าที่บ่งบอกว่า "ถูกลบ" | หมายเหตุ |
+|---|---|---|---|
+| `users` | Flag: `is_locked` | `is_locked = true` | ล็อคหลัง Grace Period หมด ไม่ลบ Record; `locked_at` เก็บวันที่ล็อค |
+| `assets` | Flag: `is_active` | `is_active = false` | ขายสินทรัพย์ออกหมดแล้ว แต่เก็บไว้เพื่อดูประวัติ |
+| `transactions` | Reversal (ไม่มี Flag) | ไม่มี — Immutable | "ยกเลิกรายการ" ทำโดยสร้าง Transaction ตรงข้าม (เช่น sell ล้าง buy) ไม่แก้/ลบของเดิม |
+| `payments` | ไม่มี Soft Delete | — | ไม่มี DELETE Policy เลย (Section 3); สถานะสิ้นสุดคือ `rejected`/`expired` |
+| `portfolios`, `goals`, `notifications`, `watchlists`, `user_settings`, `portfolio_snapshots` | ไม่มี Soft Delete | — | ยังไม่มีความจำเป็นทางธุรกิจต้องเก็บประวัติหลังลบ — RLS policy `FOR ALL` อนุญาต DELETE ได้ตามปกติ (ผู้ใช้ลบพอร์ต/เป้าหมาย/watchlist ของตัวเองได้จริง ไม่ใช่ข้อมูลที่กฎ "ห้ามลบผู้ใช้" ครอบคลุม) |
+| `audit_logs`, `system_logs` | ไม่มี Soft Delete | — | ไม่มี DELETE Policy สำหรับ authenticated เลย เข้าถึงได้เฉพาะ `service_role`; ถือเป็น Append-only Log |
+
+**หลักการเลือก:** ใช้ Flag (`is_locked` / `is_active`) เฉพาะ Entity ที่มี
+Transaction/ประวัติผูกอยู่ด้วยและกฎหมายกำหนดให้ต้องเก็บ (ผู้ใช้ และ
+สินทรัพย์ที่มีประวัติซื้อขาย) ส่วน Entity อื่นที่เป็นข้อมูล
+Configuration/Preference ล้วนๆ (portfolio, goal, watchlist) อนุญาตให้ลบ
+จริงได้ตามสิทธิ์เจ้าของข้อมูล
+
+---
+
+## 9. Foreign Key Cascade Policy
+
+หลักการ: **Default เป็น `RESTRICT` (หรือไม่ระบุ `ON DELETE` ซึ่ง Postgres
+จะใช้ `NO ACTION` ที่พฤติกรรมเทียบเท่า) สำหรับ FK ที่อ้างอิงถึง `users`
+ทุกตัว** เพื่อไม่ให้ขัดกับกฎ "ห้ามลบข้อมูลผู้ใช้" — ในทางปฏิบัติ `users`
+ไม่ควรถูก `DELETE` เลย (ใช้ `is_locked` แทน) ดังนั้น Cascade จาก `users`
+จึงเป็นเพียงเกราะป้องกันชั้นที่สอง ไม่ใช่ Flow ที่ควรเกิดขึ้นจริง
+
+| FK | Reference | ON DELETE | เหตุผล |
+|---|---|---|---|
+| `portfolios.user_id` | `users.id` | `RESTRICT` | ห้ามลบ user ที่ยังมีพอร์ตอยู่ |
+| `assets.user_id` | `users.id` | `RESTRICT` | ห้ามลบ user ที่ยังมีสินทรัพย์อยู่ |
+| `assets.portfolio_id` | `portfolios.id` | `SET NULL` | ผู้ใช้ลบพอร์ตได้ (Section 8) — สินทรัพย์ที่อยู่ในพอร์ตนั้นย้ายกลับไปเป็น "ไม่มีพอร์ต" แทนที่จะถูกลบตาม |
+| `transactions.user_id` | `users.id` | `RESTRICT` | ห้ามลบ user ที่ยังมีประวัติธุรกรรม |
+| `transactions.asset_id` | `assets.id` | `RESTRICT` | ห้ามลบ asset ที่ยังมีประวัติธุรกรรมผูกอยู่ — ต้องใช้ `is_active = false` แทนการลบจริง |
+| `payments.user_id` | `users.id` | `RESTRICT` | ห้ามลบ user ที่ยังมีประวัติการชำระเงิน (จำเป็นต่อบัญชี/ภาษี) |
+| `payments.approved_by` | `users.id` (admin) | `SET NULL` | ถ้า Admin ถูกลบ (ในทางทฤษฎี) ประวัติการอนุมัติยังต้องอยู่ แม้ไม่รู้ว่าใครอนุมัติ |
+| `goals.user_id` | `users.id` | `RESTRICT` | ห้ามลบ user ที่ยังมีเป้าหมายอยู่ |
+| `notifications.user_id` | `users.id` | `RESTRICT` | ห้ามลบ user ที่ยังมีประวัติแจ้งเตือน |
+| `user_settings.user_id` | `users.id` | `RESTRICT` | One-to-One — ห้ามลบ user ที่ยังมี Settings |
+| `watchlists.user_id` | `users.id` | `RESTRICT` | ห้ามลบ user ที่ยังมี Watchlist |
+| `portfolio_snapshots.user_id` | `users.id` | `RESTRICT` | ห้ามลบ user ที่ยังมีประวัติ Snapshot |
+| `portfolio_snapshots.portfolio_id` | `portfolios.id` | `SET NULL` | ผู้ใช้ลบพอร์ตได้ — Snapshot เก่าของพอร์ตนั้นยังต้องอยู่เพื่อดู Timeline ย้อนหลัง แต่ไม่ผูกกับพอร์ตที่ไม่มีอยู่แล้ว |
+| `audit_logs.admin_id` | `users.id` (admin) | `RESTRICT` | Audit Log ต้องคงอยู่ครบ — ห้ามลบ Admin ที่มีประวัติ Action |
+| `system_logs.user_id` | `users.id` | `SET NULL` | Log ระบบไม่ใช่ข้อมูลที่กฎหมายบังคับเก็บผูกกับ user เหมือน audit_logs — เก็บ Log ไว้ได้แม้ไม่มี user อ้างอิงแล้ว |
+
+**สรุปกฎการเลือก:**
+- FK ที่ชี้ไป `users.id` โดยตรงและเป็นข้อมูลที่มีนัยทางกฎหมาย/การเงิน
+  (ธุรกรรม, การชำระเงิน, Audit Log) → `RESTRICT`
+- FK ที่ชี้ไป Entity ที่ "ลบได้จริง" ตามสิทธิ์ผู้ใช้ (`portfolios`) และ
+  Column ฝั่ง Child เป็น `nullable` อยู่แล้ว → `SET NULL`
+- FK ที่เป็นเพียง Metadata ประกอบ Log ไม่ใช่ตัว Log เอง (`system_logs.user_id`)
+  → `SET NULL` เพื่อไม่ให้บล็อคการลบ user ในอนาคตหากนโยบายเปลี่ยน
+
+---
+
+## 10. Index Strategy (สรุปภาพรวม)
+
+Index ที่ประกาศไว้ในแต่ละตาราง (Section 2) เป็นไปตาม Guideline เดียวกันนี้:
+
+1. **ทุก FK Column ต้องมี Index** — ใช้เร่ง JOIN และเร่ง RLS Policy ที่
+   Filter ด้วย `user_id = auth.uid()` แทบทุก Query (เช่น
+   `idx_portfolios_user_id`, `idx_assets_user_id`, `idx_transactions_asset_id`)
+2. **Composite Index สำหรับ Query Pattern ที่ Filter + Sort พร้อมกัน** —
+   เมื่อหน้าจอต้องดึง "ข้อมูลของ user คนนี้ เรียงตามวันที่ล่าสุด" ให้ทำ
+   Composite Index `(user_id, date DESC)` แทนที่จะพึ่ง Index เดี่ยว 2 ตัว
+   (เช่น `idx_transactions_user_date`, `idx_snapshots_user_date`)
+3. **Partial Index สำหรับค่าที่ Query บ่อยแต่เป็น Subset เล็กของข้อมูล
+   ทั้งหมด** — ลดขนาด Index และภาระตอนเขียนข้อมูล เช่น
+   - `idx_users_plan_expires_at ... WHERE plan != 'free'` (ผู้ใช้ Free
+     ไม่มี Expiry ที่ต้องเช็ค)
+   - `idx_payments_slip_hash ... WHERE slip_hash IS NOT NULL`
+   - `idx_audit_logs_target_id ... WHERE target_id IS NOT NULL`
+   - `idx_system_logs_user_id ... WHERE user_id IS NOT NULL`
+4. **Index บน Timestamp สำหรับ Feed แบบ Reverse-chronological** — ตารางที่
+   ต้องแสดงผลล่าสุดก่อนเสมอ (`notifications`, `audit_logs`, `system_logs`,
+   `transactions`) มี Index `DESC` บน `created_at`/`sent_at`/`date`
+5. **Unique Constraint ทำหน้าที่เป็น Index ในตัวอยู่แล้ว** — ไม่ต้องสร้าง
+   Index ซ้ำซ้อนกับ Column ที่มี `UNIQUE` (เช่น `line_user_id`,
+   `(user_id, symbol, portfolio_id)` บน `assets`,
+   `(user_id, portfolio_id, snapshot_date)` บน `portfolio_snapshots`,
+   `(user_id, symbol)` บน `watchlists`)
+
+**หลักตัดสินใจสั้นๆ:** ถ้า Query Pattern คือ "หาแถวของ user/admin คนนี้"
+→ ต้องมี Index ที่ `user_id`/`admin_id` เป็นอันดับแรกเสมอ ถ้ามีการ Sort
+ต่อท้ายด้วย ให้รวมเป็น Composite Index เดียว และถ้าเงื่อนไข Filter ตัด
+ข้อมูลส่วนใหญ่ทิ้งไปแน่ๆ (เช่น `IS NOT NULL`, `!= 'free'`) ให้ใช้ Partial
+Index แทน Index เต็มตาราง
+
+---
+
+## 11. Portfolio Snapshot Strategy
+
+Cron Job คำนวณ `portfolio_snapshots` รายวัน ต้องรองรับทั้งผู้ใช้ที่มี
+พอร์ตเดียว (Free) และ Multiple Portfolio (Premium) ดังนี้:
+
+### ขั้นตอนการทำงานของ Cron Job
+
+1. รันทุกวัน (แนะนำหลังเวลา 00:00 ตาม `Asia/Bangkok` เพื่อให้ `snapshot_date`
+   ตรงกับ "เมื่อวาน" ของผู้ใช้ส่วนใหญ่ — ดู Section 7 เรื่อง Timezone)
+2. ดึงรายชื่อ User ที่ Active ทั้งหมด (`is_locked = false`)
+3. สำหรับแต่ละ User: ดึง `assets` ทั้งหมดของ User นั้น แล้วจัดกลุ่มตาม
+   `portfolio_id`
+4. **กรณี Free (ไม่มี Multiple Portfolio):** `assets.portfolio_id` เป็น
+   `NULL` ทั้งหมด → สร้าง Snapshot **1 แถวต่อวัน** โดย `portfolio_id = NULL`
+   ซึ่งเป็นค่ารวมของสินทรัพย์ทั้งหมดอยู่แล้ว
+5. **กรณี Premium (มี Multiple Portfolio):** สร้าง Snapshot ดังนี้
+   - **1 แถวต่อพอร์ต** (`portfolio_id` = ID ของแต่ละพอร์ต) สำหรับดู
+     Performance แยกรายพอร์ต
+   - **1 แถวเพิ่มเติมแบบรวม** (`portfolio_id = NULL`) เป็นผลรวมของทุก
+     พอร์ตของ User นั้น สำหรับหน้า Overview / Net Worth รวม
+6. คำนวณ `total_value` (Mark-to-Market ด้วยราคาปัจจุบัน), `total_invested`
+   (จาก `transactions`), `profit_loss`, `roi` ต่อกลุ่ม แล้ว
+   `INSERT`/`UPSERT` เข้า `portfolio_snapshots`
+
+### ข้อควรระวัง: `NULL` กับ UNIQUE Constraint
+
+`UNIQUE (user_id, portfolio_id, snapshot_date)` ที่มีอยู่แล้วใน
+`portfolio_snapshots` **ไม่ป้องกัน Duplicate ของแถวรวม (`portfolio_id
+IS NULL`) โดยอัตโนมัติ** เพราะ PostgreSQL ถือว่า `NULL` แต่ละค่าไม่เท่ากัน
+(`NULL <> NULL`) ทำให้ Unique Constraint มาตรฐานและ `ON CONFLICT
+(user_id, portfolio_id, snapshot_date)` ไม่ทำงานกับแถวที่ `portfolio_id`
+เป็น `NULL` เหมือนที่คาดหวัง
+
+แนะนำให้เลือกวิธีใดวิธีหนึ่ง:
+
+- **(แนะนำ)** ใช้ `UNIQUE NULLS NOT DISTINCT` (PostgreSQL 15+) กับ
+  Constraint นี้ เพื่อให้ `NULL` ถูกมองว่าเท่ากันเมื่อเทียบ Unique
+  ```sql
+  ALTER TABLE portfolio_snapshots
+    DROP CONSTRAINT portfolio_snapshots_user_id_portfolio_id_snapshot_date_key,
+    ADD CONSTRAINT portfolio_snapshots_user_portfolio_date_key
+      UNIQUE NULLS NOT DISTINCT (user_id, portfolio_id, snapshot_date);
+  ```
+- **(ทางเลือก)** ให้ Cron Job ตรวจสอบด้วย `SELECT ... WHERE user_id = $1
+  AND portfolio_id IS NULL AND snapshot_date = $2` ก่อน `INSERT`/`UPDATE`
+  เอง แทนการพึ่ง `ON CONFLICT` เพียงอย่างเดียว หากยังใช้ PostgreSQL
+  เวอร์ชันต่ำกว่า 15
+
+---
+
+## 12. Transaction Strategy สำหรับ Buy/Sell
+
+Average Cost และ Quantity ของแต่ละ Asset เป็นค่าที่ **คำนวณจาก
+`transactions` ทุกครั้งที่อ่าน** (ไม่ได้เก็บเป็น Column แยกใน `assets`)
+เพื่อป้องกัน Race Condition ตอนมีหลาย Request บันทึกธุรกรรมพร้อมกัน
+(เช่น ผู้ใช้กดบันทึกซ้ำ หรือ AI อ่านสลิปหลายใบพร้อมกันสำหรับ Asset
+เดียวกัน) การเขียน `transactions` ทุกครั้งต้องอยู่ใน Database Transaction
+เดียวที่ Lock แถวที่เกี่ยวข้องก่อนคำนวณ:
+
+```sql
+BEGIN;
+
+-- 1. Lock แถว asset ที่เกี่ยวข้อง กัน Request อื่นแก้ไข asset เดียวกัน
+--    พร้อมกันจนกว่า Transaction นี้จะจบ
+SELECT id FROM assets WHERE id = :asset_id FOR UPDATE;
+
+-- 2. คำนวณ Quantity/Average Cost ปัจจุบันจากประวัติ transactions
+--    ทั้งหมดของ asset นี้ ณ จุดเวลาที่ Lock ไว้แล้ว (ข้อมูลจึงนิ่งจริง
+--    ไม่ใช่ Snapshot เก่าจากก่อน Request อื่นเขียนเข้ามา)
+SELECT
+  SUM(CASE WHEN type = 'buy' THEN quantity ELSE -quantity END) AS current_qty
+FROM transactions
+WHERE asset_id = :asset_id;
+
+-- 3. ถ้าเป็นคำสั่ง sell: ตรวจสอบว่า quantity ที่จะขาย <= current_qty
+--    ที่คำนวณได้ในขั้นตอนที่ 2 — ถ้าเกิน ให้ ROLLBACK และคืน Error
+--    "ขายเกินจำนวนที่ถือ" แทนการ INSERT
+
+-- 4. บันทึกธุรกรรมใหม่
+INSERT INTO transactions (user_id, asset_id, type, amount_thb,
+  price_per_unit, quantity, fee_thb, date, source)
+VALUES (:user_id, :asset_id, :type, :amount_thb,
+  :price_per_unit, :quantity, :fee_thb, :date, :source);
+
+COMMIT;
+```
+
+**หลักการสำคัญ:**
+
+1. `SELECT ... FOR UPDATE` บนแถว `assets` เป็นกลไก Lock ระดับ Row ที่ทำให้
+   Request ที่สองซึ่งพยายามซื้อ/ขาย Asset เดียวกันพร้อมกัน ต้องรอ
+   Transaction แรก `COMMIT`/`ROLLBACK` เสร็จก่อน จึงไม่มีทางที่ทั้งสอง
+   Request จะคำนวณ Quantity ปัจจุบันจากข้อมูลชุดเดียวกัน (Stale Read)
+   แล้วเขียนทับกันจนยอดผิด
+2. การตรวจสอบ "ขายเกินจำนวนที่ถือ" (ข้อ 3) **ต้องทำภายใน Transaction
+   เดียวกัน หลังจาก Lock แล้วเท่านั้น** — ถ้าตรวจสอบก่อน Lock หรือใน
+   Request/Layer แยกต่างหาก จะมี Race Condition ที่สอง Request ขายพร้อม
+   กันผ่านการตรวจสอบทั้งคู่ (เพราะยังไม่มีใครลด Quantity ในฐานข้อมูลจริง)
+   แล้วยอดคงเหลือติดลบได้
+3. Isolation Level ที่เหมาะสมคือ `READ COMMITTED` (Default ของ Postgres)
+   ร่วมกับ `SELECT FOR UPDATE` ก็เพียงพอ ไม่จำเป็นต้องใช้ `SERIALIZABLE`
+   เพราะ Row Lock ที่ระบุชัดเจนแล้วครอบคลุม Case การแข่งกันเขียน Asset
+   เดียวกันอยู่แล้ว
+4. Transaction ต้องครอบคลุมเฉพาะ Asset เดียวต่อครั้ง (Lock ตาม `asset_id`)
+   — ไม่ Lock ทั้งตาราง `assets` หรือ Lock ระดับ `user_id` เพราะจะทำให้
+   ผู้ใช้ที่ซื้อ/ขายคนละ Asset พร้อมกันต้องรอกันโดยไม่จำเป็น
+
+---
+
 **Version:** 1.0.0 | **Last Updated:** 1 กรกฎาคม 2569
 
 *อ้างอิงจาก [PROJECT_BRIEF.md](../PROJECT_BRIEF.md)*

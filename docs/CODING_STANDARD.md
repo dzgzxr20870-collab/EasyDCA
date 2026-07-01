@@ -237,7 +237,44 @@ hotfix/webhook-signature-bypass
 
 ---
 
-## 6. Comment Style และเมื่อไหร่ควร Comment
+## 6. Definition of Done (DoD)
+
+งานหนึ่งชิ้น (Feature/Fix) จะถือว่า **"เสร็จ" (Done)** ก็ต่อเมื่อผ่านครบ
+ทุกข้อต่อไปนี้ — ใช้คู่กับ Code Review Checklist ในหัวข้อ 5 ด้านบน (DoD
+คือเกณฑ์ระดับภาพรวมของงานทั้งชิ้น ส่วน Checklist หัวข้อ 5 คือรายการย่อย
+ที่ต้องตรวจตอน Review PR)
+
+- [ ] **Code Complete** — Implement ครบตาม Spec ที่ระบุใน
+      [PRD.md](./PRD.md) และ [ROADMAP.md](./ROADMAP.md) สำหรับ Phase นั้น
+      จริง ไม่ใช่แค่ "รันได้" หรือ Cover เฉพาะ Happy Path
+- [ ] **ESLint ผ่าน** — ไม่มี Error/Warning ค้าง ตาม Lint Job ที่ตั้งไว้ใน
+      CI ([DEPLOYMENT.md § 5.1](./DEPLOYMENT.md))
+- [ ] **Test ผ่าน** — Unit/Integration Test ที่เกี่ยวข้องผ่านทั้งหมด
+      ตาม [TEST_PLAN.md](./TEST_PLAN.md) — ถ้าเป็น Feature ใหม่ที่ยังไม่มี
+      Test Case ใน TEST_PLAN.md ต้องเพิ่ม Test Case ใหม่ในเอกสารนั้นก่อน
+      Merge (ไม่ใช่เขียน Test ลอยๆ ที่ไม่ถูกบันทึกไว้ให้คนอื่นเห็นภาพรวม)
+- [ ] **Documentation Update** — ถ้างานนี้กระทบ Schema/API/Flow ที่เอกสาร
+      ใน `docs/` มีอยู่แล้ว ต้องอัพเดทไฟล์ที่เกี่ยวข้องในการ Commit เดียวกัน
+      หรือ Commit ถัดไปทันที ใช้กฎเดียวกับ
+      [DEPLOYMENT.md § 4 ขั้นตอน [7]](./DEPLOYMENT.md) ที่บังคับอัพเดท
+      DATABASE.md ให้ตรงกับ Schema จริงเสมอ — ห้ามปล่อยให้เอกสารกับโค้ด
+      ไม่ตรงกัน
+- [ ] **Code Review ผ่าน** — ผ่าน Code Review Checklist ในหัวข้อ 5 ครบทุก
+      ข้อ โดยมีคนอื่น (หรือ AI อีกตัว) Review อย่างน้อย 1 ครั้งก่อน Merge
+      ตาม Git Branch Strategy ในหัวข้อ 4
+- [ ] **Merge สำเร็จ** — Merge เข้า Branch เป้าหมาย (`develop`/`main`)
+      สำเร็จจริง ตาม Git Branch Strategy ในหัวข้อ 4
+
+**ความสัมพันธ์กับ Pre-deploy Checklist:** DoD ข้างต้นคือเกณฑ์ระดับ
+**งานแต่ละชิ้น** (ต่อ PR หนึ่งใบ) ส่วน
+[Pre-deploy Checklist ใน DEPLOYMENT.md § 8](./DEPLOYMENT.md) คือเกณฑ์ระดับ
+**การ Deploy ขึ้น Production** ซึ่งอาจรวมหลายงานที่ผ่าน DoD มาแล้วพร้อมกัน
+— งานที่ยังไม่ผ่าน DoD ครบทุกข้อ **ห้าม Merge เข้า `develop`/`main`**
+และแน่นอนว่าห้ามอยู่ใน Release ที่จะผ่าน Pre-deploy Checklist ไปด้วย
+
+---
+
+## 7. Comment Style และเมื่อไหร่ควร Comment
 
 ### หลักการ
 
@@ -274,6 +311,6 @@ hotfix/webhook-signature-bypass
 
 ---
 
-**Version:** 1.0.0 | **Last Updated:** 1 กรกฎาคม 2569
+**Version:** 1.1.0 | **Last Updated:** 1 กรกฎาคม 2569
 
 *อ้างอิงจาก [PROJECT_BRIEF.md](../PROJECT_BRIEF.md)*
