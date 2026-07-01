@@ -59,7 +59,21 @@ async function findRecentByUser(userId, limit) {
   return data.map(toTransaction);
 }
 
+async function findAllByAsset(assetId) {
+  const { data, error } = await supabaseAdmin
+    .from('transactions')
+    .select('*')
+    .eq('asset_id', assetId);
+
+  if (error) {
+    throw new Error(`Failed to find transactions for asset ${assetId}: ${error.message}`);
+  }
+
+  return data.map(toTransaction);
+}
+
 module.exports = {
   create,
   findRecentByUser,
+  findAllByAsset,
 };

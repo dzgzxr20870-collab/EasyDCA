@@ -1,0 +1,211 @@
+const assetRepository = require('../repositories/asset.repository');
+const transactionRepository = require('../repositories/transaction.repository');
+
+// PRD.md — Free Plan บันทึกได้สูงสุด 2 สินทรัพย์ Active
+const MAX_FREE_ASSETS = 2;
+
+// Error ที่มี code ตาม API.md § 5 เพื่อให้ Layer ด้านบน (Webhook/Controller)
+// Map เป็น Error Response มาตรฐานได้ ไม่ปล่อย Error ดิบหลุดถึง Client
+class TransactionServiceError extends Error {
+  constructor(code, message, details = {}) {
+    super(message);
+    this.name = 'TransactionServiceError';
+    this.code = code;
+    this.details = details;
+  }
+}
+
+function roundToTwo(value) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+// DATABASE.md § 7 — Field ประเภท DATE ควรอิงวันของผู้ใช้ (Asia/Bangkok)
+// ไม่ใช่ UTC เพื่อไม่ให้ธุรกรรมที่บันทึกช่วงดึกตกไปเป็นวันก่อนหน้า
+function todayInBangkok() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
+}
+
+// แปลง params จาก Command Parser ให้ได้ quantity + pricePerUnit + amountThb
+// ที่พร้อมบันทึกลง transactions โดยไม่มี Side Effect ใดๆ (เรียกก่อนเขียน DB
+// เสมอ เพื่อไม่ให้เกิด Asset/Transaction ค้างถ้าจำนวนคำนวณไม่ได้)
+function isPresent(value) {
+  return value !== undefined && value !== null;
+}
+
+function resolveQuantityAndPrice(params) {
+  if (isPresent(params.quantity) && isPresent(params.pricePerUnit)) {
+    const quantity = Number(params.quantity);
+    const pricePerUnit = Number(params.pricePerUnit);
+    return { quantity, pricePerUnit, amountThb: roundToTwo(quantity * pricePerUnit) };
+  }
+
+  if (isPresent(params.amountThb)) {
+    // มีแต่จำนวนเงิน (เช่น "ซื้อ BTC 1000") — ต้องใช้ราคาตลาดปัจจุบันมาหาร
+    // เป็น quantity แต่ยังไม่มี Price Feed Service ในขั้นนี้
+    // ห้าม Mock ราคามั่วเพราะจะบันทึก quantity ที่ผิดลง DB จริง
+    throw new TransactionServiceError(
+      'PRICE_FEED_NOT_IMPLEMENTED',
+      'Cannot derive quantity from amountThb without a live price feed'
+    );
+  }
+
+  throw new TransactionServiceError(
+    'VALIDATION_ERROR',
+    'params must include either (quantity + pricePerUnit) or amountThb',
+    { received: Object.keys(params) }
+  );
+}
+
+// ยอดคงเหลือ = Σ(buy quantity) - Σ(sell quantity) จากประวัติทั้งหมด
+// (DATABASE.md § 12 — ไม่เก็บ Quantity สะสมเป็น Column แยก แต่คำนวณจาก
+// transactions ทุกครั้งที่อ่าน เพื่อเลี่ยง Race Condition ตอนเขียน)
+function calculateHeldQuantity(transactions) {
+  // ปัดเศษเฉพาะค่าสุดท้ายก่อน return (ไม่ปัดระหว่าง reduce แต่ละ step)
+  // เพื่อกัน Floating Point สะสมผิดพลาด เช่น 0.1 + 0.2 = 0.30000000000000004
+  // ให้สอดคล้องกับ resolveQuantityAndPrice ที่ใช้ roundToTwo() เสมอ
+  const held = transactions.reduce((sum, tx) => {
+    const qty = Number(tx.quantity);
+    return tx.type === 'buy' ? sum + qty : sum - qty;
+  }, 0);
+
+  return roundToTwo(held);
+}
+
+async function processBuyCommand(userId, params, options = {}) {
+  // Default plan = 'free' แบบ Fail-closed — ถ้า Caller ไม่ส่ง plan มา
+  // ให้บังคับ Limit ของ Free ไว้ก่อน ปลอดภัยกว่าปล่อยผ่านโดยไม่เช็ค
+  const { plan = 'free' } = options;
+  const symbol = params.symbol;
+  const portfolioId = params.portfolioId ?? null;
+
+  const { quantity, pricePerUnit, amountThb } = resolveQuantityAndPrice(params);
+
+  let asset = await assetRepository.findByUserAndSymbol(userId, symbol, portfolioId);
+  let newAssetCreated = false;
+
+  if (!asset) {
+    // เช็ค Freemium Limit เฉพาะตอนจะสร้าง Asset ใหม่ (SRS.md § 2.3 [2])
+    if (plan === 'free') {
+      const activeCount = await assetRepository.countActiveByUser(userId);
+      if (activeCount >= MAX_FREE_ASSETS) {
+        throw new TransactionServiceError(
+          'ASSET_LIMIT_REACHED',
+          `Free plan is limited to ${MAX_FREE_ASSETS} active assets`,
+          { limit: MAX_FREE_ASSETS, current: activeCount }
+        );
+      }
+    }
+
+    // การจำแนก type ของ Symbol ใหม่ (เช่น BTC=crypto, PTT=stock_th) ต้องใช้
+    // Symbol Registry ที่ยังไม่มีในขั้นนี้ — Caller ต้องส่ง type มาให้จนกว่า
+    // จะมี Service นั้น (แนวเดียวกับ Price Feed) ไม่เดา type มั่ว
+    if (!params.type) {
+      throw new TransactionServiceError(
+        'VALIDATION_ERROR',
+        'Creating a new asset requires an asset type',
+        { symbol }
+      );
+    }
+
+    asset = await assetRepository.create(
+      userId,
+      portfolioId,
+      symbol,
+      params.name ?? symbol,
+      params.type
+    );
+    newAssetCreated = true;
+  }
+
+  const transaction = await transactionRepository.create({
+    userId,
+    assetId: asset.id,
+    type: 'buy',
+    amountThb,
+    pricePerUnit,
+    quantity,
+    feeThb: params.feeThb ?? 0,
+    date: params.date ?? todayInBangkok(),
+    note: params.note ?? null,
+    source: 'line',
+  });
+
+  return {
+    transactionId: transaction.id,
+    symbol,
+    quantity,
+    pricePerUnit,
+    amountThb,
+    newAssetCreated,
+  };
+}
+
+async function processSellCommand(userId, params) {
+  const symbol = params.symbol;
+  const portfolioId = params.portfolioId ?? null;
+
+  const asset = await assetRepository.findByUserAndSymbol(userId, symbol, portfolioId);
+  if (!asset) {
+    throw new TransactionServiceError('ASSET_NOT_FOUND', `Asset ${symbol} not found for this user`, {
+      symbol,
+    });
+  }
+
+  const { quantity, pricePerUnit, amountThb } = resolveQuantityAndPrice(params);
+
+  // ── Race Condition Warning (DATABASE.md § 12) ──────────────────────────
+  // การขายต้องตรวจ "ขายเกินยอดคงเหลือ" ภายใน DB Transaction เดียวที่ Lock
+  // แถว asset ด้วย SELECT ... FOR UPDATE ก่อนคำนวณ แล้วจึง INSERT
+  // มิฉะนั้นสองคำสั่งขายพร้อมกันจะอ่านยอดคงเหลือชุดเดียวกัน (Stale Read)
+  // แล้วผ่านการตรวจทั้งคู่ ทำให้ยอดติดลบได้
+  //
+  // TODO(phase1): Supabase JS Client (PostgREST) ไม่รองรับ Row-level Lock /
+  // Multi-statement Transaction — ต้องย้าย Logic ข้อ [ตรวจยอด → INSERT] นี้
+  // ไปเป็น Postgres RPC (SECURITY DEFINER function) ที่ทำ
+  // BEGIN → SELECT FOR UPDATE → validate → INSERT → COMMIT ในตัวเดียว
+  // ตาม DATABASE.md § 12
+  //
+  // ความเสี่ยงที่ยังเหลืออยู่ ณ ตอนนี้: การตรวจ INSUFFICIENT_QUANTITY ด้านล่าง
+  // เป็นแบบ check-then-insert ที่ "ไม่ Atomic" — ยังมีช่องให้ขายเกินยอดได้จริง
+  // หากมีสองคำสั่งขาย Asset เดียวกันเข้ามาพร้อมกัน ยังไม่ปลอดภัยเต็มที่
+  const history = await transactionRepository.findAllByAsset(asset.id);
+  const heldQuantity = calculateHeldQuantity(history);
+
+  if (quantity > heldQuantity) {
+    throw new TransactionServiceError(
+      'INSUFFICIENT_QUANTITY',
+      'Cannot sell more than the currently held quantity',
+      { requested: quantity, held: heldQuantity }
+    );
+  }
+
+  const transaction = await transactionRepository.create({
+    userId,
+    assetId: asset.id,
+    type: 'sell',
+    amountThb,
+    pricePerUnit,
+    quantity,
+    feeThb: params.feeThb ?? 0,
+    date: params.date ?? todayInBangkok(),
+    note: params.note ?? null,
+    source: 'line',
+  });
+
+  return {
+    transactionId: transaction.id,
+    symbol,
+    quantity,
+    pricePerUnit,
+    amountThb,
+    remainingQuantity: roundToTwo(heldQuantity - quantity),
+  };
+}
+
+module.exports = {
+  TransactionServiceError,
+  MAX_FREE_ASSETS,
+  calculateHeldQuantity,
+  processBuyCommand,
+  processSellCommand,
+};
