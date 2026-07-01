@@ -1,5 +1,5 @@
 jest.mock('../src/repositories/user.repository');
-jest.mock('../src/services/transaction.service');
+jest.mock('../src/services/pendingTransaction.service');
 jest.mock('../src/services/portfolio.service');
 jest.mock('../src/services/history.service');
 jest.mock('../src/services/line.service');
@@ -11,7 +11,7 @@ jest.mock('../src/services/commandParser.service', () => {
 });
 
 const userRepository = require('../src/repositories/user.repository');
-const transactionService = require('../src/services/transaction.service');
+const pendingService = require('../src/services/pendingTransaction.service');
 const portfolioService = require('../src/services/portfolio.service');
 const historyService = require('../src/services/history.service');
 const lineService = require('../src/services/line.service');
@@ -30,6 +30,15 @@ function textEvent(text) {
   };
 }
 
+function postbackEvent(data) {
+  return {
+    type: 'postback',
+    replyToken: 'reply-token-1',
+    source: { userId: 'U123' },
+    postback: { data },
+  };
+}
+
 // ดึง payload ที่ถูกส่งเข้า replyMessage มาเป็น String เพื่อตรวจเนื้อหา
 function lastReplyText() {
   const call = lineService.replyMessage.mock.calls.at(-1);
@@ -45,60 +54,63 @@ beforeEach(() => {
   lineService.getProfile.mockResolvedValue(null);
 });
 
-describe('handleEvent — BUY', () => {
-  test('ซื้อสำเร็จ → replyMessage ด้วย Confirm Message ที่ถูกต้อง', async () => {
+describe('handleEvent — BUY/SELL สร้าง Preview รอ Confirm', () => {
+  test('ซื้อ → สร้าง Pending แล้ว reply ด้วย Preview พร้อมปุ่ม Postback (ยังไม่บันทึกจริง)', async () => {
     commandParser.parseCommand.mockReturnValue({
       command: COMMANDS.BUY,
       params: { symbol: 'PTT', quantity: 50, pricePerUnit: 34 },
     });
-    transactionService.processBuyCommand.mockResolvedValue({
-      symbol: 'PTT',
+    pendingService.createPending.mockResolvedValue({
+      id: 'pending-1',
+      commandType: 'buy',
+      assetSymbol: 'PTT',
       quantity: 50,
       pricePerUnit: 34,
       amountThb: 1700,
-      newAssetCreated: false,
     });
 
     await handleEvent(textEvent('ซื้อ PTT 50 หุ้น ราคา 34'));
 
-    // ส่ง plan ของ user เข้า service ด้วย + เติม type จาก Symbol Registry (PTT = stock_th)
-    expect(transactionService.processBuyCommand).toHaveBeenCalledWith(
+    // ส่ง plan + parsed (ที่เติม type จาก Symbol Registry: PTT = stock_th) เข้า service
+    expect(pendingService.createPending).toHaveBeenCalledWith(
       FREE_USER.id,
-      { symbol: 'PTT', quantity: 50, pricePerUnit: 34, type: 'stock_th' },
+      { command: COMMANDS.BUY, params: { symbol: 'PTT', quantity: 50, pricePerUnit: 34, type: 'stock_th' } },
       { plan: 'free' }
     );
     expect(lineService.replyMessage).toHaveBeenCalledTimes(1);
     const reply = lastReplyText();
-    expect(reply).toContain('ยืนยันรายการซื้อ');
+    expect(reply).toContain('ยืนยันการซื้อ'); // หัวข้อ Preview (ไม่ใช่ "บันทึกแล้ว")
     expect(reply).toContain('PTT');
     expect(reply).toContain('1,700');
+    // ปุ่ม Postback พก pendingId เฉพาะเจาะจง
+    expect(reply).toContain('action=confirm&pendingId=pending-1');
+    expect(reply).toContain('action=cancel&pendingId=pending-1');
   });
-});
 
-describe('handleEvent — BUY เติม type จาก Symbol Registry', () => {
-  test('ซื้อ Symbol ที่รู้จัก (ไม่มี type) → เติม type อัตโนมัติก่อนส่งเข้า service', async () => {
+  test('ขาย → สร้าง Pending แล้ว reply ด้วย Preview (SELL ไม่เติม type)', async () => {
     commandParser.parseCommand.mockReturnValue({
-      command: COMMANDS.BUY,
-      params: { symbol: 'PTT', quantity: 50, pricePerUnit: 34 },
+      command: COMMANDS.SELL,
+      params: { symbol: 'PTT', quantity: 10, pricePerUnit: 40 },
     });
-    transactionService.processBuyCommand.mockResolvedValue({
-      symbol: 'PTT',
-      quantity: 50,
-      pricePerUnit: 34,
-      amountThb: 1700,
-      newAssetCreated: true,
+    pendingService.createPending.mockResolvedValue({
+      id: 'pending-2',
+      commandType: 'sell',
+      assetSymbol: 'PTT',
+      quantity: 10,
+      pricePerUnit: 40,
+      amountThb: 400,
     });
 
-    await handleEvent(textEvent('ซื้อ PTT 50 หุ้น ราคา 34'));
+    await handleEvent(textEvent('ขาย PTT 10 หุ้น ราคา 40'));
 
-    // Controller ต้องเติม type: 'stock_th' ให้ PTT ก่อนส่งต่อ
-    expect(transactionService.processBuyCommand).toHaveBeenCalledWith(
+    expect(pendingService.createPending).toHaveBeenCalledWith(
       FREE_USER.id,
-      { symbol: 'PTT', quantity: 50, pricePerUnit: 34, type: 'stock_th' },
+      { command: COMMANDS.SELL, params: { symbol: 'PTT', quantity: 10, pricePerUnit: 40 } },
       { plan: 'free' }
     );
     const reply = lastReplyText();
-    expect(reply).toContain('ยืนยันรายการซื้อ');
+    expect(reply).toContain('ยืนยันการขาย');
+    expect(reply).toContain('action=confirm&pendingId=pending-2');
   });
 
   test('ซื้อ Symbol ที่มี type มาแล้ว → ไม่เขียนทับ type เดิม', async () => {
@@ -106,45 +118,129 @@ describe('handleEvent — BUY เติม type จาก Symbol Registry', () =
       command: COMMANDS.BUY,
       params: { symbol: 'BTC', quantity: 0.01, pricePerUnit: 3400000, type: 'fund' },
     });
-    transactionService.processBuyCommand.mockResolvedValue({
-      symbol: 'BTC',
+    pendingService.createPending.mockResolvedValue({
+      id: 'pending-3',
+      commandType: 'buy',
+      assetSymbol: 'BTC',
       quantity: 0.01,
       pricePerUnit: 3400000,
       amountThb: 34000,
-      newAssetCreated: false,
     });
 
     await handleEvent(textEvent('ซื้อ BTC 0.01 หุ้น ราคา 3400000'));
 
-    expect(transactionService.processBuyCommand).toHaveBeenCalledWith(
+    expect(pendingService.createPending).toHaveBeenCalledWith(
       FREE_USER.id,
-      { symbol: 'BTC', quantity: 0.01, pricePerUnit: 3400000, type: 'fund' },
+      { command: COMMANDS.BUY, params: { symbol: 'BTC', quantity: 0.01, pricePerUnit: 3400000, type: 'fund' } },
       { plan: 'free' }
     );
   });
 
-  test('ซื้อ Symbol ที่ไม่รู้จัก → ส่งต่อโดยไม่มี type, service throw VALIDATION_ERROR, ได้ข้อความแนะนำที่ชัดเจน', async () => {
+  test('ซื้อ Symbol ที่ไม่รู้จัก → createPending throw VALIDATION_ERROR, ได้ข้อความแนะนำที่ชัดเจน (ไม่มี Pending ค้าง)', async () => {
     commandParser.parseCommand.mockReturnValue({
       command: COMMANDS.BUY,
       params: { symbol: 'UNKNOWNCOIN', quantity: 1, pricePerUnit: 10 },
     });
     const err = new Error('Creating a new asset requires an asset type');
     err.code = 'VALIDATION_ERROR';
-    transactionService.processBuyCommand.mockRejectedValue(err);
+    pendingService.createPending.mockRejectedValue(err);
 
     await handleEvent(textEvent('ซื้อ UNKNOWNCOIN 1 หุ้น ราคา 10'));
 
     // Controller ไม่เดา type — ส่งต่อ params เดิมโดยไม่มี type
-    expect(transactionService.processBuyCommand).toHaveBeenCalledWith(
+    expect(pendingService.createPending).toHaveBeenCalledWith(
       FREE_USER.id,
-      { symbol: 'UNKNOWNCOIN', quantity: 1, pricePerUnit: 10 },
+      { command: COMMANDS.BUY, params: { symbol: 'UNKNOWNCOIN', quantity: 1, pricePerUnit: 10 } },
       { plan: 'free' }
     );
     const reply = lastReplyText();
     expect(reply).toContain('ไม่รู้จักสินทรัพย์นี้');
     expect(reply).toContain('ติดต่อทีมงาน');
     expect(reply).not.toContain('VALIDATION_ERROR');
-    expect(reply).not.toContain('asset type');
+  });
+});
+
+describe('handleEvent — Postback (Confirm/Cancel/Edit)', () => {
+  test('กดยืนยัน BUY → confirmPending แล้ว reply ด้วย Confirm Message สำเร็จ', async () => {
+    pendingService.confirmPending.mockResolvedValue({
+      commandType: 'buy',
+      result: { symbol: 'PTT', quantity: 50, pricePerUnit: 34, amountThb: 1700, newAssetCreated: false },
+    });
+
+    await handleEvent(postbackEvent('action=confirm&pendingId=pending-1'));
+
+    expect(pendingService.confirmPending).toHaveBeenCalledWith('pending-1', { plan: 'free' });
+    const reply = lastReplyText();
+    expect(reply).toContain('ยืนยันรายการซื้อ'); // Success Message
+    expect(reply).toContain('1,700');
+  });
+
+  test('กดยืนยัน SELL → reply ด้วย Sell Confirm Message', async () => {
+    pendingService.confirmPending.mockResolvedValue({
+      commandType: 'sell',
+      result: { symbol: 'PTT', quantity: 10, pricePerUnit: 40, amountThb: 400, remainingQuantity: 30 },
+    });
+
+    await handleEvent(postbackEvent('action=confirm&pendingId=pending-2'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('ยืนยันรายการขาย');
+    expect(reply).toContain('คงเหลือ');
+  });
+
+  test('กดยกเลิก → cancelPending แล้ว reply ว่ายกเลิกแล้ว', async () => {
+    pendingService.cancelPending.mockResolvedValue({ id: 'pending-1', status: 'cancelled' });
+
+    await handleEvent(postbackEvent('action=cancel&pendingId=pending-1'));
+
+    expect(pendingService.cancelPending).toHaveBeenCalledWith('pending-1');
+    const reply = lastReplyText();
+    expect(reply).toContain('ยกเลิกรายการแล้ว');
+  });
+
+  test('กดแก้ไข → ยกเลิกแบบ Best-effort แล้วแนะนำให้พิมพ์ใหม่', async () => {
+    pendingService.cancelPending.mockResolvedValue({ id: 'pending-1', status: 'cancelled' });
+
+    await handleEvent(postbackEvent('action=edit&pendingId=pending-1'));
+
+    expect(pendingService.cancelPending).toHaveBeenCalledWith('pending-1');
+    const reply = lastReplyText();
+    expect(reply).toContain('แก้ไขรายการ');
+  });
+
+  test('กดแก้ไขแต่ยกเลิกไม่ได้ (resolve ไปแล้ว) → ยังตอบ Edit Hint ได้ ไม่ Error', async () => {
+    const err = new Error('already');
+    err.code = 'PENDING_ALREADY_RESOLVED';
+    pendingService.cancelPending.mockRejectedValue(err);
+
+    await handleEvent(postbackEvent('action=edit&pendingId=pending-1'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('แก้ไขรายการ');
+    expect(reply).not.toContain('ดำเนินการไปแล้ว'); // ไม่หลุด Error ของ cancel
+  });
+
+  test('ยืนยันรายการที่หมดอายุ → PENDING_EXPIRED แปลเป็นข้อความไทย', async () => {
+    const err = new Error('expired');
+    err.code = 'PENDING_EXPIRED';
+    pendingService.confirmPending.mockRejectedValue(err);
+
+    await handleEvent(postbackEvent('action=confirm&pendingId=pending-old'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('หมดเวลายืนยัน');
+    expect(reply).not.toContain('PENDING_EXPIRED');
+  });
+
+  test('กดยืนยันซ้ำ (resolve แล้ว) → PENDING_ALREADY_RESOLVED แปลเป็นข้อความไทย', async () => {
+    const err = new Error('already');
+    err.code = 'PENDING_ALREADY_RESOLVED';
+    pendingService.confirmPending.mockRejectedValue(err);
+
+    await handleEvent(postbackEvent('action=confirm&pendingId=pending-1'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('ดำเนินการไปแล้ว');
   });
 });
 
@@ -224,7 +320,7 @@ describe('handleEvent — UNKNOWN', () => {
 
     await handleEvent(textEvent('อะไรสักอย่าง'));
 
-    expect(transactionService.processBuyCommand).not.toHaveBeenCalled();
+    expect(pendingService.createPending).not.toHaveBeenCalled();
     const reply = lastReplyText();
     expect(reply).toContain('ไม่เข้าใจคำสั่ง');
     expect(reply).toContain('ซื้อ BTC 0.01 หุ้น ราคา 3400000');
@@ -232,14 +328,14 @@ describe('handleEvent — UNKNOWN', () => {
 });
 
 describe('handleEvent — Error Translation', () => {
-  test('ASSET_LIMIT_REACHED → แปลเป็นข้อความไทย ไม่โชว์ Error Code ดิบ', async () => {
+  test('ASSET_LIMIT_REACHED (จาก createPending) → แปลเป็นข้อความไทย ไม่โชว์ Error Code ดิบ', async () => {
     commandParser.parseCommand.mockReturnValue({
       command: COMMANDS.BUY,
       params: { symbol: 'ETH', quantity: 1, pricePerUnit: 1000, type: 'crypto' },
     });
     const err = new Error('Free plan is limited to 2 active assets');
     err.code = 'ASSET_LIMIT_REACHED';
-    transactionService.processBuyCommand.mockRejectedValue(err);
+    pendingService.createPending.mockRejectedValue(err);
 
     await handleEvent(textEvent('ซื้อ ETH 1 หุ้น ราคา 1000'));
 
@@ -257,7 +353,7 @@ describe('handleEvent — Error Translation', () => {
       command: COMMANDS.SELL,
       params: { symbol: 'PTT', quantity: 5, pricePerUnit: 34 },
     });
-    transactionService.processSellCommand.mockRejectedValue(new Error('db exploded'));
+    pendingService.createPending.mockRejectedValue(new Error('db exploded'));
 
     await handleEvent(textEvent('ขาย PTT 5 หุ้น ราคา 34'));
 

@@ -71,50 +71,73 @@ function calculateHeldQuantity(transactions) {
   return roundToTwo(held);
 }
 
-async function processBuyCommand(userId, params, options = {}) {
+// ตรวจว่าคำสั่ง BUY ทำได้ไหม + จำแนกว่าเป็น Asset เดิมหรือต้องสร้างใหม่
+// โดย "ไม่เขียน DB ใดๆ" (No Side Effect) — ใช้ร่วมกันได้ทั้งตอน Commit จริง
+// (processBuyCommand) และตอนสร้าง Preview รอ Confirm (pendingTransaction.service)
+// เพื่อไม่ให้ Logic ตรวจสอบ (Freemium/type/แปลงจำนวน) ถูก Copy ซ้ำสองที่
+// อาจ throw: PRICE_FEED_NOT_IMPLEMENTED / VALIDATION_ERROR / ASSET_LIMIT_REACHED
+async function validateBuy(userId, params, options = {}) {
   // Default plan = 'free' แบบ Fail-closed — ถ้า Caller ไม่ส่ง plan มา
   // ให้บังคับ Limit ของ Free ไว้ก่อน ปลอดภัยกว่าปล่อยผ่านโดยไม่เช็ค
   const { plan = 'free' } = options;
-  const symbol = params.symbol;
   const portfolioId = params.portfolioId ?? null;
 
-  const { quantity, pricePerUnit, amountThb } = resolveQuantityAndPrice(params);
+  // แปลง/ตรวจจำนวนก่อน (อาจ throw PRICE_FEED/VALIDATION) — ยังไม่แตะ DB
+  const amounts = resolveQuantityAndPrice(params);
 
-  let asset = await assetRepository.findByUserAndSymbol(userId, symbol, portfolioId);
-  let newAssetCreated = false;
+  const existingAsset = await assetRepository.findByUserAndSymbol(
+    userId,
+    params.symbol,
+    portfolioId
+  );
+  if (existingAsset) {
+    return { asset: existingAsset, assetType: existingAsset.type, newAsset: false, amounts };
+  }
 
-  if (!asset) {
-    // เช็ค Freemium Limit เฉพาะตอนจะสร้าง Asset ใหม่ (SRS.md § 2.3 [2])
-    if (plan === 'free') {
-      const activeCount = await assetRepository.countActiveByUser(userId);
-      if (activeCount >= MAX_FREE_ASSETS) {
-        throw new TransactionServiceError(
-          'ASSET_LIMIT_REACHED',
-          `Free plan is limited to ${MAX_FREE_ASSETS} active assets`,
-          { limit: MAX_FREE_ASSETS, current: activeCount }
-        );
-      }
-    }
-
-    // การจำแนก type ของ Symbol ใหม่ (เช่น BTC=crypto, PTT=stock_th) ต้องใช้
-    // Symbol Registry ที่ยังไม่มีในขั้นนี้ — Caller ต้องส่ง type มาให้จนกว่า
-    // จะมี Service นั้น (แนวเดียวกับ Price Feed) ไม่เดา type มั่ว
-    if (!params.type) {
+  // Asset ใหม่ — เช็ค Freemium Limit เฉพาะตอนจะสร้าง Asset ใหม่ (SRS.md § 2.3 [2])
+  if (plan === 'free') {
+    const activeCount = await assetRepository.countActiveByUser(userId);
+    if (activeCount >= MAX_FREE_ASSETS) {
       throw new TransactionServiceError(
-        'VALIDATION_ERROR',
-        'Creating a new asset requires an asset type',
-        { symbol }
+        'ASSET_LIMIT_REACHED',
+        `Free plan is limited to ${MAX_FREE_ASSETS} active assets`,
+        { limit: MAX_FREE_ASSETS, current: activeCount }
       );
     }
+  }
 
+  // การจำแนก type ของ Symbol ใหม่ (เช่น BTC=crypto, PTT=stock_th) ต้องมาจาก
+  // Caller (Symbol Registry) — ไม่เดา type มั่ว
+  if (!params.type) {
+    throw new TransactionServiceError(
+      'VALIDATION_ERROR',
+      'Creating a new asset requires an asset type',
+      { symbol: params.symbol }
+    );
+  }
+
+  return { asset: null, assetType: params.type, newAsset: true, amounts };
+}
+
+async function processBuyCommand(userId, params, options = {}) {
+  const portfolioId = params.portfolioId ?? null;
+
+  const { asset: existingAsset, assetType, newAsset, amounts } = await validateBuy(
+    userId,
+    params,
+    options
+  );
+  const { quantity, pricePerUnit, amountThb } = amounts;
+
+  let asset = existingAsset;
+  if (newAsset) {
     asset = await assetRepository.create(
       userId,
       portfolioId,
-      symbol,
-      params.name ?? symbol,
-      params.type
+      params.symbol,
+      params.name ?? params.symbol,
+      assetType
     );
-    newAssetCreated = true;
   }
 
   const transaction = await transactionRepository.create({
@@ -132,26 +155,28 @@ async function processBuyCommand(userId, params, options = {}) {
 
   return {
     transactionId: transaction.id,
-    symbol,
+    symbol: params.symbol,
     quantity,
     pricePerUnit,
     amountThb,
-    newAssetCreated,
+    newAssetCreated: newAsset,
   };
 }
 
-async function processSellCommand(userId, params) {
-  const symbol = params.symbol;
+// ตรวจว่าคำสั่ง SELL ทำได้ไหม (Asset มีจริง + ยอดคงเหลือพอ) โดย "ไม่เขียน DB"
+// ใช้ร่วมกันทั้ง Commit จริงและ Preview เช่นเดียวกับ validateBuy
+// อาจ throw: ASSET_NOT_FOUND / PRICE_FEED_NOT_IMPLEMENTED / INSUFFICIENT_QUANTITY
+async function validateSell(userId, params) {
   const portfolioId = params.portfolioId ?? null;
 
-  const asset = await assetRepository.findByUserAndSymbol(userId, symbol, portfolioId);
+  const asset = await assetRepository.findByUserAndSymbol(userId, params.symbol, portfolioId);
   if (!asset) {
-    throw new TransactionServiceError('ASSET_NOT_FOUND', `Asset ${symbol} not found for this user`, {
-      symbol,
+    throw new TransactionServiceError('ASSET_NOT_FOUND', `Asset ${params.symbol} not found for this user`, {
+      symbol: params.symbol,
     });
   }
 
-  const { quantity, pricePerUnit, amountThb } = resolveQuantityAndPrice(params);
+  const amounts = resolveQuantityAndPrice(params);
 
   // ── Race Condition Warning (DATABASE.md § 12) ──────────────────────────
   // การขายต้องตรวจ "ขายเกินยอดคงเหลือ" ภายใน DB Transaction เดียวที่ Lock
@@ -168,16 +193,25 @@ async function processSellCommand(userId, params) {
   // ความเสี่ยงที่ยังเหลืออยู่ ณ ตอนนี้: การตรวจ INSUFFICIENT_QUANTITY ด้านล่าง
   // เป็นแบบ check-then-insert ที่ "ไม่ Atomic" — ยังมีช่องให้ขายเกินยอดได้จริง
   // หากมีสองคำสั่งขาย Asset เดียวกันเข้ามาพร้อมกัน ยังไม่ปลอดภัยเต็มที่
+  // (การมี Preview/Confirm เพิ่มช่องเวลานี้ให้ยาวขึ้น — Confirm จึงเรียก
+  // validateSell ซ้ำอีกครั้งเพื่อลดโอกาสขายเกินจากยอดที่เปลี่ยนไประหว่างรอ)
   const history = await transactionRepository.findAllByAsset(asset.id);
   const heldQuantity = calculateHeldQuantity(history);
 
-  if (quantity > heldQuantity) {
+  if (amounts.quantity > heldQuantity) {
     throw new TransactionServiceError(
       'INSUFFICIENT_QUANTITY',
       'Cannot sell more than the currently held quantity',
-      { requested: quantity, held: heldQuantity }
+      { requested: amounts.quantity, held: heldQuantity }
     );
   }
+
+  return { asset, amounts, heldQuantity };
+}
+
+async function processSellCommand(userId, params) {
+  const { asset, amounts, heldQuantity } = await validateSell(userId, params);
+  const { quantity, pricePerUnit, amountThb } = amounts;
 
   const transaction = await transactionRepository.create({
     userId,
@@ -194,7 +228,7 @@ async function processSellCommand(userId, params) {
 
   return {
     transactionId: transaction.id,
-    symbol,
+    symbol: params.symbol,
     quantity,
     pricePerUnit,
     amountThb,
@@ -206,6 +240,9 @@ module.exports = {
   TransactionServiceError,
   MAX_FREE_ASSETS,
   calculateHeldQuantity,
+  todayInBangkok,
+  validateBuy,
+  validateSell,
   processBuyCommand,
   processSellCommand,
 };

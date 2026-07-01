@@ -24,8 +24,18 @@ const ERROR_MESSAGES = {
     'ตอนนี้ยังไม่รองรับการบันทึกด้วยจำนวนเงิน กรุณาระบุจำนวนหน่วยและราคา เช่น "ซื้อ PTT 50 หุ้น ราคา 34"',
   VALIDATION_ERROR:
     'ไม่รู้จักสินทรัพย์นี้ กรุณาติดต่อทีมงานเพื่อเพิ่มในระบบ หรือตรวจสอบว่าพิมพ์ชื่อย่อถูกต้องแล้ว',
+  // Confirm Flow (SRS.md § 2.3 [5-7]) — Postback มาช้า/ซ้ำ/ไม่พบ pending record
+  PENDING_EXPIRED: 'รายการหมดเวลายืนยันแล้ว (เกิน 5 นาที) กรุณาพิมพ์คำสั่งใหม่อีกครั้ง',
+  PENDING_NOT_FOUND: 'ไม่พบรายการที่รอยืนยัน อาจหมดอายุหรือถูกยกเลิกไปแล้ว กรุณาพิมพ์คำสั่งใหม่',
+  PENDING_ALREADY_RESOLVED: 'รายการนี้ถูกดำเนินการไปแล้ว ไม่สามารถทำซ้ำได้',
   INTERNAL_ERROR: 'เกิดข้อผิดพลาดบางอย่าง กรุณาลองใหม่อีกครั้งในภายหลัง',
 };
+
+// Postback data encoding สำหรับปุ่มในข้อความ Preview — Controller ถอดด้วย
+// URLSearchParams รูปแบบ "action=<confirm|edit|cancel>&pendingId=<uuid>"
+function postbackData(action, pendingId) {
+  return `action=${action}&pendingId=${pendingId}`;
+}
 
 function formatNumber(value) {
   const num = Number(value);
@@ -256,6 +266,131 @@ function buildHistoryMessage(transactions) {
   });
 }
 
+// ข้อความ Preview พร้อมปุ่ม [ยืนยัน]/[แก้ไข]/[ยกเลิก] (SRS.md § 2.3 [4])
+// รับ pending record จาก pendingTransaction.service.createPending
+function buildPreviewMessage(pending) {
+  const isBuy = pending.commandType === 'buy';
+  const headerText = isBuy ? '🟢 ยืนยันการซื้อ' : '🔴 ยืนยันการขาย';
+  const headerColor = isBuy ? COLOR.profit : COLOR.loss;
+  const headerBg = isBuy ? COLOR.profitBg : COLOR.lossBg;
+
+  const body = [
+    textLine(pending.assetSymbol, { size: 'lg', weight: 'bold', color: COLOR.textPrimary }),
+    textLine(`จำนวน: ${formatNumber(pending.quantity)} ${pending.assetSymbol}`, {
+      size: 'sm',
+      color: COLOR.textSecondary,
+    }),
+    textLine(`ราคาต่อหน่วย: ${formatNumber(pending.pricePerUnit)} บาท`, {
+      size: 'sm',
+      color: COLOR.textSecondary,
+    }),
+    textLine(`มูลค่ารวม: ${formatNumber(pending.amountThb)} บาท`, {
+      size: 'md',
+      weight: 'bold',
+      color: COLOR.textPrimary,
+    }),
+    textLine('ตรวจสอบแล้วกด "ยืนยัน" เพื่อบันทึก (รายการหมดอายุใน 5 นาที)', {
+      size: 'xs',
+      color: COLOR.textSecondary,
+    }),
+  ];
+
+  // ปุ่ม action:postback — data ถูกถอดที่ Controller (routePostback)
+  // displayText = ข้อความที่แสดงในแชทเสมือนผู้ใช้พิมพ์เอง เมื่อกดปุ่ม
+  const footerButtons = [
+    {
+      type: 'button',
+      style: 'primary',
+      color: headerColor,
+      action: {
+        type: 'postback',
+        label: '✅ ยืนยัน',
+        data: postbackData('confirm', pending.id),
+        displayText: 'ยืนยันรายการ',
+      },
+    },
+    {
+      type: 'button',
+      style: 'secondary',
+      action: {
+        type: 'postback',
+        label: '✏️ แก้ไข',
+        data: postbackData('edit', pending.id),
+        displayText: 'แก้ไขรายการ',
+      },
+    },
+    {
+      type: 'button',
+      style: 'secondary',
+      action: {
+        type: 'postback',
+        label: '❌ ยกเลิก',
+        data: postbackData('cancel', pending.id),
+        displayText: 'ยกเลิกรายการ',
+      },
+    },
+  ];
+
+  return {
+    type: 'flex',
+    altText: headerText,
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: headerBg,
+        paddingAll: '12px',
+        contents: [textLine(headerText, { weight: 'bold', color: headerColor })],
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: body,
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: footerButtons,
+      },
+    },
+  };
+}
+
+// ตอบกลับเมื่อผู้ใช้กด "ยกเลิก"
+function buildCancelledMessage() {
+  return bubble({
+    headerText: '❌ ยกเลิกรายการแล้ว',
+    headerColor: COLOR.textSecondary,
+    headerBg: COLOR.warningBg,
+    bodyContents: [
+      textLine('รายการนี้ถูกยกเลิก ไม่มีการบันทึกลงพอร์ตของคุณ', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+    ],
+  });
+}
+
+// ตอบกลับเมื่อผู้ใช้กด "แก้ไข" — Phase นี้ยังไม่มี Stateful Edit Flow จึงให้
+// ยกเลิกรายการเดิมแล้วแนะนำให้พิมพ์คำสั่งใหม่พร้อมข้อมูลที่ถูกต้อง
+function buildEditHintMessage() {
+  return bubble({
+    headerText: '✏️ แก้ไขรายการ',
+    headerColor: COLOR.info,
+    headerBg: COLOR.profitBg,
+    bodyContents: [
+      textLine('ยกเลิกรายการเดิมแล้ว กรุณาพิมพ์คำสั่งใหม่พร้อมข้อมูลที่ถูกต้อง', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      textLine('เช่น "ซื้อ PTT 50 หุ้น ราคา 34"', { size: 'sm', color: COLOR.textSecondary }),
+    ],
+  });
+}
+
 function buildUnknownCommandMessage() {
   return bubble({
     headerText: '🤔 ไม่เข้าใจคำสั่งนี้',
@@ -276,6 +411,9 @@ module.exports = {
   ERROR_MESSAGES,
   buildBuyConfirmMessage,
   buildSellConfirmMessage,
+  buildPreviewMessage,
+  buildCancelledMessage,
+  buildEditHintMessage,
   buildPortfolioMessage,
   buildHistoryMessage,
   buildErrorMessage,

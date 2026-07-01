@@ -874,12 +874,21 @@ auto-increment integer ด้วยเหตุผลดังนี้:
 | `payments` | ไม่มี Soft Delete | — | ไม่มี DELETE Policy เลย (Section 3); สถานะสิ้นสุดคือ `rejected`/`expired` |
 | `portfolios`, `goals`, `notifications`, `watchlists`, `user_settings`, `portfolio_snapshots` | ไม่มี Soft Delete | — | ยังไม่มีความจำเป็นทางธุรกิจต้องเก็บประวัติหลังลบ — RLS policy `FOR ALL` อนุญาต DELETE ได้ตามปกติ (ผู้ใช้ลบพอร์ต/เป้าหมาย/watchlist ของตัวเองได้จริง ไม่ใช่ข้อมูลที่กฎ "ห้ามลบผู้ใช้" ครอบคลุม) |
 | `audit_logs`, `system_logs` | ไม่มี Soft Delete | — | ไม่มี DELETE Policy สำหรับ authenticated เลย เข้าถึงได้เฉพาะ `service_role`; ถือเป็น Append-only Log |
+| `pending_transactions` | **Hard Delete (ข้อยกเว้นที่ตั้งใจ)** — Cron purge | สถานะ terminal (`confirmed` / `cancelled` / `expired`) + `resolved_at` | **ไม่ใช่ข้อมูลการเงินที่ Commit แล้ว แต่เป็น Working State ชั่วคราว** ของ LINE Confirm Flow (เทียบเท่า Redis / Memory cache ที่ SRS § 2.3 [5] ระบุไว้เดิม) — จึงยกเว้นจากกฎ "ห้ามลบ" ได้; Cron ลบจริง (hard `DELETE`) เฉพาะ row ที่ resolve แล้วและเก่ากว่า **24 ชม.** (นานพอให้ Debug ปัญหาที่ User รายงานช้าข้ามคืน สั้นพอไม่ให้ตารางโตไม่จำกัด) ตัว Transaction จริงที่เกิดจากการ Confirm ยังคงบันทึกถาวรใน `transactions` ตามกฎห้ามลบทุกประการ |
 
 **หลักการเลือก:** ใช้ Flag (`is_locked` / `is_active`) เฉพาะ Entity ที่มี
 Transaction/ประวัติผูกอยู่ด้วยและกฎหมายกำหนดให้ต้องเก็บ (ผู้ใช้ และ
 สินทรัพย์ที่มีประวัติซื้อขาย) ส่วน Entity อื่นที่เป็นข้อมูล
 Configuration/Preference ล้วนๆ (portfolio, goal, watchlist) อนุญาตให้ลบ
 จริงได้ตามสิทธิ์เจ้าของข้อมูล
+
+**ข้อยกเว้นสำหรับ Working State ชั่วคราว:** กฎ "ห้ามลบ" คุ้มครองเฉพาะ
+**ข้อมูลที่ Commit แล้วและมีนัยทางกฎหมาย/การเงิน** (`users`, `transactions`,
+`payments`, Audit Log) เท่านั้น — ข้อมูลที่เป็นเพียง **Working State
+ชั่วคราวระหว่าง Flow** ที่ยังไม่ Commit (`pending_transactions` ซึ่ง SRS
+ตั้งใจให้เป็น Redis-like Cache มาแต่แรก) ถือเป็นข้อยกเว้นที่ลบจริงได้ผ่าน
+Cron Retention เพราะการหายไปของมันไม่กระทบความครบถ้วนของประวัติการเงินที่
+บันทึกถาวรแล้ว
 
 ---
 
