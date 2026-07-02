@@ -1,6 +1,17 @@
 const assetRepository = require('../repositories/asset.repository');
 const transactionRepository = require('../repositories/transaction.repository');
 const priceFeedService = require('./priceFeed.service');
+const symbolRegistry = require('./symbolRegistry.service');
+
+// แหล่งราคาจริงตาม Asset Type (Pattern เดียวกับที่ priceFeed.service.js ใช้
+// จัดเส้นทาง Crypto → CoinGecko / หุ้นสหรัฐ → Twelve Data) — priceFeedService
+// รองรับทั้งสอง Type แล้ว จึงต้องระบุ priceSource ให้ตรงจริง ไม่ Hardcode
+// 'coingecko' ตายตัว (เดิมมีมาก่อนที่จะรองรับหุ้นสหรัฐ)
+function resolvePriceSource(symbol) {
+  const type = symbolRegistry.lookupType(symbol);
+  if (type === 'stock_us') return 'twelvedata';
+  return 'coingecko';
+}
 
 // PRD.md — Free Plan บันทึกได้สูงสุด 2 สินทรัพย์ Active
 const MAX_FREE_ASSETS = 2;
@@ -67,10 +78,16 @@ async function resolveQuantityAndPrice(params) {
       // ปัด quantity เป็น 8 ตำแหน่งตรงกับ Column Precision NUMERIC(20,8) เอง
       // ใน App Layer — ไม่ปล่อยให้ Database ปัดทิ้งเองแบบไม่มี Control ตอน INSERT
       const quantity = roundToEight(amountThb / pricePerUnit);
-      // priceSource: 'coingecko' — ราคามาจาก Price Feed Service ไม่ใช่ที่ User
-      // ระบุเอง ใช้แจ้งเตือนผู้ใช้ใน Preview/Confirm Message ว่าราคาอาจ
-      // คลาดเคลื่อนจาก Exchange ที่ User ใช้จริงเล็กน้อย
-      return { quantity, pricePerUnit, amountThb: roundToTwo(amountThb), priceSource: 'coingecko' };
+      // priceSource ตาม Asset Type จริง (coingecko/twelvedata) — ราคามาจาก
+      // Price Feed Service ไม่ใช่ที่ User ระบุเอง ใช้แจ้งเตือนผู้ใช้ใน
+      // Preview/Confirm Message ว่าราคาอาจคลาดเคลื่อนจาก Exchange ที่ User
+      // ใช้จริงเล็กน้อย
+      return {
+        quantity,
+        pricePerUnit,
+        amountThb: roundToTwo(amountThb),
+        priceSource: resolvePriceSource(params.symbol),
+      };
     }
 
     // ราคาหาไม่ได้จริง (Symbol ไม่รองรับ Price Feed เช่นหุ้น หรือ CoinGecko

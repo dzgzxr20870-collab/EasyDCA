@@ -3,6 +3,16 @@ const transactionRepository = require('../repositories/transaction.repository');
 const { calculateHeldQuantity } = require('./transaction.service');
 const { calculateTotalInvested } = require('./portfolio.service');
 const priceFeedService = require('./priceFeed.service');
+const symbolRegistry = require('./symbolRegistry.service');
+
+// แหล่งราคาจริงตาม Asset Type (Pattern เดียวกับที่ priceFeed.service.js ใช้
+// จัดเส้นทาง Crypto → CoinGecko / หุ้นสหรัฐ → Twelve Data) — ใช้กำหนด
+// priceSource ให้ตรงความจริง แทนการ Hardcode 'coingecko' ตายตัว
+function resolvePriceSource(symbol) {
+  const type = symbolRegistry.lookupType(symbol);
+  if (type === 'stock_us') return 'twelvedata';
+  return 'coingecko';
+}
 
 // Error ที่มี code (Pattern เดียวกับ TransactionServiceError — API.md § 5)
 // เพื่อให้ Controller (Webhook) Map เป็นข้อความไทยได้ ไม่ปล่อย Error ดิบถึง Client
@@ -85,9 +95,9 @@ async function getAssetProfit(userId, symbol, portfolioId = null) {
     currentValue,
     profitLoss,
     profitLossPercent,
-    // priceSource เดียวกับ transaction.service เพื่อให้ Flex Message แสดงคำเตือน
-    // ราคาอ้างอิงจาก CoinGecko ได้ด้วย Pattern เดียวกัน (priceSourceNote)
-    priceSource: 'coingecko',
+    // priceSource ตาม Asset Type จริง (coingecko/twelvedata) เพื่อให้ Flex Message
+    // แสดงคำเตือนราคาอ้างอิงจากแหล่งที่ถูกต้อง (priceSourceNote)
+    priceSource: resolvePriceSource(asset.symbol),
   };
 }
 

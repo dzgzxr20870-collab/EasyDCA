@@ -165,6 +165,16 @@ describe('processBuyCommand', () => {
     );
   });
 
+  test('รูปแบบจำนวนเงินล้วน (amountThb) กับหุ้นสหรัฐ (AAPL) → priceSource เป็น twelvedata ไม่ใช่ coingecko', async () => {
+    const ASSET_AAPL = { id: 'asset-uuid-aapl', userId: USER_ID, symbol: 'AAPL', type: 'stock_us' };
+    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_AAPL);
+    priceFeedService.getCurrentPrice.mockResolvedValue(7000);
+
+    const result = await processBuyCommand(USER_ID, { symbol: 'AAPL', amountThb: 14000 });
+
+    expect(result.priceSource).toBe('twelvedata');
+  });
+
   test('สร้าง Asset ใหม่แต่ไม่ส่ง type มา → VALIDATION_ERROR (ไม่เดา type)', async () => {
     assetRepository.findByUserAndSymbol.mockResolvedValue(null);
     assetRepository.countActiveByUser.mockResolvedValue(0);

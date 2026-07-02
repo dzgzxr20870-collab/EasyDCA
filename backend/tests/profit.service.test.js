@@ -124,6 +124,37 @@ describe('getAssetProfit — คำนวณกำไร/ขาดทุน', ()
   });
 });
 
+describe('getAssetProfit — priceSource ตาม Asset Type จริง', () => {
+  test('BTC (crypto) → priceSource ยังเป็น coingecko เหมือนเดิม (ไม่ Regression)', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_BTC);
+    transactionRepository.findAllByAsset.mockResolvedValue([
+      { type: 'buy', quantity: 0.01, amountThb: 30000 },
+    ]);
+    priceFeedService.getCurrentPrice.mockResolvedValue(4000000);
+
+    const result = await getAssetProfit(USER_ID, 'BTC');
+
+    expect(result.priceSource).toBe('coingecko');
+  });
+
+  test('AAPL (stock_us) → priceSource เป็น twelvedata ไม่ใช่ coingecko', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue({
+      id: 'asset-aapl',
+      userId: USER_ID,
+      symbol: 'AAPL',
+      type: 'stock_us',
+    });
+    transactionRepository.findAllByAsset.mockResolvedValue([
+      { type: 'buy', quantity: 5, amountThb: 30000 },
+    ]);
+    priceFeedService.getCurrentPrice.mockResolvedValue(7000);
+
+    const result = await getAssetProfit(USER_ID, 'AAPL');
+
+    expect(result.priceSource).toBe('twelvedata');
+  });
+});
+
 describe('ProfitServiceError', () => {
   test('มี code และ details ติดไปกับ Error', async () => {
     assetRepository.findByUserAndSymbol.mockResolvedValue(null);

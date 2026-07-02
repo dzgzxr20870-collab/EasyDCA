@@ -30,6 +30,11 @@ const ERROR_MESSAGES = {
   PENDING_EXPIRED: 'รายการหมดเวลายืนยันแล้ว (เกิน 5 นาที) กรุณาพิมพ์คำสั่งใหม่อีกครั้ง',
   PENDING_NOT_FOUND: 'ไม่พบรายการที่รอยืนยัน อาจหมดอายุหรือถูกยกเลิกไปแล้ว กรุณาพิมพ์คำสั่งใหม่',
   PENDING_ALREADY_RESOLVED: 'รายการนี้ถูกดำเนินการไปแล้ว ไม่สามารถทำซ้ำได้',
+  // Command History — คำสั่ง "ยกเลิกล่าสุด" (undoTransaction.service)
+  NO_TRANSACTION_TO_UNDO: 'ยังไม่มีรายการให้ยกเลิก ลองบันทึกรายการซื้อ/ขายก่อนนะครับ',
+  ALREADY_UNDONE: 'รายการล่าสุดถูกยกเลิกไปแล้ว ไม่สามารถยกเลิกซ้ำได้',
+  CANNOT_UNDO_QUANTITY_MISMATCH:
+    'ยกเลิกรายการล่าสุดไม่ได้ เพราะยอดคงเหลือปัจจุบันน้อยกว่าจำนวนในรายการนั้น (อาจมีการขายไปแล้วบางส่วน)',
   INTERNAL_ERROR: 'เกิดข้อผิดพลาดบางอย่าง กรุณาลองใหม่อีกครั้งในภายหลัง',
 };
 
@@ -55,11 +60,22 @@ function textLine(text, options = {}) {
 // ระบบมีปัญหา — priceSource === 'user' หรือไม่มี Field นี้ (Backward
 // Compatible กับ Caller เดิม) ไม่ต้องแสดงข้อความนี้
 function priceSourceNote(priceSource) {
-  if (priceSource !== 'coingecko') return null;
-  return textLine('* ราคาอ้างอิงจาก CoinGecko อาจคลาดเคลื่อนจาก Exchange ที่คุณใช้เล็กน้อย', {
-    size: 'xs',
-    color: COLOR.textSecondary,
-  });
+  if (priceSource === 'coingecko') {
+    return textLine('* ราคาอ้างอิงจาก CoinGecko อาจคลาดเคลื่อนจาก Exchange ที่คุณใช้เล็กน้อย', {
+      size: 'xs',
+      color: COLOR.textSecondary,
+    });
+  }
+
+  // Twelve Data (หุ้นสหรัฐ) — Pattern เดียวกับ CoinGecko ข้างต้น
+  if (priceSource === 'twelvedata') {
+    return textLine('* ราคาอ้างอิงจาก Twelve Data อาจคลาดเคลื่อนจาก Exchange ที่คุณใช้เล็กน้อย', {
+      size: 'xs',
+      color: COLOR.textSecondary,
+    });
+  }
+
+  return null;
 }
 
 function bubble({ headerText, headerColor, headerBg, bodyContents }) {
@@ -464,6 +480,39 @@ function buildEditHintMessage() {
   });
 }
 
+// ตอบกลับคำสั่ง "ยกเลิกล่าสุด" (Command History) — แจ้งว่าย้อนรายการเดิมแล้ว
+// โดยระบุว่าเป็นการสร้างรายการตรงข้ามชดเชย (ไม่ได้ลบของเดิม) ตาม DATABASE.md § 8
+function buildUndoMessage(result) {
+  const wasBuy = result.originalType === 'buy';
+  const originalLabel = wasBuy ? 'ซื้อ' : 'ขาย';
+  const symbol = result.symbol ?? '';
+
+  return bubble({
+    headerText: '↩️ ยกเลิกรายการล่าสุดแล้ว',
+    headerColor: COLOR.info,
+    headerBg: COLOR.warningBg,
+    bodyContents: [
+      textLine(`ย้อนรายการ${originalLabel} ${symbol}`.trim(), {
+        size: 'md',
+        weight: 'bold',
+        color: COLOR.textPrimary,
+      }),
+      textLine(`จำนวน: ${formatNumber(result.quantity)} ${symbol}`.trimEnd(), {
+        size: 'sm',
+        color: COLOR.textSecondary,
+      }),
+      textLine(`มูลค่ารวม: ${formatNumber(result.amountThb)} บาท`, {
+        size: 'sm',
+        color: COLOR.textSecondary,
+      }),
+      textLine('* สร้างรายการตรงข้ามเพื่อชดเชย ประวัติเดิมยังถูกเก็บไว้ครบถ้วน', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
+}
+
 function buildUnknownCommandMessage() {
   return bubble({
     headerText: '🤔 ไม่เข้าใจคำสั่งนี้',
@@ -490,6 +539,7 @@ module.exports = {
   buildEditHintMessage,
   buildPortfolioMessage,
   buildHistoryMessage,
+  buildUndoMessage,
   buildErrorMessage,
   buildUnknownCommandMessage,
 };
