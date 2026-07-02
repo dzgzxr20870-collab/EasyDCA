@@ -85,6 +85,29 @@ describe('handleEvent — BUY/SELL สร้าง Preview รอ Confirm', () =
     // ปุ่ม Postback พก pendingId เฉพาะเจาะจง
     expect(reply).toContain('action=confirm&pendingId=pending-1');
     expect(reply).toContain('action=cancel&pendingId=pending-1');
+    // priceSource ไม่ได้ส่งมา (ราคาที่ User ระบุเอง) → ไม่มีข้อความเตือนเรื่อง CoinGecko
+    expect(reply).not.toContain('CoinGecko');
+  });
+
+  test('ซื้อด้วยจำนวนเงิน (priceSource=coingecko) → Preview แจ้งที่มาของราคาจาก CoinGecko', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.BUY,
+      params: { symbol: 'BTC', amountThb: 1000 },
+    });
+    pendingService.createPending.mockResolvedValue({
+      id: 'pending-4',
+      commandType: 'buy',
+      assetSymbol: 'BTC',
+      quantity: 0.0005,
+      pricePerUnit: 2000000,
+      amountThb: 1000,
+      priceSource: 'coingecko',
+    });
+
+    await handleEvent(textEvent('ซื้อ BTC 1000 บาท'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('CoinGecko');
   });
 
   test('ขาย → สร้าง Pending แล้ว reply ด้วย Preview (SELL ไม่เติม type)', async () => {
@@ -173,6 +196,27 @@ describe('handleEvent — Postback (Confirm/Cancel/Edit)', () => {
     const reply = lastReplyText();
     expect(reply).toContain('ยืนยันรายการซื้อ'); // Success Message
     expect(reply).toContain('1,700');
+    // ไม่มี priceSource ใน result (Backward Compatible กับ Caller เดิม) → ไม่แสดงคำเตือน
+    expect(reply).not.toContain('CoinGecko');
+  });
+
+  test('กดยืนยัน BUY ด้วยราคาจาก Price Feed (priceSource=coingecko) → Confirm Message แจ้งที่มาของราคา', async () => {
+    pendingService.confirmPending.mockResolvedValue({
+      commandType: 'buy',
+      result: {
+        symbol: 'BTC',
+        quantity: 0.0005,
+        pricePerUnit: 2000000,
+        amountThb: 1000,
+        newAssetCreated: false,
+        priceSource: 'coingecko',
+      },
+    });
+
+    await handleEvent(postbackEvent('action=confirm&pendingId=pending-4'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('CoinGecko');
   });
 
   test('กดยืนยัน SELL → reply ด้วย Sell Confirm Message', async () => {

@@ -64,7 +64,7 @@ async function createPending(userId, parsed, options = {}) {
     amounts = result.amounts;
   }
 
-  return pendingRepository.create({
+  const pending = await pendingRepository.create({
     userId,
     portfolioId: params.portfolioId ?? null,
     commandType: command === COMMANDS.BUY ? 'buy' : 'sell',
@@ -77,6 +77,11 @@ async function createPending(userId, parsed, options = {}) {
     feeThb: params.feeThb ?? 0,
     txnDate: params.date ?? transactionService.todayInBangkok(),
   });
+
+  // priceSource ไม่มี Column รองรับใน pending_transactions (ตรวจ Migration แล้ว)
+  // จึงไม่ Insert ลง DB — Enrich กลับเข้า Object ที่คืนให้ Controller ใช้สร้าง
+  // Preview Message ได้ทันทีแทน (ไหลเป็น JS Object เท่านั้น ไม่ Persist)
+  return { ...pending, priceSource: amounts.priceSource };
 }
 
 // ยืนยัน Pending → บันทึก Transaction จริง (SRS.md § 2.3 [6])
@@ -119,6 +124,9 @@ async function confirmPending(pendingId, options = {}) {
   }
 
   const params = toCommitParams(claimed);
+  // result มี priceSource ติดมาด้วยแล้ว (คำนวณใหม่ผ่าน resolveQuantityAndPrice
+  // ตอน Commit จริง) — ส่งต่อให้ Controller สร้าง Success Message ได้เลย
+  // ไม่ต้องอ่านจาก Pending record ใน DB (ไม่มี Column นี้อยู่แล้ว)
   const result =
     claimed.commandType === 'buy'
       ? await transactionService.processBuyCommand(claimed.userId, params, options)

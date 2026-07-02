@@ -29,14 +29,14 @@ describe('createPending — BUY', () => {
       asset: null,
       assetType: 'crypto',
       newAsset: true,
-      amounts: { quantity: 0.01, pricePerUnit: 3400000, amountThb: 34000 },
+      amounts: { quantity: 0.01, pricePerUnit: 3400000, amountThb: 34000, priceSource: 'user' },
     });
 
     const parsed = {
       command: COMMANDS.BUY,
       params: { symbol: 'BTC', quantity: 0.01, pricePerUnit: 3400000, type: 'crypto' },
     };
-    await createPending(USER_ID, parsed, { plan: 'free' });
+    const pending = await createPending(USER_ID, parsed, { plan: 'free' });
 
     expect(transactionService.validateBuy).toHaveBeenCalledWith(USER_ID, parsed.params, {
       plan: 'free',
@@ -53,6 +53,28 @@ describe('createPending — BUY', () => {
         txnDate: '2026-07-02',
       })
     );
+    // priceSource ไม่มี Column รองรับใน pending_transactions — ต้องไม่ถูกส่งเข้า
+    // Insert Payload ของ Repository เลย (Enrich กลับเข้า Object คืนค่าเท่านั้น)
+    expect(pendingRepository.create.mock.calls[0][0]).not.toHaveProperty('priceSource');
+    // Controller ต้องได้ priceSource ติดมากับ Object ที่คืน เพื่อสร้าง Preview Message
+    expect(pending).toMatchObject({ id: PENDING_ID, priceSource: 'user' });
+  });
+
+  test('BUY ด้วย amountThb (Price Feed) → priceSource "coingecko" Enrich เข้า Object ที่คืน ไม่ Persist ลง DB', async () => {
+    transactionService.validateBuy.mockResolvedValue({
+      asset: { id: 'a-btc', type: 'crypto' },
+      assetType: 'crypto',
+      newAsset: false,
+      amounts: { quantity: 0.0005, pricePerUnit: 2000000, amountThb: 1000, priceSource: 'coingecko' },
+    });
+
+    const pending = await createPending(USER_ID, {
+      command: COMMANDS.BUY,
+      params: { symbol: 'BTC', amountThb: 1000 },
+    });
+
+    expect(pendingRepository.create.mock.calls[0][0]).not.toHaveProperty('priceSource');
+    expect(pending).toMatchObject({ id: PENDING_ID, priceSource: 'coingecko' });
   });
 
   test('Asset เดิม → asset_type = null (รู้ type ตอน Confirm อยู่แล้ว)', async () => {
@@ -139,7 +161,11 @@ describe('confirmPending — สำเร็จ', () => {
       txnDate: '2026-07-02',
       portfolioId: null,
     });
-    transactionService.processBuyCommand.mockResolvedValue({ transactionId: 'tx-1', symbol: 'BTC' });
+    transactionService.processBuyCommand.mockResolvedValue({
+      transactionId: 'tx-1',
+      symbol: 'BTC',
+      priceSource: 'user',
+    });
 
     const out = await confirmPending(PENDING_ID, { plan: 'free' });
 
@@ -149,7 +175,9 @@ describe('confirmPending — สำเร็จ', () => {
       { plan: 'free' }
     );
     expect(pendingRepository.attachTransaction).toHaveBeenCalledWith(PENDING_ID, 'tx-1');
-    expect(out).toMatchObject({ commandType: 'buy', result: { transactionId: 'tx-1' } });
+    // priceSource มาจาก result ของ processBuyCommand โดยตรง (คำนวณใหม่ตอน Commit)
+    // ไม่ได้อ่านจาก Pending record ใน DB
+    expect(out).toMatchObject({ commandType: 'buy', result: { transactionId: 'tx-1', priceSource: 'user' } });
   });
 
   test('SELL → Execute processSellCommand', async () => {

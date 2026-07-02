@@ -47,6 +47,19 @@ function textLine(text, options = {}) {
   return { type: 'text', text, wrap: true, ...options };
 }
 
+// เตือนที่มาของราคาเมื่อมาจาก Price Feed Service (CoinGecko) ไม่ใช่ราคาที่
+// User ระบุเอง — CoinGecko เป็น Price Aggregator จึงต่างจาก Exchange ที่ User
+// ใช้จริงได้เล็กน้อย (~0.1-0.3%) เป็นเรื่องปกติ แต่ต้องแจ้งไม่ให้เข้าใจผิดว่า
+// ระบบมีปัญหา — priceSource === 'user' หรือไม่มี Field นี้ (Backward
+// Compatible กับ Caller เดิม) ไม่ต้องแสดงข้อความนี้
+function priceSourceNote(priceSource) {
+  if (priceSource !== 'coingecko') return null;
+  return textLine('* ราคาอ้างอิงจาก CoinGecko อาจคลาดเคลื่อนจาก Exchange ที่คุณใช้เล็กน้อย', {
+    size: 'xs',
+    color: COLOR.textSecondary,
+  });
+}
+
 function bubble({ headerText, headerColor, headerBg, bodyContents }) {
   return {
     type: 'flex',
@@ -92,6 +105,9 @@ function buildBuyConfirmMessage(result) {
     body.push(textLine('✨ เพิ่มสินทรัพย์ใหม่เข้าพอร์ตแล้ว', { size: 'xs', color: COLOR.info }));
   }
 
+  const note = priceSourceNote(result.priceSource);
+  if (note) body.push(note);
+
   return bubble({
     headerText: '🟢 ยืนยันรายการซื้อ',
     headerColor: COLOR.profit,
@@ -121,6 +137,9 @@ function buildSellConfirmMessage(result) {
       color: COLOR.textSecondary,
     }),
   ];
+
+  const note = priceSourceNote(result.priceSource);
+  if (note) body.push(note);
 
   return bubble({
     headerText: '🔴 ยืนยันรายการขาย',
@@ -294,6 +313,9 @@ function buildPreviewMessage(pending) {
       color: COLOR.textSecondary,
     }),
   ];
+
+  const note = priceSourceNote(pending.priceSource);
+  if (note) body.push(note);
 
   // ปุ่ม action:postback — data ถูกถอดที่ Controller (routePostback)
   // displayText = ข้อความที่แสดงในแชทเสมือนผู้ใช้พิมพ์เอง เมื่อกดปุ่ม

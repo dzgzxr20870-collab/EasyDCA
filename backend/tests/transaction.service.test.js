@@ -54,6 +54,7 @@ describe('processBuyCommand', () => {
       quantity: 50,
       amountThb: 1700,
       newAssetCreated: false,
+      priceSource: 'user',
     });
   });
 
@@ -143,6 +144,7 @@ describe('processBuyCommand', () => {
       quantity: 0.0005,
       pricePerUnit: 2000000,
       amountThb: 1000,
+      priceSource: 'coingecko',
     });
   });
 
@@ -157,6 +159,7 @@ describe('processBuyCommand', () => {
     expect(result.quantity).toBe(0.00029412);
     // ยืนยันว่าปัดจริง ไม่ใช่ทศนิยมยาวเกิน 8 ตำแหน่ง
     expect(Number.isInteger(result.quantity * 1e8)).toBe(true);
+    expect(result.priceSource).toBe('coingecko');
     expect(transactionRepository.create).toHaveBeenCalledWith(
       expect.objectContaining({ quantity: 0.00029412, pricePerUnit: 3400000, amountThb: 1000 })
     );
@@ -193,7 +196,12 @@ describe('processSellCommand', () => {
       expect.objectContaining({ type: 'sell', quantity: 50, assetId: ASSET.id, source: 'line' })
     );
     // ยอดคงเหลือก่อนขาย = 100 - 20 = 80 → หลังขาย 50 เหลือ 30
-    expect(result).toMatchObject({ symbol: 'PTT', quantity: 50, remainingQuantity: 30 });
+    expect(result).toMatchObject({
+      symbol: 'PTT',
+      quantity: 50,
+      remainingQuantity: 30,
+      priceSource: 'user',
+    });
   });
 
   test('ขายเกินยอดคงเหลือ → INSUFFICIENT_QUANTITY (ไม่บันทึก Transaction)', async () => {

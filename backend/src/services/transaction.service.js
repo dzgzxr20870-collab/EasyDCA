@@ -46,7 +46,14 @@ async function resolveQuantityAndPrice(params) {
   if (isPresent(params.quantity) && isPresent(params.pricePerUnit)) {
     const quantity = Number(params.quantity);
     const pricePerUnit = Number(params.pricePerUnit);
-    return { quantity, pricePerUnit, amountThb: roundToTwo(quantity * pricePerUnit) };
+    // priceSource: 'user' — ราคาที่ User ระบุเองตรงๆ (ไม่ได้มาจาก Price Feed)
+    // ใช้แยกแยะใน Preview/Confirm Message ว่าควรเตือนเรื่องราคาอ้างอิงไหม
+    return {
+      quantity,
+      pricePerUnit,
+      amountThb: roundToTwo(quantity * pricePerUnit),
+      priceSource: 'user',
+    };
   }
 
   if (isPresent(params.amountThb)) {
@@ -60,7 +67,10 @@ async function resolveQuantityAndPrice(params) {
       // ปัด quantity เป็น 8 ตำแหน่งตรงกับ Column Precision NUMERIC(20,8) เอง
       // ใน App Layer — ไม่ปล่อยให้ Database ปัดทิ้งเองแบบไม่มี Control ตอน INSERT
       const quantity = roundToEight(amountThb / pricePerUnit);
-      return { quantity, pricePerUnit, amountThb: roundToTwo(amountThb) };
+      // priceSource: 'coingecko' — ราคามาจาก Price Feed Service ไม่ใช่ที่ User
+      // ระบุเอง ใช้แจ้งเตือนผู้ใช้ใน Preview/Confirm Message ว่าราคาอาจ
+      // คลาดเคลื่อนจาก Exchange ที่ User ใช้จริงเล็กน้อย
+      return { quantity, pricePerUnit, amountThb: roundToTwo(amountThb), priceSource: 'coingecko' };
     }
 
     // ราคาหาไม่ได้จริง (Symbol ไม่รองรับ Price Feed เช่นหุ้น หรือ CoinGecko
@@ -149,7 +159,7 @@ async function processBuyCommand(userId, params, options = {}) {
     params,
     options
   );
-  const { quantity, pricePerUnit, amountThb } = amounts;
+  const { quantity, pricePerUnit, amountThb, priceSource } = amounts;
 
   let asset = existingAsset;
   if (newAsset) {
@@ -182,6 +192,7 @@ async function processBuyCommand(userId, params, options = {}) {
     pricePerUnit,
     amountThb,
     newAssetCreated: newAsset,
+    priceSource,
   };
 }
 
@@ -233,7 +244,7 @@ async function validateSell(userId, params) {
 
 async function processSellCommand(userId, params) {
   const { asset, amounts, heldQuantity } = await validateSell(userId, params);
-  const { quantity, pricePerUnit, amountThb } = amounts;
+  const { quantity, pricePerUnit, amountThb, priceSource } = amounts;
 
   const transaction = await transactionRepository.create({
     userId,
@@ -255,6 +266,7 @@ async function processSellCommand(userId, params) {
     pricePerUnit,
     amountThb,
     remainingQuantity: roundToTwo(heldQuantity - quantity),
+    priceSource,
   };
 }
 
