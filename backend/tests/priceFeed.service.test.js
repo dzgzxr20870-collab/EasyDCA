@@ -130,3 +130,147 @@ describe('getCurrentPrice — Cache (TTL 60 วินาที)', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
+
+// ── หุ้นสหรัฐ (Twelve Data) ────────────────────────────────────────────────
+// Mock fetch แยกตาม URL: /quote คืนราคา USD (String), /exchange_rate คืน rate
+function mockTwelveData({ closeUsd, rate }) {
+  return jest.spyOn(global, 'fetch').mockImplementation((url) => {
+    if (url.includes('/quote')) {
+      return Promise.resolve({ ok: true, json: async () => ({ symbol: 'AAPL', close: String(closeUsd) }) });
+    }
+    if (url.includes('/exchange_rate')) {
+      return Promise.resolve({ ok: true, json: async () => ({ symbol: 'USD/THB', rate }) });
+    }
+    return Promise.resolve({ ok: false, status: 404, text: async () => 'unexpected url' });
+  });
+}
+
+function countCalls(fetchMock, fragment) {
+  return fetchMock.mock.calls.filter(([url]) => url.includes(fragment)).length;
+}
+
+describe('getCurrentPrice — หุ้นสหรัฐ (Twelve Data + แปลง USD→THB)', () => {
+  beforeEach(() => {
+    // getUsStockPriceThb อ่าน process.env ตอน Call — ตั้ง Key จำลองให้ยิง API ได้
+    process.env.TWELVE_DATA_API_KEY = 'test-twelve-key';
+  });
+
+  afterEach(() => {
+    delete process.env.TWELVE_DATA_API_KEY;
+  });
+
+  test('AAPL สำเร็จ → แปลงเป็น THB ด้วยการคูณ Rate ถูกทาง', async () => {
+    // ราคา 185.5 USD, Rate 36 THB/USD → 185.5 × 36 = 6678 THB
+    mockTwelveData({ closeUsd: 185.5, rate: 36 });
+
+    const price = await priceFeedService.getCurrentPrice('AAPL');
+
+    expect(price).toBeCloseTo(6678, 5);
+    // ยิงทั้ง quote และ exchange_rate อย่างละครั้ง
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    const quoteUrl = global.fetch.mock.calls.find(([u]) => u.includes('/quote'))[0];
+    expect(quoteUrl).toContain('symbol=AAPL');
+    expect(quoteUrl).toContain('apikey=test-twelve-key');
+  });
+
+  test('ป้องกัน Currency Bug: ผลลัพธ์ต้องเป็น USD×Rate ไม่ใช่ USD÷Rate', async () => {
+    const closeUsd = 200;
+    const rate = 35;
+    mockTwelveData({ closeUsd, rate });
+
+    const price = await priceFeedService.getCurrentPrice('TSLA');
+
+    // ถูกต้อง = 7000; ถ้าเผลอหารผิดทางจะได้ ~5.71 — ยืนยันว่าไม่ใช่ค่าที่หารผิด
+    expect(price).toBe(closeUsd * rate);
+    expect(price).not.toBeCloseTo(closeUsd / rate, 5);
+    // และราคา THB ต้องมากกว่าราคา USD เดิมเสมอ (Rate > 1) กันคูณ/หารสลับ
+    expect(price).toBeGreaterThan(closeUsd);
+  });
+
+  test('Symbol case-insensitive (aapl) → Normalize เป็น AAPL แล้วยิง Twelve Data', async () => {
+    mockTwelveData({ closeUsd: 100, rate: 35 });
+
+    const price = await priceFeedService.getCurrentPrice('aapl');
+
+    expect(price).toBe(3500);
+  });
+
+  test('Twelve Data /quote ล้มเหลว (Status Error) → คืน null ไม่ throw', async () => {
+    jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 429,
+      text: async () => 'Too Many Requests',
+    });
+
+    await expect(priceFeedService.getCurrentPrice('AAPL')).resolves.toBeNull();
+  });
+
+  test('Twelve Data Response ไม่มี close (Shape ผิด/error) → คืน null', async () => {
+    jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ status: 'error', code: 401, message: 'Invalid API key' }),
+    });
+
+    await expect(priceFeedService.getCurrentPrice('AAPL')).resolves.toBeNull();
+  });
+
+  test('Network Error / Timeout (fetch reject) → คืน null ไม่ throw', async () => {
+    jest.spyOn(global, 'fetch').mockRejectedValue(new Error('aborted'));
+
+    await expect(priceFeedService.getCurrentPrice('AAPL')).resolves.toBeNull();
+  });
+
+  test('ราคาหุ้นได้แต่ FX Rate ล้มเหลว → คืน null (ไม่คืนราคา USD ดิบ)', async () => {
+    jest.spyOn(global, 'fetch').mockImplementation((url) => {
+      if (url.includes('/quote')) {
+        return Promise.resolve({ ok: true, json: async () => ({ close: '150' }) });
+      }
+      // exchange_rate ล้มเหลว
+      return Promise.resolve({ ok: false, status: 500, text: async () => 'fx down' });
+    });
+
+    await expect(priceFeedService.getCurrentPrice('AAPL')).resolves.toBeNull();
+  });
+
+  test('ไม่ได้ตั้ง TWELVE_DATA_API_KEY → คืน null และไม่ยิง API', async () => {
+    delete process.env.TWELVE_DATA_API_KEY;
+    const fetchMock = jest.spyOn(global, 'fetch');
+
+    const price = await priceFeedService.getCurrentPrice('AAPL');
+
+    expect(price).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test('Symbol ที่ Registry ไม่รู้จักเลย (IBM) → คืน null ไม่ยิง API', async () => {
+    const fetchMock = jest.spyOn(global, 'fetch');
+
+    const price = await priceFeedService.getCurrentPrice('IBM');
+
+    expect(price).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test('Cache ราคาหุ้น (TTL 60s): เรียกซ้ำภายใน TTL ไม่ยิง API ซ้ำ', async () => {
+    mockTwelveData({ closeUsd: 100, rate: 35 });
+
+    const first = await priceFeedService.getCurrentPrice('AAPL'); // quote + fx = 2
+    jest.advanceTimersByTime(30 * 1000);
+    const second = await priceFeedService.getCurrentPrice('AAPL'); // cache hit = 0
+
+    expect(first).toBe(3500);
+    expect(second).toBe(3500);
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  test('FX Cache นานกว่า (10 นาที): หลังราคาหุ้นหมดอายุ 60s ยิงแค่ /quote ไม่ยิง FX ซ้ำ', async () => {
+    const fetchMock = mockTwelveData({ closeUsd: 100, rate: 35 });
+
+    await priceFeedService.getCurrentPrice('AAPL'); // quote(1) + exchange_rate(1)
+    jest.advanceTimersByTime(61 * 1000); // ราคาหุ้นหมดอายุ (60s) แต่ FX ยังอยู่ (<10 นาที)
+    await priceFeedService.getCurrentPrice('AAPL'); // quote(2) เท่านั้น — FX ใช้ Cache
+
+    expect(countCalls(fetchMock, '/quote')).toBe(2);
+    expect(countCalls(fetchMock, '/exchange_rate')).toBe(1);
+  });
+});

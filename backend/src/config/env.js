@@ -54,4 +54,10 @@ module.exports = {
   claude: {
     apiKey: process.env.CLAUDE_API_KEY || null,
   },
+  // Twelve Data — Price Feed หุ้นสหรัฐ (stock_us) + อัตราแลกเปลี่ยน USD/THB
+  // ยังไม่บังคับ (ไม่อยู่ใน REQUIRED_ENV_VARS) เพราะยังไม่มี Key จริง — ถ้าไม่ตั้ง
+  // ค่า priceFeed.service จะคืน null สำหรับหุ้นสหรัฐ (Fallback ตามเดิม ไม่ Crash)
+  twelveData: {
+    apiKey: process.env.TWELVE_DATA_API_KEY || null,
+  },
 };

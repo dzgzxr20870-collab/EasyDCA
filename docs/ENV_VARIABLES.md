@@ -58,6 +58,14 @@ cp .env.example .env
 
 ---
 
+## Market Data (หุ้นสหรัฐ)
+
+| Variable | จำเป็น | คำอธิบาย |
+|---|---|---|
+| `TWELVE_DATA_API_KEY` | ❌ | API Key ของ [Twelve Data](https://twelvedata.com) Free Tier สำหรับดึงราคาหุ้นสหรัฐ (`stock_us`) และอัตราแลกเปลี่ยน USD/THB เพื่อแปลงราคาเป็นบาท ถ้าไม่ตั้งค่า ราคาหุ้นสหรัฐจะคืน `null` (ระบบไม่ Crash) |
+
+---
+
 ## Claude API (Phase 4)
 
 | Variable | จำเป็น | คำอธิบาย |
@@ -89,6 +97,9 @@ JWT_EXPIRES_IN=7d
 APP_URL=http://localhost:3000
 NODE_ENV=development
 PORT=3000
+
+# ===== Market Data (หุ้นสหรัฐ) =====
+# TWELVE_DATA_API_KEY=your_twelve_data_api_key_here
 
 # ===== Claude API (Phase 4 only) =====
 # CLAUDE_API_KEY=your_claude_api_key_here
