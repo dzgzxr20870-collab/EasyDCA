@@ -85,6 +85,35 @@ async function findByIds(assetIds) {
   return data.map(toAsset);
 }
 
+// คืนรายการ User ที่มี Asset Active อย่างน้อย 1 ตัว (Distinct ราย user_id) พร้อม
+// line_user_id ที่ Join มาในคราวเดียว — ใช้เป็นรายชื่อ User ที่ Cron สรุปพอร์ต
+// (portfolioSummary.job) ต้องวนคำนวณให้ การ Join users ที่นี่เลยกัน N+1 Query
+// ตอน Push (ไม่ต้องยิงหา line_user_id ทีละ User)
+//
+// PostgREST ไม่มี DISTINCT ตรงๆ — ดึงทุกแถว Asset Active แล้ว Dedupe ราย user_id
+// ในชั้น App (จำนวน Asset ต่อ User น้อย ไม่กระทบ Performance อย่างมีนัยสำคัญ)
+async function findUserIdsWithActiveAssets() {
+  const { data, error } = await supabaseAdmin
+    .from('assets')
+    .select('user_id, users(line_user_id)')
+    .eq('is_active', true);
+
+  if (error) {
+    throw new Error(`Failed to find user ids with active assets: ${error.message}`);
+  }
+
+  const seen = new Map();
+  for (const row of data) {
+    if (seen.has(row.user_id)) continue;
+    seen.set(row.user_id, {
+      userId: row.user_id,
+      lineUserId: row.users?.line_user_id ?? null,
+    });
+  }
+
+  return Array.from(seen.values());
+}
+
 async function countActiveByUser(userId) {
   const { count, error } = await supabaseAdmin
     .from('assets')
@@ -105,4 +134,5 @@ module.exports = {
   findActiveByUser,
   findByIds,
   countActiveByUser,
+  findUserIdsWithActiveAssets,
 };

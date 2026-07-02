@@ -751,6 +751,58 @@ function buildReminderSetupCancelledMessage() {
   });
 }
 
+// ข้อความ Push สรุปพอร์ตรายสัปดาห์/รายเดือน (portfolioSummary.job) — bubble()
+// คืน Flex Message Object แบบเดียวกับที่ LINE Push API รับได้ ใช้ Pattern สี
+// เขียว/แดงตามกำไร-ขาดทุนเหมือน buildProfitMessage
+function buildPortfolioSummaryPushMessage(summary) {
+  const isMonthly = summary.periodLabel === 'monthly';
+  const headerText = isMonthly ? '📊 สรุปพอร์ตประจำเดือน' : '📊 สรุปพอร์ตประจำสัปดาห์';
+
+  const isProfit = summary.totalProfitLoss >= 0;
+  const plColor = isProfit ? COLOR.profit : COLOR.loss;
+  const sign = isProfit ? '+' : '-';
+  const plAbs = Math.abs(summary.totalProfitLoss);
+
+  // percent เป็น null เมื่อไม่มี Asset ที่มีราคาเลย (หารด้วยศูนย์) → แสดงเฉพาะจำนวนเงิน
+  const plText =
+    summary.totalProfitLossPercent === null
+      ? `กำไร/ขาดทุนรวม: ${sign}${formatNumber(plAbs)} บาท`
+      : `กำไร/ขาดทุนรวม: ${sign}${formatNumber(plAbs)} บาท (${sign}${formatNumber(
+          Math.abs(summary.totalProfitLossPercent)
+        )}%)`;
+
+  const body = [
+    textLine(`เงินลงทุนรวมทั้งพอร์ต: ${formatNumber(summary.totalInvestedAllAssets)} บาท`, {
+      size: 'sm',
+      color: COLOR.textSecondary,
+    }),
+    textLine(`มูลค่าปัจจุบันรวม: ${formatNumber(summary.totalCurrentValue)} บาท`, {
+      size: 'md',
+      weight: 'bold',
+      color: COLOR.textPrimary,
+    }),
+    textLine(plText, { size: 'md', weight: 'bold', color: plColor }),
+  ];
+
+  // มี Asset ที่ยังไม่มีราคาตลาด (เช่นหุ้นไทย) — บอกชัดว่าตัวเลขกำไร/ขาดทุน
+  // ไม่ได้รวมทั้งพอร์ต เพื่อไม่ให้ User เข้าใจผิด
+  if (summary.excludedCount > 0) {
+    body.push(
+      textLine(
+        `* ไม่รวม ${summary.excludedCount} สินทรัพย์ที่ยังไม่มีราคาตลาด (เช่น หุ้นไทย) ตัวเลขนี้จึงไม่ใช่ทั้งพอร์ต`,
+        { size: 'xs', color: COLOR.textSecondary }
+      )
+    );
+  }
+
+  return bubble({
+    headerText,
+    headerColor: plColor,
+    headerBg: isProfit ? COLOR.profitBg : COLOR.lossBg,
+    bodyContents: body,
+  });
+}
+
 function buildUnknownCommandMessage() {
   return bubble({
     headerText: '🤔 ไม่เข้าใจคำสั่งนี้',
@@ -782,6 +834,7 @@ module.exports = {
   buildReminderListMessage,
   buildReminderDeletedMessage,
   buildReminderPushMessage,
+  buildPortfolioSummaryPushMessage,
   buildSymbolQuickReply,
   buildFrequencyQuickReply,
   buildDayOfWeekQuickReply,

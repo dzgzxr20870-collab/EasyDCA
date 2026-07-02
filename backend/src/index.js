@@ -9,6 +9,10 @@ const webhookRoutes = require('./routes/webhook.routes');
 const { scheduleExpirePending, schedulePurgeOld } = require('./jobs/pendingCleanup.job');
 const { scheduleReminderPush } = require('./jobs/dcaReminder.job');
 const { schedulePurgeStaleSetupSessions } = require('./jobs/reminderSetupCleanup.job');
+const {
+  scheduleWeeklySummaryPush,
+  scheduleMonthlySummaryPush,
+} = require('./jobs/portfolioSummary.job');
 
 const app = express();
 
@@ -44,6 +48,10 @@ app.listen(config.app.port, () => {
   scheduleReminderPush();
   // Purge Reminder Setup Session ที่หมดอายุค้าง ตี 3 (reminderSetupCleanup.job.js)
   schedulePurgeStaleSetupSessions();
+  // Push สรุปพอร์ตรายสัปดาห์ (อาทิตย์ 08:00) และรายเดือน (วันที่ 1 08:00)
+  // Asia/Bangkok (portfolioSummary.job.js)
+  scheduleWeeklySummaryPush();
+  scheduleMonthlySummaryPush();
 });
 
 module.exports = app;

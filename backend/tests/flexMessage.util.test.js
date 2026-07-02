@@ -4,6 +4,7 @@ const {
   buildReminderListMessage,
   buildReminderDeletedMessage,
   buildReminderPushMessage,
+  buildPortfolioSummaryPushMessage,
   buildSymbolQuickReply,
   buildFrequencyQuickReply,
   buildDayOfWeekQuickReply,
@@ -141,6 +142,84 @@ describe('buildReminderPushMessage — ข้อความ Push ตอน Cron
     expect(text).toContain('BTC');
     expect(text).toContain('ซื้อ BTC 1,000'); // ตัวอย่างคำสั่งที่ให้ไปพิมพ์เอง
     expect(text).toContain('ไม่ได้ซื้อ');
+  });
+});
+
+describe('buildPortfolioSummaryPushMessage — สรุปพอร์ตรายสัปดาห์/รายเดือน', () => {
+  const BASE_SUMMARY = {
+    totalInvestedAllAssets: 30000,
+    totalCurrentValue: 40000,
+    totalProfitLoss: 10000,
+    totalProfitLossPercent: 33.33,
+    excludedCount: 0,
+    periodLabel: 'weekly',
+  };
+
+  test('เป็น Flex Message (มี altText/contents) แสดงเงินลงทุนรวม + มูลค่าปัจจุบัน + กำไร/ขาดทุน', () => {
+    const message = buildPortfolioSummaryPushMessage(BASE_SUMMARY);
+
+    expect(message.type).toBe('flex');
+    expect(message.altText).toBeTruthy();
+    expect(message.contents.type).toBe('bubble');
+
+    const text = allText(message);
+    expect(text).toContain('30,000'); // เงินลงทุนรวมทั้งพอร์ต
+    expect(text).toContain('40,000'); // มูลค่าปัจจุบันรวม
+    expect(text).toContain('+10,000'); // กำไรรวม
+    expect(text).toContain('33.33');
+  });
+
+  test('weekly → Header "ประจำสัปดาห์", monthly → Header "ประจำเดือน"', () => {
+    expect(allText(buildPortfolioSummaryPushMessage(BASE_SUMMARY))).toBeTruthy();
+    expect(buildPortfolioSummaryPushMessage(BASE_SUMMARY).altText).toContain('ประจำสัปดาห์');
+    expect(
+      buildPortfolioSummaryPushMessage({ ...BASE_SUMMARY, periodLabel: 'monthly' }).altText
+    ).toContain('ประจำเดือน');
+  });
+
+  test('ขาดทุน → เครื่องหมายลบ + สีแดง (loss)', () => {
+    const message = buildPortfolioSummaryPushMessage({
+      ...BASE_SUMMARY,
+      totalCurrentValue: 25000,
+      totalProfitLoss: -5000,
+      totalProfitLossPercent: -16.67,
+    });
+    const text = allText(message);
+
+    expect(text).toContain('-5,000');
+    expect(text).toContain('16.67');
+    // สีแดงตาม Design System (UI_UX.md § 1.1)
+    expect(text).toContain('#DC2626');
+  });
+
+  test('percent เป็น null (พอร์ตไม่มีราคาเลย) → ข้ามการแสดง % ไม่ Error', () => {
+    const message = buildPortfolioSummaryPushMessage({
+      totalInvestedAllAssets: 2900,
+      totalCurrentValue: 0,
+      totalProfitLoss: 0,
+      totalProfitLossPercent: null,
+      excludedCount: 2,
+      periodLabel: 'weekly',
+    });
+    const text = allText(message);
+
+    // ไม่มีวงเล็บ % ในบรรทัดกำไร/ขาดทุน
+    expect(text).not.toContain('%');
+    expect(text).toContain('กำไร/ขาดทุนรวม');
+  });
+
+  test('excludedCount > 0 → มีข้อความบอกว่าไม่รวม N สินทรัพย์ที่ยังไม่มีราคาตลาด', () => {
+    const message = buildPortfolioSummaryPushMessage({ ...BASE_SUMMARY, excludedCount: 3 });
+    const text = allText(message);
+
+    expect(text).toContain('ไม่รวม 3 สินทรัพย์');
+    expect(text).toContain('หุ้นไทย');
+  });
+
+  test('excludedCount = 0 → ไม่มีข้อความเตือนเรื่องสินทรัพย์ที่ถูกข้าม', () => {
+    const message = buildPortfolioSummaryPushMessage({ ...BASE_SUMMARY, excludedCount: 0 });
+
+    expect(allText(message)).not.toContain('ไม่รวม');
   });
 });
 
