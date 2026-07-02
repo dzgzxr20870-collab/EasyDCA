@@ -45,11 +45,17 @@ async function create(data) {
 }
 
 async function findRecentByUser(userId, limit) {
+  // date เป็นชนิด DATE (ไม่มีเวลา — DATABASE.md § 2) ธุรกรรมหลายรายการในวัน
+  // เดียวกันจะมี date เท่ากันหมด ทำให้ ORDER BY date เดี่ยวไม่ Deterministic
+  // (SQL ไม่การันตีลำดับแถวที่ค่าเท่ากัน) — เพิ่ม created_at DESC (TIMESTAMPTZ
+  // ระดับเวลาจริง) เป็น Secondary Key เพื่อให้ "ล่าสุดจริง" ถูกคืนก่อนเสมอ
+  // สำคัญต่อ undoLastTransaction (ย้อนรายการล่าสุด) และ history (แสดงล่าสุด N)
   const { data, error } = await supabaseAdmin
     .from('transactions')
     .select('*')
     .eq('user_id', userId)
     .order('date', { ascending: false })
+    .order('created_at', { ascending: false })
     .limit(limit);
 
   if (error) {
