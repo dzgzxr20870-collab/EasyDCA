@@ -94,13 +94,16 @@ async function resolveQuantityAndPrice(params) {
 function calculateHeldQuantity(transactions) {
   // ปัดเศษเฉพาะค่าสุดท้ายก่อน return (ไม่ปัดระหว่าง reduce แต่ละ step)
   // เพื่อกัน Floating Point สะสมผิดพลาด เช่น 0.1 + 0.2 = 0.30000000000000004
-  // ให้สอดคล้องกับ resolveQuantityAndPrice ที่ใช้ roundToTwo() เสมอ
+  // ใช้ roundToEight ให้ตรงกับ Precision ของ quantity (DATABASE.md NUMERIC(20,8))
+  // และ resolveQuantityAndPrice ที่ปัด quantity ด้วย roundToEight เสมอ — ห้ามใช้
+  // roundToTwo เพราะจะปัด Crypto ยอดน้อย (เช่น BTC 0.00049068) เป็น 0 ทำให้ Asset
+  // นั้นหายจากพอร์ต/คำนวณกำไรไม่ได้
   const held = transactions.reduce((sum, tx) => {
     const qty = Number(tx.quantity);
     return tx.type === 'buy' ? sum + qty : sum - qty;
   }, 0);
 
-  return roundToTwo(held);
+  return roundToEight(held);
 }
 
 // ตรวจว่าคำสั่ง BUY ทำได้ไหม + จำแนกว่าเป็น Asset เดิมหรือต้องสร้างใหม่
@@ -265,7 +268,7 @@ async function processSellCommand(userId, params) {
     quantity,
     pricePerUnit,
     amountThb,
-    remainingQuantity: roundToTwo(heldQuantity - quantity),
+    remainingQuantity: roundToEight(heldQuantity - quantity),
     priceSource,
   };
 }

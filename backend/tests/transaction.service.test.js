@@ -236,6 +236,22 @@ describe('processSellCommand', () => {
     expect(transactionRepository.create).not.toHaveBeenCalled();
   });
 
+  // Regression: ขาย Crypto บางส่วนแล้วเหลือยอดน้อยกว่า 0.01 — remainingQuantity
+  // ต้องคงทศนิยม 8 ตำแหน่ง ไม่ถูกปัดเป็น 0 (ก่อนแก้ใช้ roundToTwo จะได้ 0)
+  test('ขาย Crypto บางส่วนเหลือยอดน้อยกว่า 0.01 → remainingQuantity ไม่ปัดเป็น 0', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET);
+    transactionRepository.findAllByAsset.mockResolvedValue([{ type: 'buy', quantity: 0.001 }]);
+
+    const result = await processSellCommand(USER_ID, {
+      symbol: 'BTC',
+      quantity: 0.0005,
+      pricePerUnit: 2000000,
+    });
+
+    // ยอดคงเหลือก่อนขาย = 0.001 → หลังขาย 0.0005 เหลือ 0.0005
+    expect(result.remainingQuantity).toBe(0.0005);
+  });
+
   test('ขายพอดียอดคงเหลือทั้งหมด (Boundary) → สำเร็จ เหลือ 0', async () => {
     assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET);
     transactionRepository.findAllByAsset.mockResolvedValue([{ type: 'buy', quantity: 50 }]);
@@ -292,6 +308,29 @@ describe('calculateHeldQuantity', () => {
         { type: 'sell', quantity: '40' },
       ])
     ).toBe(60);
+  });
+
+  // Regression: Crypto ยอดน้อยกว่า 0.01 ต้องไม่ถูกปัดเป็น 0 (DATABASE.md NUMERIC(20,8))
+  // ก่อนแก้ (roundToTwo) เคสเหล่านี้จะได้ 0 → Asset หายจากพอร์ต/คำนวณกำไรไม่ได้
+  test('Crypto ยอดน้อย 0.00049068 (BTC) ต้องคงค่าไว้ ไม่ปัดเป็น 0', () => {
+    expect(calculateHeldQuantity([{ type: 'buy', quantity: 0.00049068 }])).toBe(0.00049068);
+  });
+
+  test('Crypto ยอดน้อย 0.0001749 ต้องคงค่าไว้ ไม่ปัดเป็น 0', () => {
+    expect(calculateHeldQuantity([{ type: 'buy', quantity: 0.0001749 }])).toBe(0.0001749);
+  });
+
+  test('ยอดคงเหลือ Crypto ต่ำกว่า 0.01 หลังหักขายบางส่วน ต้องมากกว่า 0', () => {
+    const held = calculateHeldQuantity([
+      { type: 'buy', quantity: 0.001 },
+      { type: 'sell', quantity: 0.0005 },
+    ]);
+    expect(held).toBe(0.0005);
+    expect(held).toBeGreaterThan(0);
+  });
+
+  test('quantity เป็น String ยอดน้อย (จาก DB NUMERIC(20,8)) ต้องคงทศนิยม 8 ตำแหน่ง', () => {
+    expect(calculateHeldQuantity([{ type: 'buy', quantity: '0.00049068' }])).toBe(0.00049068);
   });
 });
 
