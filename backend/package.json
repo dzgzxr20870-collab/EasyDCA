@@ -4,6 +4,9 @@
   "private": true,
   "description": "EasyDCA API Server (Node.js + Express)",
   "main": "src/index.js",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
