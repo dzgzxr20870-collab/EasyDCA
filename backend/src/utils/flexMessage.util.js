@@ -1,4 +1,4 @@
-const { dowToDayName } = require('./thaiDate.util');
+const { dowToDayName, THAI_DAY_NAMES } = require('./thaiDate.util');
 
 // Flex Message Builders ตาม Design System ใน UI_UX.md § 1, § 3
 // สีอ้างอิงจาก UI_UX.md § 1.1 (Financial Status Colors)
@@ -42,6 +42,16 @@ const ERROR_MESSAGES = {
     'ไม่พบการตั้งเตือนของสินทรัพย์นี้ที่กำลังใช้งานอยู่ ลองพิมพ์ "ดูเตือน" เพื่อดูรายการที่ตั้งไว้',
   INVALID_REMINDER:
     'ตั้งเตือนไม่สำเร็จ กรุณาตรวจสอบรูปแบบ เช่น "ตั้งเตือน BTC ทุกวันจันทร์ 1000" หรือ "ตั้งเตือน AAPL ทุกวันที่ 5 3000"',
+  // DCA Reminder Setup Flow (reminderSetupFlow.service) — สนทนาแบบเลือกปุ่มหลายขั้น
+  SETUP_SESSION_NOT_FOUND:
+    'ไม่พบขั้นตอนการตั้งเตือนที่ค้างอยู่ (อาจหมดเวลา 5 นาทีแล้ว) กรุณากดปุ่ม "⏰ ตั้งเตือน DCA" ที่เมนูเพื่อเริ่มใหม่',
+  WRONG_STEP:
+    'ปุ่มนี้ไม่ตรงกับขั้นตอนปัจจุบัน (อาจกดปุ่มเก่าซ้ำ) กรุณาทำตามปุ่มล่าสุดที่ระบบส่งให้ หรือกด "ยกเลิก" แล้วเริ่มใหม่',
+  PORTFOLIO_EMPTY_FOR_REMINDER:
+    'คุณยังไม่มีสินทรัพย์ในพอร์ต จึงยังตั้งเตือน DCA ไม่ได้ ลองบันทึกการซื้อครั้งแรกก่อน เช่น "ซื้อ BTC 1000"',
+  INVALID_AMOUNT: 'จำนวนเงินไม่ถูกต้อง กรุณาพิมพ์เป็นตัวเลขที่มากกว่า 0 (เช่น 1000) อีกครั้ง',
+  INVALID_DAY:
+    'วันที่ไม่ถูกต้อง สำหรับรายเดือนกรุณาพิมพ์เลข 1-31 หรือเลือกจากปุ่มที่ระบบส่งให้',
   INTERNAL_ERROR: 'เกิดข้อผิดพลาดบางอย่าง กรุณาลองใหม่อีกครั้งในภายหลัง',
 };
 
@@ -644,6 +654,103 @@ function buildReminderPushMessage(reminder) {
   });
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// DCA Reminder Setup Flow — Quick Reply (แถบปุ่มด้านล่างจอ) หลายขั้นตอน
+// ทุกข้อความแนบปุ่ม "❌ ยกเลิก" (Postback action=cancel_reminder_setup) เสมอ
+// ให้ผู้ใช้เลิก Flow กลางทางได้ (Requirement ข้อ 5-6)
+// ═══════════════════════════════════════════════════════════════════════
+
+// 1 Quick Reply Item แบบ Postback — data ถอดที่ Controller ด้วย URLSearchParams
+function quickReplyPostback(label, data, displayText) {
+  return {
+    type: 'action',
+    action: { type: 'postback', label, data, displayText },
+  };
+}
+
+// ปุ่มยกเลิกที่แนบไปทุกขั้นตอน
+function cancelSetupItem() {
+  return quickReplyPostback('❌ ยกเลิก', 'action=cancel_reminder_setup', 'ยกเลิกการตั้งเตือน');
+}
+
+// ข้อความ Text + Quick Reply — ผนวกปุ่มยกเลิกต่อท้ายเสมอ (LINE จำกัด 13 items/ข้อความ)
+function textWithQuickReply(text, items = []) {
+  return {
+    type: 'text',
+    text,
+    quickReply: { items: [...items, cancelSetupItem()] },
+  };
+}
+
+// ── ขั้น 1: เลือก Symbol ที่ถืออยู่ในพอร์ต ────────────────────────────────
+// LINE จำกัด 13 items/ข้อความ (รวมปุ่มยกเลิก) — จำกัด Symbol ไว้ 12 ตัว
+function buildSymbolQuickReply(symbols) {
+  const items = (symbols ?? [])
+    .slice(0, 12)
+    .map((symbol) =>
+      quickReplyPostback(symbol, `action=reminder_symbol&symbol=${symbol}`, symbol)
+    );
+
+  return textWithQuickReply('จะตั้งเตือน DCA ให้สินทรัพย์ไหนดีครับ? เลือกจากพอร์ตของคุณได้เลย', items);
+}
+
+// ── ขั้น 2: เลือกความถี่ ──────────────────────────────────────────────────
+function buildFrequencyQuickReply() {
+  const items = [
+    quickReplyPostback('รายสัปดาห์', 'action=reminder_freq&frequency=weekly', 'รายสัปดาห์'),
+    quickReplyPostback('รายเดือน', 'action=reminder_freq&frequency=monthly', 'รายเดือน'),
+  ];
+
+  return textWithQuickReply('ต้องการให้เตือนบ่อยแค่ไหนครับ?', items);
+}
+
+// ── ขั้น 3a: เลือกวันในสัปดาห์ (รายสัปดาห์) — 7 วัน ────────────────────────
+function buildDayOfWeekQuickReply() {
+  const items = THAI_DAY_NAMES.map((dayName, dow) =>
+    quickReplyPostback(dayName, `action=reminder_day&dayOfWeek=${dow}`, `วัน${dayName}`)
+  );
+
+  return textWithQuickReply('เตือนทุกวันอะไรของสัปดาห์ดีครับ?', items);
+}
+
+// ── ขั้น 3b: เลือกวันของเดือน (รายเดือน) — ปุ่มวันยอดนิยม + พิมพ์เองได้ ──────
+function buildDayOfMonthQuickReply() {
+  const items = [1, 5, 10, 15, 20, 25].map((day) =>
+    quickReplyPostback(`วันที่ ${day}`, `action=reminder_day&dayOfMonth=${day}`, `วันที่ ${day}`)
+  );
+
+  return textWithQuickReply(
+    'เตือนทุกวันที่เท่าไรของเดือนดีครับ? เลือกจากปุ่ม หรือพิมพ์ตัวเลข 1-31 เองก็ได้',
+    items
+  );
+}
+
+// ── ขั้น 4: ขอจำนวนเงิน (พิมพ์เอง — เดาไม่ได้ จึงไม่มีปุ่มตัวเลือก มีแต่ยกเลิก) ─
+function buildAskAmountMessage(symbol) {
+  return textWithQuickReply(
+    `ตั้งใจ DCA ${symbol} ครั้งละกี่บาทครับ? พิมพ์จำนวนเงินมาได้เลย (เช่น 1000)`
+  );
+}
+
+// ยืนยันว่ายกเลิก Flow ตั้งเตือนแล้ว (กดปุ่มยกเลิกกลางทาง)
+function buildReminderSetupCancelledMessage() {
+  return bubble({
+    headerText: '❌ ยกเลิกการตั้งเตือนแล้ว',
+    headerColor: COLOR.textSecondary,
+    headerBg: COLOR.warningBg,
+    bodyContents: [
+      textLine('ยกเลิกขั้นตอนการตั้งเตือน DCA แล้ว ยังไม่มีการบันทึกการเตือนใดๆ', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      textLine('อยากเริ่มใหม่กดปุ่ม "⏰ ตั้งเตือน DCA" ที่เมนูได้เลย', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
+}
+
 function buildUnknownCommandMessage() {
   return bubble({
     headerText: '🤔 ไม่เข้าใจคำสั่งนี้',
@@ -675,6 +782,12 @@ module.exports = {
   buildReminderListMessage,
   buildReminderDeletedMessage,
   buildReminderPushMessage,
+  buildSymbolQuickReply,
+  buildFrequencyQuickReply,
+  buildDayOfWeekQuickReply,
+  buildDayOfMonthQuickReply,
+  buildAskAmountMessage,
+  buildReminderSetupCancelledMessage,
   buildErrorMessage,
   buildUnknownCommandMessage,
 };

@@ -10,7 +10,13 @@
 // สำเร็จออกมาชัดเจน เพื่อให้เอาไปลบ Rich Menu เก่าที่ไม่ใช้แล้วได้ทีหลัง
 // ด้วย DELETE https://api.line.me/v2/bot/richmenu/{richMenuId}
 const config = require('../config/env');
-const { generatePlaceholderImage, WIDTH, HEIGHT } = require('./richMenuImage');
+const {
+  generatePlaceholderImage,
+  WIDTH,
+  HEIGHT,
+  CELL_WIDTH,
+  CELL_HEIGHT,
+} = require('./richMenuImage');
 
 // หมายเหตุ: Endpoint อัพโหลดเนื้อหา (รูปภาพ) ของ LINE ใช้ Host แยกต่างหาก
 // คือ api-data.line.me (ไม่ใช่ api.line.me เหมือน Endpoint อื่น) ตาม LINE
@@ -19,8 +25,6 @@ const RICHMENU_API_URL = 'https://api.line.me/v2/bot/richmenu';
 const RICHMENU_DATA_API_URL = 'https://api-data.line.me/v2/bot/richmenu';
 const RICHMENU_DEFAULT_URL = 'https://api.line.me/v2/bot/user/all/richmenu';
 
-const SECTION_WIDTH = WIDTH / 5;
-
 // action type "message" ของ LINE ส่งข้อความนั้นออกไปทันทีเมื่อผู้ใช้แตะปุ่ม
 // (ไม่ใช่แค่เติมข้อความในช่อง Input ให้พิมพ์ต่อ — LINE Rich Menu ไม่มี Action
 // แบบ "เติมข้อความแต่ยังไม่ส่ง" ให้ใช้) ดังนั้นปุ่ม "เพิ่มรายการ" ที่ส่ง "ซื้อ"
@@ -28,11 +32,17 @@ const SECTION_WIDTH = WIDTH / 5;
 // Command ซึ่งระบบตอบกลับด้วยตัวอย่างคำสั่งที่ถูกต้องอยู่แล้ว
 // (flexMessage.util.js buildUnknownCommandMessage) ผลลัพธ์จึงยังใกล้เคียง
 // เจตนาเดิม (ชี้แนะให้ผู้ใช้พิมพ์ต่อ) แม้กลไกจะต่างจากการ "Prefix ในช่อง Input"
+//
+// Layout: Grid 2 แถว x 3 คอลัมน์ (2500x1686)
+//   แถวบน:  ซื้อ | พอต | ประวัติ
+//   แถวล่าง: ดูแพ็กเกจ Premium | ตั้งค่า | ⏰ ตั้งเตือน DCA
 function buildRichMenuPayload() {
-  const area = (index, text) => ({
-    bounds: { x: index * SECTION_WIDTH, y: 0, width: SECTION_WIDTH, height: HEIGHT },
-    action: { type: 'message', text },
+  // 1 ช่องใน Grid (col 0..2, row 0..1)
+  const cell = (col, row, action) => ({
+    bounds: { x: col * CELL_WIDTH, y: row * CELL_HEIGHT, width: CELL_WIDTH, height: CELL_HEIGHT },
+    action,
   });
+  const message = (text) => ({ type: 'message', text });
 
   return {
     size: { width: WIDTH, height: HEIGHT },
@@ -40,11 +50,21 @@ function buildRichMenuPayload() {
     name: 'EasyDCA Main Menu',
     chatBarText: 'เมนู',
     areas: [
-      area(0, 'ซื้อ'), // เพิ่มรายการ — Prefix ให้พิมพ์ต่อ (ดู Comment ด้านบน)
-      area(1, 'พอต'), // พอร์ต — คำสั่งสมบูรณ์
-      area(2, 'ประวัติ'), // ประวัติ — คำสั่งสมบูรณ์
-      area(3, 'ดูแพ็กเกจ Premium'), // ยังไม่มี Handler จริง → ตก UNKNOWN
-      area(4, 'ตั้งค่า'), // ยังไม่มี Handler จริง → ตก UNKNOWN
+      // ── แถวบน ──────────────────────────────────────────────────────────
+      cell(0, 0, message('ซื้อ')), // เพิ่มรายการ — Prefix ให้พิมพ์ต่อ (ดู Comment ด้านบน)
+      cell(1, 0, message('พอต')), // พอร์ต — คำสั่งสมบูรณ์
+      cell(2, 0, message('ประวัติ')), // ประวัติ — คำสั่งสมบูรณ์
+      // ── แถวล่าง ────────────────────────────────────────────────────────
+      cell(0, 1, message('ดูแพ็กเกจ Premium')), // ยังไม่มี Handler จริง → ตก UNKNOWN
+      cell(1, 1, message('ตั้งค่า')), // ยังไม่มี Handler จริง → ตก UNKNOWN
+      // ปุ่มใหม่ — Postback (ไม่ใช่ message) เพราะเริ่ม Flow ตั้งเตือน DCA แบบ Quick
+      // Reply หลายขั้นตอน webhook.controller routePostback จับ action นี้ (ไม่ผ่าน
+      // Command Parser) displayText แสดงในแชทเสมือนผู้ใช้กดเลือกเอง
+      cell(2, 1, {
+        type: 'postback',
+        data: 'action=start_reminder_setup',
+        displayText: '⏰ ตั้งเตือน DCA',
+      }),
     ],
   };
 }

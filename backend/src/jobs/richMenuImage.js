@@ -1,6 +1,6 @@
-// สร้างรูปภาพ Rich Menu แบบ Placeholder (สีพื้นแบ่ง 5 ช่อง + Label ตัวอักษร)
-// ⚠️ PLACEHOLDER — รอ Design จริงจากทีม Design ตาม UI_UX.md § 1 มาแทนที่
-// ก่อนใช้งานจริงกับผู้ใช้
+// สร้างรูปภาพ Rich Menu แบบ Placeholder (สีพื้น Grid 2 แถว x 3 คอลัมน์ = 6 ช่อง
+// + Label ตัวอักษร) ⚠️ PLACEHOLDER — รอ Design จริงจากทีม Design ตาม UI_UX.md § 1
+// มาแทนที่ก่อนใช้งานจริงกับผู้ใช้
 //
 // ไม่ใช้ Library ภายนอก (เช่น canvas/sharp) เพราะต้อง Compile Native
 // Binding ซึ่งเสี่ยงใช้ไม่ได้บน Windows/Node เวอร์ชันใหม่ — เขียน PNG
@@ -13,10 +13,16 @@
 // อัพโหลดรูปคงที่แทน
 const zlib = require('zlib');
 
+// Grid 2 แถว x 3 คอลัมน์ (LINE Rich Menu รองรับสูงสุด 2500x1686 — 2 แถว)
 const WIDTH = 2500;
-const HEIGHT = 843;
-const SECTION_COUNT = 5;
-const SECTION_WIDTH = WIDTH / SECTION_COUNT;
+const ROW_HEIGHT = 843; // ความสูงต่อ 1 แถว (LINE Spec แถวเดียว)
+const COLS = 3;
+const ROWS = 2;
+const HEIGHT = ROW_HEIGHT * ROWS; // 1686
+// 2500/3 ไม่ลงตัว — ใช้ Math.floor ให้เป็น Integer (LINE bounds + Pixel math ต้อง
+// เป็นจำนวนเต็ม) เหลือขอบขวา 1px เป็นพื้นหลัง ไม่กระทบการใช้งาน
+const CELL_WIDTH = Math.floor(WIDTH / COLS); // 833
+const CELL_HEIGHT = ROW_HEIGHT;
 
 const BG_COLOR = [15, 61, 104]; // UI_UX.md § 1.1 Primary (Navy Blue) #0F3D68
 const LINE_COLOR = [255, 255, 255];
@@ -48,8 +54,13 @@ const GLYPH_W = 5;
 const GLYPH_H = 7;
 const GLYPH_GAP = 1;
 
-// Label ภาษาอังกฤษของแต่ละปุ่ม (เรียงตรงกับ areas ใน setupRichMenu.js)
-const LABELS = ['ADD', 'PORTFOLIO', 'HISTORY', 'PREMIUM', 'SETTINGS'];
+// Label ภาษาอังกฤษของแต่ละปุ่ม เรียงแบบ Row-major (index → col=index%COLS,
+// row=floor(index/COLS)) ให้ตรงกับ areas ใน setupRichMenu.js
+// แถวบน: ADD(ซื้อ) PORTFOLIO(พอต) HISTORY(ประวัติ)
+// แถวล่าง: PREMIUM(ดูแพ็กเกจ) SETTINGS(ตั้งค่า) REMINDER(ตั้งเตือน DCA)
+// หมายเหตุ: Bitmap Font 5x7 รองรับเฉพาะบางตัวอักษร — เลี่ยง "DCA" เพราะไม่มี
+// glyph 'C' ใช้ "REMINDER" (ทุกตัวอักษรมีใน FONT_5X7) แทน
+const LABELS = ['ADD', 'PORTFOLIO', 'HISTORY', 'PREMIUM', 'SETTINGS', 'REMINDER'];
 
 function setPixel(raw, x, y, color) {
   if (x < 0 || x >= WIDTH || y < 0 || y >= HEIGHT) return;
@@ -68,9 +79,9 @@ function fillRect(raw, x0, y0, w, h, color) {
   }
 }
 
-function drawLabel(raw, sectionIndex, word) {
+function drawLabel(raw, col, row, word) {
   const unitsWide = word.length * GLYPH_W + (word.length - 1) * GLYPH_GAP;
-  const maxWidthPx = SECTION_WIDTH - 60;
+  const maxWidthPx = CELL_WIDTH - 60;
   const maxHeightPx = 200;
 
   const scale = Math.max(
@@ -80,9 +91,11 @@ function drawLabel(raw, sectionIndex, word) {
 
   const textWidthPx = unitsWide * scale;
   const textHeightPx = GLYPH_H * scale;
-  const sectionX0 = sectionIndex * SECTION_WIDTH;
-  const startX = sectionX0 + Math.floor((SECTION_WIDTH - textWidthPx) / 2);
-  const startY = Math.floor((HEIGHT - textHeightPx) / 2);
+  // จัดกึ่งกลางภายในเซลล์ (col,row) ของ Grid
+  const cellX0 = col * CELL_WIDTH;
+  const cellY0 = row * CELL_HEIGHT;
+  const startX = cellX0 + Math.floor((CELL_WIDTH - textWidthPx) / 2);
+  const startY = cellY0 + Math.floor((CELL_HEIGHT - textHeightPx) / 2);
 
   let cursorX = startX;
   for (const ch of word) {
@@ -152,20 +165,29 @@ function encodePng(raw) {
   ]);
 }
 
-// สร้างรูป Rich Menu Placeholder ขนาด 2500x843 (LINE Spec เต็มความกว้าง
-// แถวเดียว) แบ่ง 5 ช่องเท่ากัน พร้อม Label ภาษาอังกฤษกลางช่อง
+// สร้างรูป Rich Menu Placeholder ขนาด 2500x1686 (LINE Spec 2 แถว) แบ่ง Grid
+// 2 แถว x 3 คอลัมน์ = 6 ช่องเท่ากัน พร้อม Label ภาษาอังกฤษกลางช่อง
 function generatePlaceholderImage() {
   const bytesPerRow = 1 + WIDTH * 3; // filter byte + RGB
   const raw = Buffer.alloc(bytesPerRow * HEIGHT);
 
   fillRect(raw, 0, 0, WIDTH, HEIGHT, BG_COLOR);
 
-  // เส้นแบ่งช่อง (2px) ที่ขอบขวาของช่องที่ 1-4
-  for (let i = 1; i < SECTION_COUNT; i++) {
-    fillRect(raw, i * SECTION_WIDTH - 1, 0, 2, HEIGHT, LINE_COLOR);
+  // เส้นแบ่งคอลัมน์ (แนวตั้ง 2px) ที่ขอบขวาของคอลัมน์ที่ 1..COLS-1
+  for (let c = 1; c < COLS; c++) {
+    fillRect(raw, c * CELL_WIDTH - 1, 0, 2, HEIGHT, LINE_COLOR);
+  }
+  // เส้นแบ่งแถว (แนวนอน 2px) ที่ขอบล่างของแถวที่ 1..ROWS-1
+  for (let r = 1; r < ROWS; r++) {
+    fillRect(raw, 0, r * CELL_HEIGHT - 1, WIDTH, 2, LINE_COLOR);
   }
 
-  LABELS.forEach((label, index) => drawLabel(raw, index, label));
+  // วาด Label ตามลำดับ Row-major: index → (col, row)
+  LABELS.forEach((label, index) => {
+    const col = index % COLS;
+    const row = Math.floor(index / COLS);
+    drawLabel(raw, col, row, label);
+  });
 
   return encodePng(raw);
 }
@@ -174,4 +196,8 @@ module.exports = {
   generatePlaceholderImage,
   WIDTH,
   HEIGHT,
+  COLS,
+  ROWS,
+  CELL_WIDTH,
+  CELL_HEIGHT,
 };

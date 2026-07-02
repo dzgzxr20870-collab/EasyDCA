@@ -3,12 +3,30 @@ jest.mock('../src/services/pendingTransaction.service');
 jest.mock('../src/services/portfolio.service');
 jest.mock('../src/services/profit.service');
 jest.mock('../src/services/history.service');
+jest.mock('../src/services/dcaReminder.service');
+// Mock ฟังก์ชันของ Flow แต่คง STEPS จริงไว้ให้ Controller ใช้เทียบ Step
+// (Pattern เดียวกับ commandParser ด้านล่าง — automock ไม่คงค่า Constant object)
+jest.mock('../src/services/reminderSetupFlow.service', () => {
+  const actual = jest.requireActual('../src/services/reminderSetupFlow.service');
+  return {
+    STEPS: actual.STEPS,
+    getCurrentSession: jest.fn(),
+    startFlow: jest.fn(),
+    handleSymbolSelected: jest.fn(),
+    handleFrequencySelected: jest.fn(),
+    handleDaySelected: jest.fn(),
+    handleAmountEntered: jest.fn(),
+    cancelFlow: jest.fn(),
+  };
+});
 jest.mock('../src/services/line.service');
 
 // Mock parseCommand แต่คง COMMANDS จริงไว้ให้ Controller ใช้เทียบ
 jest.mock('../src/services/commandParser.service', () => {
   const actual = jest.requireActual('../src/services/commandParser.service');
-  return { COMMANDS: actual.COMMANDS, parseCommand: jest.fn() };
+  // คง COMMANDS + normalizeText จริงไว้ (Controller ใช้ normalizeText แปลงเลขไทย
+  // ในการ Parse จำนวนเงิน/วันที่) Mock เฉพาะ parseCommand
+  return { COMMANDS: actual.COMMANDS, normalizeText: actual.normalizeText, parseCommand: jest.fn() };
 });
 
 const userRepository = require('../src/repositories/user.repository');
@@ -16,6 +34,8 @@ const pendingService = require('../src/services/pendingTransaction.service');
 const portfolioService = require('../src/services/portfolio.service');
 const profitService = require('../src/services/profit.service');
 const historyService = require('../src/services/history.service');
+const reminderService = require('../src/services/dcaReminder.service');
+const reminderSetupFlow = require('../src/services/reminderSetupFlow.service');
 const lineService = require('../src/services/line.service');
 const commandParser = require('../src/services/commandParser.service');
 const { handleEvent } = require('../src/controllers/webhook.controller');
@@ -54,6 +74,8 @@ beforeEach(() => {
   // Default: จำลอง LINE Profile API ล้มเหลว — Test ที่ต้องการ Profile จริง
   // จะ Override ค่านี้เอง
   lineService.getProfile.mockResolvedValue(null);
+  // Default: ไม่มี Setup Session ค้าง — Test ของ Flow ตั้งเตือนจะ Override เอง
+  reminderSetupFlow.getCurrentSession.mockResolvedValue(null);
 });
 
 describe('handleEvent — BUY/SELL สร้าง Preview รอ Confirm', () => {
@@ -445,6 +467,270 @@ describe('handleEvent — PROFIT', () => {
     const reply = lastReplyText();
     expect(reply).toContain('เฉพาะบางสินทรัพย์');
     expect(reply).not.toContain('PRICE_FEED_NOT_IMPLEMENTED');
+  });
+});
+
+describe('handleEvent — DCA Reminder', () => {
+  test('ตั้งเตือน weekly → เรียก createReminder แล้ว reply ยืนยันตั้งเตือน', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.SET_REMINDER,
+      params: { symbol: 'BTC', frequency: 'weekly', dayOfWeek: 1, amountThb: 1000 },
+    });
+    reminderService.createReminder.mockResolvedValue({
+      symbol: 'BTC',
+      frequency: 'weekly',
+      dayOfWeek: 1,
+      amountThb: 1000,
+    });
+
+    await handleEvent(textEvent('ตั้งเตือน BTC ทุกวันจันทร์ 1000'));
+
+    expect(reminderService.createReminder).toHaveBeenCalledWith(FREE_USER.id, {
+      symbol: 'BTC',
+      frequency: 'weekly',
+      dayOfWeek: 1,
+      amountThb: 1000,
+    });
+    const reply = lastReplyText();
+    expect(reply).toContain('ตั้งเตือน DCA แล้ว');
+    expect(reply).toContain('ทุกวันจันทร์');
+    expect(reply).toContain('1,000');
+  });
+
+  test('ดูเตือน → เรียก listReminders แล้ว reply ด้วยรายการ', async () => {
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.LIST_REMINDERS, params: {} });
+    reminderService.listReminders.mockResolvedValue([
+      { symbol: 'BTC', frequency: 'weekly', dayOfWeek: 3, amountThb: 1000 },
+    ]);
+
+    await handleEvent(textEvent('ดูเตือน'));
+
+    expect(reminderService.listReminders).toHaveBeenCalledWith(FREE_USER.id);
+    const reply = lastReplyText();
+    expect(reply).toContain('BTC');
+    expect(reply).toContain('ทุกวันพุธ');
+  });
+
+  test('ดูเตือน แต่ยังไม่มี → reply แนะนำให้เริ่มตั้ง', async () => {
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.LIST_REMINDERS, params: {} });
+    reminderService.listReminders.mockResolvedValue([]);
+
+    await handleEvent(textEvent('ดูเตือน'));
+
+    expect(lastReplyText()).toContain('ยังไม่มีการตั้งเตือน');
+  });
+
+  test('ลบเตือน BTC → เรียก deleteReminder แล้ว reply ยืนยันปิด', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.DELETE_REMINDER,
+      params: { symbol: 'BTC' },
+    });
+    reminderService.deleteReminder.mockResolvedValue({ symbol: 'BTC', deactivated: 1 });
+
+    await handleEvent(textEvent('ลบเตือน BTC'));
+
+    expect(reminderService.deleteReminder).toHaveBeenCalledWith(FREE_USER.id, 'BTC');
+    expect(lastReplyText()).toContain('ปิดการเตือน');
+  });
+
+  test('ลบเตือนที่ไม่มีอยู่ → REMINDER_NOT_FOUND แปลเป็นข้อความไทย (ไม่โชว์ Code ดิบ)', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.DELETE_REMINDER,
+      params: { symbol: 'DOGE' },
+    });
+    const err = new Error('No active reminder found for DOGE');
+    err.code = 'REMINDER_NOT_FOUND';
+    reminderService.deleteReminder.mockRejectedValue(err);
+
+    await handleEvent(textEvent('ลบเตือน DOGE'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('ไม่พบการตั้งเตือน');
+    expect(reply).not.toContain('REMINDER_NOT_FOUND');
+  });
+
+  test('ตั้งเตือนรูปแบบผิด (service throw INVALID_REMINDER) → แปลเป็นข้อความไทยแนะนำรูปแบบ', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.SET_REMINDER,
+      params: { symbol: 'BTC', frequency: 'monthly', dayOfMonth: 45, amountThb: 1000 },
+    });
+    const err = new Error('dayOfMonth must be an integer 1-31 for monthly');
+    err.code = 'INVALID_REMINDER';
+    reminderService.createReminder.mockRejectedValue(err);
+
+    await handleEvent(textEvent('ตั้งเตือน BTC ทุกวันที่ 45 1000'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('ตรวจสอบรูปแบบ');
+    expect(reply).not.toContain('INVALID_REMINDER');
+  });
+});
+
+describe('handleEvent — DCA Reminder Setup Flow (Quick Reply)', () => {
+  test('Postback start_reminder_setup → startFlow แล้วส่ง Quick Reply เลือก Symbol', async () => {
+    reminderSetupFlow.startFlow.mockResolvedValue({ symbols: ['BTC', 'ETH'] });
+
+    await handleEvent(postbackEvent('action=start_reminder_setup'));
+
+    expect(reminderSetupFlow.startFlow).toHaveBeenCalledWith(FREE_USER.id);
+    const reply = lastReplyText();
+    expect(reply).toContain('action=reminder_symbol&symbol=BTC');
+    expect(reply).toContain('action=reminder_symbol&symbol=ETH');
+    // ทุกข้อความแนบปุ่มยกเลิก
+    expect(reply).toContain('action=cancel_reminder_setup');
+  });
+
+  test('พอร์ตว่าง → PORTFOLIO_EMPTY_FOR_REMINDER แปลเป็นข้อความไทย (ไม่โชว์ Code)', async () => {
+    const err = new Error('empty portfolio');
+    err.code = 'PORTFOLIO_EMPTY_FOR_REMINDER';
+    reminderSetupFlow.startFlow.mockRejectedValue(err);
+
+    await handleEvent(postbackEvent('action=start_reminder_setup'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('ยังไม่มีสินทรัพย์ในพอร์ต');
+    expect(reply).not.toContain('PORTFOLIO_EMPTY_FOR_REMINDER');
+  });
+
+  test('Postback เลือก Symbol → handleSymbolSelected แล้วถามความถี่', async () => {
+    reminderSetupFlow.handleSymbolSelected.mockResolvedValue({ symbol: 'BTC' });
+
+    await handleEvent(postbackEvent('action=reminder_symbol&symbol=BTC'));
+
+    expect(reminderSetupFlow.handleSymbolSelected).toHaveBeenCalledWith(FREE_USER.id, 'BTC');
+    const reply = lastReplyText();
+    expect(reply).toContain('action=reminder_freq&frequency=weekly');
+    expect(reply).toContain('action=reminder_freq&frequency=monthly');
+  });
+
+  test('Postback เลือกความถี่ weekly → ถามวันในสัปดาห์ (7 วัน)', async () => {
+    reminderSetupFlow.handleFrequencySelected.mockResolvedValue({ frequency: 'weekly' });
+
+    await handleEvent(postbackEvent('action=reminder_freq&frequency=weekly'));
+
+    expect(reminderSetupFlow.handleFrequencySelected).toHaveBeenCalledWith(FREE_USER.id, 'weekly');
+    const reply = lastReplyText();
+    expect(reply).toContain('action=reminder_day&dayOfWeek=0');
+    expect(reply).toContain('action=reminder_day&dayOfWeek=6');
+  });
+
+  test('Postback เลือกความถี่ monthly → ถามวันของเดือน', async () => {
+    reminderSetupFlow.handleFrequencySelected.mockResolvedValue({ frequency: 'monthly' });
+
+    await handleEvent(postbackEvent('action=reminder_freq&frequency=monthly'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('action=reminder_day&dayOfMonth=1');
+    expect(reply).toContain('พิมพ์ตัวเลข');
+  });
+
+  test('Postback เลือกวัน → handleDaySelected แล้วขอจำนวนเงิน', async () => {
+    reminderSetupFlow.handleDaySelected.mockResolvedValue({ symbol: 'BTC' });
+
+    await handleEvent(postbackEvent('action=reminder_day&dayOfWeek=1'));
+
+    expect(reminderSetupFlow.handleDaySelected).toHaveBeenCalledWith(FREE_USER.id, 1);
+    const reply = lastReplyText();
+    expect(reply).toContain('BTC');
+    expect(reply).toContain('กี่บาท');
+  });
+
+  test('Postback ยกเลิก → cancelFlow แล้ว reply ยืนยันยกเลิก', async () => {
+    reminderSetupFlow.cancelFlow.mockResolvedValue(undefined);
+
+    await handleEvent(postbackEvent('action=cancel_reminder_setup'));
+
+    expect(reminderSetupFlow.cancelFlow).toHaveBeenCalledWith(FREE_USER.id);
+    expect(lastReplyText()).toContain('ยกเลิกการตั้งเตือนแล้ว');
+  });
+
+  test('Text จำนวนเงินตอน AWAITING_AMOUNT → handleAmountEntered แล้วยืนยันตั้งเตือนสำเร็จ', async () => {
+    reminderSetupFlow.getCurrentSession.mockResolvedValue({
+      step: 'AWAITING_AMOUNT',
+      symbol: 'BTC',
+      frequency: 'weekly',
+    });
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+    reminderSetupFlow.handleAmountEntered.mockResolvedValue({
+      symbol: 'BTC',
+      frequency: 'weekly',
+      dayOfWeek: 1,
+      amountThb: 1000,
+    });
+
+    await handleEvent(textEvent('1000'));
+
+    expect(reminderSetupFlow.handleAmountEntered).toHaveBeenCalledWith(FREE_USER.id, 1000);
+    expect(lastReplyText()).toContain('ตั้งเตือน DCA แล้ว');
+  });
+
+  test('พิมพ์ "พอต" แทรกกลาง Flow (AWAITING_AMOUNT) → คำสั่งปกติทำงาน ไม่ถูก Flow ดักจับ', async () => {
+    reminderSetupFlow.getCurrentSession.mockResolvedValue({
+      step: 'AWAITING_AMOUNT',
+      symbol: 'BTC',
+      frequency: 'weekly',
+    });
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.PORTFOLIO, params: {} });
+    portfolioService.getPortfolioSummary.mockResolvedValue({
+      isEmpty: false,
+      holdings: [{ symbol: 'BTC', name: 'BTC', type: 'crypto', heldQuantity: 0.01, totalInvested: 1000, averageCost: 100000 }],
+      totalInvested: 1000,
+    });
+
+    await handleEvent(textEvent('พอต'));
+
+    // คำสั่ง PORTFOLIO ทำงานปกติ, ไม่เรียก handleAmountEntered (ไม่ auto-cancel Session)
+    expect(portfolioService.getPortfolioSummary).toHaveBeenCalledWith(FREE_USER.id);
+    expect(reminderSetupFlow.handleAmountEntered).not.toHaveBeenCalled();
+    expect(reminderSetupFlow.cancelFlow).not.toHaveBeenCalled();
+    expect(lastReplyText()).toContain('พอร์ตของคุณ');
+  });
+
+  test('จำนวนเงินไม่ถูกต้อง (พิมพ์ตัวอักษร) → INVALID_AMOUNT, Session คงอยู่ (service จัดการ)', async () => {
+    reminderSetupFlow.getCurrentSession.mockResolvedValue({
+      step: 'AWAITING_AMOUNT',
+      symbol: 'BTC',
+      frequency: 'weekly',
+    });
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+    const err = new Error('invalid');
+    err.code = 'INVALID_AMOUNT';
+    reminderSetupFlow.handleAmountEntered.mockRejectedValue(err);
+
+    await handleEvent(textEvent('ห้าร้อย'));
+
+    // ไม่มีตัวเลข → NaN ส่งเข้า service ซึ่งโยน INVALID_AMOUNT
+    expect(reminderSetupFlow.handleAmountEntered).toHaveBeenCalledWith(FREE_USER.id, NaN);
+    const reply = lastReplyText();
+    expect(reply).toContain('จำนวนเงินไม่ถูกต้อง');
+    expect(reply).not.toContain('INVALID_AMOUNT');
+  });
+
+  test('Text ตัวเลขตอน AWAITING_DAY (monthly) → พิมพ์วันที่เอง → handleDaySelected', async () => {
+    reminderSetupFlow.getCurrentSession.mockResolvedValue({
+      step: 'AWAITING_DAY',
+      symbol: 'AAPL',
+      frequency: 'monthly',
+    });
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+    reminderSetupFlow.handleDaySelected.mockResolvedValue({ symbol: 'AAPL' });
+
+    await handleEvent(textEvent('15'));
+
+    expect(reminderSetupFlow.handleDaySelected).toHaveBeenCalledWith(FREE_USER.id, 15);
+    expect(lastReplyText()).toContain('AAPL');
+  });
+
+  test('กดปุ่มหลัง Session หมดอายุ → SETUP_SESSION_NOT_FOUND แปลเป็นข้อความไทย', async () => {
+    const err = new Error('expired');
+    err.code = 'SETUP_SESSION_NOT_FOUND';
+    reminderSetupFlow.handleSymbolSelected.mockRejectedValue(err);
+
+    await handleEvent(postbackEvent('action=reminder_symbol&symbol=BTC'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('ไม่พบขั้นตอนการตั้งเตือน');
+    expect(reply).not.toContain('SETUP_SESSION_NOT_FOUND');
   });
 });
 

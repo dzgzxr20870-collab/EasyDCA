@@ -4,7 +4,20 @@ const {
   buildReminderListMessage,
   buildReminderDeletedMessage,
   buildReminderPushMessage,
+  buildSymbolQuickReply,
+  buildFrequencyQuickReply,
+  buildDayOfWeekQuickReply,
+  buildDayOfMonthQuickReply,
+  buildAskAmountMessage,
+  buildReminderSetupCancelledMessage,
 } = require('../src/utils/flexMessage.util');
+
+// ดึง data ของทุกปุ่ม Quick Reply ออกมาเป็น Array ของ String
+function quickReplyData(message) {
+  return message.quickReply.items.map((item) => item.action.data);
+}
+
+const CANCEL_DATA = 'action=cancel_reminder_setup';
 
 const BASE_PROFIT = {
   symbol: 'BTC',
@@ -128,5 +141,73 @@ describe('buildReminderPushMessage — ข้อความ Push ตอน Cron
     expect(text).toContain('BTC');
     expect(text).toContain('ซื้อ BTC 1,000'); // ตัวอย่างคำสั่งที่ให้ไปพิมพ์เอง
     expect(text).toContain('ไม่ได้ซื้อ');
+  });
+});
+
+describe('Reminder Setup Quick Reply — ทุกข้อความต้องแนบปุ่มยกเลิก', () => {
+  test('buildSymbolQuickReply → ปุ่มรายสัญลักษณ์ + ปุ่มยกเลิกท้ายสุด', () => {
+    const message = buildSymbolQuickReply(['BTC', 'ETH']);
+
+    expect(message.type).toBe('text');
+    const data = quickReplyData(message);
+    expect(data).toContain('action=reminder_symbol&symbol=BTC');
+    expect(data).toContain('action=reminder_symbol&symbol=ETH');
+    // ปุ่มยกเลิกต้องเป็นอันสุดท้ายเสมอ
+    expect(data[data.length - 1]).toBe(CANCEL_DATA);
+  });
+
+  test('buildSymbolQuickReply → จำกัดไม่เกิน 12 Symbol (LINE 13 items รวมยกเลิก)', () => {
+    const many = Array.from({ length: 20 }, (_, i) => `SYM${i}`);
+    const message = buildSymbolQuickReply(many);
+
+    // 12 symbol + 1 cancel = 13
+    expect(message.quickReply.items).toHaveLength(13);
+    expect(quickReplyData(message)[12]).toBe(CANCEL_DATA);
+  });
+
+  test('buildFrequencyQuickReply → weekly/monthly + ยกเลิก', () => {
+    const data = quickReplyData(buildFrequencyQuickReply());
+    expect(data).toContain('action=reminder_freq&frequency=weekly');
+    expect(data).toContain('action=reminder_freq&frequency=monthly');
+    expect(data).toContain(CANCEL_DATA);
+  });
+
+  test('buildDayOfWeekQuickReply → ครบ 7 วัน (dayOfWeek 0-6) + ยกเลิก', () => {
+    const message = buildDayOfWeekQuickReply();
+    const data = quickReplyData(message);
+
+    for (let dow = 0; dow <= 6; dow++) {
+      expect(data).toContain(`action=reminder_day&dayOfWeek=${dow}`);
+    }
+    expect(message.quickReply.items).toHaveLength(8); // 7 วัน + ยกเลิก
+    expect(data[data.length - 1]).toBe(CANCEL_DATA);
+  });
+
+  test('buildDayOfMonthQuickReply → ปุ่มวันยอดนิยม + คำแนะนำให้พิมพ์เอง + ยกเลิก', () => {
+    const message = buildDayOfMonthQuickReply();
+    const data = quickReplyData(message);
+
+    expect(data).toContain('action=reminder_day&dayOfMonth=1');
+    expect(data).toContain('action=reminder_day&dayOfMonth=25');
+    expect(message.text).toContain('พิมพ์ตัวเลข'); // แนะนำพิมพ์วันอื่นเองได้
+    expect(data).toContain(CANCEL_DATA);
+  });
+
+  test('buildAskAmountMessage → Text ธรรมดา (ไม่มีปุ่มจำนวนเงิน) มีแค่ปุ่มยกเลิก', () => {
+    const message = buildAskAmountMessage('BTC');
+
+    expect(message.type).toBe('text');
+    expect(message.text).toContain('BTC');
+    expect(message.text).toContain('1000'); // ตัวอย่าง
+    // มีแต่ปุ่มยกเลิกปุ่มเดียว
+    expect(message.quickReply.items).toHaveLength(1);
+    expect(message.quickReply.items[0].action.data).toBe(CANCEL_DATA);
+  });
+
+  test('buildReminderSetupCancelledMessage → ยืนยันยกเลิก + แนะนำเริ่มใหม่', () => {
+    const message = buildReminderSetupCancelledMessage();
+    const text = allText(message);
+    expect(text).toContain('ยกเลิก');
+    expect(text).toContain('ตั้งเตือน DCA');
   });
 });

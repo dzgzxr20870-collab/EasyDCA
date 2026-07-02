@@ -8,6 +8,7 @@ const cors = require('cors');
 const webhookRoutes = require('./routes/webhook.routes');
 const { scheduleExpirePending, schedulePurgeOld } = require('./jobs/pendingCleanup.job');
 const { scheduleReminderPush } = require('./jobs/dcaReminder.job');
+const { schedulePurgeStaleSetupSessions } = require('./jobs/reminderSetupCleanup.job');
 
 const app = express();
 
@@ -41,6 +42,8 @@ app.listen(config.app.port, () => {
   schedulePurgeOld();
   // Push DCA Reminder ที่ครบกำหนดทุกวัน 09:00 Asia/Bangkok (dcaReminder.job.js)
   scheduleReminderPush();
+  // Purge Reminder Setup Session ที่หมดอายุค้าง ตี 3 (reminderSetupCleanup.job.js)
+  schedulePurgeStaleSetupSessions();
 });
 
 module.exports = app;

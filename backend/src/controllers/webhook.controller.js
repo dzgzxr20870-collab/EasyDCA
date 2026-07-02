@@ -5,12 +5,24 @@ const profitService = require('../services/profit.service');
 const historyService = require('../services/history.service');
 const undoService = require('../services/undoTransaction.service');
 const reminderService = require('../services/dcaReminder.service');
+const reminderSetupFlow = require('../services/reminderSetupFlow.service');
 const pendingService = require('../services/pendingTransaction.service');
 const symbolRegistry = require('../services/symbolRegistry.service');
 const lineService = require('../services/line.service');
 const flexMessage = require('../utils/flexMessage.util');
 
 const { COMMANDS } = commandParser;
+const { STEPS } = reminderSetupFlow;
+
+// แปลง Text ที่ผู้ใช้พิมพ์ (จำนวนเงิน/วันที่) เป็นตัวเลข — รองรับเลขไทย + Comma
+// ผ่าน commandParser.normalizeText แล้วดึงเฉพาะตัวเลขตัวแรก (เผื่อพิมพ์ "1000 บาท")
+// คืน NaN ถ้าไม่มีตัวเลข ให้ Service ปลายทาง (handleAmountEntered/handleDaySelected)
+// เป็นผู้ตัดสิน INVALID_AMOUNT/INVALID_DAY เอง
+function parseNumericText(text) {
+  const normalized = commandParser.normalizeText(text).replace(/,/g, '');
+  const match = normalized.match(/-?\d+(?:\.\d+)?/);
+  return match ? Number(match[0]) : NaN;
+}
 
 // DATABASE.md — users.display_name เป็น NOT NULL ใช้ชื่อชั่วคราวนี้เป็น
 // Fallback เมื่อดึง LINE Profile API ไม่สำเร็จ (pictureUrl nullable อยู่แล้ว
@@ -141,9 +153,80 @@ async function routePostback(user, data) {
       return flexMessage.buildEditHintMessage();
     }
 
+    // ── DCA Reminder Setup Flow (Quick Reply หลายขั้นตอน) ────────────────────
+    // เริ่ม Flow จากปุ่ม Rich Menu "⏰ ตั้งเตือน DCA"
+    case 'start_reminder_setup': {
+      // พอร์ตว่าง → startFlow throw PORTFOLIO_EMPTY_FOR_REMINDER ให้ catch แปลไทย
+      const { symbols } = await reminderSetupFlow.startFlow(user.id);
+      return flexMessage.buildSymbolQuickReply(symbols);
+    }
+
+    case 'reminder_symbol': {
+      // ถ้า Session หมดอายุ/ผิดขั้น service จะ throw SETUP_SESSION_NOT_FOUND/WRONG_STEP
+      await reminderSetupFlow.handleSymbolSelected(user.id, params.get('symbol'));
+      return flexMessage.buildFrequencyQuickReply();
+    }
+
+    case 'reminder_freq': {
+      const frequency = params.get('frequency');
+      await reminderSetupFlow.handleFrequencySelected(user.id, frequency);
+      // รายสัปดาห์ → ถามวันในสัปดาห์; รายเดือน → ถามวันของเดือน
+      return frequency === 'weekly'
+        ? flexMessage.buildDayOfWeekQuickReply()
+        : flexMessage.buildDayOfMonthQuickReply();
+    }
+
+    case 'reminder_day': {
+      // ปุ่มส่ง dayOfWeek (รายสัปดาห์) หรือ dayOfMonth (รายเดือน) มาอย่างใดอย่างหนึ่ง
+      // service ใช้ session.frequency เป็นตัวตัดสินว่าเก็บลง Field ไหน
+      const dayOfWeek = params.get('dayOfWeek');
+      const dayValue = dayOfWeek !== null ? Number(dayOfWeek) : Number(params.get('dayOfMonth'));
+      const session = await reminderSetupFlow.handleDaySelected(user.id, dayValue);
+      return flexMessage.buildAskAmountMessage(session.symbol);
+    }
+
+    case 'cancel_reminder_setup': {
+      await reminderSetupFlow.cancelFlow(user.id);
+      return flexMessage.buildReminderSetupCancelledMessage();
+    }
+
     default:
       return flexMessage.buildUnknownCommandMessage();
   }
+}
+
+// ประมวลผล Text Message — ต้อง "เช็ค Setup Session ก่อน parseCommand เสมอ"
+// (Requirement ข้อ 5) เพื่อไม่ให้ข้อความตัวเลขทั่วไปถูก Flow ตั้งเตือนดักจับผิดๆ
+// หลักการ:
+//  - คำสั่งที่ parseCommand จำได้ (เช่น "พอต") "ชนะเสมอ" — ทำงานตามปกติแม้มี Session
+//    ค้างอยู่ และไม่ auto-cancel Session (Requirement ข้อ 3)
+//  - เฉพาะ Text ที่ parseCommand ไม่รู้จัก + มี Session ค้างในขั้นที่รับ Text ได้
+//    เท่านั้น ที่ถูกตีความเป็น Input ของ Flow (จำนวนเงิน / วันที่ของเดือนที่พิมพ์เอง)
+async function routeText(user, text) {
+  const session = await reminderSetupFlow.getCurrentSession(user.id);
+  const parsed = commandParser.parseCommand(text);
+
+  // คำสั่งปกติชนะเสมอ (ไม่ถูก Flow ดักจับ)
+  if (parsed.command !== COMMANDS.UNKNOWN) {
+    return routeCommand(user, parsed);
+  }
+
+  // Text ไม่ใช่คำสั่งที่รู้จัก + มี Session ค้าง → อาจเป็น Input ของ Flow
+  if (session) {
+    if (session.step === STEPS.AWAITING_AMOUNT) {
+      const reminder = await reminderSetupFlow.handleAmountEntered(user.id, parseNumericText(text));
+      return flexMessage.buildReminderSetMessage(reminder);
+    }
+
+    // รายเดือน: อนุญาตให้พิมพ์วันที่เอง (นอกเหนือปุ่มยอดนิยม)
+    if (session.step === STEPS.AWAITING_DAY && session.frequency === 'monthly') {
+      const updated = await reminderSetupFlow.handleDaySelected(user.id, parseNumericText(text));
+      return flexMessage.buildAskAmountMessage(updated.symbol);
+    }
+  }
+
+  // ไม่เข้าเงื่อนไข Flow → ตอบข้อความ "ไม่เข้าใจคำสั่ง" ตามปกติ
+  return flexMessage.buildUnknownCommandMessage();
 }
 
 // แปล Error เป็นข้อความไทยแล้วตอบกลับ (ใช้ร่วมกันทั้ง Text และ Postback)
@@ -171,7 +254,7 @@ async function handleEvent(event) {
   try {
     const user = await resolveUser(event.source?.userId);
     const message = isText
-      ? await routeCommand(user, commandParser.parseCommand(event.message.text))
+      ? await routeText(user, event.message.text)
       : await routePostback(user, event.postback?.data);
     await lineService.replyMessage(replyToken, message);
   } catch (err) {
