@@ -3,6 +3,8 @@ const commandParser = require('../services/commandParser.service');
 const portfolioService = require('../services/portfolio.service');
 const profitService = require('../services/profit.service');
 const historyService = require('../services/history.service');
+const undoService = require('../services/undoTransaction.service');
+const reminderService = require('../services/dcaReminder.service');
 const pendingService = require('../services/pendingTransaction.service');
 const symbolRegistry = require('../services/symbolRegistry.service');
 const lineService = require('../services/line.service');
@@ -65,6 +67,33 @@ async function routeCommand(user, parsed) {
       // ถ้าไม่มี Holding/ราคาหาไม่ได้ service จะ throw ให้ catch แปลเป็นข้อความไทย
       const profit = await profitService.getAssetProfit(user.id, parsed.params.symbol);
       return flexMessage.buildProfitMessage(profit);
+    }
+
+    case COMMANDS.UNDO_LAST: {
+      // Command History (PRD.md) — ย้อนรายการที่ Commit แล้วด้วย Reversal
+      // (DATABASE.md § 8) ถ้าไม่มีรายการ/ย้อนไปแล้ว/ยอดไม่พอ service จะ throw
+      // ให้ catch แปลเป็นข้อความไทย
+      const undo = await undoService.undoLastTransaction(user.id);
+      return flexMessage.buildUndoMessage(undo);
+    }
+
+    case COMMANDS.SET_REMINDER: {
+      // ตั้งเตือน DCA (Push อย่างเดียว — ไม่ซื้อ/บันทึกให้อัตโนมัติ) ถ้ารูปแบบ/ช่วง
+      // วันไม่ถูกต้อง service จะ throw INVALID_REMINDER ให้ catch แปลเป็นข้อความไทย
+      const reminder = await reminderService.createReminder(user.id, parsed.params);
+      return flexMessage.buildReminderSetMessage(reminder);
+    }
+
+    case COMMANDS.LIST_REMINDERS: {
+      const reminders = await reminderService.listReminders(user.id);
+      return flexMessage.buildReminderListMessage(reminders);
+    }
+
+    case COMMANDS.DELETE_REMINDER: {
+      // Soft-delete (active=false) — ถ้าไม่พบ Reminder Active service จะ throw
+      // REMINDER_NOT_FOUND ให้ catch แปลเป็นข้อความไทย
+      const deleted = await reminderService.deleteReminder(user.id, parsed.params.symbol);
+      return flexMessage.buildReminderDeletedMessage(deleted.symbol);
     }
 
     case COMMANDS.UNKNOWN:

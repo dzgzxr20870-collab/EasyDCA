@@ -1,3 +1,5 @@
+const { dowToDayName } = require('./thaiDate.util');
+
 // Flex Message Builders ตาม Design System ใน UI_UX.md § 1, § 3
 // สีอ้างอิงจาก UI_UX.md § 1.1 (Financial Status Colors)
 const COLOR = {
@@ -35,6 +37,11 @@ const ERROR_MESSAGES = {
   ALREADY_UNDONE: 'รายการล่าสุดถูกยกเลิกไปแล้ว ไม่สามารถยกเลิกซ้ำได้',
   CANNOT_UNDO_QUANTITY_MISMATCH:
     'ยกเลิกรายการล่าสุดไม่ได้ เพราะยอดคงเหลือปัจจุบันน้อยกว่าจำนวนในรายการนั้น (อาจมีการขายไปแล้วบางส่วน)',
+  // DCA Reminder (dcaReminder.service) — ตั้ง/ลบเตือน
+  REMINDER_NOT_FOUND:
+    'ไม่พบการตั้งเตือนของสินทรัพย์นี้ที่กำลังใช้งานอยู่ ลองพิมพ์ "ดูเตือน" เพื่อดูรายการที่ตั้งไว้',
+  INVALID_REMINDER:
+    'ตั้งเตือนไม่สำเร็จ กรุณาตรวจสอบรูปแบบ เช่น "ตั้งเตือน BTC ทุกวันจันทร์ 1000" หรือ "ตั้งเตือน AAPL ทุกวันที่ 5 3000"',
   INTERNAL_ERROR: 'เกิดข้อผิดพลาดบางอย่าง กรุณาลองใหม่อีกครั้งในภายหลัง',
 };
 
@@ -513,6 +520,130 @@ function buildUndoMessage(result) {
   });
 }
 
+// อธิบายรอบเตือนเป็นข้อความไทย: weekly → "ทุกวันจันทร์", monthly → "ทุกวันที่ 5"
+function describeSchedule(reminder) {
+  if (reminder.frequency === 'weekly') {
+    const dayName = dowToDayName(Number(reminder.dayOfWeek));
+    return `ทุกวัน${dayName ?? ''}`.trim();
+  }
+  return `ทุกวันที่ ${reminder.dayOfMonth}`;
+}
+
+// ยืนยันว่าตั้งเตือนสำเร็จ — ย้ำว่าเป็นการเตือนให้มาซื้อเอง ไม่ซื้อให้อัตโนมัติ
+// (PROJECT_BRIEF § 17 — ระบบไม่ตัดสินใจ/ทำธุรกรรมลงทุนแทนผู้ใช้)
+function buildReminderSetMessage(reminder) {
+  return bubble({
+    headerText: '⏰ ตั้งเตือน DCA แล้ว',
+    headerColor: COLOR.info,
+    headerBg: COLOR.profitBg,
+    bodyContents: [
+      textLine(reminder.symbol, { size: 'lg', weight: 'bold', color: COLOR.textPrimary }),
+      textLine(`รอบเตือน: ${describeSchedule(reminder)}`, { size: 'sm', color: COLOR.textSecondary }),
+      textLine(`จำนวนที่ตั้งใจ: ${formatNumber(reminder.amountThb)} บาท`, {
+        size: 'sm',
+        color: COLOR.textSecondary,
+      }),
+      textLine('* ระบบจะเตือนให้คุณมาพิมพ์คำสั่งซื้อเอง ไม่ได้ซื้อหรือบันทึกให้อัตโนมัติ', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
+}
+
+// แสดงรายการเตือนที่ Active — ถ้าไม่มีเลยแนะนำให้เริ่มตั้ง
+function buildReminderListMessage(reminders) {
+  if (!reminders || reminders.length === 0) {
+    return bubble({
+      headerText: '⏰ การเตือน DCA',
+      headerColor: COLOR.info,
+      headerBg: COLOR.profitBg,
+      bodyContents: [
+        textLine('ยังไม่มีการตั้งเตือน', { size: 'md', weight: 'bold', color: COLOR.textPrimary }),
+        textLine('เริ่มตั้งได้เลย เช่น "ตั้งเตือน BTC ทุกวันจันทร์ 1000"', {
+          size: 'sm',
+          color: COLOR.textSecondary,
+        }),
+      ],
+    });
+  }
+
+  const body = [];
+  reminders.forEach((reminder) => {
+    body.push(textLine(reminder.symbol, { size: 'md', weight: 'bold', color: COLOR.textPrimary }));
+    body.push(
+      textLine(`${describeSchedule(reminder)} • ${formatNumber(reminder.amountThb)} บาท`, {
+        size: 'sm',
+        color: COLOR.textSecondary,
+      })
+    );
+    body.push(separator());
+  });
+  body.push(
+    textLine('พิมพ์ "ลบเตือน <ชื่อย่อ>" เพื่อปิดการเตือน', {
+      size: 'xs',
+      color: COLOR.textSecondary,
+    })
+  );
+
+  return bubble({
+    headerText: '⏰ การเตือน DCA',
+    headerColor: COLOR.info,
+    headerBg: COLOR.profitBg,
+    bodyContents: body,
+  });
+}
+
+// ยืนยันว่าปิด/ลบเตือนสำเร็จ (Soft-delete — ประวัติเดิมยังอยู่)
+function buildReminderDeletedMessage(symbol) {
+  return bubble({
+    headerText: '🔕 ปิดการเตือนแล้ว',
+    headerColor: COLOR.textSecondary,
+    headerBg: COLOR.warningBg,
+    bodyContents: [
+      textLine(`ปิดการเตือน DCA ของ ${symbol} เรียบร้อยแล้ว`, {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      textLine('* ประวัติการตั้งเตือนเดิมยังถูกเก็บไว้ (ปิดการใช้งานเท่านั้น)', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
+}
+
+// ข้อความที่ Push จริงตอน Cron ครบกำหนด — bubble() คืน Flex Message Object แบบ
+// เดียวกับที่ LINE Push API รับได้ (โครงเดียวกับ Reply) เชิญชวนให้พิมพ์คำสั่งซื้อ
+// เอง ไม่มีการซื้ออัตโนมัติ
+function buildReminderPushMessage(reminder) {
+  return bubble({
+    headerText: '⏰ ถึงรอบ DCA แล้ว',
+    headerColor: COLOR.info,
+    headerBg: COLOR.profitBg,
+    bodyContents: [
+      textLine(reminder.symbol, { size: 'lg', weight: 'bold', color: COLOR.textPrimary }),
+      textLine(`วันนี้ถึงรอบที่คุณตั้งใจ DCA ${reminder.symbol}`, {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      textLine(`จำนวนที่ตั้งใจ: ${formatNumber(reminder.amountThb)} บาท`, {
+        size: 'md',
+        weight: 'bold',
+        color: COLOR.textPrimary,
+      }),
+      textLine(
+        `ถ้าซื้อแล้วพิมพ์บันทึกเองได้เลย เช่น "ซื้อ ${reminder.symbol} ${formatNumber(reminder.amountThb)}"`,
+        { size: 'sm', color: COLOR.textSecondary }
+      ),
+      textLine('* นี่เป็นเพียงการแจ้งเตือน ระบบไม่ได้ซื้อหรือบันทึกรายการให้อัตโนมัติ', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
+}
+
 function buildUnknownCommandMessage() {
   return bubble({
     headerText: '🤔 ไม่เข้าใจคำสั่งนี้',
@@ -540,6 +671,10 @@ module.exports = {
   buildPortfolioMessage,
   buildHistoryMessage,
   buildUndoMessage,
+  buildReminderSetMessage,
+  buildReminderListMessage,
+  buildReminderDeletedMessage,
+  buildReminderPushMessage,
   buildErrorMessage,
   buildUnknownCommandMessage,
 };

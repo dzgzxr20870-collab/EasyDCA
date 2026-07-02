@@ -1,6 +1,7 @@
 const config = require('../config/env');
 
 const LINE_REPLY_URL = 'https://api.line.me/v2/bot/message/reply';
+const LINE_PUSH_URL = 'https://api.line.me/v2/bot/message/push';
 const LINE_PROFILE_URL = 'https://api.line.me/v2/bot/profile';
 
 // ส่งข้อความตอบกลับผ่าน LINE Reply API
@@ -58,7 +59,36 @@ async function getProfile(userId) {
   }
 }
 
+// ส่งข้อความแบบ Push ผ่าน LINE Push API (ใช้กับ Cron แจ้งเตือน DCA — ไม่มี
+// replyToken เพราะไม่ได้ตอบกลับข้อความของผู้ใช้)
+//
+// ⚠️ ต่างจาก replyMessage โดยตั้งใจ: ที่นี่ "ต้อง throw เมื่อล้มเหลว" เพื่อให้
+// Caller (Cron) รู้ว่า Push ไม่สำเร็จ แล้ว "ไม่ markNotified" (จะได้ Retry รอบ
+// ถัดไป) — replyMessage ต้องเงียบเพราะ Webhook ต้องตอบ 200 ให้ LINE เสมอ แต่
+// Cron ไม่มีข้อจำกัดนั้น จึงให้ Error ทะลุขึ้นไปให้ Loop ราย Reminder จัดการเอง
+async function pushMessage(to, messages) {
+  const payload = {
+    to,
+    messages: Array.isArray(messages) ? messages : [messages],
+  };
+
+  const response = await fetch(LINE_PUSH_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${config.line.channelAccessToken}`,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(`LINE Push API failed: ${response.status} ${detail}`);
+  }
+}
+
 module.exports = {
   replyMessage,
+  pushMessage,
   getProfile,
 };

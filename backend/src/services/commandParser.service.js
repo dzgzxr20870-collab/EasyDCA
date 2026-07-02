@@ -1,9 +1,15 @@
+const { THAI_DAY_PATTERNS, dayNameToDow } = require('../utils/thaiDate.util');
+
 const COMMANDS = {
   BUY: 'BUY',
   SELL: 'SELL',
   PORTFOLIO: 'PORTFOLIO',
   PROFIT: 'PROFIT',
   HISTORY: 'HISTORY',
+  UNDO_LAST: 'UNDO_LAST',
+  SET_REMINDER: 'SET_REMINDER',
+  LIST_REMINDERS: 'LIST_REMINDERS',
+  DELETE_REMINDER: 'DELETE_REMINDER',
   UNKNOWN: 'UNKNOWN',
 };
 
@@ -40,6 +46,26 @@ const SIMPLE_SELL = new RegExp(`^(?:ขาย|sell)\\s+${SYMBOL}\\s+${NUMBER}\\s
 const PORTFOLIO = /^(?:พอต|พอร์ต|พอร์ท|portfolio|port)$/;
 const PROFIT = new RegExp(`^(?:กำไร|profit)\\s+${SYMBOL}$`);
 const HISTORY = /^(?:ประวัติ|history)$/;
+// Command History (PRD.md — "ยกเลิกรายการล่าสุด") ต่างจากปุ่ม Postback ยกเลิก
+// (ที่ยกเลิกได้เฉพาะตอนยังไม่ Confirm) — คำสั่งนี้ย้อนรายการที่ Commit แล้ว
+// Full-match anchored จึงไม่ชนกับ SELL ("ขาย...") / คำสั่งอื่น
+const UNDO_LAST = /^(?:ยกเลิกล่าสุด|ยกเลิกรายการล่าสุด|undo)$/;
+
+// ── DCA Reminder (ฟีเจอร์ตั้งเตือนให้มาซื้อเอง — ไม่ซื้ออัตโนมัติ) ──────────
+// ชื่อวันไทยเรียงยาว→สั้น (พฤหัสบดี ก่อน พฤหัส) กัน Match ครึ่งคำ
+const THAI_DAY_ALT = THAI_DAY_PATTERNS.join('|');
+// "ตั้งเตือน BTC ทุกวันจันทร์ 1000" (รายสัปดาห์) — day มาจากชื่อวัน, เงินหนึ่งจำนวน
+const REMINDER_WEEKLY = new RegExp(
+  `^ตั้งเตือน\\s+${SYMBOL}\\s+ทุกวัน(${THAI_DAY_ALT})\\s+${NUMBER}$`
+);
+// "ตั้งเตือน AAPL ทุกวันที่ 5 3000" (รายเดือน) — วันที่ 1-31 แล้วตามด้วยจำนวนเงิน
+// ตรวจก่อน WEEKLY เสมอ: "ทุกวันที่" ขึ้นต้นด้วย "ทุกวัน" เหมือนกัน แต่ตามด้วย "ที่"
+// (ไม่ใช่ชื่อวัน) จึงไม่ชนกัน แต่จัดลำดับให้ชัดเจนไว้ก่อน
+const REMINDER_MONTHLY = new RegExp(
+  `^ตั้งเตือน\\s+${SYMBOL}\\s+ทุกวันที่\\s+${NUMBER}\\s+${NUMBER}$`
+);
+const LIST_REMINDERS = /^ดูเตือน$/;
+const DELETE_REMINDER = new RegExp(`^ลบเตือน\\s+${SYMBOL}$`);
 
 const unknown = () => ({ command: COMMANDS.UNKNOWN, params: {} });
 
@@ -109,6 +135,50 @@ function parseCommand(rawText) {
 
   if (HISTORY.test(text)) {
     return { command: COMMANDS.HISTORY, params: {} };
+  }
+
+  if (UNDO_LAST.test(text)) {
+    return { command: COMMANDS.UNDO_LAST, params: {} };
+  }
+
+  // รายเดือนก่อนรายสัปดาห์: ทั้งคู่ขึ้นต้น "ตั้งเตือน ... ทุกวัน" — รูปแบบ "ทุกวันที่ <เลข>"
+  // เจาะจงกว่า ตรวจก่อนกัน Ambiguity (Range 1-31 ตรวจจริงที่ dcaReminder.service)
+  match = text.match(REMINDER_MONTHLY);
+  if (match && isValidSymbol(match[1])) {
+    return {
+      command: COMMANDS.SET_REMINDER,
+      params: {
+        symbol: match[1].toUpperCase(),
+        frequency: 'monthly',
+        dayOfMonth: parseNumber(match[2]),
+        amountThb: parseNumber(match[3]),
+      },
+    };
+  }
+
+  match = text.match(REMINDER_WEEKLY);
+  if (match && isValidSymbol(match[1])) {
+    return {
+      command: COMMANDS.SET_REMINDER,
+      params: {
+        symbol: match[1].toUpperCase(),
+        frequency: 'weekly',
+        dayOfWeek: dayNameToDow(match[2]),
+        amountThb: parseNumber(match[3]),
+      },
+    };
+  }
+
+  if (LIST_REMINDERS.test(text)) {
+    return { command: COMMANDS.LIST_REMINDERS, params: {} };
+  }
+
+  match = text.match(DELETE_REMINDER);
+  if (match && isValidSymbol(match[1])) {
+    return {
+      command: COMMANDS.DELETE_REMINDER,
+      params: { symbol: match[1].toUpperCase() },
+    };
   }
 
   return unknown();

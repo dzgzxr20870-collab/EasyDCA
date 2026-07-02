@@ -7,6 +7,7 @@ const cors = require('cors');
 
 const webhookRoutes = require('./routes/webhook.routes');
 const { scheduleExpirePending, schedulePurgeOld } = require('./jobs/pendingCleanup.job');
+const { scheduleReminderPush } = require('./jobs/dcaReminder.job');
 
 const app = express();
 
@@ -38,6 +39,8 @@ app.listen(config.app.port, () => {
   // พร้อมก่อน Server จะ Listen (pendingCleanup.job.js)
   scheduleExpirePending();
   schedulePurgeOld();
+  // Push DCA Reminder ที่ครบกำหนดทุกวัน 09:00 Asia/Bangkok (dcaReminder.job.js)
+  scheduleReminderPush();
 });
 
 module.exports = app;
