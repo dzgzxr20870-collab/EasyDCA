@@ -1,5 +1,6 @@
 const assetRepository = require('../repositories/asset.repository');
 const transactionRepository = require('../repositories/transaction.repository');
+const priceFeedService = require('./priceFeed.service');
 
 // PRD.md — Free Plan บันทึกได้สูงสุด 2 สินทรัพย์ Active
 const MAX_FREE_ASSETS = 2;
@@ -19,6 +20,13 @@ function roundToTwo(value) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
+// ปัดทศนิยม 8 ตำแหน่งสำหรับ quantity รองรับ Crypto (DATABASE.md
+// quantity NUMERIC(20,8)) — เลี่ยง Floating Point Noise ตอนหาร
+// (Pattern เดียวกับ portfolio.service.js roundToEight)
+function roundToEight(value) {
+  return Math.round((value + Number.EPSILON) * 1e8) / 1e8;
+}
+
 // DATABASE.md § 7 — Field ประเภท DATE ควรอิงวันของผู้ใช้ (Asia/Bangkok)
 // ไม่ใช่ UTC เพื่อไม่ให้ธุรกรรมที่บันทึกช่วงดึกตกไปเป็นวันก่อนหน้า
 function todayInBangkok() {
@@ -32,7 +40,9 @@ function isPresent(value) {
   return value !== undefined && value !== null;
 }
 
-function resolveQuantityAndPrice(params) {
+// async เพราะกรณี amountThb ต้องเรียก Price Feed (I/O) มาหาร quantity —
+// Caller ทุกจุด (validateBuy/validateSell) ต้อง await ผลลัพธ์
+async function resolveQuantityAndPrice(params) {
   if (isPresent(params.quantity) && isPresent(params.pricePerUnit)) {
     const quantity = Number(params.quantity);
     const pricePerUnit = Number(params.pricePerUnit);
@@ -41,8 +51,20 @@ function resolveQuantityAndPrice(params) {
 
   if (isPresent(params.amountThb)) {
     // มีแต่จำนวนเงิน (เช่น "ซื้อ BTC 1000") — ต้องใช้ราคาตลาดปัจจุบันมาหาร
-    // เป็น quantity แต่ยังไม่มี Price Feed Service ในขั้นนี้
-    // ห้าม Mock ราคามั่วเพราะจะบันทึก quantity ที่ผิดลง DB จริง
+    // เป็น quantity ลองดึงราคาจริงจาก Price Feed ก่อน (รองรับเฉพาะ Crypto ตอนนี้)
+    const pricePerUnit = await priceFeedService.getCurrentPrice(params.symbol);
+
+    // ได้ราคาจริง → คำนวณ quantity จากจำนวนเงิน ห้าม Mock ราคามั่วเด็ดขาด
+    if (pricePerUnit !== null) {
+      const amountThb = Number(params.amountThb);
+      // ปัด quantity เป็น 8 ตำแหน่งตรงกับ Column Precision NUMERIC(20,8) เอง
+      // ใน App Layer — ไม่ปล่อยให้ Database ปัดทิ้งเองแบบไม่มี Control ตอน INSERT
+      const quantity = roundToEight(amountThb / pricePerUnit);
+      return { quantity, pricePerUnit, amountThb: roundToTwo(amountThb) };
+    }
+
+    // ราคาหาไม่ได้จริง (Symbol ไม่รองรับ Price Feed เช่นหุ้น หรือ CoinGecko
+    // ล้มเหลว/Timeout) → คง Behavior เดิม โยน PRICE_FEED_NOT_IMPLEMENTED
     throw new TransactionServiceError(
       'PRICE_FEED_NOT_IMPLEMENTED',
       'Cannot derive quantity from amountThb without a live price feed'
@@ -83,7 +105,7 @@ async function validateBuy(userId, params, options = {}) {
   const portfolioId = params.portfolioId ?? null;
 
   // แปลง/ตรวจจำนวนก่อน (อาจ throw PRICE_FEED/VALIDATION) — ยังไม่แตะ DB
-  const amounts = resolveQuantityAndPrice(params);
+  const amounts = await resolveQuantityAndPrice(params);
 
   const existingAsset = await assetRepository.findByUserAndSymbol(
     userId,
@@ -176,7 +198,7 @@ async function validateSell(userId, params) {
     });
   }
 
-  const amounts = resolveQuantityAndPrice(params);
+  const amounts = await resolveQuantityAndPrice(params);
 
   // ── Race Condition Warning (DATABASE.md § 12) ──────────────────────────
   // การขายต้องตรวจ "ขายเกินยอดคงเหลือ" ภายใน DB Transaction เดียวที่ Lock

@@ -1,8 +1,10 @@
 jest.mock('../src/repositories/asset.repository');
 jest.mock('../src/repositories/transaction.repository');
+jest.mock('../src/services/priceFeed.service');
 
 const assetRepository = require('../src/repositories/asset.repository');
 const transactionRepository = require('../src/repositories/transaction.repository');
+const priceFeedService = require('../src/services/priceFeed.service');
 const {
   processBuyCommand,
   processSellCommand,
@@ -19,6 +21,9 @@ beforeEach(() => {
   // Default: create คืน record ที่มี id — Test แต่ละเคส Override ตามต้องการ
   transactionRepository.create.mockResolvedValue({ id: 'tx-uuid-1' });
   assetRepository.create.mockResolvedValue(ASSET);
+  // Default: Price Feed หาราคาไม่ได้ (null) — เคสที่ต้องการราคาจริง Override เอง
+  // เพื่อคง Behavior เดิมของ PRICE_FEED_NOT_IMPLEMENTED เมื่อไม่มีราคา
+  priceFeedService.getCurrentPrice.mockResolvedValue(null);
 });
 
 describe('processBuyCommand', () => {
@@ -102,8 +107,9 @@ describe('processBuyCommand', () => {
     expect(result.newAssetCreated).toBe(true);
   });
 
-  test('รูปแบบจำนวนเงินล้วน (amountThb) → PRICE_FEED_NOT_IMPLEMENTED ก่อนเขียน DB', async () => {
+  test('รูปแบบจำนวนเงินล้วน (amountThb) + Price Feed หาราคาไม่ได้ → PRICE_FEED_NOT_IMPLEMENTED ก่อนเขียน DB', async () => {
     assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET);
+    priceFeedService.getCurrentPrice.mockResolvedValue(null);
 
     await expect(
       processBuyCommand(USER_ID, { symbol: 'BTC', amountThb: 1000 })
@@ -111,6 +117,49 @@ describe('processBuyCommand', () => {
 
     expect(transactionRepository.create).not.toHaveBeenCalled();
     expect(assetRepository.create).not.toHaveBeenCalled();
+  });
+
+  test('รูปแบบจำนวนเงินล้วน (amountThb) + Price Feed สำเร็จ → คำนวณ quantity จากราคาจริง', async () => {
+    const ASSET_BTC = { id: 'asset-uuid-btc', userId: USER_ID, symbol: 'BTC', type: 'crypto' };
+    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_BTC);
+    // ราคา 2,000,000 บาท/BTC → ซื้อด้วย 1,000 บาท ได้ 0.0005 BTC
+    priceFeedService.getCurrentPrice.mockResolvedValue(2000000);
+
+    const result = await processBuyCommand(USER_ID, { symbol: 'BTC', amountThb: 1000 });
+
+    expect(priceFeedService.getCurrentPrice).toHaveBeenCalledWith('BTC');
+    expect(transactionRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'buy',
+        assetId: ASSET_BTC.id,
+        quantity: 0.0005,
+        pricePerUnit: 2000000,
+        amountThb: 1000,
+        source: 'line',
+      })
+    );
+    expect(result).toMatchObject({
+      symbol: 'BTC',
+      quantity: 0.0005,
+      pricePerUnit: 2000000,
+      amountThb: 1000,
+    });
+  });
+
+  test('amountThb หารด้วยราคาไม่ลงตัว → quantity ถูกปัดเศษ 8 ตำแหน่ง (ไม่เกิน Precision NUMERIC(20,8))', async () => {
+    const ASSET_BTC = { id: 'asset-uuid-btc', userId: USER_ID, symbol: 'BTC', type: 'crypto' };
+    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_BTC);
+    // 1000 / 3400000 = 0.0002941176470588235 (ทศนิยม 19 ตำแหน่ง) → ปัดเหลือ 0.00029412
+    priceFeedService.getCurrentPrice.mockResolvedValue(3400000);
+
+    const result = await processBuyCommand(USER_ID, { symbol: 'BTC', amountThb: 1000 });
+
+    expect(result.quantity).toBe(0.00029412);
+    // ยืนยันว่าปัดจริง ไม่ใช่ทศนิยมยาวเกิน 8 ตำแหน่ง
+    expect(Number.isInteger(result.quantity * 1e8)).toBe(true);
+    expect(transactionRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ quantity: 0.00029412, pricePerUnit: 3400000, amountThb: 1000 })
+    );
   });
 
   test('สร้าง Asset ใหม่แต่ไม่ส่ง type มา → VALIDATION_ERROR (ไม่เดา type)', async () => {
