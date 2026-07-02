@@ -1,6 +1,7 @@
 const userRepository = require('../repositories/user.repository');
 const commandParser = require('../services/commandParser.service');
 const portfolioService = require('../services/portfolio.service');
+const profitService = require('../services/profit.service');
 const historyService = require('../services/history.service');
 const pendingService = require('../services/pendingTransaction.service');
 const symbolRegistry = require('../services/symbolRegistry.service');
@@ -8,12 +9,6 @@ const lineService = require('../services/line.service');
 const flexMessage = require('../utils/flexMessage.util');
 
 const { COMMANDS } = commandParser;
-
-// ฟีเจอร์ที่ยังไม่ Implement ใน Phase นี้ (กำไร)
-const COMING_SOON_MESSAGE = {
-  type: 'text',
-  text: 'ฟีเจอร์นี้กำลังพัฒนาอยู่ 🚧 เร็วๆ นี้',
-};
 
 // DATABASE.md — users.display_name เป็น NOT NULL ใช้ชื่อชั่วคราวนี้เป็น
 // Fallback เมื่อดึง LINE Profile API ไม่สำเร็จ (pictureUrl nullable อยู่แล้ว
@@ -65,8 +60,12 @@ async function routeCommand(user, parsed) {
       return flexMessage.buildHistoryMessage(transactions);
     }
 
-    case COMMANDS.PROFIT:
-      return COMING_SOON_MESSAGE;
+    case COMMANDS.PROFIT: {
+      // Price Feed พร้อมแล้ว (รองรับเฉพาะ Crypto) — คำนวณกำไร/ขาดทุนจริง
+      // ถ้าไม่มี Holding/ราคาหาไม่ได้ service จะ throw ให้ catch แปลเป็นข้อความไทย
+      const profit = await profitService.getAssetProfit(user.id, parsed.params.symbol);
+      return flexMessage.buildProfitMessage(profit);
+    }
 
     case COMMANDS.UNKNOWN:
     default:

@@ -20,6 +20,8 @@ const ERROR_MESSAGES = {
   ASSET_NOT_FOUND: 'ไม่พบสินทรัพย์นี้ในพอร์ตของคุณ ลองบันทึกรายการซื้อก่อนนะครับ',
   INSUFFICIENT_QUANTITY:
     'จำนวนที่ต้องการขายมากกว่าที่คุณถือครองอยู่ กรุณาตรวจสอบยอดคงเหลืออีกครั้ง',
+  NO_HOLDING_TO_CALCULATE_PROFIT:
+    'ไม่มีการถือครองสินทรัพย์นี้อยู่ในขณะนี้ จึงยังคำนวณกำไร/ขาดทุนไม่ได้ ลองพิมพ์ "พอต" เพื่อดูสินทรัพย์ที่คุณถืออยู่',
   PRICE_FEED_NOT_IMPLEMENTED:
     'การบันทึกด้วยจำนวนเงินรองรับเฉพาะบางสินทรัพย์ (เช่น Crypto อย่าง BTC/ETH) เท่านั้น สำหรับสินทรัพย์อื่นกรุณาระบุจำนวนหน่วยและราคา เช่น "ซื้อ PTT 50 หุ้น ราคา 34"',
   VALIDATION_ERROR:
@@ -145,6 +147,55 @@ function buildSellConfirmMessage(result) {
     headerText: '🔴 ยืนยันรายการขาย',
     headerColor: COLOR.loss,
     headerBg: COLOR.lossBg,
+    bodyContents: body,
+  });
+}
+
+// ข้อความผลกำไร/ขาดทุนของสินทรัพย์ 1 ตัว (คำสั่ง "กำไร") จาก profit.service
+// สีเขียว/แดงตามผลกำไร-ขาดทุน (Pattern เดียวกับ Buy/Sell Confirm)
+function buildProfitMessage(profit) {
+  const isProfit = profit.profitLoss >= 0;
+  const plColor = isProfit ? COLOR.profit : COLOR.loss;
+  const sign = isProfit ? '+' : '-';
+  const plAbs = Math.abs(profit.profitLoss);
+  const percentAbs = Math.abs(profit.profitLossPercent);
+
+  const body = [
+    textLine(profit.symbol, { size: 'lg', weight: 'bold', color: COLOR.textPrimary }),
+    textLine(`จำนวนที่ถือ: ${formatNumber(profit.heldQuantity)} ${profit.symbol}`, {
+      size: 'sm',
+      color: COLOR.textSecondary,
+    }),
+    textLine(`ต้นทุนเฉลี่ย: ${formatNumber(profit.averageCost)} บาท/หน่วย`, {
+      size: 'sm',
+      color: COLOR.textSecondary,
+    }),
+    textLine(`เงินลงทุน: ${formatNumber(profit.totalInvested)} บาท`, {
+      size: 'sm',
+      color: COLOR.textSecondary,
+    }),
+    textLine(`ราคาปัจจุบัน: ${formatNumber(profit.currentPrice)} บาท/หน่วย`, {
+      size: 'sm',
+      color: COLOR.textSecondary,
+    }),
+    textLine(`มูลค่าปัจจุบัน: ${formatNumber(profit.currentValue)} บาท`, {
+      size: 'md',
+      weight: 'bold',
+      color: COLOR.textPrimary,
+    }),
+    textLine(
+      `กำไร/ขาดทุน: ${sign}${formatNumber(plAbs)} บาท (${sign}${formatNumber(percentAbs)}%)`,
+      { size: 'md', weight: 'bold', color: plColor }
+    ),
+  ];
+
+  const note = priceSourceNote(profit.priceSource);
+  if (note) body.push(note);
+
+  return bubble({
+    headerText: isProfit ? '📈 กำไร' : '📉 ขาดทุน',
+    headerColor: plColor,
+    headerBg: isProfit ? COLOR.profitBg : COLOR.lossBg,
     bodyContents: body,
   });
 }
@@ -433,6 +484,7 @@ module.exports = {
   ERROR_MESSAGES,
   buildBuyConfirmMessage,
   buildSellConfirmMessage,
+  buildProfitMessage,
   buildPreviewMessage,
   buildCancelledMessage,
   buildEditHintMessage,

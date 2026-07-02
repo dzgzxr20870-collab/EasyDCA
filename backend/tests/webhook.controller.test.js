@@ -1,6 +1,7 @@
 jest.mock('../src/repositories/user.repository');
 jest.mock('../src/services/pendingTransaction.service');
 jest.mock('../src/services/portfolio.service');
+jest.mock('../src/services/profit.service');
 jest.mock('../src/services/history.service');
 jest.mock('../src/services/line.service');
 
@@ -13,6 +14,7 @@ jest.mock('../src/services/commandParser.service', () => {
 const userRepository = require('../src/repositories/user.repository');
 const pendingService = require('../src/services/pendingTransaction.service');
 const portfolioService = require('../src/services/portfolio.service');
+const profitService = require('../src/services/profit.service');
 const historyService = require('../src/services/history.service');
 const lineService = require('../src/services/line.service');
 const commandParser = require('../src/services/commandParser.service');
@@ -355,6 +357,94 @@ describe('handleEvent — HISTORY', () => {
     const reply = lastReplyText();
     expect(reply).toContain('ยังไม่มีประวัติ');
     expect(reply).not.toContain('กำลังพัฒนา');
+  });
+});
+
+describe('handleEvent — PROFIT', () => {
+  test('กำไร BTC → เรียก profitService จริงและ reply ด้วยผลกำไร (ไม่ใช่ "กำลังพัฒนา")', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.PROFIT,
+      params: { symbol: 'BTC' },
+    });
+    profitService.getAssetProfit.mockResolvedValue({
+      symbol: 'BTC',
+      heldQuantity: 0.01,
+      averageCost: 3000000,
+      totalInvested: 30000,
+      currentPrice: 4000000,
+      currentValue: 40000,
+      profitLoss: 10000,
+      profitLossPercent: 33.33,
+      priceSource: 'coingecko',
+    });
+
+    await handleEvent(textEvent('กำไร BTC'));
+
+    expect(profitService.getAssetProfit).toHaveBeenCalledWith(FREE_USER.id, 'BTC');
+    expect(lineService.replyMessage).toHaveBeenCalledTimes(1);
+    const reply = lastReplyText();
+    expect(reply).toContain('BTC');
+    expect(reply).toContain('กำไร');
+    expect(reply).toContain('40,000'); // มูลค่าปัจจุบัน
+    // priceSource=coingecko → แสดงคำเตือนราคาอ้างอิง
+    expect(reply).toContain('CoinGecko');
+    expect(reply).not.toContain('กำลังพัฒนา');
+  });
+
+  test('ขาดทุน → reply ด้วยสีขาดทุน (หัวข้อ 📉 ขาดทุน)', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.PROFIT,
+      params: { symbol: 'BTC' },
+    });
+    profitService.getAssetProfit.mockResolvedValue({
+      symbol: 'BTC',
+      heldQuantity: 0.01,
+      averageCost: 3000000,
+      totalInvested: 30000,
+      currentPrice: 2000000,
+      currentValue: 20000,
+      profitLoss: -10000,
+      profitLossPercent: -33.33,
+      priceSource: 'coingecko',
+    });
+
+    await handleEvent(textEvent('กำไร BTC'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('ขาดทุน');
+  });
+
+  test('ไม่มี Holding → NO_HOLDING_TO_CALCULATE_PROFIT แปลเป็นข้อความไทย (ไม่โชว์ Code ดิบ)', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.PROFIT,
+      params: { symbol: 'BTC' },
+    });
+    const err = new Error('No current holding for BTC to calculate profit');
+    err.code = 'NO_HOLDING_TO_CALCULATE_PROFIT';
+    profitService.getAssetProfit.mockRejectedValue(err);
+
+    await handleEvent(textEvent('กำไร BTC'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('ไม่มีการถือครองสินทรัพย์นี้');
+    expect(reply).toContain('พอต');
+    expect(reply).not.toContain('NO_HOLDING_TO_CALCULATE_PROFIT');
+  });
+
+  test('หุ้นไทยที่ยังไม่มี Price Feed → PRICE_FEED_NOT_IMPLEMENTED แปลเป็นข้อความไทย', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.PROFIT,
+      params: { symbol: 'PTT' },
+    });
+    const err = new Error('No live price feed available for PTT');
+    err.code = 'PRICE_FEED_NOT_IMPLEMENTED';
+    profitService.getAssetProfit.mockRejectedValue(err);
+
+    await handleEvent(textEvent('กำไร PTT'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('เฉพาะบางสินทรัพย์');
+    expect(reply).not.toContain('PRICE_FEED_NOT_IMPLEMENTED');
   });
 });
 
