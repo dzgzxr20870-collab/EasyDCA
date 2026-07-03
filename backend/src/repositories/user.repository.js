@@ -9,6 +9,8 @@ function toUser(row) {
     displayName: row.display_name,
     pictureUrl: row.picture_url,
     plan: row.plan,
+    // entitlement.service ใช้ planExpiresAt (คู่กับ plan) ตัดสินว่า Premium ยัง
+    // Active ไหม (null = ไม่เคย/หมดแล้ว = ถือเป็น Free)
     planExpiresAt: row.plan_expires_at,
     isLocked: row.is_locked,
     lockedAt: row.locked_at,

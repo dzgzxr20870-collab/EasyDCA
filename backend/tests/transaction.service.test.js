@@ -95,17 +95,37 @@ describe('processBuyCommand', () => {
     expect(transactionRepository.create).not.toHaveBeenCalled();
   });
 
-  test('Premium ไม่ติด Freemium Limit แม้มี Asset เกิน 2', async () => {
+  test('Premium ที่ยัง Active ไม่ติด Freemium Limit แม้มี Asset เกิน 2', async () => {
     assetRepository.findByUserAndSymbol.mockResolvedValue(null);
 
+    // ผ่าน entitlement: premium ต้องมี planExpiresAt อนาคตจึงถือว่า Active
+    const future = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
     const result = await processBuyCommand(
       USER_ID,
       { symbol: 'ETH', quantity: 1, pricePerUnit: 1000, type: 'crypto' },
-      { plan: 'premium' }
+      { plan: 'premium', planExpiresAt: future }
     );
 
     expect(assetRepository.countActiveByUser).not.toHaveBeenCalled();
     expect(result.newAssetCreated).toBe(true);
+  });
+
+  test('Premium ที่หมดอายุแล้ว → ถือเป็น free ติด Freemium Limit (entitlement)', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue(null);
+    assetRepository.countActiveByUser.mockResolvedValue(MAX_FREE_ASSETS);
+
+    // plan=premium แต่วันหมดอายุเป็นอดีต → entitlement ถือเป็น free → บังคับ Limit
+    const past = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    await expect(
+      processBuyCommand(
+        USER_ID,
+        { symbol: 'ETH', quantity: 1, pricePerUnit: 1000, type: 'crypto' },
+        { plan: 'premium', planExpiresAt: past }
+      )
+    ).rejects.toMatchObject({ code: 'ASSET_LIMIT_REACHED' });
+
+    expect(assetRepository.countActiveByUser).toHaveBeenCalledWith(USER_ID);
+    expect(assetRepository.create).not.toHaveBeenCalled();
   });
 
   test('รูปแบบจำนวนเงินล้วน (amountThb) + Price Feed หาราคาไม่ได้ → PRICE_FEED_NOT_IMPLEMENTED ก่อนเขียน DB', async () => {

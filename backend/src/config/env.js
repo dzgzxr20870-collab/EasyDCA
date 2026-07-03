@@ -77,4 +77,19 @@ module.exports = {
   twelveData: {
     apiKey: process.env.TWELVE_DATA_API_KEY || null,
   },
+  // Payment (Phase 2 Step 3 — Premium ผ่าน PromptPay QR + ต่ออายุเอง)
+  // ⚠️ ไม่บังคับใน REQUIRED_ENV_VARS (ตามบทเรียน Audit — บังคับเฉพาะ 4 ตัวที่ boot
+  // ต้องใช้จริง) ตัวเหล่านี้ค่อย Validate ตอนเรียกใช้จริงในรอบ 2 (สร้าง QR/อนุมัติ)
+  //   - PROMPTPAY_ID: เบอร์พร้อมเพย์/เลขบัตรที่รับเงิน (ยังไม่มีค่า = null)
+  //   - ADMIN_LINE_USER_IDS: line_user_id ของ Admin ที่อนุมัติได้ (คั่นด้วย ',')
+  //   - PREMIUM_PRICE_MONTHLY/YEARLY: ราคา Default 59 / 590 บาท
+  payment: {
+    promptpayId: process.env.PROMPTPAY_ID || null,
+    adminLineUserIds: (process.env.ADMIN_LINE_USER_IDS || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+    premiumPriceMonthly: Number(process.env.PREMIUM_PRICE_MONTHLY || 59),
+    premiumPriceYearly: Number(process.env.PREMIUM_PRICE_YEARLY || 590),
+  },
 };

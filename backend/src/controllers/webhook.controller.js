@@ -60,7 +60,10 @@ async function routeCommand(user, parsed) {
       // Pending รอ Confirm ส่ง Preview พร้อมปุ่มยืนยัน/แก้ไข/ยกเลิกกลับไป
       // ถ้า Validate ไม่ผ่าน (Limit/type/ยอดไม่พอ) createPending จะ throw
       // ให้ตัว catch ด้านล่างแปลเป็นข้อความไทย โดยไม่มี Pending ค้าง
-      const pending = await pendingService.createPending(user.id, parsed, { plan: user.plan });
+      const pending = await pendingService.createPending(user.id, parsed, {
+        plan: user.plan,
+        planExpiresAt: user.planExpiresAt,
+      });
       return flexMessage.buildPreviewMessage(pending);
     }
 
@@ -125,6 +128,7 @@ async function routePostback(user, data) {
     case 'confirm': {
       const { commandType, result } = await pendingService.confirmPending(pendingId, {
         plan: user.plan,
+        planExpiresAt: user.planExpiresAt,
       });
       // ⚠️ ถ้ามาถึงบรรทัดนี้ = Transaction จริงถูกบันทึกลง DB สำเร็จแล้ว
       // (pendingService.confirmPending คืน result ก็ต่อเมื่อ Commit สำเร็จ) —

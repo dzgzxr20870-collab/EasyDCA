@@ -2,6 +2,7 @@ const assetRepository = require('../repositories/asset.repository');
 const transactionRepository = require('../repositories/transaction.repository');
 const priceFeedService = require('./priceFeed.service');
 const symbolRegistry = require('./symbolRegistry.service');
+const entitlement = require('./entitlement.service');
 
 // แหล่งราคาจริงตาม Asset Type (Pattern เดียวกับที่ priceFeed.service.js ใช้
 // จัดเส้นทาง Crypto → CoinGecko / หุ้นสหรัฐ → Twelve Data) — priceFeedService
@@ -14,7 +15,9 @@ function resolvePriceSource(symbol) {
 }
 
 // PRD.md — Free Plan บันทึกได้สูงสุด 2 สินทรัพย์ Active
-const MAX_FREE_ASSETS = 2;
+// ค่ากลางอยู่ที่ entitlement.service (แหล่งตัดสินสิทธิ์เดียว) — คงชื่อ MAX_FREE_ASSETS
+// ไว้ Re-export เพื่อ Backward Compat กับโค้ด/เทสต์ที่อ้างค่านี้อยู่แล้ว ไม่ Hardcode ซ้ำ
+const MAX_FREE_ASSETS = entitlement.FREE_TIER_ASSET_LIMIT;
 
 // Error ที่มี code ตาม API.md § 5 เพื่อให้ Layer ด้านบน (Webhook/Controller)
 // Map เป็น Error Response มาตรฐานได้ ไม่ปล่อย Error ดิบหลุดถึง Client
@@ -129,9 +132,10 @@ function calculateHeldQuantity(transactions) {
 // เพื่อไม่ให้ Logic ตรวจสอบ (Freemium/type/แปลงจำนวน) ถูก Copy ซ้ำสองที่
 // อาจ throw: PRICE_FEED_NOT_IMPLEMENTED / VALIDATION_ERROR / ASSET_LIMIT_REACHED
 async function validateBuy(userId, params, options = {}) {
-  // Default plan = 'free' แบบ Fail-closed — ถ้า Caller ไม่ส่ง plan มา
-  // ให้บังคับ Limit ของ Free ไว้ก่อน ปลอดภัยกว่าปล่อยผ่านโดยไม่เช็ค
-  const { plan = 'free' } = options;
+  // Default Fail-closed — ถ้า Caller ไม่ส่งมา: plan='free', planExpiresAt=null
+  // (ปลอดภัยกว่าปล่อยผ่าน) entitlement จะถือว่า premium ที่หมดอายุ/ไม่มีวันหมดอายุ
+  // = free โดยอัตโนมัติ
+  const { plan = 'free', planExpiresAt = null } = options;
   const portfolioId = params.portfolioId ?? null;
 
   // แปลง/ตรวจจำนวนก่อน (อาจ throw PRICE_FEED/VALIDATION) — ยังไม่แตะ DB
@@ -147,13 +151,17 @@ async function validateBuy(userId, params, options = {}) {
   }
 
   // Asset ใหม่ — เช็ค Freemium Limit เฉพาะตอนจะสร้าง Asset ใหม่ (SRS.md § 2.3 [2])
-  if (plan === 'free') {
+  // ตัดสินสิทธิ์ผ่าน entitlement (แหล่งตัดสินสิทธิ์เดียว) แทนการเทียบ plan ตรงๆ:
+  // getActiveAssetLimit คืน null = ไม่จำกัด (Premium ที่ยัง Active) / เลข = เพดาน Free
+  // พฤติกรรมเหมือนเดิมทุกอย่าง ต่างแค่ "premium ที่หมดอายุ = ถือเป็น free"
+  const assetLimit = entitlement.getActiveAssetLimit({ plan, planExpiresAt });
+  if (assetLimit !== null) {
     const activeCount = await assetRepository.countActiveByUser(userId);
-    if (activeCount >= MAX_FREE_ASSETS) {
+    if (activeCount >= assetLimit) {
       throw new TransactionServiceError(
         'ASSET_LIMIT_REACHED',
-        `Free plan is limited to ${MAX_FREE_ASSETS} active assets`,
-        { limit: MAX_FREE_ASSETS, current: activeCount }
+        `Free plan is limited to ${assetLimit} active assets`,
+        { limit: assetLimit, current: activeCount }
       );
     }
   }
