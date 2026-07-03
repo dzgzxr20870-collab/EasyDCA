@@ -65,6 +65,29 @@ async function findRecentByUser(userId, limit) {
   return data.map(toTransaction);
 }
 
+// ดึง Transaction "ทั้งหมด" ของ User (ไม่จำกัด limit ต่างจาก findRecentByUser)
+// พร้อม Join assets เพื่อได้ symbol มาด้วยในคราวเดียว (เลี่ยง N+1 Query) — ใช้
+// สำหรับหน้า History ของ Dashboard ที่ต้อง Filter/Limit เองในชั้น Controller
+// เรียงตาม date DESC, created_at DESC (Pattern เดียวกับ findRecentByUser — เหตุผล
+// เดียวกัน: date เป็น DATE ไม่มีเวลา ต้องใช้ created_at เป็น Secondary Key)
+async function findAllByUser(userId) {
+  const { data, error } = await supabaseAdmin
+    .from('transactions')
+    .select('*, assets(symbol)')
+    .eq('user_id', userId)
+    .order('date', { ascending: false })
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    throw new Error(`Failed to find all transactions for user ${userId}: ${error.message}`);
+  }
+
+  return data.map((row) => ({
+    ...toTransaction(row),
+    symbol: row.assets?.symbol ?? null,
+  }));
+}
+
 async function findAllByAsset(assetId) {
   const { data, error } = await supabaseAdmin
     .from('transactions')
@@ -81,5 +104,6 @@ async function findAllByAsset(assetId) {
 module.exports = {
   create,
   findRecentByUser,
+  findAllByUser,
   findAllByAsset,
 };

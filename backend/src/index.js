@@ -8,6 +8,7 @@ const cors = require('cors');
 
 const webhookRoutes = require('./routes/webhook.routes');
 const authRoutes = require('./routes/auth.routes');
+const dashboardRoutes = require('./routes/dashboard.routes');
 const { scheduleExpirePending, schedulePurgeOld } = require('./jobs/pendingCleanup.job');
 const { scheduleReminderPush } = require('./jobs/dcaReminder.job');
 const { schedulePurgeStaleSetupSessions } = require('./jobs/reminderSetupCleanup.job');
@@ -47,6 +48,9 @@ app.use(express.static(path.join(__dirname, '../public')));
 
 // Mount Auth Routes (Phase 2 — LIFF Login) ที่ /api/v1/auth
 app.use('/api/v1/auth', authRoutes);
+
+// Mount Dashboard Routes (Phase 2 — Web Dashboard) ที่ /api/v1/dashboard
+app.use('/api/v1/dashboard', dashboardRoutes);
 
 // Railway Health Check (ดู docs/DEPLOYMENT.md § 3.1)
 app.get('/health', (req, res) => {
