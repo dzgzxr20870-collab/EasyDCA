@@ -1,0 +1,59 @@
+const userRepository = require('../repositories/user.repository');
+const liffAuthService = require('../services/liffAuth.service');
+const authTokenService = require('../services/authToken.service');
+
+// ชื่อสำรองกรณี LINE ไม่คืน displayName (สอดคล้องกับ webhook.controller)
+const DEFAULT_DISPLAY_NAME = 'LINE User';
+
+// หา User เดิมจาก lineUserId — ถ้ายังไม่มีให้สร้างใหม่ (Auto-register) โดย Reuse
+// ฟังก์ชันเดียวกับ Webhook (findByLineUserId + create) เพื่อให้ User จากเว็บ (LIFF)
+// กับจาก LINE Chat เป็น Record เดียวกันเสมอ ไม่เกิด Record ซ้ำ
+async function resolveUser(profile) {
+  const existing = await userRepository.findByLineUserId(profile.userId);
+  if (existing) return existing;
+
+  const displayName = profile.displayName ?? DEFAULT_DISPLAY_NAME;
+  const pictureUrl = profile.pictureUrl ?? null;
+
+  return userRepository.create(profile.userId, displayName, pictureUrl);
+}
+
+// POST /api/v1/auth/liff-verify
+// รับ LIFF Access Token จากหน้าเว็บ → Verify กับ LINE → ออก JWT ของระบบเราคืน
+async function liffVerify(req, res) {
+  const { accessToken } = req.body || {};
+
+  if (!accessToken) {
+    return res.status(400).json({ error: 'accessToken is required' });
+  }
+
+  try {
+    // Verify Token + client_id ก่อน แล้วจึงดึง Profile (ตามลำดับ)
+    await liffAuthService.verifyLiffAccessToken(accessToken);
+    const profile = await liffAuthService.fetchLiffProfile(accessToken);
+
+    const user = await resolveUser(profile);
+    const token = authTokenService.issueUserToken(user);
+
+    return res.status(200).json({
+      token,
+      user: {
+        id: user.id,
+        displayName: user.displayName,
+        pictureUrl: user.pictureUrl,
+      },
+    });
+  } catch (err) {
+    // Error ที่คาดไว้จาก LIFF (Token ผิด/Channel ไม่ตรง/หมดอายุ/ดึง Profile ไม่ได้)
+    // → 401 พร้อม code ให้ Client รู้สาเหตุ
+    if (err instanceof liffAuthService.LiffAuthError) {
+      return res.status(401).json({ error: err.code });
+    }
+
+    // Error อื่นที่ไม่คาดคิด → 500 (ไม่ปล่อย Stack Trace หลุดถึง Client)
+    console.error(`[auth] liffVerify failed: ${err.message}`);
+    return res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+}
+
+module.exports = { liffVerify };

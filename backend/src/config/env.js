@@ -49,6 +49,17 @@ module.exports = {
     jwtSecret: process.env.JWT_SECRET,
     jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',
   },
+  // LIFF (Phase 2 — LIFF Login) — ยังไม่บังคับ (ไม่อยู่ใน REQUIRED_ENV_VARS)
+  // เหมือน TWELVE_DATA_API_KEY เพราะยังเป็น Phase 2 ที่กำลังพัฒนา
+  //   - LIFF_ID: มีค่าจริงแล้วบน Railway (2010586158-DO9yzmaP)
+  //   - LIFF_CHANNEL_ID: ⚠️ ต้องเพิ่ม Environment Variable ใหม่นี้บน Railway
+  //     ด้วยค่า "2010586158" (Channel ID ของ LINE Login Channel สำหรับ LIFF App นี้)
+  //     ก่อน Deploy — liffAuth.service ใช้ตรวจ client_id ของ Access Token ให้ตรง
+  //     Channel (กัน Token จาก LIFF App อื่นมาสวมสิทธิ์) ถ้าไม่ตั้งจะ Verify ไม่ผ่าน
+  liff: {
+    id: process.env.LIFF_ID || null,
+    channelId: process.env.LIFF_CHANNEL_ID || null,
+  },
   app: {
     url: process.env.APP_URL,
     nodeEnv: process.env.NODE_ENV,

@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EasyDCA — เข้าสู่ระบบ</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
+        "Sarabun", "Kanit", sans-serif;
+      background: #f5f6f8;
+      color: #222;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 24px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+      padding: 32px 28px;
+      max-width: 360px;
+      width: 100%;
+      text-align: center;
+    }
+    .logo {
+      font-size: 22px;
+      font-weight: 700;
+      color: #06c755;
+      margin-bottom: 8px;
+    }
+    .status {
+      font-size: 15px;
+      line-height: 1.6;
+      margin-top: 16px;
+      color: #555;
+    }
+    .status.error { color: #d64545; }
+    .status.success { color: #1a9e4b; }
+    .avatar {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      object-fit: cover;
+      margin: 16px auto 0;
+      display: none;
+    }
+    .spinner {
+      width: 28px;
+      height: 28px;
+      border: 3px solid #e0e0e0;
+      border-top-color: #06c755;
+      border-radius: 50%;
+      margin: 16px auto 0;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">EasyDCA</div>
+    <img id="avatar" class="avatar" alt="รูปโปรไฟล์" />
+    <div id="spinner" class="spinner"></div>
+    <div id="status" class="status">กำลังเข้าสู่ระบบ...</div>
+  </div>
+
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <script>
+    // LIFF ID เป็นค่า Public ฝัง Client-side ได้ปกติ (ไม่ใช่ Secret)
+    var LIFF_ID = '2010586158-DO9yzmaP';
+    var TOKEN_KEY = 'easydca_token';
+
+    var statusEl = document.getElementById('status');
+    var spinnerEl = document.getElementById('spinner');
+    var avatarEl = document.getElementById('avatar');
+
+    function setStatus(text, type) {
+      statusEl.textContent = text;
+      statusEl.className = 'status' + (type ? ' ' + type : '');
+    }
+
+    function hideSpinner() {
+      spinnerEl.style.display = 'none';
+    }
+
+    function showError(message) {
+      hideSpinner();
+      setStatus(message || 'เข้าสู่ระบบไม่สำเร็จ กรุณาลองใหม่อีกครั้ง', 'error');
+    }
+
+    async function main() {
+      try {
+        await liff.init({ liffId: LIFF_ID });
+      } catch (err) {
+        showError('ไม่สามารถเริ่มต้นระบบได้ กรุณาลองใหม่อีกครั้ง');
+        return;
+      }
+
+      // ยังไม่ Login → ส่งไปหน้า Login ของ LINE (จะกลับมาหน้านี้อีกครั้งหลัง Login)
+      if (!liff.isLoggedIn()) {
+        liff.login();
+        return;
+      }
+
+      setStatus('กำลังเข้าสู่ระบบ...');
+
+      try {
+        var accessToken = liff.getAccessToken();
+
+        var response = await fetch('/api/v1/auth/liff-verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ accessToken: accessToken }),
+        });
+
+        if (!response.ok) {
+          showError('เข้าสู่ระบบไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+          return;
+        }
+
+        var data = await response.json();
+
+        // เก็บ JWT ของระบบไว้ใช้เรียก API ที่ต้อง Login ต่อไป
+        localStorage.setItem(TOKEN_KEY, data.token);
+
+        hideSpinner();
+        var name = (data.user && data.user.displayName) || '';
+        setStatus('เข้าสู่ระบบสำเร็จ' + (name ? ' — ' + name : ''), 'success');
+
+        if (data.user && data.user.pictureUrl) {
+          avatarEl.src = data.user.pictureUrl;
+          avatarEl.style.display = 'block';
+        }
+      } catch (err) {
+        showError('เข้าสู่ระบบไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+      }
+    }
+
+    main();
+  </script>
+</body>
+</html>
