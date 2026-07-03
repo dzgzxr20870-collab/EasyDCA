@@ -53,6 +53,10 @@ const ERROR_MESSAGES = {
   INVALID_DAY:
     'วันที่ไม่ถูกต้อง สำหรับรายเดือนกรุณาพิมพ์เลข 1-31 หรือเลือกจากปุ่มที่ระบบส่งให้',
   INTERNAL_ERROR: 'เกิดข้อผิดพลาดบางอย่าง กรุณาลองใหม่อีกครั้งในภายหลัง',
+  // Payment Admin Postback (payment.service) — อนุมัติ/ปฏิเสธผ่านปุ่มใน LINE
+  // NOT_AUTHORIZED: ตอบสั้นๆ ไม่บอกรายละเอียดเพิ่ม (กัน Enumerate ว่าใครเป็น Admin)
+  NOT_AUTHORIZED: 'คุณไม่มีสิทธิ์ทำรายการนี้',
+  ALREADY_RESOLVED: 'รายการนี้ถูกดำเนินการไปแล้ว',
 };
 
 // Postback data encoding สำหรับปุ่มในข้อความ Preview — Controller ถอดด้วย
@@ -803,6 +807,168 @@ function buildPortfolioSummaryPushMessage(summary) {
   });
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// Payment (Phase 2 Step 3 — Premium ผ่าน PromptPay QR + Admin Approval)
+// ═══════════════════════════════════════════════════════════════════════
+
+// รอบบิลเป็นข้อความไทย
+function billingLabel(billingPeriod) {
+  return billingPeriod === 'yearly' ? 'รายปี' : 'รายเดือน';
+}
+
+// จัดรูปวันหมดอายุเป็น YYYY-MM-DD ตามเขตเวลา Asia/Bangkok (Pattern เดียวกับ
+// todayInBangkok ใน transaction.service) — รับได้ทั้ง Date และ ISO string
+function formatDateBangkok(value) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date(value));
+}
+
+// ── Push หา Admin: มีคำขอชำระเงินใหม่ พร้อมปุ่มอนุมัติ/ปฏิเสธ ────────────────
+// ปุ่ม Postback encode paymentId (คนละ Key กับ pendingId ของ Flow ซื้อ/ขาย)
+// Controller (routePostback) ถอดด้วย URLSearchParams action=approve_payment/reject_payment
+function buildAdminPaymentRequestMessage(payment, userDisplayName) {
+  const body = [
+    textLine(`ผู้ใช้: ${userDisplayName ?? '-'}`, {
+      size: 'sm',
+      color: COLOR.textSecondary,
+    }),
+    textLine(`แพ็กเกจ: Premium (${billingLabel(payment.billingPeriod)})`, {
+      size: 'sm',
+      color: COLOR.textSecondary,
+    }),
+    textLine(`ยอดที่ต้องได้รับ: ${formatNumber(payment.amountThb)} บาท`, {
+      size: 'lg',
+      weight: 'bold',
+      color: COLOR.textPrimary,
+    }),
+    textLine('* ตรวจยอดในบัญชีให้ตรงเป๊ะ (รวมเศษสตางค์) ก่อนกดอนุมัติ', {
+      size: 'xs',
+      color: COLOR.textSecondary,
+    }),
+  ];
+
+  const footerButtons = [
+    {
+      type: 'button',
+      style: 'primary',
+      color: COLOR.profit,
+      action: {
+        type: 'postback',
+        label: '✅ อนุมัติ',
+        data: `action=approve_payment&paymentId=${payment.id}`,
+        displayText: 'อนุมัติการชำระเงิน',
+      },
+    },
+    {
+      type: 'button',
+      style: 'secondary',
+      action: {
+        type: 'postback',
+        label: '❌ ปฏิเสธ',
+        data: `action=reject_payment&paymentId=${payment.id}`,
+        displayText: 'ปฏิเสธการชำระเงิน',
+      },
+    },
+  ];
+
+  return {
+    type: 'flex',
+    altText: `คำขอชำระเงินใหม่ ${formatNumber(payment.amountThb)} บาท`,
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: COLOR.warningBg,
+        paddingAll: '12px',
+        contents: [textLine('💰 คำขอชำระเงินใหม่', { weight: 'bold', color: COLOR.warning })],
+      },
+      body: { type: 'box', layout: 'vertical', spacing: 'sm', contents: body },
+      footer: { type: 'box', layout: 'vertical', spacing: 'sm', contents: footerButtons },
+    },
+  };
+}
+
+// ── Reply ยืนยันกับ Admin หลังอนุมัติสำเร็จ ───────────────────────────────
+function buildAdminApproveAckMessage(payment, newExpiry) {
+  return bubble({
+    headerText: '✅ อนุมัติแล้ว',
+    headerColor: COLOR.profit,
+    headerBg: COLOR.profitBg,
+    bodyContents: [
+      textLine(`ยอด ${formatNumber(payment.amountThb)} บาท (${billingLabel(payment.billingPeriod)})`, {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      textLine(`ต่ออายุ Premium ให้ผู้ใช้ถึง ${formatDateBangkok(newExpiry)} แล้ว`, {
+        size: 'sm',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
+}
+
+// ── Reply ยืนยันกับ Admin หลังปฏิเสธสำเร็จ ─────────────────────────────────
+function buildAdminRejectAckMessage(payment) {
+  return bubble({
+    headerText: '❌ ปฏิเสธแล้ว',
+    headerColor: COLOR.loss,
+    headerBg: COLOR.lossBg,
+    bodyContents: [
+      textLine(`ปฏิเสธคำขอยอด ${formatNumber(payment.amountThb)} บาทแล้ว`, {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      textLine('ไม่มีการเปลี่ยนแปลงสิทธิ์ของผู้ใช้', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
+}
+
+// ── Push หาผู้ใช้: อนุมัติสำเร็จ Premium ใช้งานได้ ─────────────────────────
+function buildPaymentApprovedMessage(payment, newExpiry) {
+  return bubble({
+    headerText: '🎉 อัพเกรด Premium สำเร็จ',
+    headerColor: COLOR.profit,
+    headerBg: COLOR.profitBg,
+    bodyContents: [
+      textLine('ขอบคุณที่สนับสนุน EasyDCA! บัญชีของคุณเป็น Premium แล้ว', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      textLine(`ใช้งาน Premium ได้ถึง: ${formatDateBangkok(newExpiry)}`, {
+        size: 'md',
+        weight: 'bold',
+        color: COLOR.textPrimary,
+      }),
+      textLine('* บันทึกสินทรัพย์ได้ไม่จำกัดแล้ว', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
+}
+
+// ── Push หาผู้ใช้: คำขอถูกปฏิเสธ ───────────────────────────────────────────
+function buildPaymentRejectedMessage(payment) {
+  return bubble({
+    headerText: '⚠️ คำขอชำระเงินไม่ผ่าน',
+    headerColor: COLOR.warning,
+    headerBg: COLOR.warningBg,
+    bodyContents: [
+      textLine(`คำขอ Premium (${billingLabel(payment.billingPeriod)}) ยอด ${formatNumber(payment.amountThb)} บาท ไม่ผ่านการตรวจสอบ`, {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      textLine('อาจเกิดจากยอดโอนไม่ตรงหรือสลิปไม่ชัด กรุณาลองทำรายการใหม่อีกครั้ง หากคิดว่าผิดพลาดติดต่อทีมงานได้เลย', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
+}
+
 function buildUnknownCommandMessage() {
   return bubble({
     headerText: '🤔 ไม่เข้าใจคำสั่งนี้',
@@ -841,6 +1007,11 @@ module.exports = {
   buildDayOfMonthQuickReply,
   buildAskAmountMessage,
   buildReminderSetupCancelledMessage,
+  buildAdminPaymentRequestMessage,
+  buildAdminApproveAckMessage,
+  buildAdminRejectAckMessage,
+  buildPaymentApprovedMessage,
+  buildPaymentRejectedMessage,
   buildErrorMessage,
   buildUnknownCommandMessage,
 };

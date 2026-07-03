@@ -9,7 +9,9 @@ const cors = require('cors');
 const webhookRoutes = require('./routes/webhook.routes');
 const authRoutes = require('./routes/auth.routes');
 const dashboardRoutes = require('./routes/dashboard.routes');
+const paymentRoutes = require('./routes/payment.routes');
 const { scheduleExpirePending, schedulePurgeOld } = require('./jobs/pendingCleanup.job');
+const { scheduleExpirePayments } = require('./jobs/paymentExpiry.job');
 const { scheduleReminderPush } = require('./jobs/dcaReminder.job');
 const { schedulePurgeStaleSetupSessions } = require('./jobs/reminderSetupCleanup.job');
 const {
@@ -52,6 +54,9 @@ app.use('/api/v1/auth', authRoutes);
 // Mount Dashboard Routes (Phase 2 — Web Dashboard) ที่ /api/v1/dashboard
 app.use('/api/v1/dashboard', dashboardRoutes);
 
+// Mount Payment Routes (Phase 2 Step 3 — Premium ผ่าน PromptPay QR) ที่ /api/v1/payment
+app.use('/api/v1/payment', paymentRoutes);
+
 // Railway Health Check (ดู docs/DEPLOYMENT.md § 3.1)
 app.get('/health', (req, res) => {
   res.status(200).json({ success: true, data: { status: 'ok' } });
@@ -72,6 +77,8 @@ app.listen(config.app.port, () => {
   // Asia/Bangkok (portfolioSummary.job.js)
   scheduleWeeklySummaryPush();
   scheduleMonthlySummaryPush();
+  // Mark คำขอชำระเงินที่หมดอายุ (24 ชม.) เป็น 'expired' ทุกชั่วโมง (paymentExpiry.job.js)
+  scheduleExpirePayments();
 });
 
 module.exports = app;

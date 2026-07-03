@@ -7,6 +7,7 @@ const undoService = require('../services/undoTransaction.service');
 const reminderService = require('../services/dcaReminder.service');
 const reminderSetupFlow = require('../services/reminderSetupFlow.service');
 const pendingService = require('../services/pendingTransaction.service');
+const paymentService = require('../services/payment.service');
 const symbolRegistry = require('../services/symbolRegistry.service');
 const lineService = require('../services/line.service');
 const flexMessage = require('../utils/flexMessage.util');
@@ -192,6 +193,52 @@ async function routePostback(user, data) {
     case 'cancel_reminder_setup': {
       await reminderSetupFlow.cancelFlow(user.id);
       return flexMessage.buildReminderSetupCancelledMessage();
+    }
+
+    // ── Admin อนุมัติ/ปฏิเสธคำขอชำระเงิน (Payment Approval) ────────────────────
+    // adminLineUserId = user.lineUserId (คนที่กดปุ่มจริง — resolveUser มาจาก
+    // event.source.userId) ไม่ใช่เจ้าของ Payment | service ตรวจสิทธิ์ Admin เอง
+    // NOT_AUTHORIZED/ALREADY_RESOLVED จะ throw ขึ้นไปให้ replyWithError แปลไทย
+    case 'approve_payment': {
+      const { payment, user: owner, newExpiry } = await paymentService.approvePayment(
+        params.get('paymentId'),
+        user.lineUserId
+      );
+
+      // Push แจ้งเจ้าของ Payment แบบ Best-effort — plan ถูกอัปเดตแล้ว (Source of
+      // Truth คือ DB) ถ้า Push พังห้ามทำให้ Admin เห็น Error ว่าอนุมัติไม่สำเร็จ
+      try {
+        if (owner?.lineUserId) {
+          await lineService.pushMessage(
+            owner.lineUserId,
+            flexMessage.buildPaymentApprovedMessage(payment, newExpiry)
+          );
+        }
+      } catch (pushErr) {
+        console.error(`[webhook] approve_payment: push to owner failed: ${pushErr.message}`);
+      }
+
+      return flexMessage.buildAdminApproveAckMessage(payment, newExpiry);
+    }
+
+    case 'reject_payment': {
+      const { payment, user: owner } = await paymentService.rejectPayment(
+        params.get('paymentId'),
+        user.lineUserId
+      );
+
+      try {
+        if (owner?.lineUserId) {
+          await lineService.pushMessage(
+            owner.lineUserId,
+            flexMessage.buildPaymentRejectedMessage(payment)
+          );
+        }
+      } catch (pushErr) {
+        console.error(`[webhook] reject_payment: push to owner failed: ${pushErr.message}`);
+      }
+
+      return flexMessage.buildAdminRejectAckMessage(payment);
     }
 
     default:

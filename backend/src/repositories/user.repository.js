@@ -33,6 +33,22 @@ async function findByLineUserId(lineUserId) {
   return toUser(data);
 }
 
+// หา User ด้วย Primary Key (id) — ใช้ตอนอนุมัติ Payment ที่มีแต่ payment.user_id
+// (คนละตัวกับ findByLineUserId ที่ค้นด้วย LINE User ID)
+async function findById(userId) {
+  const { data, error } = await supabaseAdmin
+    .from('users')
+    .select('*')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Failed to find user by id: ${error.message}`);
+  }
+
+  return toUser(data);
+}
+
 async function create(lineUserId, displayName, pictureUrl) {
   const { data, error } = await supabaseAdmin
     .from('users')
@@ -72,6 +88,7 @@ async function updatePlan(userId, plan, expiresAt) {
 
 module.exports = {
   findByLineUserId,
+  findById,
   create,
   updatePlan,
 };
