@@ -20,6 +20,23 @@ jest.mock('../src/services/reminderSetupFlow.service', () => {
   };
 });
 jest.mock('../src/services/line.service');
+jest.mock('../src/services/payment.service');
+jest.mock('../src/services/entitlement.service');
+// Override เฉพาะค่าที่ Postback Premium/Dashboard ใช้ (adminIds/liff.id/publicBaseUrl)
+// ให้ Deterministic — คงค่าอื่นจาก config จริง (.env) ไว้
+jest.mock('../src/config/env', () => {
+  const actual = jest.requireActual('../src/config/env');
+  return {
+    ...actual,
+    payment: { ...actual.payment, adminLineUserIds: ['Uadmin1', 'Uadmin2'] },
+    liff: { ...actual.liff, id: '2010586158-DO9yzmaP' },
+    app: {
+      ...actual.app,
+      publicBaseUrl: 'https://api.easydca.test',
+      frontendUrl: 'https://app.easydca.test',
+    },
+  };
+});
 
 // Mock parseCommand แต่คง COMMANDS จริงไว้ให้ Controller ใช้เทียบ
 jest.mock('../src/services/commandParser.service', () => {
@@ -37,6 +54,8 @@ const historyService = require('../src/services/history.service');
 const reminderService = require('../src/services/dcaReminder.service');
 const reminderSetupFlow = require('../src/services/reminderSetupFlow.service');
 const lineService = require('../src/services/line.service');
+const paymentService = require('../src/services/payment.service');
+const entitlement = require('../src/services/entitlement.service');
 const commandParser = require('../src/services/commandParser.service');
 const { handleEvent } = require('../src/controllers/webhook.controller');
 
@@ -731,6 +750,135 @@ describe('handleEvent — DCA Reminder Setup Flow (Quick Reply)', () => {
     const reply = lastReplyText();
     expect(reply).toContain('ไม่พบขั้นตอนการตั้งเตือน');
     expect(reply).not.toContain('SETUP_SESSION_NOT_FOUND');
+  });
+});
+
+describe('handleEvent — Premium Menu (Postback 3 เคส)', () => {
+  test('เคส 1: ยังไม่ Premium + ไม่มีคำขอค้าง → เสนอแพ็กเกจรายเดือน/รายปี', async () => {
+    paymentService.findPendingByUserId.mockResolvedValue(null);
+    entitlement.isPremiumActive.mockReturnValue(false);
+
+    await handleEvent(postbackEvent('action=premium_menu'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('action=request_payment&period=monthly');
+    expect(reply).toContain('action=request_payment&period=yearly');
+    expect(paymentService.requestPayment).not.toHaveBeenCalled();
+  });
+
+  test('เคส 2: Premium Active → แสดงสถานะ + วันหมดอายุ (ไทย/พ.ศ.) + ปุ่มต่ออายุ', async () => {
+    userRepository.findByLineUserId.mockResolvedValue({
+      ...FREE_USER,
+      plan: 'premium',
+      planExpiresAt: '2027-01-15T00:00:00.000Z',
+    });
+    paymentService.findPendingByUserId.mockResolvedValue(null);
+    entitlement.isPremiumActive.mockReturnValue(true);
+
+    await handleEvent(postbackEvent('action=premium_menu'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('Premium อยู่แล้ว');
+    expect(reply).toContain('15 มกราคม 2570'); // แปลงเป็น พ.ศ. ผ่าน thaiDate.util
+    // ต่ออายุใช้ Postback เดียวกับเคส 1
+    expect(reply).toContain('action=request_payment&period=monthly');
+  });
+
+  test('เคส 3: มีคำขอ pending ค้าง → ส่ง QR เดิมซ้ำ (ไม่สร้างใหม่ซ้อน)', async () => {
+    paymentService.findPendingByUserId.mockResolvedValue({
+      id: 'pay-9',
+      amountThb: 59.17,
+      billingPeriod: 'monthly',
+      expiresAt: '2026-07-05T00:00:00.000Z',
+      status: 'pending',
+    });
+
+    await handleEvent(postbackEvent('action=premium_menu'));
+
+    const reply = lastReplyText();
+    // Image ชี้ไป Endpoint qr.png ของคำขอเดิม + ปุ่มแจ้งชำระของ paymentId เดิม
+    expect(reply).toContain('/api/v1/payment/pay-9/qr.png');
+    expect(reply).toContain('action=notify_payment&paymentId=pay-9');
+    expect(paymentService.requestPayment).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleEvent — Payment Postback (request/notify)', () => {
+  test('request_payment: สร้างคำขอ + ส่ง QR (Image URL เต็ม, ยอด 2 ตำแหน่ง, ปุ่มแจ้งชำระ)', async () => {
+    paymentService.requestPayment.mockResolvedValue({
+      paymentId: 'pay-5',
+      amountThb: 590.05,
+      qrPayload: '000201...',
+      expiresAt: new Date('2026-07-05T00:00:00.000Z'),
+    });
+
+    await handleEvent(postbackEvent('action=request_payment&period=yearly'));
+
+    expect(paymentService.requestPayment).toHaveBeenCalledWith(FREE_USER.id, 'yearly');
+    const reply = lastReplyText();
+    expect(reply).toContain('https://api.easydca.test/api/v1/payment/pay-5/qr.png');
+    expect(reply).toContain('590.05');
+    expect(reply).toContain('action=notify_payment&paymentId=pay-5');
+  });
+
+  test('notify_payment: แจ้งชำระ → Push แจ้ง Admin ทุกคน + reply ยืนยันรอตรวจสอบ', async () => {
+    paymentService.notifyPaymentSubmitted.mockResolvedValue({
+      id: 'pay-1',
+      userId: FREE_USER.id,
+      amountThb: 59.17,
+      billingPeriod: 'monthly',
+    });
+    lineService.pushMessage.mockResolvedValue(undefined);
+
+    await handleEvent(postbackEvent('action=notify_payment&paymentId=pay-1'));
+
+    expect(paymentService.notifyPaymentSubmitted).toHaveBeenCalledWith('pay-1', FREE_USER.id);
+    // Push แจ้ง Admin ครบ 2 คน (จาก config mock) พร้อมปุ่มอนุมัติ/ปฏิเสธ
+    expect(lineService.pushMessage).toHaveBeenCalledWith('Uadmin1', expect.any(Object));
+    expect(lineService.pushMessage).toHaveBeenCalledWith('Uadmin2', expect.any(Object));
+    const adminMsg = JSON.stringify(lineService.pushMessage.mock.calls[0][1]);
+    expect(adminMsg).toContain('action=approve_payment&paymentId=pay-1');
+    expect(adminMsg).toContain('action=reject_payment&paymentId=pay-1');
+    // ผู้ใช้ได้รับข้อความยืนยันรอตรวจสอบ
+    expect(lastReplyText()).toContain('รอ Admin ตรวจสอบ');
+  });
+
+  test('notify_payment: Push Admin 1 คนล้มเหลว → ยังตอบผู้ใช้สำเร็จ (Best-effort)', async () => {
+    paymentService.notifyPaymentSubmitted.mockResolvedValue({
+      id: 'pay-1',
+      userId: FREE_USER.id,
+      amountThb: 59.17,
+      billingPeriod: 'monthly',
+    });
+    lineService.pushMessage
+      .mockRejectedValueOnce(new Error('blocked'))
+      .mockResolvedValueOnce(undefined);
+
+    await handleEvent(postbackEvent('action=notify_payment&paymentId=pay-1'));
+
+    expect(lastReplyText()).toContain('รอ Admin ตรวจสอบ');
+  });
+
+  test('notify_payment: คำขอถูกดำเนินการไปแล้ว → PAYMENT_NOT_PENDING แปลไทย, ไม่ Push Admin', async () => {
+    const err = new Error('not pending');
+    err.code = 'PAYMENT_NOT_PENDING';
+    paymentService.notifyPaymentSubmitted.mockRejectedValue(err);
+
+    await handleEvent(postbackEvent('action=notify_payment&paymentId=pay-1'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('ถูกดำเนินการไปแล้ว');
+    expect(reply).not.toContain('PAYMENT_NOT_PENDING');
+    expect(lineService.pushMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleEvent — Dashboard Postback', () => {
+  test('open_dashboard: ส่งลิงก์เปิด LIFF Dashboard (uri ประกอบจาก config.liff.id)', async () => {
+    await handleEvent(postbackEvent('action=open_dashboard'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('https://liff.line.me/2010586158-DO9yzmaP');
   });
 });
 

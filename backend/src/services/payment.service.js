@@ -147,6 +147,31 @@ async function notifyPaymentSubmitted(paymentId, userId) {
   return payment;
 }
 
+// ดึงคำขอที่ยัง pending ล่าสุดของผู้ใช้ (หรือ null) — ปุ่ม "Premium" ใช้ตัดสินว่า
+// มีคำขอค้างอยู่ไหม (จะได้ไม่สร้างซ้อน) ทำเป็น Wrapper บาง ๆ ให้ Controller เรียก
+// ผ่าน Service Layer แทนแตะ Repository ตรง (Layering เดียวกับ requestPayment)
+async function findPendingByUserId(userId) {
+  return paymentRepository.findPendingByUserId(userId);
+}
+
+// ดึงคำขอเพื่อ "สร้างรูป QR ซ้ำ" ให้ Endpoint qr.png — ต้องยัง pending เท่านั้น
+// throw PAYMENT_NOT_FOUND ทั้งกรณีไม่พบและกรณีสถานะไม่ใช่ pending (Endpoint แปลง
+// เป็น 404 เหมือนกัน) — ผู้เรียกต้องใช้ payment.amountThb จากที่นี่ (ค่าใน DB)
+// สร้าง QR เท่านั้น ห้ามเชื่อยอดจาก Query String ใด ๆ (กันปลอมยอดในรูป QR)
+async function getPendingPaymentForQr(paymentId) {
+  const payment = await paymentRepository.findById(paymentId);
+
+  if (!payment || payment.status !== 'pending') {
+    throw new PaymentServiceError(
+      'PAYMENT_NOT_FOUND',
+      `Payment ${paymentId} not found or not pending`,
+      { paymentId }
+    );
+  }
+
+  return payment;
+}
+
 // ตรวจว่า LINE User ID ที่กดปุ่มเป็น Admin ที่ได้รับอนุญาต ไม่งั้น throw NOT_AUTHORIZED
 function assertAdmin(adminLineUserId) {
   if (!adminLineUserId || !config.payment.adminLineUserIds.includes(adminLineUserId)) {
@@ -232,6 +257,8 @@ module.exports = {
   PAYMENT_TTL_MS,
   allocateSatangTag,
   requestPayment,
+  findPendingByUserId,
+  getPendingPaymentForQr,
   notifyPaymentSubmitted,
   approvePayment,
   rejectPayment,

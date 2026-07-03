@@ -68,6 +68,27 @@ async function create(lineUserId, displayName, pictureUrl) {
   return toUser(data);
 }
 
+// หา user ที่ plan='premium' แต่ plan_expires_at เลยเวลาปัจจุบันไปแล้ว (หมดอายุ)
+// — Downgrade Cron (planDowngrade.job) ใช้ปรับกลับเป็น Free + แจ้งผู้ใช้
+// หมายเหตุ: กรอง plan_expires_at IS NOT NULL โดยปริยายผ่าน .lt() (แถวที่ค่าเป็น
+// null จะไม่ Match ตัวกรอง Less-than อยู่แล้ว) จึงไม่หยิบ Premium ที่ยังไม่ตั้ง
+// วันหมดอายุมาลดชั้นผิดๆ
+async function findExpiredPremiumUsers(now = new Date()) {
+  const nowIso = now.toISOString();
+
+  const { data, error } = await supabaseAdmin
+    .from('users')
+    .select('*')
+    .eq('plan', 'premium')
+    .lt('plan_expires_at', nowIso);
+
+  if (error) {
+    throw new Error(`Failed to find expired premium users: ${error.message}`);
+  }
+
+  return (data ?? []).map(toUser);
+}
+
 async function updatePlan(userId, plan, expiresAt) {
   const { data, error } = await supabaseAdmin
     .from('users')
@@ -90,5 +111,6 @@ module.exports = {
   findByLineUserId,
   findById,
   create,
+  findExpiredPremiumUsers,
   updatePlan,
 };

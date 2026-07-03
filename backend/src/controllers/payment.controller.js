@@ -1,5 +1,7 @@
 const config = require('../config/env');
 const paymentService = require('../services/payment.service');
+const promptpayQrService = require('../services/promptpayQr.service');
+const qrImageService = require('../services/qrImage.service');
 const userRepository = require('../repositories/user.repository');
 const lineService = require('../services/line.service');
 const flexMessage = require('../utils/flexMessage.util');
@@ -81,4 +83,46 @@ async function notifyPayment(req, res) {
   return res.status(200).json({ status: 'notified' });
 }
 
-module.exports = { requestPayment, notifyPayment };
+// GET /api/v1/payment/:id/qr.png — (ไม่ต้อง requireAuth: LINE ต้อง Fetch รูปได้
+// โดยไม่มี Header พิเศษ, ความเสี่ยงต่ำเพราะ QR เข้ารหัสแค่บัญชีรับเงิน+ยอด ไม่มี
+// ข้อมูลส่วนตัว) — Render รูป QR PNG จากยอดที่เก็บใน DB เท่านั้น
+//
+// ⚠️ ความปลอดภัย: ห้ามเชื่อ Query Param ยอดเงินใด ๆ (เช่น ?amount=) เด็ดขาด —
+// ดึง payment จาก DB ด้วย :id แล้วใช้ payment.amountThb จริงประกอบ Payload
+// (กันคนแก้ URL ให้ QR โชว์ยอดอื่น) ถ้าไม่พบ/สถานะไม่ใช่ pending → 404
+async function getPaymentQr(req, res) {
+  let payment;
+  try {
+    payment = await paymentService.getPendingPaymentForQr(req.params.id);
+  } catch (err) {
+    if (
+      err instanceof paymentService.PaymentServiceError &&
+      err.code === 'PAYMENT_NOT_FOUND'
+    ) {
+      return res.status(404).json({ error: 'PAYMENT_NOT_FOUND' });
+    }
+    console.error(`[payment] getPaymentQr failed: ${err.message}`);
+    return res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+
+  const promptpayId = config.payment.promptpayId;
+  if (!promptpayId) {
+    return res.status(503).json({ error: 'PAYMENT_NOT_CONFIGURED' });
+  }
+
+  try {
+    // ยอดมาจาก DB (payment.amountThb) เท่านั้น — ไม่แตะ req.query
+    const qrPayload = promptpayQrService.buildPromptPayPayload(promptpayId, payment.amountThb);
+    const pngBuffer = await qrImageService.renderPng(qrPayload);
+
+    res.set('Content-Type', 'image/png');
+    // ห้าม Cache ที่ Proxy/Browser — ยอดผูกกับคำขอเฉพาะราย ไม่ควรถูกใช้ซ้ำข้ามคำขอ
+    res.set('Cache-Control', 'no-store');
+    return res.status(200).send(pngBuffer);
+  } catch (err) {
+    console.error(`[payment] getPaymentQr render failed: ${err.message}`);
+    return res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+}
+
+module.exports = { requestPayment, notifyPayment, getPaymentQr };

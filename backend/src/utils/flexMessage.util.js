@@ -1,4 +1,4 @@
-const { dowToDayName, THAI_DAY_NAMES } = require('./thaiDate.util');
+const { dowToDayName, THAI_DAY_NAMES, formatThaiDate } = require('./thaiDate.util');
 
 // Flex Message Builders ตาม Design System ใน UI_UX.md § 1, § 3
 // สีอ้างอิงจาก UI_UX.md § 1.1 (Financial Status Colors)
@@ -57,6 +57,12 @@ const ERROR_MESSAGES = {
   // NOT_AUTHORIZED: ตอบสั้นๆ ไม่บอกรายละเอียดเพิ่ม (กัน Enumerate ว่าใครเป็น Admin)
   NOT_AUTHORIZED: 'คุณไม่มีสิทธิ์ทำรายการนี้',
   ALREADY_RESOLVED: 'รายการนี้ถูกดำเนินการไปแล้ว',
+  // Payment User Postback (Premium Menu / request_payment / notify_payment)
+  PAYMENT_NOT_FOUND: 'ไม่พบคำขอชำระเงินนี้ อาจหมดอายุหรือถูกดำเนินการไปแล้ว กรุณากดเมนู "Premium" เพื่อเริ่มใหม่',
+  PAYMENT_NOT_PENDING: 'คำขอชำระเงินนี้ถูกดำเนินการไปแล้ว ไม่ต้องแจ้งซ้ำ หากยังไม่ได้รับสิทธิ์ Premium กรุณาติดต่อทีมงาน',
+  PAYMENT_NOT_CONFIGURED: 'ระบบชำระเงินยังไม่พร้อมใช้งานในขณะนี้ กรุณาลองใหม่ภายหลังหรือติดต่อทีมงาน',
+  SATANG_POOL_EXHAUSTED: 'ขณะนี้มีผู้ทำรายการพร้อมกันจำนวนมาก กรุณาลองกดอีกครั้งในอีกสักครู่',
+  ALLOCATION_CONFLICT: 'ขณะนี้มีผู้ทำรายการพร้อมกันจำนวนมาก กรุณาลองกดอีกครั้งในอีกสักครู่',
 };
 
 // Postback data encoding สำหรับปุ่มในข้อความ Preview — Controller ถอดด้วย
@@ -969,6 +975,279 @@ function buildPaymentRejectedMessage(payment) {
   });
 }
 
+// ยอดเงินบาททศนิยม 2 ตำแหน่งเป๊ะเสมอ (เช่น 59.17 / 590.05) — ยอดชำระมีเศษ
+// สตางค์เฉพาะ (satang tag) ที่ต้องโอนให้ตรงทุกหลัก ต่างจาก formatNumber ที่ตัด
+// ศูนย์ท้าย (59.10 → "59.1") ซึ่งอาจทำให้ผู้ใช้โอนยอดผิด
+function formatThb2(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return String(value);
+  return new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(num);
+}
+
+// ── ปุ่มเสนอแพ็กเกจ Premium (รายเดือน/รายปี) — ใช้ร่วมทั้งเคสยังไม่ Premium และ
+// เคสต่ออายุ (Postback request_payment เดียวกัน paymentService.requestPayment
+// ใช้ Stacking Logic ต่อจากวันหมดอายุเดิมให้เองอยู่แล้ว) ────────────────────
+function premiumPeriodButtons(monthlyLabel, yearlyLabel) {
+  return [
+    {
+      type: 'button',
+      style: 'primary',
+      color: COLOR.info,
+      action: {
+        type: 'postback',
+        label: monthlyLabel,
+        data: 'action=request_payment&period=monthly',
+        displayText: monthlyLabel,
+      },
+    },
+    {
+      type: 'button',
+      style: 'primary',
+      color: COLOR.profit,
+      action: {
+        type: 'postback',
+        label: yearlyLabel,
+        data: 'action=request_payment&period=yearly',
+        displayText: yearlyLabel,
+      },
+    },
+  ];
+}
+
+// เคส 1: ยังไม่ใช่ Premium และไม่มีคำขอค้าง — เสนอ 2 แพ็กเกจให้เลือก
+function buildPremiumOfferMessage() {
+  const body = [
+    textLine('อัพเกรดเป็น Premium 👑', { size: 'lg', weight: 'bold', color: COLOR.textPrimary }),
+    textLine('บันทึกสินทรัพย์ได้ไม่จำกัด + ดู Dashboard เต็มรูปแบบ', {
+      size: 'sm',
+      color: COLOR.textSecondary,
+    }),
+    separator(),
+    textLine('เลือกแพ็กเกจที่ต้องการ แล้วระบบจะสร้าง QR PromptPay ให้โอน', {
+      size: 'sm',
+      color: COLOR.textPrimary,
+    }),
+  ];
+
+  return {
+    type: 'flex',
+    altText: 'อัพเกรดเป็น Premium',
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: COLOR.profitBg,
+        paddingAll: '12px',
+        contents: [textLine('👑 Premium', { weight: 'bold', color: COLOR.profit })],
+      },
+      body: { type: 'box', layout: 'vertical', spacing: 'sm', contents: body },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: premiumPeriodButtons('รายเดือน 59 บาท', 'รายปี 590 บาท'),
+      },
+    },
+  };
+}
+
+// เคส 2: เป็น Premium Active อยู่แล้ว — แสดงวันหมดอายุ (ไทย/พ.ศ.) + ปุ่มต่ออายุ
+function buildPremiumStatusMessage(expiresAt) {
+  const body = [
+    textLine('คุณเป็นสมาชิก Premium อยู่แล้ว ✅', {
+      size: 'md',
+      weight: 'bold',
+      color: COLOR.textPrimary,
+    }),
+    textLine(`หมดอายุวันที่ ${formatThaiDate(expiresAt)}`, {
+      size: 'md',
+      weight: 'bold',
+      color: COLOR.info,
+    }),
+    textLine('* ต่ออายุล่วงหน้าได้ ระบบจะบวกเวลาต่อจากวันหมดอายุเดิมให้ ไม่เสียวันที่เหลือ', {
+      size: 'xs',
+      color: COLOR.textSecondary,
+    }),
+  ];
+
+  return {
+    type: 'flex',
+    altText: 'สถานะ Premium',
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: COLOR.profitBg,
+        paddingAll: '12px',
+        contents: [textLine('👑 Premium ของคุณ', { weight: 'bold', color: COLOR.profit })],
+      },
+      body: { type: 'box', layout: 'vertical', spacing: 'sm', contents: body },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: premiumPeriodButtons('ต่ออายุรายเดือน 59 บาท', 'ต่ออายุรายปี 590 บาท'),
+      },
+    },
+  };
+}
+
+// เคส 3 + หลังกด request_payment: แสดงรูป QR PromptPay ให้สแกนโอน พร้อมยอดเป๊ะ
+// (2 ตำแหน่งทศนิยม) เวลาหมดอายุ และปุ่ม "แจ้งชำระแล้ว"
+// payment ต้องมี { id, amountThb, billingPeriod, expiresAt } | qrImageUrl = URL
+// รูป PNG ที่ LINE Fetch ได้ (Endpoint GET /api/v1/payment/:id/qr.png)
+function buildPaymentQrMessage(payment, qrImageUrl) {
+  const footerButtons = [
+    {
+      type: 'button',
+      style: 'primary',
+      color: COLOR.profit,
+      action: {
+        type: 'postback',
+        label: '📤 แจ้งชำระแล้ว',
+        data: `action=notify_payment&paymentId=${payment.id}`,
+        displayText: 'แจ้งชำระเงินแล้ว',
+      },
+    },
+  ];
+
+  return {
+    type: 'flex',
+    altText: `สแกนจ่าย Premium ${formatThb2(payment.amountThb)} บาท`,
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: COLOR.profitBg,
+        paddingAll: '12px',
+        contents: [textLine('💳 สแกนจ่ายผ่าน PromptPay', { weight: 'bold', color: COLOR.profit })],
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'md',
+        contents: [
+          {
+            type: 'image',
+            url: qrImageUrl,
+            size: 'full',
+            aspectMode: 'fit',
+            aspectRatio: '1:1',
+          },
+          textLine(`ยอดที่ต้องโอน: ${formatThb2(payment.amountThb)} บาท`, {
+            size: 'lg',
+            weight: 'bold',
+            color: COLOR.textPrimary,
+          }),
+          textLine(`แพ็กเกจ: Premium (${billingLabel(payment.billingPeriod)})`, {
+            size: 'sm',
+            color: COLOR.textSecondary,
+          }),
+          textLine(`กรุณาโอนภายใน: ${formatDateBangkok(payment.expiresAt)} (คำขอมีอายุ 24 ชม.)`, {
+            size: 'sm',
+            color: COLOR.textSecondary,
+          }),
+          textLine('⚠️ โอนยอดให้ตรงทุกหลักรวมเศษสตางค์ เพื่อให้ระบบจับคู่รายการได้', {
+            size: 'xs',
+            color: COLOR.warning,
+          }),
+          textLine('โอนแล้วกด "แจ้งชำระแล้ว" เพื่อให้ทีมงานตรวจสอบ', {
+            size: 'xs',
+            color: COLOR.textSecondary,
+          }),
+        ],
+      },
+      footer: { type: 'box', layout: 'vertical', spacing: 'sm', contents: footerButtons },
+    },
+  };
+}
+
+// ตอบผู้ใช้หลังกด "แจ้งชำระแล้ว" — คำขอถูกส่งให้ Admin ตรวจสอบแล้ว
+function buildPaymentNotifySubmittedMessage() {
+  return bubble({
+    headerText: '📤 แจ้งชำระเงินแล้ว',
+    headerColor: COLOR.info,
+    headerBg: COLOR.profitBg,
+    bodyContents: [
+      textLine('ได้รับแจ้งการชำระเงินแล้ว กำลังรอ Admin ตรวจสอบ', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      textLine('เมื่ออนุมัติแล้วระบบจะแจ้งเตือนและเปิดสิทธิ์ Premium ให้ทันที', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
+}
+
+// ── ปุ่มเปิด Web Dashboard (LIFF) — action type uri (เปิดใน LINE In-App Browser)
+function buildDashboardLinkMessage(dashboardUrl) {
+  return {
+    type: 'flex',
+    altText: 'เปิด Dashboard',
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: COLOR.profitBg,
+        paddingAll: '12px',
+        contents: [textLine('📊 Web Dashboard', { weight: 'bold', color: COLOR.info })],
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: [
+          textLine('ดูพอร์ต กราฟ และประวัติแบบเต็มรูปแบบบนหน้าเว็บ', {
+            size: 'sm',
+            color: COLOR.textPrimary,
+          }),
+        ],
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: [
+          {
+            type: 'button',
+            style: 'primary',
+            color: COLOR.info,
+            action: { type: 'uri', label: '📊 เปิด Dashboard', uri: dashboardUrl },
+          },
+        ],
+      },
+    },
+  };
+}
+
+// ── Push หาผู้ใช้เมื่อ Premium หมดอายุ (planDowngrade.job) — กลับเป็น Free ────
+function buildPlanDowngradedMessage() {
+  return bubble({
+    headerText: '⚠️ Premium หมดอายุแล้ว',
+    headerColor: COLOR.warning,
+    headerBg: COLOR.warningBg,
+    bodyContents: [
+      textLine('แพ็กเกจ Premium ของคุณหมดอายุแล้ว บัญชีกลับเป็น Free (จำกัด 2 สินทรัพย์)', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      textLine('ข้อมูลเดิมทั้งหมดยังอยู่ครบ ต่ออายุได้ทุกเมื่อผ่านเมนู "Premium"', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
+}
+
 function buildUnknownCommandMessage() {
   return bubble({
     headerText: '🤔 ไม่เข้าใจคำสั่งนี้',
@@ -1012,6 +1291,12 @@ module.exports = {
   buildAdminRejectAckMessage,
   buildPaymentApprovedMessage,
   buildPaymentRejectedMessage,
+  buildPremiumOfferMessage,
+  buildPremiumStatusMessage,
+  buildPaymentQrMessage,
+  buildPaymentNotifySubmittedMessage,
+  buildDashboardLinkMessage,
+  buildPlanDowngradedMessage,
   buildErrorMessage,
   buildUnknownCommandMessage,
 };

@@ -12,6 +12,7 @@ const dashboardRoutes = require('./routes/dashboard.routes');
 const paymentRoutes = require('./routes/payment.routes');
 const { scheduleExpirePending, schedulePurgeOld } = require('./jobs/pendingCleanup.job');
 const { scheduleExpirePayments } = require('./jobs/paymentExpiry.job');
+const { schedulePlanDowngrade } = require('./jobs/planDowngrade.job');
 const { scheduleReminderPush } = require('./jobs/dcaReminder.job');
 const { schedulePurgeStaleSetupSessions } = require('./jobs/reminderSetupCleanup.job');
 const {
@@ -79,6 +80,8 @@ app.listen(config.app.port, () => {
   scheduleMonthlySummaryPush();
   // Mark คำขอชำระเงินที่หมดอายุ (24 ชม.) เป็น 'expired' ทุกชั่วโมง (paymentExpiry.job.js)
   scheduleExpirePayments();
+  // Downgrade ผู้ใช้ Premium ที่หมดอายุกลับเป็น Free ทุกวันตี 1 (planDowngrade.job.js)
+  schedulePlanDowngrade();
 });
 
 module.exports = app;

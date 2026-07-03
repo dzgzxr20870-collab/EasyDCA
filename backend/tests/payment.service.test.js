@@ -127,6 +127,50 @@ describe('requestPayment', () => {
   });
 });
 
+describe('findPendingByUserId', () => {
+  test('มอบต่อ repository และคืนค่าที่ได้ (มีคำขอค้าง)', async () => {
+    const pending = { id: 'pay-1', userId: USER_ID, status: 'pending' };
+    paymentRepository.findPendingByUserId.mockResolvedValue(pending);
+
+    const result = await paymentService.findPendingByUserId(USER_ID);
+
+    expect(result).toBe(pending);
+    expect(paymentRepository.findPendingByUserId).toHaveBeenCalledWith(USER_ID);
+  });
+
+  test('ไม่มีคำขอค้าง → null', async () => {
+    paymentRepository.findPendingByUserId.mockResolvedValue(null);
+    expect(await paymentService.findPendingByUserId(USER_ID)).toBeNull();
+  });
+});
+
+describe('getPendingPaymentForQr', () => {
+  test('พบและ pending → คืน payment', async () => {
+    const payment = { id: 'pay-1', status: 'pending', amountThb: 59.17 };
+    paymentRepository.findById.mockResolvedValue(payment);
+
+    expect(await paymentService.getPendingPaymentForQr('pay-1')).toBe(payment);
+  });
+
+  test('ไม่พบ → PAYMENT_NOT_FOUND', async () => {
+    paymentRepository.findById.mockResolvedValue(null);
+    await expect(paymentService.getPendingPaymentForQr('x')).rejects.toMatchObject({
+      code: 'PAYMENT_NOT_FOUND',
+    });
+  });
+
+  test('พบแต่ status ไม่ใช่ pending (confirmed) → PAYMENT_NOT_FOUND (Endpoint แปลงเป็น 404)', async () => {
+    paymentRepository.findById.mockResolvedValue({
+      id: 'pay-1',
+      status: 'confirmed',
+      amountThb: 59.17,
+    });
+    await expect(paymentService.getPendingPaymentForQr('pay-1')).rejects.toMatchObject({
+      code: 'PAYMENT_NOT_FOUND',
+    });
+  });
+});
+
 describe('notifyPaymentSubmitted', () => {
   test('คำขอมีจริง เป็นของ user เอง และ pending → คืน payment', async () => {
     const payment = { id: 'pay-1', userId: USER_ID, status: 'pending' };

@@ -1,3 +1,4 @@
+const config = require('../config/env');
 const userRepository = require('../repositories/user.repository');
 const commandParser = require('../services/commandParser.service');
 const portfolioService = require('../services/portfolio.service');
@@ -8,6 +9,7 @@ const reminderService = require('../services/dcaReminder.service');
 const reminderSetupFlow = require('../services/reminderSetupFlow.service');
 const pendingService = require('../services/pendingTransaction.service');
 const paymentService = require('../services/payment.service');
+const entitlement = require('../services/entitlement.service');
 const symbolRegistry = require('../services/symbolRegistry.service');
 const lineService = require('../services/line.service');
 const flexMessage = require('../utils/flexMessage.util');
@@ -116,6 +118,18 @@ async function routeCommand(user, parsed) {
     default:
       return flexMessage.buildUnknownCommandMessage();
   }
+}
+
+// ประกอบ URL รูป QR ที่ LINE จะ Fetch มาแสดงใน Flex Message (Public Endpoint)
+// ใช้ PUBLIC_BASE_URL (config.app.publicBaseUrl) เป็นฐาน — ต้องตั้งค่าบน Railway
+// ให้เป็น URL ของ Backend ตัวนี้ก่อนใช้งานจริง (มิฉะนั้นรูปจะโหลดไม่ขึ้น)
+function buildQrImageUrl(paymentId) {
+  const base = config.app.publicBaseUrl;
+  if (!base) {
+    // Log ให้เห็นชัดเจนตอน Dev/Deploy ที่ลืมตั้งค่า — ยังคืน Path สัมพัทธ์ไว้กัน Crash
+    console.error('[webhook] PUBLIC_BASE_URL is not configured; QR image will not load in LINE');
+  }
+  return `${base ?? ''}/api/v1/payment/${paymentId}/qr.png`;
 }
 
 // ประมวลผล Postback จากปุ่มในข้อความ Preview (ยืนยัน/แก้ไข/ยกเลิก)
@@ -239,6 +253,78 @@ async function routePostback(user, data) {
       }
 
       return flexMessage.buildAdminRejectAckMessage(payment);
+    }
+
+    // ── ปุ่ม Premium (Rich Menu) — แตกเป็น 3 เคสตามสถานะผู้ใช้ ─────────────────
+    // ลำดับความสำคัญ: มีคำขอ pending ค้าง (ต้องจ่ายให้จบก่อน) > เป็น Premium Active
+    // > ยังไม่ Premium — จัดลำดับแบบนี้กันสร้างคำขอซ้อน และให้ผู้ใช้เห็น QR เดิม
+    // ที่ค้างจ่ายอยู่เป็นอันดับแรก (ครอบคลุมทั้งเคสต่ออายุที่จ่ายไม่จบด้วย)
+    case 'premium_menu': {
+      const pending = await paymentService.findPendingByUserId(user.id);
+      if (pending) {
+        // เคส 3: มีคำขอ pending ค้าง → ส่ง QR ของคำขอเดิมซ้ำ (ไม่สร้างใหม่ซ้อน)
+        return flexMessage.buildPaymentQrMessage(pending, buildQrImageUrl(pending.id));
+      }
+      if (entitlement.isPremiumActive(user)) {
+        // เคส 2: Premium Active → แสดงสถานะ + วันหมดอายุ (ไทย/พ.ศ.) + ปุ่มต่ออายุ
+        return flexMessage.buildPremiumStatusMessage(user.planExpiresAt);
+      }
+      // เคส 1: ยังไม่ Premium + ไม่มีคำขอค้าง → เสนอแพ็กเกจรายเดือน/รายปี
+      return flexMessage.buildPremiumOfferMessage();
+    }
+
+    // ── ผู้ใช้เลือกแพ็กเกจ → สร้างคำขอ + QR (paymentService จัดสรรเลขสตางค์เอง) ──
+    // requestPayment ใช้ Stacking Logic ต่ออายุจากวันหมดอายุเดิมให้แล้วตอน Admin
+    // อนุมัติ ไม่ต้องเขียน Logic ต่ออายุซ้ำที่นี่ | period มาจากปุ่มของเราเอง
+    case 'request_payment': {
+      const period = params.get('period');
+      const result = await paymentService.requestPayment(user.id, period);
+      // result = { paymentId, amountThb, qrPayload, expiresAt } — ประกอบ object
+      // ให้ตรงกับที่ buildPaymentQrMessage ต้องใช้ (id/amountThb/billingPeriod/expiresAt)
+      const payment = {
+        id: result.paymentId,
+        amountThb: result.amountThb,
+        billingPeriod: period,
+        expiresAt: result.expiresAt,
+      };
+      return flexMessage.buildPaymentQrMessage(payment, buildQrImageUrl(result.paymentId));
+    }
+
+    // ── ผู้ใช้กด "แจ้งชำระแล้ว" → Validate คำขอ แล้ว Push แจ้ง Admin ทุกคน ────────
+    // ตอบผู้ใช้ (reply) ว่ารอตรวจสอบ; Push หา Admin แบบ Best-effort (1 คนล้มไม่
+    // กระทบคนอื่น/การตอบผู้ใช้) — Error (PAYMENT_NOT_FOUND/PAYMENT_NOT_PENDING)
+    // ทะลุขึ้นไปให้ replyWithError แปลเป็นข้อความไทยตาม error code
+    case 'notify_payment': {
+      const payment = await paymentService.notifyPaymentSubmitted(
+        params.get('paymentId'),
+        user.id
+      );
+
+      const adminIds = config.payment.adminLineUserIds;
+      if (adminIds.length === 0) {
+        console.error('[webhook] notify_payment: no ADMIN_LINE_USER_IDS configured; nobody notified');
+      } else {
+        const adminMessage = flexMessage.buildAdminPaymentRequestMessage(payment, user.displayName);
+        await Promise.all(
+          adminIds.map((adminId) =>
+            lineService.pushMessage(adminId, adminMessage).catch((pushErr) => {
+              console.error(`[webhook] notify_payment: push to admin ${adminId} failed: ${pushErr.message}`);
+            })
+          )
+        );
+      }
+
+      return flexMessage.buildPaymentNotifySubmittedMessage();
+    }
+
+    // ── ปุ่ม Dashboard (Rich Menu) → ส่งลิงก์เปิด LIFF Dashboard ────────────────
+    // ประกอบ URL จาก config.liff.id (ไม่ Hardcode) — Fallback ไป FRONTEND_URL
+    // ถ้ายังไม่ได้ตั้ง LIFF_ID
+    case 'open_dashboard': {
+      const dashboardUrl = config.liff.id
+        ? `https://liff.line.me/${config.liff.id}`
+        : config.app.frontendUrl || '';
+      return flexMessage.buildDashboardLinkMessage(dashboardUrl);
     }
 
     default:

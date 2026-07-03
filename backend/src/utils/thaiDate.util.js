@@ -8,6 +8,13 @@
 // (ตรงกับ Date.prototype.getDay() / getUTCDay() ของ JS ด้วย)
 const THAI_DAY_NAMES = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์'];
 
+// ชื่อเดือนไทยเต็ม (index 0=มกราคม .. 11=ธันวาคม) — ใช้จัดรูปวันหมดอายุ Premium
+// เป็นภาษาไทย/พ.ศ. (formatThaiDate) แสดงในข้อความ LINE
+const THAI_MONTH_NAMES = [
+  'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
+  'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม',
+];
+
 // ชื่อวัน (รวม Alias ที่ผู้ใช้พิมพ์ได้จริง) → day_of_week
 // "พฤหัส" เป็นคำย่อของ "พฤหัสบดี" ที่คนไทยพิมพ์บ่อย จึงรับด้วย
 const THAI_DAY_TO_DOW = THAI_DAY_NAMES.reduce((acc, name, dow) => {
@@ -53,12 +60,33 @@ function lastDayOfMonthOf(dateStr) {
   return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
+// จัดรูปวันที่เป็นภาษาไทย/พ.ศ. เช่น "4 กรกฎาคม 2569" ตามเขตเวลา Asia/Bangkok
+// รับได้ทั้ง Date และ ISO string — คำนวณ ปี/เดือน/วัน ในเขตเวลาไทยผ่าน Intl ก่อน
+// (กันคลาดวันเมื่อเวลาใกล้เที่ยงคืน UTC) แล้วบวก 543 เป็นพุทธศักราช
+function formatThaiDate(value) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Bangkok',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(value));
+
+  const get = (type) => Number(parts.find((p) => p.type === type)?.value);
+  const year = get('year');
+  const month = get('month'); // 1-12
+  const day = get('day');
+
+  return `${day} ${THAI_MONTH_NAMES[month - 1]} ${year + 543}`;
+}
+
 module.exports = {
   THAI_DAY_NAMES,
+  THAI_MONTH_NAMES,
   THAI_DAY_PATTERNS,
   dayNameToDow,
   dowToDayName,
   parseDateParts,
   dayOfWeekOf,
   lastDayOfMonthOf,
+  formatThaiDate,
 };

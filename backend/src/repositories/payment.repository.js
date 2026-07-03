@@ -67,6 +67,26 @@ async function findById(id) {
   return toPayment(data);
 }
 
+// คำขอ pending ล่าสุดของ user คนนี้ (หรือ null ถ้าไม่มี) — ปุ่ม "Premium" ใช้
+// ตัดสินว่าจะเสนอแพ็กเกจใหม่ หรือส่ง QR ของคำขอเดิมซ้ำ (ไม่สร้างคำขอซ้อน)
+// เรียง created_at ใหม่→เก่า เอาตัวแรก (limit 1) — maybeSingle รับ 0/1 แถวได้
+async function findPendingByUserId(userId) {
+  const { data, error } = await supabaseAdmin
+    .from('payments')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('status', 'pending')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Failed to find pending payment for user ${userId}: ${error.message}`);
+  }
+
+  return toPayment(data);
+}
+
 // ดึงเลขสตางค์ (satang_tag) ที่ "ถูกจองอยู่" ณ ขณะนี้สำหรับยอดฐานหนึ่งๆ
 // (payment ที่ยัง status='pending') — payment.service ใช้เลือกเลขว่างที่เหลือ
 // คืน array ของ integer
@@ -163,6 +183,7 @@ async function markExpired(id) {
 module.exports = {
   create,
   findById,
+  findPendingByUserId,
   findPendingSatangTagsByBaseAmount,
   claimForApproval,
   claimForRejection,

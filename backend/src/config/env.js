@@ -67,6 +67,12 @@ module.exports = {
     // Frontend URL จริง (React App บน Vercel/Railway ฯลฯ) — ใช้จำกัด CORS Origin
     // ยังไม่บังคับเพราะยังไม่รู้ URL จนกว่าจะ Deploy Frontend สำเร็จ (ดู index.js)
     frontendUrl: process.env.FRONTEND_URL || null,
+    // Base URL ของ Backend ตัวนี้ (Public) — ใช้ประกอบ URL รูป QR ที่ LINE ต้อง
+    // Fetch ได้จากภายนอก (Image component ใน Flex Message ต้องเป็น https ที่เข้าถึง
+    // ได้จริง) Phase 2 Step 3 รอบ 3 | ตั้ง PUBLIC_BASE_URL บน Railway ให้เป็น URL
+    // ของ Service นี้ (เช่น https://easydca-backend.up.railway.app) — Fallback ไป
+    // APP_URL ถ้ามี มิฉะนั้น null (จะประกอบ URL ไม่ได้ ต้องตั้งค่าก่อนใช้ปุ่ม Premium)
+    publicBaseUrl: process.env.PUBLIC_BASE_URL || process.env.APP_URL || null,
   },
   claude: {
     apiKey: process.env.CLAUDE_API_KEY || null,
