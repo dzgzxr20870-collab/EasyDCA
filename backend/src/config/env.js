@@ -64,6 +64,9 @@ module.exports = {
     url: process.env.APP_URL,
     nodeEnv: process.env.NODE_ENV,
     port: process.env.PORT || 3000,
+    // Frontend URL จริง (React App บน Vercel/Railway ฯลฯ) — ใช้จำกัด CORS Origin
+    // ยังไม่บังคับเพราะยังไม่รู้ URL จนกว่าจะ Deploy Frontend สำเร็จ (ดู index.js)
+    frontendUrl: process.env.FRONTEND_URL || null,
   },
   claude: {
     apiKey: process.env.CLAUDE_API_KEY || null,

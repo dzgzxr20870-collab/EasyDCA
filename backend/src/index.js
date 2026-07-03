@@ -18,7 +18,14 @@ const {
 
 const app = express();
 
-app.use(cors());
+// Fallback '*' เป็นค่าชั่วคราวเท่านั้น (ยังไม่รู้ Frontend URL จนกว่าจะ Deploy
+// React App สำเร็จ) ต้องตั้ง FRONTEND_URL จริงบน Railway ก่อน Production ใช้งานจริง
+// เพื่อความปลอดภัย (จำกัด Origin ที่เรียก API ได้ ไม่เปิดทุก Origin แบบ Wildcard)
+app.use(
+  cors({
+    origin: config.app.frontendUrl || '*',
+  })
+);
 
 // Route Webhook ต้องเก็บ Raw Body ไว้คำนวณ HMAC ก่อน Parse JSON เสมอ
 // (ดู docs/SECURITY.md § 4) จึงแยก JSON Parser เฉพาะ Route นี้ออกจาก Route อื่น

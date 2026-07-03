@@ -1,0 +1,74 @@
+.login-page {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
+    "Sarabun", "Kanit", sans-serif;
+  background: #f5f6f8;
+  color: #222;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+.login-page * {
+  box-sizing: border-box;
+}
+
+.login-card {
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+  padding: 32px 28px;
+  max-width: 360px;
+  width: 100%;
+  text-align: center;
+}
+
+.login-logo {
+  font-size: 22px;
+  font-weight: 700;
+  color: #06c755;
+  margin-bottom: 8px;
+}
+
+.login-status {
+  font-size: 15px;
+  line-height: 1.6;
+  margin-top: 16px;
+  color: #555;
+}
+
+.login-status.error {
+  color: #d64545;
+}
+
+.login-status.success {
+  color: #1a9e4b;
+}
+
+.login-avatar {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  object-fit: cover;
+  margin: 16px auto 0;
+  display: block;
+}
+
+.login-spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid #e0e0e0;
+  border-top-color: #06c755;
+  border-radius: 50%;
+  margin: 16px auto 0;
+  animation: login-spin 0.8s linear infinite;
+}
+
+@keyframes login-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
