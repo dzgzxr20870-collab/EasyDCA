@@ -1,0 +1,30 @@
+// Helper กลางสำหรับเรียก Backend API — ทุก Component ต้องเรียกผ่านที่นี่
+// ห้ามเขียน fetch() กระจายเอง เพื่อให้ Logic แนบ Token / จัดการ 401 มีที่เดียว
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+const TOKEN_KEY = 'easydca_token';
+
+function getToken() {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+async function apiGet(path) {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    headers: { Authorization: `Bearer ${getToken()}` },
+  });
+
+  // Token หมดอายุ/ไม่ถูกต้อง → เคลียร์แล้วบังคับ Login ใหม่ทันที
+  if (response.status === 401) {
+    localStorage.removeItem(TOKEN_KEY);
+    window.location.href = '/';
+    throw new Error('UNAUTHORIZED');
+  }
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new Error(body?.error || `Request failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+export { getToken, apiGet };

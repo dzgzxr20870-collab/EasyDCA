@@ -1,23 +1,245 @@
-import { useEffect, useState } from 'react';
-import './Login.css';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Bar } from 'react-chartjs-2';
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  Tooltip,
+  Legend,
+} from 'chart.js';
+import { apiGet } from '../lib/api.js';
+import './Dashboard.css';
+
+ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip, Legend);
 
 const TOKEN_KEY = 'easydca_token';
 
+function formatNumber(value, maxDecimals = 2) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '-';
+  return new Intl.NumberFormat('en-US', { maximumFractionDigits: maxDecimals }).format(num);
+}
+
 function Dashboard() {
-  const [token, setToken] = useState(null);
+  const navigate = useNavigate();
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  const [portfolio, setPortfolio] = useState(null);
+  const [profitBySymbol, setProfitBySymbol] = useState({});
+  const [transactions, setTransactions] = useState([]);
+  const [symbolFilter, setSymbolFilter] = useState('all');
 
   useEffect(() => {
-    setToken(localStorage.getItem(TOKEN_KEY));
+    async function load() {
+      try {
+        const portfolioData = await apiGet('/api/v1/dashboard/portfolio');
+        setPortfolio(portfolioData);
+
+        // ยิงหา Profit ของทุก Holding พร้อมกัน — Endpoint ไหน Error (เช่นหุ้นไทย
+        // ที่ยังไม่มี Price Feed → PRICE_FEED_NOT_IMPLEMENTED) จับไว้เฉยๆ เป็น
+        // null ไม่ให้ทั้งหน้าพัง (Pattern เดียวกับ Portfolio Summary Push ทาง LINE)
+        const profitEntries = await Promise.all(
+          portfolioData.holdings.map((h) =>
+            apiGet(`/api/v1/dashboard/profit/${h.symbol}`)
+              .then((profit) => [h.symbol, profit])
+              .catch(() => [h.symbol, null])
+          )
+        );
+        setProfitBySymbol(Object.fromEntries(profitEntries));
+
+        const historyData = await apiGet('/api/v1/dashboard/history?limit=100');
+        setTransactions(historyData.transactions);
+      } catch (err) {
+        setLoadError('โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    load();
   }, []);
 
-  return (
-    <div className="login-page">
-      <div className="login-card">
-        <div className="login-logo">EasyDCA</div>
-        <div className="login-status">
-          {token ? 'Dashboard (กำลังพัฒนา)' : 'กรุณาเข้าสู่ระบบก่อนใช้งาน'}
-        </div>
+  const excludedCount = useMemo(() => {
+    if (!portfolio) return 0;
+    return portfolio.holdings.filter((h) => !profitBySymbol[h.symbol]).length;
+  }, [portfolio, profitBySymbol]);
+
+  const filteredTransactions = useMemo(() => {
+    if (symbolFilter === 'all') return transactions;
+    return transactions.filter((tx) => tx.symbol === symbolFilter);
+  }, [transactions, symbolFilter]);
+
+  const chartData = useMemo(() => {
+    if (!portfolio || portfolio.isEmpty) return null;
+    return {
+      labels: portfolio.holdings.map((h) => h.symbol),
+      datasets: [
+        {
+          label: 'เงินลงทุนสะสม (บาท)',
+          data: portfolio.holdings.map((h) => h.totalInvested),
+          backgroundColor: '#06c755',
+        },
+      ],
+    };
+  }, [portfolio]);
+
+  function handleLogout() {
+    localStorage.removeItem(TOKEN_KEY);
+    navigate('/');
+  }
+
+  if (loading) {
+    return (
+      <div className="dashboard-page">
+        <div className="dashboard-message">กำลังโหลดข้อมูล...</div>
       </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="dashboard-page">
+        <div className="dashboard-message error">{loadError}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="dashboard-page">
+      <header className="dashboard-header">
+        <div className="dashboard-logo">EasyDCA</div>
+        <button type="button" className="dashboard-logout-btn" onClick={handleLogout}>
+          ออกจากระบบ
+        </button>
+      </header>
+
+      <section className="dashboard-section">
+        <h2>ภาพรวมพอร์ต</h2>
+
+        {portfolio.isEmpty ? (
+          <p className="dashboard-message">ยังไม่มีสินทรัพย์ในพอร์ต</p>
+        ) : (
+          <>
+            <div className="dashboard-table-wrap">
+              <table className="dashboard-table">
+                <thead>
+                  <tr>
+                    <th>สินทรัพย์</th>
+                    <th>จำนวนถือ</th>
+                    <th>ต้นทุนเฉลี่ย</th>
+                    <th>มูลค่าปัจจุบัน</th>
+                    <th>กำไร/ขาดทุน</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {portfolio.holdings.map((h) => {
+                    const profit = profitBySymbol[h.symbol];
+                    const isProfit = profit && profit.profitLoss >= 0;
+
+                    return (
+                      <tr key={h.symbol}>
+                        <td>{h.symbol}</td>
+                        <td>{formatNumber(h.heldQuantity, 8)}</td>
+                        <td>{h.averageCost === null ? '-' : `${formatNumber(h.averageCost, 8)} บาท`}</td>
+                        <td>{profit ? `${formatNumber(profit.currentValue)} บาท` : 'ไม่มีราคาตลาด'}</td>
+                        <td className={profit ? (isProfit ? 'profit-positive' : 'profit-negative') : ''}>
+                          {profit
+                            ? `${isProfit ? '+' : ''}${formatNumber(profit.profitLoss)} บาท (${
+                                isProfit ? '+' : ''
+                              }${formatNumber(profit.profitLossPercent)}%)`
+                            : '-'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {excludedCount > 0 && (
+              <p className="dashboard-warning">
+                * ไม่รวม {excludedCount} สินทรัพย์ที่ยังไม่มีราคาตลาด (เช่น หุ้นไทย)
+                ตัวเลขนี้จึงไม่ใช่ทั้งพอร์ต
+              </p>
+            )}
+
+            <p className="dashboard-total">
+              รวมเงินลงทุนทั้งพอร์ต: {formatNumber(portfolio.totalInvested)} บาท
+            </p>
+          </>
+        )}
+      </section>
+
+      {chartData && (
+        <section className="dashboard-section">
+          <h2>เงินลงทุนสะสมแยกตามสินทรัพย์</h2>
+          <div className="dashboard-chart">
+            <Bar
+              data={chartData}
+              options={{
+                responsive: true,
+                plugins: { legend: { display: false } },
+                scales: { y: { beginAtZero: true } },
+              }}
+            />
+          </div>
+        </section>
+      )}
+
+      <section className="dashboard-section">
+        <h2>ประวัติธุรกรรม</h2>
+
+        <div className="dashboard-filter">
+          <label htmlFor="symbol-filter">กรองตามสินทรัพย์:</label>
+          <select
+            id="symbol-filter"
+            value={symbolFilter}
+            onChange={(e) => setSymbolFilter(e.target.value)}
+          >
+            <option value="all">ทั้งหมด</option>
+            {portfolio.holdings.map((h) => (
+              <option key={h.symbol} value={h.symbol}>
+                {h.symbol}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {filteredTransactions.length === 0 ? (
+          <p className="dashboard-message">ยังไม่มีประวัติธุรกรรม</p>
+        ) : (
+          <div className="dashboard-table-wrap">
+            <table className="dashboard-table">
+              <thead>
+                <tr>
+                  <th>สินทรัพย์</th>
+                  <th>ประเภท</th>
+                  <th>จำนวนเงิน</th>
+                  <th>ราคาต่อหน่วย</th>
+                  <th>จำนวน</th>
+                  <th>วันที่</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredTransactions.map((tx) => (
+                  <tr key={tx.id}>
+                    <td>{tx.symbol}</td>
+                    <td className={tx.type === 'buy' ? 'profit-positive' : 'profit-negative'}>
+                      {tx.type === 'buy' ? 'ซื้อ' : 'ขาย'}
+                    </td>
+                    <td>{formatNumber(tx.amountThb)} บาท</td>
+                    <td>{formatNumber(tx.pricePerUnit, 8)} บาท</td>
+                    <td>{formatNumber(tx.quantity, 8)}</td>
+                    <td>{tx.date}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
     </div>
   );
 }
