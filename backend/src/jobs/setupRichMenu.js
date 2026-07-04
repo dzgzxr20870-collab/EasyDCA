@@ -27,16 +27,12 @@ const RICHMENU_API_URL = 'https://api.line.me/v2/bot/richmenu';
 const RICHMENU_DATA_API_URL = 'https://api-data.line.me/v2/bot/richmenu';
 const RICHMENU_DEFAULT_URL = 'https://api.line.me/v2/bot/user/all/richmenu';
 
-// action type "message" ของ LINE ส่งข้อความนั้นออกไปทันทีเมื่อผู้ใช้แตะปุ่ม
-// (ไม่ใช่แค่เติมข้อความในช่อง Input ให้พิมพ์ต่อ — LINE Rich Menu ไม่มี Action
-// แบบ "เติมข้อความแต่ยังไม่ส่ง" ให้ใช้) ดังนั้นปุ่ม "เพิ่มรายการ" ที่ส่ง "ซื้อ"
-// เปล่าๆ จะเข้า Command Parser ไม่ Match รูปแบบไหนเลย → ตกไปที่ UNKNOWN
-// Command ซึ่งระบบตอบกลับด้วยตัวอย่างคำสั่งที่ถูกต้องอยู่แล้ว
-// (flexMessage.util.js buildUnknownCommandMessage) ผลลัพธ์จึงยังใกล้เคียง
-// เจตนาเดิม (ชี้แนะให้ผู้ใช้พิมพ์ต่อ) แม้กลไกจะต่างจากการ "Prefix ในช่อง Input"
+// Postback (ไม่ใช่ message) เพื่อส่ง Flex Message สอนวิธีพิมพ์คำสั่งซื้อ/ขายทันที
+// (buildAddGuideMessage) กันข้อความเปล่าหลุดเข้า Command Parser — Pattern
+// เดียวกับปุ่ม Dashboard/Premium/ตั้งเตือน DCA
 //
 // Layout: Grid 2 แถว x 3 คอลัมน์ (2500x1686)
-//   แถวบน:  ซื้อ | พอต | ประวัติ
+//   แถวบน:  เพิ่มรายการ (postback→คำแนะนำ) | พอต | ประวัติ
 //   แถวล่าง: Dashboard | ตั้งเตือน DCA | Premium
 function buildRichMenuPayload() {
   // 1 ช่องใน Grid (col 0..2, row 0..1)
@@ -53,7 +49,13 @@ function buildRichMenuPayload() {
     chatBarText: 'เมนู',
     areas: [
       // ── แถวบน ──────────────────────────────────────────────────────────
-      cell(0, 0, message('ซื้อ')), // เพิ่มรายการ — Prefix ให้พิมพ์ต่อ (ดู Comment ด้านบน)
+      // เพิ่มรายการ — Postback (ไม่ใช่ message) กันข้อความเปล่าหลุด Command Parser
+      // (ดู Comment ด้านบน) routePostback จับ action นี้ตรงๆ (ดู webhook.controller)
+      cell(0, 0, {
+        type: 'postback',
+        data: 'action=add_guide',
+        displayText: '📝 เพิ่มรายการ',
+      }),
       cell(1, 0, message('พอต')), // พอร์ต — คำสั่งสมบูรณ์
       cell(2, 0, message('ประวัติ')), // ประวัติ — คำสั่งสมบูรณ์
       // ── แถวล่าง ────────────────────────────────────────────────────────

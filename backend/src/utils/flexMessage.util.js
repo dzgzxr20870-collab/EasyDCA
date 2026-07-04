@@ -1248,6 +1248,23 @@ function buildPlanDowngradedMessage() {
   });
 }
 
+// ตอบกลับปุ่ม Rich Menu "เพิ่มรายการ" (Postback action=add_guide) — สอนวิธีพิมพ์
+// คำสั่งซื้อ/ขายตรงๆ ทันที ไม่มีปุ่มกด (แค่ข้อความสอน) Pattern Header/สีเดียวกับ
+// buildUnknownCommandMessage ด้านล่าง | Syntax ตัวอย่างตรงกับ commandParser.service.js
+// (DETAILED_BUY/DETAILED_SELL) เป๊ะ ห้ามเดาเอง
+function buildAddGuideMessage() {
+  return bubble({
+    headerText: '📝 วิธีเพิ่มรายการซื้อ/ขาย',
+    headerColor: COLOR.warning,
+    headerBg: COLOR.warningBg,
+    bodyContents: [
+      textLine('พิมพ์ข้อความตามรูปแบบด้านล่างได้เลย', { size: 'sm', color: COLOR.textPrimary }),
+      textLine('• ซื้อ BTC 0.01 หุ้น ราคา 3400000', { size: 'sm', color: COLOR.textSecondary }),
+      textLine('• ขาย PTT 50 หุ้น ราคา 34', { size: 'sm', color: COLOR.textSecondary }),
+    ],
+  });
+}
+
 function buildUnknownCommandMessage() {
   return bubble({
     headerText: '🤔 ไม่เข้าใจคำสั่งนี้',
@@ -1298,5 +1315,6 @@ module.exports = {
   buildDashboardLinkMessage,
   buildPlanDowngradedMessage,
   buildErrorMessage,
+  buildAddGuideMessage,
   buildUnknownCommandMessage,
 };

@@ -11,6 +11,7 @@ const {
   buildDayOfMonthQuickReply,
   buildAskAmountMessage,
   buildReminderSetupCancelledMessage,
+  buildAddGuideMessage,
 } = require('../src/utils/flexMessage.util');
 
 // ดึง data ของทุกปุ่ม Quick Reply ออกมาเป็น Array ของ String
@@ -35,6 +36,16 @@ const BASE_PROFIT = {
 function allText(message) {
   return JSON.stringify(message.contents.body.contents);
 }
+
+describe('buildAddGuideMessage — คำแนะนำวิธีพิมพ์คำสั่งซื้อ/ขาย (ปุ่ม "เพิ่มรายการ")', () => {
+  test('มีตัวอย่างคำสั่งซื้อ/ขายจริงปรากฏอยู่ในเนื้อหา', () => {
+    const message = buildAddGuideMessage();
+    const text = allText(message);
+
+    expect(text).toContain('ซื้อ BTC 0.01 หุ้น ราคา 3400000');
+    expect(text).toContain('ขาย PTT 50 หุ้น ราคา 34');
+  });
+});
 
 describe('buildProfitMessage — priceSourceNote ตามแหล่งราคาจริง', () => {
   test('priceSource: coingecko (Crypto) → ข้อความพูดถึง CoinGecko (ไม่ Regression)', () => {

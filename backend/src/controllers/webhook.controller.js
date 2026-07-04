@@ -327,6 +327,13 @@ async function routePostback(user, data) {
       return flexMessage.buildDashboardLinkMessage(dashboardUrl);
     }
 
+    // ── ปุ่ม "เพิ่มรายการ" (Rich Menu) → สอนวิธีพิมพ์คำสั่งซื้อ/ขายตรงๆ ──────────
+    // Postback (ไม่ใช่ message('ซื้อ')) กันข้อความเปล่าหลุดเข้า Command Parser
+    // แล้วตก UNKNOWN โดยไม่ได้ตั้งใจ (ดู Comment ใน setupRichMenu.js)
+    case 'add_guide': {
+      return flexMessage.buildAddGuideMessage();
+    }
+
     default:
       return flexMessage.buildUnknownCommandMessage();
   }

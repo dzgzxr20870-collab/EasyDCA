@@ -882,6 +882,18 @@ describe('handleEvent — Dashboard Postback', () => {
   });
 });
 
+describe('handleEvent — Add Guide Postback (ปุ่ม "เพิ่มรายการ" ใน Rich Menu)', () => {
+  test('add_guide: reply ด้วยคำแนะนำวิธีพิมพ์คำสั่งซื้อ/ขาย (ไม่ใช่ message("ซื้อ") เปล่าๆ)', async () => {
+    await handleEvent(postbackEvent('action=add_guide'));
+
+    expect(pendingService.createPending).not.toHaveBeenCalled();
+    const reply = lastReplyText();
+    expect(reply).toContain('วิธีเพิ่มรายการซื้อ/ขาย');
+    expect(reply).toContain('ซื้อ BTC 0.01 หุ้น ราคา 3400000');
+    expect(reply).toContain('ขาย PTT 50 หุ้น ราคา 34');
+  });
+});
+
 describe('handleEvent — UNKNOWN', () => {
   test('คำสั่งไม่รู้จัก → replyMessage ด้วย Unknown Message พร้อมตัวอย่าง', async () => {
     commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
