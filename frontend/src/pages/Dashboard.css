@@ -1,36 +1,94 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   Design Tokens — สีอ้างอิงจาก design/easydca-dashboard-mockup_4.html
+   เขียว LINE #06c755 เป็นสีหลักทั้ง 2 ธีม | Dark override ผ่าน
+   [data-theme="dark"] บน <html> (Dashboard.jsx ตั้งค่าผ่าน
+   document.documentElement.setAttribute)
+   ═══════════════════════════════════════════════════════════════════════ */
+:root {
+  --dca-bg: #f5f6f8;
+  --dca-card: #ffffff;
+  --dca-card-alt: #eef1f5;
+  --dca-border: #e5e8ec;
+  --dca-text: #1e293b;
+  --dca-text-muted: #64748b;
+  --dca-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+  --dca-green: #06c755;
+  --dca-green-2: #00a86b;
+  --dca-blue: #38bdf8;
+  --dca-pos: #16a34a;
+  --dca-neg: #dc2626;
+  --dca-gold: #d97706;
+}
+
+:root[data-theme='dark'] {
+  --dca-bg: #0f172a;
+  --dca-card: #1e293b;
+  --dca-card-alt: #16213a;
+  --dca-border: #334155;
+  --dca-text: #e6edf5;
+  --dca-text-muted: #94a3b8;
+  --dca-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+  --dca-pos: #22c55e;
+  --dca-neg: #f87171;
+  --dca-gold: #f5c518;
+}
+
 .dashboard-page {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
     "Sarabun", "Kanit", sans-serif;
-  background: #f5f6f8;
-  color: #222;
+  background: var(--dca-bg);
+  color: var(--dca-text);
   min-height: 100vh;
   padding: 24px;
   box-sizing: border-box;
+  transition: background 0.2s, color 0.2s;
 }
 
 .dashboard-page * {
   box-sizing: border-box;
 }
 
+.dashboard-container {
+  max-width: 1080px;
+  margin: 0 auto;
+}
+
 .dashboard-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  max-width: 960px;
+  max-width: 1080px;
   margin: 0 auto 20px;
 }
 
 .dashboard-logo {
   font-size: 22px;
   font-weight: 700;
-  color: #06c755;
+  color: var(--dca-green);
+}
+
+.dashboard-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dashboard-theme-btn {
+  background: var(--dca-card-alt);
+  border: 1px solid var(--dca-border);
+  color: var(--dca-text);
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  font-size: 16px;
+  cursor: pointer;
 }
 
 .dashboard-logout-btn {
-  background: #fff;
-  border: 1px solid #06c755;
-  color: #06c755;
+  background: var(--dca-card);
+  border: 1px solid var(--dca-green);
+  color: var(--dca-green);
   border-radius: 8px;
   padding: 8px 16px;
   font-size: 14px;
@@ -39,15 +97,14 @@
 }
 
 .dashboard-logout-btn:hover {
-  background: #06c755;
+  background: var(--dca-green);
   color: #fff;
 }
 
-/* Plan Banner (Premium/Free) — สีอ้างอิงจาก design/easydca-dashboard-mockup_4.html
-   .prem-banner (Premium Active) และ .upsell (Free) เขียว LINE #06c755 เป็นสีหลัก */
+/* ===== Plan Banner (Premium/Free) — .prem-banner (Premium Active) และ
+   .upsell (Free) จาก Mockup, เขียว LINE เป็นสีหลัก ===== */
 .dashboard-plan-banner {
-  max-width: 960px;
-  margin: 0 auto 20px;
+  margin: 0 0 20px;
   padding: 14px 20px;
   border-radius: 14px;
   font-size: 13.5px;
@@ -59,43 +116,217 @@
 }
 
 .dashboard-plan-banner.premium {
-  background: linear-gradient(135deg, rgba(6, 199, 85, 0.12), rgba(6, 199, 85, 0.02));
+  background: linear-gradient(135deg, rgba(6, 199, 85, 0.16), rgba(6, 199, 85, 0.03));
   border: 1px solid rgba(6, 199, 85, 0.3);
-  color: #1e293b;
+  color: var(--dca-text);
 }
 
 .dashboard-plan-banner.free {
-  background: linear-gradient(135deg, rgba(6, 199, 85, 0.14), rgba(56, 189, 248, 0.1));
+  background: linear-gradient(135deg, rgba(6, 199, 85, 0.16), rgba(56, 189, 248, 0.1));
   border: 1px solid rgba(6, 199, 85, 0.35);
   border-radius: 16px;
-  color: #1e293b;
+  color: var(--dca-text);
 }
 
-.dashboard-section {
-  background: #fff;
+/* ===== Tabs ===== */
+.dashboard-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--dca-border);
+  background: var(--dca-card);
+  border-radius: 12px 12px 0 0;
+  padding: 6px 10px 0;
+  overflow-x: auto;
+  margin-bottom: 20px;
+}
+
+.dashboard-tab {
+  padding: 11px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--dca-text-muted);
+  border: none;
+  background: none;
+  cursor: pointer;
+  border-bottom: 3px solid transparent;
+  white-space: nowrap;
+  font-family: inherit;
+}
+
+.dashboard-tab.on {
+  color: var(--dca-green);
+  border-bottom-color: var(--dca-green);
+}
+
+.dashboard-tab-panel {
+  animation: dashboard-fade-in 0.15s ease-in;
+}
+
+@keyframes dashboard-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ===== Summary Cards (แท็บภาพรวม) ===== */
+.dashboard-summary-cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.dashboard-card {
+  background: var(--dca-card);
+  border: 1px solid var(--dca-border);
   border-radius: 16px;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+  padding: 18px;
+  box-shadow: var(--dca-shadow);
+  position: relative;
+  overflow: hidden;
+}
+
+.dashboard-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--dca-green), var(--dca-blue));
+}
+
+.dashboard-card-label {
+  font-size: 11.5px;
+  color: var(--dca-text-muted);
+  margin-bottom: 8px;
+}
+
+.dashboard-card-value {
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  color: var(--dca-text);
+}
+
+.dashboard-card-value.pos {
+  color: var(--dca-pos);
+}
+
+.dashboard-card-value.neg {
+  color: var(--dca-neg);
+}
+
+.dashboard-card-value.gold {
+  color: var(--dca-gold);
+}
+
+.dashboard-card-sub {
+  font-size: 11.5px;
+  margin-top: 5px;
+  color: var(--dca-text-muted);
+}
+
+/* ===== Box (กราฟ/ส่วนย่อยในแท็บภาพรวม) ===== */
+.dashboard-box {
+  background: var(--dca-card);
+  border: 1px solid var(--dca-border);
+  border-radius: 16px;
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: var(--dca-shadow);
+}
+
+.dashboard-box h3 {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--dca-text);
+  margin: 0 0 6px;
+}
+
+.dashboard-box-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.dashboard-box-header h3 {
+  margin: 0;
+}
+
+.dashboard-chip-group {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dashboard-chip {
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--dca-border);
+  background: var(--dca-card-alt);
+  color: var(--dca-text-muted);
+  font-weight: 600;
+  font-family: inherit;
+}
+
+.dashboard-chip.on {
+  background: var(--dca-green);
+  color: #fff;
+  border-color: var(--dca-green);
+}
+
+.dashboard-hint {
+  font-size: 11.5px;
+  color: var(--dca-text-muted);
+  margin: 10px 0 0;
+}
+
+.dashboard-grid-2 {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr;
+  gap: 20px;
+}
+
+.dashboard-grid-2 .dashboard-box {
+  margin-bottom: 0;
+}
+
+.dashboard-donut-wrap {
+  max-width: 260px;
+  margin: 6px auto 0;
+}
+
+/* ===== Section (แท็บสินทรัพย์/ประวัติ/วิธีใช้งาน) ===== */
+.dashboard-section {
+  background: var(--dca-card);
+  border: 1px solid var(--dca-border);
+  border-radius: 16px;
+  box-shadow: var(--dca-shadow);
   padding: 24px;
-  max-width: 960px;
-  margin: 0 auto 20px;
+  margin-bottom: 20px;
 }
 
 .dashboard-section h2 {
   font-size: 17px;
   margin: 0 0 16px;
-  color: #1e293b;
+  color: var(--dca-text);
 }
 
 .dashboard-message {
   font-size: 15px;
   line-height: 1.6;
-  color: #555;
+  color: var(--dca-text-muted);
   text-align: center;
   padding: 16px 0;
 }
 
 .dashboard-message.error {
-  color: #d64545;
+  color: var(--dca-neg);
 }
 
 .dashboard-table-wrap {
@@ -112,36 +343,37 @@
 .dashboard-table td {
   text-align: left;
   padding: 10px 12px;
-  border-bottom: 1px solid #eee;
+  border-bottom: 1px solid var(--dca-border);
   white-space: nowrap;
+  color: var(--dca-text);
 }
 
 .dashboard-table th {
-  color: #64748b;
+  color: var(--dca-text-muted);
   font-weight: 600;
   font-size: 13px;
 }
 
 .profit-positive {
-  color: #16a34a;
+  color: var(--dca-pos);
   font-weight: 600;
 }
 
 .profit-negative {
-  color: #dc2626;
+  color: var(--dca-neg);
   font-weight: 600;
 }
 
 .dashboard-warning {
   font-size: 12px;
-  color: #d97706;
+  color: var(--dca-gold);
   margin: 12px 0 0;
 }
 
 .dashboard-total {
   font-size: 15px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--dca-text);
   margin: 16px 0 0;
   text-align: right;
 }
@@ -156,11 +388,124 @@
   gap: 8px;
   margin-bottom: 16px;
   font-size: 14px;
+  color: var(--dca-text);
 }
 
 .dashboard-filter select {
   padding: 6px 10px;
   border-radius: 8px;
-  border: 1px solid #ddd;
+  border: 1px solid var(--dca-border);
+  background: var(--dca-card-alt);
+  color: var(--dca-text);
   font-size: 14px;
+}
+
+/* ===== How-to (แท็บวิธีใช้งาน) ===== */
+.dashboard-howto-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.dashboard-howto-step {
+  display: flex;
+  gap: 16px;
+}
+
+.dashboard-howto-num {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--dca-green), var(--dca-green-2));
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  flex-shrink: 0;
+  font-size: 14px;
+}
+
+.dashboard-howto-step h3 {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0 0 4px;
+  color: var(--dca-text);
+}
+
+.dashboard-howto-step p {
+  font-size: 12.5px;
+  color: var(--dca-text-muted);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.dashboard-cmd {
+  background: var(--dca-card-alt);
+  border-left: 3px solid var(--dca-green);
+  border-radius: 8px;
+  padding: 9px 13px;
+  margin: 8px 0 0;
+  font-family: "Courier New", monospace;
+  font-size: 12.5px;
+  color: var(--dca-green);
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.dashboard-richmenu-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+}
+
+.dashboard-richmenu-grid > div {
+  background: var(--dca-card-alt);
+  border: 1px solid var(--dca-border);
+  border-radius: 12px;
+  padding: 14px 10px;
+  text-align: center;
+}
+
+.dashboard-richmenu-ico {
+  font-size: 22px;
+  margin-bottom: 6px;
+}
+
+.dashboard-richmenu-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--dca-text);
+  margin-bottom: 4px;
+}
+
+.dashboard-richmenu-desc {
+  font-size: 11px;
+  color: var(--dca-text-muted);
+  line-height: 1.4;
+}
+
+/* ===== Responsive ===== */
+@media (max-width: 820px) {
+  .dashboard-summary-cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .dashboard-grid-2 {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-richmenu-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .dashboard-summary-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-richmenu-grid {
+    grid-template-columns: 1fr;
+  }
 }
