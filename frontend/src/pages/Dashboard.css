@@ -43,6 +43,34 @@
   color: #fff;
 }
 
+/* Plan Banner (Premium/Free) — สีอ้างอิงจาก design/easydca-dashboard-mockup_4.html
+   .prem-banner (Premium Active) และ .upsell (Free) เขียว LINE #06c755 เป็นสีหลัก */
+.dashboard-plan-banner {
+  max-width: 960px;
+  margin: 0 auto 20px;
+  padding: 14px 20px;
+  border-radius: 14px;
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+
+.dashboard-plan-banner p {
+  margin: 0;
+}
+
+.dashboard-plan-banner.premium {
+  background: linear-gradient(135deg, rgba(6, 199, 85, 0.12), rgba(6, 199, 85, 0.02));
+  border: 1px solid rgba(6, 199, 85, 0.3);
+  color: #1e293b;
+}
+
+.dashboard-plan-banner.free {
+  background: linear-gradient(135deg, rgba(6, 199, 85, 0.14), rgba(56, 189, 248, 0.1));
+  border: 1px solid rgba(6, 199, 85, 0.35);
+  border-radius: 16px;
+  color: #1e293b;
+}
+
 .dashboard-section {
   background: #fff;
   border-radius: 16px;

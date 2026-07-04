@@ -10,5 +10,6 @@ router.use(requireAuth);
 router.get('/portfolio', dashboardController.getPortfolio);
 router.get('/history', dashboardController.getHistory);
 router.get('/profit/:symbol', dashboardController.getProfit);
+router.get('/me', dashboardController.getMe);
 
 module.exports = router;

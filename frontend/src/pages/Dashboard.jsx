@@ -16,10 +16,35 @@ ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip, Legend);
 
 const TOKEN_KEY = 'easydca_token';
 
+// ชื่อเดือนไทยเต็ม — Pattern เดียวกับ backend/src/utils/thaiDate.util.js
+// formatThaiDate (ไม่ import ข้าม Backend/Frontend ได้ จึงเขียน inline ที่นี่)
+const THAI_MONTH_NAMES = [
+  'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
+  'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม',
+];
+
 function formatNumber(value, maxDecimals = 2) {
   const num = Number(value);
   if (!Number.isFinite(num)) return '-';
   return new Intl.NumberFormat('en-US', { maximumFractionDigits: maxDecimals }).format(num);
+}
+
+// จัดรูปวันหมดอายุ Premium เป็นภาษาไทย/พ.ศ. เช่น "4 กรกฎาคม 2569" ตามเขตเวลา
+// Asia/Bangkok (คำนวณผ่าน Intl ก่อนบวก 543 กันคลาดวันใกล้เที่ยงคืน UTC)
+function formatThaiDate(value) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Bangkok',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(value));
+
+  const get = (type) => Number(parts.find((p) => p.type === type)?.value);
+  const year = get('year');
+  const month = get('month');
+  const day = get('day');
+
+  return `${day} ${THAI_MONTH_NAMES[month - 1]} ${year + 543}`;
 }
 
 function Dashboard() {
@@ -30,10 +55,19 @@ function Dashboard() {
   const [profitBySymbol, setProfitBySymbol] = useState({});
   const [transactions, setTransactions] = useState([]);
   const [symbolFilter, setSymbolFilter] = useState('all');
+  const [planInfo, setPlanInfo] = useState(null);
 
   useEffect(() => {
     async function load() {
       try {
+        // Endpoint แยกต่างหาก + catch เอง — ถ้า /me ล่ม ไม่ให้กระทบการโหลด
+        // Portfolio/History เดิม (Fallback เป็น Free assetLimit 2 ตาม Default จริง)
+        const planData = await apiGet('/api/v1/dashboard/me').catch(() => ({
+          isPremiumActive: false,
+          assetLimit: 2,
+        }));
+        setPlanInfo(planData);
+
         const portfolioData = await apiGet('/api/v1/dashboard/portfolio');
         setPortfolio(portfolioData);
 
@@ -114,6 +148,19 @@ function Dashboard() {
           ออกจากระบบ
         </button>
       </header>
+
+      {planInfo && (
+        <section className={`dashboard-plan-banner ${planInfo.isPremiumActive ? 'premium' : 'free'}`}>
+          {planInfo.isPremiumActive ? (
+            <p>👑 คุณเป็นสมาชิก Premium (หมดอายุ {formatThaiDate(planInfo.planExpiresAt)})</p>
+          ) : (
+            <p>
+              คุณใช้แผน Free (จำกัด {planInfo.assetLimit} สินทรัพย์) — อัพเกรดเป็น Premium
+              เพื่อไม่จำกัดจำนวนสินทรัพย์
+            </p>
+          )}
+        </section>
+      )}
 
       <section className="dashboard-section">
         <h2>ภาพรวมพอร์ต</h2>

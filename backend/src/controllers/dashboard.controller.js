@@ -1,6 +1,8 @@
 const portfolioService = require('../services/portfolio.service');
 const profitService = require('../services/profit.service');
 const transactionRepository = require('../repositories/transaction.repository');
+const userRepository = require('../repositories/user.repository');
+const entitlementService = require('../services/entitlement.service');
 
 // Default เท่ากับที่ Requirement กำหนด (ต่างจาก historyService.getRecentHistory
 // ที่ใช้ 5 สำหรับคำสั่ง LINE "ประวัติ" — Dashboard ต้องการเห็นได้มากกว่านั้น)
@@ -62,4 +64,26 @@ async function getProfit(req, res) {
   }
 }
 
-module.exports = { getPortfolio, getHistory, getProfit };
+// GET /api/v1/dashboard/me — คืนสถานะ Plan ของ User ปัจจุบัน สำหรับ Frontend
+// ใช้ตัดสินว่าจะโชว์ Free/Premium Banner แบบไหน (ไม่มี Logic คำนวณเงินใดๆ
+// Reuse entitlement.service ที่เดียวกับทุกจุดของระบบ ไม่เทียบ plan==='premium' เอง)
+async function getMe(req, res) {
+  try {
+    const user = await userRepository.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ error: 'USER_NOT_FOUND' });
+    }
+
+    return res.status(200).json({
+      plan: user.plan,
+      planExpiresAt: user.planExpiresAt ?? null,
+      isPremiumActive: entitlementService.isPremiumActive(user),
+      assetLimit: entitlementService.getActiveAssetLimit(user),
+    });
+  } catch (err) {
+    console.error(`[dashboard] getMe failed: ${err.message}`);
+    return res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+}
+
+module.exports = { getPortfolio, getHistory, getProfit, getMe };

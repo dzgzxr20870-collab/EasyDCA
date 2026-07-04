@@ -1,11 +1,13 @@
 jest.mock('../src/services/portfolio.service');
 jest.mock('../src/services/profit.service');
 jest.mock('../src/repositories/transaction.repository');
+jest.mock('../src/repositories/user.repository');
 
 const portfolioService = require('../src/services/portfolio.service');
 const profitService = require('../src/services/profit.service');
 const transactionRepository = require('../src/repositories/transaction.repository');
-const { getPortfolio, getHistory, getProfit } = require('../src/controllers/dashboard.controller');
+const userRepository = require('../src/repositories/user.repository');
+const { getPortfolio, getHistory, getProfit, getMe } = require('../src/controllers/dashboard.controller');
 
 // profit.service เป็น Automock — ต้องประกาบ ProfitServiceError เองเพราะ
 // jest.mock automock ทำให้ Class เดิมหายไป (Pattern เดียวกับที่ต้องระวังใน
@@ -199,6 +201,84 @@ describe('getProfit', () => {
     const req = mockReq({ params: { symbol: 'BTC' } });
     const res = mockRes();
     await getProfit(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith({ error: 'INTERNAL_ERROR' });
+  });
+});
+
+// entitlement.service ไม่ Mock (Pure Logic ไม่มี DB Call) — ใช้ตัวจริงเพื่อยืนยัน
+// ว่า getMe เรียก isPremiumActive/getActiveAssetLimit จริง ไม่เทียบ plan เอง
+describe('getMe', () => {
+  test('Premium Active จริง (plan=premium + planExpiresAt อนาคต) → isPremiumActive: true, assetLimit: null', async () => {
+    userRepository.findById.mockResolvedValue({
+      id: USER_ID,
+      plan: 'premium',
+      planExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+    });
+
+    const req = mockReq();
+    const res = mockRes();
+    await getMe(req, res);
+
+    expect(userRepository.findById).toHaveBeenCalledWith(USER_ID);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ isPremiumActive: true, assetLimit: null })
+    );
+  });
+
+  test('plan=premium แต่ planExpiresAt หมดอายุแล้ว → isPremiumActive: false, assetLimit: 2', async () => {
+    userRepository.findById.mockResolvedValue({
+      id: USER_ID,
+      plan: 'premium',
+      planExpiresAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+    });
+
+    const req = mockReq();
+    const res = mockRes();
+    await getMe(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ isPremiumActive: false, assetLimit: 2 })
+    );
+  });
+
+  test('User Free ปกติ → isPremiumActive: false, assetLimit: 2', async () => {
+    userRepository.findById.mockResolvedValue({
+      id: USER_ID,
+      plan: 'free',
+      planExpiresAt: null,
+    });
+
+    const req = mockReq();
+    const res = mockRes();
+    await getMe(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ plan: 'free', isPremiumActive: false, assetLimit: 2 })
+    );
+  });
+
+  test('User ไม่พบ (findById คืน null) → 404 USER_NOT_FOUND', async () => {
+    userRepository.findById.mockResolvedValue(null);
+
+    const req = mockReq();
+    const res = mockRes();
+    await getMe(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith({ error: 'USER_NOT_FOUND' });
+  });
+
+  test('findById throw Error → 500 INTERNAL_ERROR', async () => {
+    userRepository.findById.mockRejectedValue(new Error('db down'));
+
+    const req = mockReq();
+    const res = mockRes();
+    await getMe(req, res);
 
     expect(res.status).toHaveBeenCalledWith(500);
     expect(res.json).toHaveBeenCalledWith({ error: 'INTERNAL_ERROR' });
