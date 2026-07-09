@@ -26,6 +26,16 @@ const ERROR_MESSAGES = {
     'ไม่มีการถือครองสินทรัพย์นี้อยู่ในขณะนี้ จึงยังคำนวณกำไร/ขาดทุนไม่ได้ ลองพิมพ์ "พอต" เพื่อดูสินทรัพย์ที่คุณถืออยู่',
   PRICE_FEED_NOT_IMPLEMENTED:
     'การบันทึกด้วยจำนวนเงินรองรับเฉพาะบางสินทรัพย์ (เช่น Crypto อย่าง BTC/ETH) เท่านั้น สำหรับสินทรัพย์อื่นกรุณาระบุจำนวนหน่วยและราคา เช่น "ซื้อ PTT 50 หุ้น ราคา 34"',
+  // "ขาย <SYMBOL> ทั้งหมด" — Asset ยังมีอยู่แต่ยอดคงเหลือเป็น 0 (ขายไปหมดแล้ว)
+  NOTHING_TO_SELL:
+    'สินทรัพย์นี้ถูกขายไปหมดแล้ว ไม่มียอดคงเหลือให้ขายเพิ่ม ลองพิมพ์ "พอต" เพื่อดูสินทรัพย์ที่คุณถืออยู่',
+  // "ขาย <SYMBOL> ทั้งหมด" — ดึงราคาตลาดปัจจุบันไม่ได้ (หุ้นไทยยังไม่มี Price Feed
+  // หรือระบบราคาขัดข้องชั่วคราว) — ไม่เดาราคาให้
+  MARKET_PRICE_UNAVAILABLE:
+    'ดึงราคาตลาดของสินทรัพย์นี้ไม่ได้ในขณะนี้ (อาจเป็นสินทรัพย์ที่ยังไม่มีราคาตลาด เช่นหุ้นไทย หรือระบบราคาขัดข้องชั่วคราว) กรุณาลองใหม่อีกครั้งภายหลัง',
+  // ราคาที่พิมพ์เป็น USD แต่แปลงเป็นบาทไม่ได้ (ระบบอัตราแลกเปลี่ยนขัดข้อง) — ไม่เดาเรต
+  FX_RATE_UNAVAILABLE:
+    'แปลงราคาจาก USD เป็นบาทไม่ได้ในขณะนี้ (ระบบอัตราแลกเปลี่ยนขัดข้องชั่วคราว) กรุณาลองใหม่ภายหลัง หรือระบุราคาเป็นบาทโดยตรง',
   VALIDATION_ERROR:
     'ไม่รู้จักสินทรัพย์นี้ กรุณาติดต่อทีมงานเพื่อเพิ่มในระบบ หรือตรวจสอบว่าพิมพ์ชื่อย่อถูกต้องแล้ว',
   // Confirm Flow (SRS.md § 2.3 [5-7]) — Postback มาช้า/ซ้ำ/ไม่พบ pending record
@@ -387,17 +397,42 @@ function buildPreviewMessage(pending) {
   const headerColor = isBuy ? COLOR.profit : COLOR.loss;
   const headerBg = isBuy ? COLOR.profitBg : COLOR.lossBg;
 
+  // คำสั่งที่พิมพ์ราคาเป็น USD — โชว์ทั้งยอด USD ที่พิมพ์และเรตที่ใช้ เพื่อไม่ให้
+  // ผู้ใช้งงว่าทำไมยอดในพอร์ต (บาท) ไม่ตรงกับตัวเลขที่พิมพ์ (pending.fx จาก
+  // resolveQuantityAndPrice — ไม่ได้ Persist ใน DB)
+  const isUsd = Boolean(pending.fx && pending.fx.currency === 'USD');
+
   const body = [
     textLine(pending.assetSymbol, { size: 'lg', weight: 'bold', color: COLOR.textPrimary }),
     textLine(`จำนวน: ${formatNumber(pending.quantity)} ${pending.assetSymbol}`, {
       size: 'sm',
       color: COLOR.textSecondary,
     }),
-    textLine(`ราคาต่อหน่วย: ${formatNumber(pending.pricePerUnit)} บาท`, {
+  ];
+
+  if (isUsd) {
+    body.push(
+      textLine(`ราคาที่พิมพ์: ${formatNumber(pending.fx.pricePerUnitOriginal)} USD/หน่วย`, {
+        size: 'sm',
+        color: COLOR.textSecondary,
+      }),
+      textLine(`ยอดรวมที่พิมพ์: ${formatNumber(pending.fx.amountOriginal)} USD`, {
+        size: 'sm',
+        color: COLOR.textSecondary,
+      }),
+      textLine(`อัตราแลกเปลี่ยน: 1 USD = ${formatNumber(pending.fx.rate)} บาท`, {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      })
+    );
+  }
+
+  body.push(
+    textLine(`ราคาต่อหน่วย: ${formatNumber(pending.pricePerUnit)} บาท${isUsd ? ' (แปลงแล้ว)' : ''}`, {
       size: 'sm',
       color: COLOR.textSecondary,
     }),
-    textLine(`มูลค่ารวม: ${formatNumber(pending.amountThb)} บาท`, {
+    textLine(`มูลค่ารวม: ${formatNumber(pending.amountThb)} บาท${isUsd ? ' (แปลงแล้ว)' : ''}`, {
       size: 'md',
       weight: 'bold',
       color: COLOR.textPrimary,
@@ -405,8 +440,8 @@ function buildPreviewMessage(pending) {
     textLine('ตรวจสอบแล้วกด "ยืนยัน" เพื่อบันทึก (รายการหมดอายุใน 5 นาที)', {
       size: 'xs',
       color: COLOR.textSecondary,
-    }),
-  ];
+    })
+  );
 
   const note = priceSourceNote(pending.priceSource);
   if (note) body.push(note);

@@ -78,10 +78,11 @@ async function createPending(userId, parsed, options = {}) {
     txnDate: params.date ?? transactionService.todayInBangkok(),
   });
 
-  // priceSource ไม่มี Column รองรับใน pending_transactions (ตรวจ Migration แล้ว)
+  // priceSource + fx ไม่มี Column รองรับใน pending_transactions (ตรวจ Migration แล้ว)
   // จึงไม่ Insert ลง DB — Enrich กลับเข้า Object ที่คืนให้ Controller ใช้สร้าง
   // Preview Message ได้ทันทีแทน (ไหลเป็น JS Object เท่านั้น ไม่ Persist)
-  return { ...pending, priceSource: amounts.priceSource };
+  // fx = null เมื่อไม่ใช่คำสั่งราคา USD (Preview จะไม่แสดงบรรทัด USD/เรต)
+  return { ...pending, priceSource: amounts.priceSource, fx: amounts.fx ?? null };
 }
 
 // ยืนยัน Pending → บันทึก Transaction จริง (SRS.md § 2.3 [6])

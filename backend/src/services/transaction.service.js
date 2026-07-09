@@ -59,13 +59,45 @@ function isPresent(value) {
 async function resolveQuantityAndPrice(params) {
   if (isPresent(params.quantity) && isPresent(params.pricePerUnit)) {
     const quantity = Number(params.quantity);
-    const pricePerUnit = Number(params.pricePerUnit);
+    const pricePerUnitInput = Number(params.pricePerUnit);
+
+    // ผู้ใช้พิมพ์ราคาต่อหน่วยเป็น USD → แปลงเป็น THB ด้วย FX Rate เดิมจาก
+    // priceFeed.service (Reuse getUsdThbFxRate — ไม่เขียน FX Conversion ใหม่)
+    // amountThb ที่บันทึกลง DB เป็น THB เสมอ ไม่มีคอลัมน์เก็บ USD คู่ขนาน — เก็บ fx
+    // ไว้ให้ Preview แสดงทั้งยอด USD ที่พิมพ์และยอด THB ที่แปลงแล้ว + เรตที่ใช้
+    if (params.priceCurrency === 'USD') {
+      const rate = await priceFeedService.getUsdThbFxRate();
+      if (rate === null) {
+        // ดึง FX ไม่ได้ (Key ไม่ได้ตั้ง / Twelve Data ล่ม) — ไม่ Fallback เรตเดา
+        throw new TransactionServiceError(
+          'FX_RATE_UNAVAILABLE',
+          'Cannot convert USD price to THB: FX rate unavailable',
+          { symbol: params.symbol }
+        );
+      }
+
+      const pricePerUnit = roundToEight(pricePerUnitInput * rate);
+      return {
+        quantity,
+        pricePerUnit,
+        amountThb: roundToTwo(quantity * pricePerUnit),
+        priceSource: 'user',
+        // Enrich สำหรับ Preview เท่านั้น (ไม่ Persist ลง DB — ไม่มีคอลัมน์รองรับ)
+        fx: {
+          currency: 'USD',
+          rate,
+          pricePerUnitOriginal: pricePerUnitInput,
+          amountOriginal: roundToTwo(quantity * pricePerUnitInput),
+        },
+      };
+    }
+
     // priceSource: 'user' — ราคาที่ User ระบุเองตรงๆ (ไม่ได้มาจาก Price Feed)
     // ใช้แยกแยะใน Preview/Confirm Message ว่าควรเตือนเรื่องราคาอ้างอิงไหม
     return {
       quantity,
-      pricePerUnit,
-      amountThb: roundToTwo(quantity * pricePerUnit),
+      pricePerUnit: pricePerUnitInput,
+      amountThb: roundToTwo(quantity * pricePerUnitInput),
       priceSource: 'user',
     };
   }
@@ -235,6 +267,47 @@ async function validateSell(userId, params) {
     throw new TransactionServiceError('ASSET_NOT_FOUND', `Asset ${params.symbol} not found for this user`, {
       symbol: params.symbol,
     });
+  }
+
+  // ── "ขายทั้งหมด" (params.sellAll) ────────────────────────────────────────
+  // เติมจำนวน = ยอดคงเหลือปัจจุบัน (Reuse calculateHeldQuantity — DATABASE.md § 12
+  // ไม่มีคอลัมน์เก็บ heldQuantity จึงคำนวณจากประวัติเสมอ) และราคา = ราคาตลาด ณ ตอนนี้
+  // (Reuse getCurrentPrice เดิมที่คำสั่งขายปกติใช้อยู่) แล้วเดินต่อผ่าน Flow Pending/
+  // Confirm ปกติเหมือนคำสั่งขายทั่วไป (ราคาถูก Snapshot ไว้ตอน Preview — Confirm ใช้
+  // ค่าที่ Snapshot ไม่ดึงราคาใหม่ ตาม Design pendingTransaction.service เดิม)
+  if (params.sellAll) {
+    const historyForAll = await transactionRepository.findAllByAsset(asset.id);
+    const heldForAll = calculateHeldQuantity(historyForAll);
+
+    if (heldForAll <= 0) {
+      // Asset มีอยู่จริงแต่ขายหมดแล้ว — แยก Error จาก ASSET_NOT_FOUND (ไม่เคยมี)
+      throw new TransactionServiceError(
+        'NOTHING_TO_SELL',
+        `No remaining holding of ${params.symbol} to sell`,
+        { symbol: params.symbol, held: heldForAll }
+      );
+    }
+
+    const marketPrice = await priceFeedService.getCurrentPrice(params.symbol);
+    if (marketPrice === null) {
+      // ไม่มี Price Feed (หุ้นไทย) / API ล่มชั่วคราว — ไม่ Fallback ราคาเดา/0
+      throw new TransactionServiceError(
+        'MARKET_PRICE_UNAVAILABLE',
+        `Cannot fetch current market price for ${params.symbol}`,
+        { symbol: params.symbol }
+      );
+    }
+
+    const allAmounts = await resolveQuantityAndPrice({
+      ...params,
+      quantity: heldForAll,
+      pricePerUnit: marketPrice,
+    });
+    // ราคามาจาก Price Feed ไม่ใช่ที่ User พิมพ์เอง — ตั้ง priceSource ตาม Type จริง
+    // (coingecko/twelvedata) เพื่อให้ Preview เตือนที่มาของราคา (priceSourceNote)
+    allAmounts.priceSource = resolvePriceSource(params.symbol);
+
+    return { asset, amounts: allAmounts, heldQuantity: heldForAll };
   }
 
   const amounts = await resolveQuantityAndPrice(params);

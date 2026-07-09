@@ -1,4 +1,5 @@
 const {
+  buildPreviewMessage,
   buildProfitMessage,
   buildReminderSetMessage,
   buildReminderListMessage,
@@ -299,5 +300,51 @@ describe('Reminder Setup Quick Reply — ทุกข้อความต้อ
     const text = allText(message);
     expect(text).toContain('ยกเลิก');
     expect(text).toContain('ตั้งเตือน DCA');
+  });
+});
+
+// ── Round 2: Preview คำสั่งราคา USD ต้องโชว์ทั้งยอด USD และ THB ที่แปลงแล้ว ──────
+describe('buildPreviewMessage — ราคาเป็น USD', () => {
+  const baseUsdPending = {
+    id: 'pending-usd-1',
+    commandType: 'buy',
+    assetSymbol: 'MSFT',
+    quantity: 2,
+    pricePerUnit: 10500, // THB (แปลงแล้ว)
+    amountThb: 21000, // THB (ที่จะบันทึกจริง)
+    priceSource: 'user',
+    fx: { currency: 'USD', rate: 35, pricePerUnitOriginal: 300, amountOriginal: 600 },
+  };
+
+  test('มี fx (USD) → แสดงราคา USD ที่พิมพ์ + เรต + ยอด THB ที่แปลงแล้ว', () => {
+    const text = JSON.stringify(buildPreviewMessage(baseUsdPending));
+
+    // ยอด USD ที่ผู้ใช้พิมพ์ตรงๆ
+    expect(text).toContain('300 USD');
+    expect(text).toContain('600 USD');
+    // FX Rate ที่ใช้ตอนนั้น
+    expect(text).toContain('1 USD = 35 บาท');
+    // ยอด THB ที่แปลงแล้ว (ที่จะบันทึกจริง)
+    expect(text).toContain('21,000 บาท');
+    expect(text).toContain('แปลงแล้ว');
+  });
+
+  test('ไม่มี fx (คำสั่ง THB ปกติ) → ไม่โชว์บรรทัด USD/เรต', () => {
+    const thbPending = {
+      id: 'pending-thb-1',
+      commandType: 'sell',
+      assetSymbol: 'PTT',
+      quantity: 50,
+      pricePerUnit: 34,
+      amountThb: 1700,
+      priceSource: 'user',
+      fx: null,
+    };
+    const text = JSON.stringify(buildPreviewMessage(thbPending));
+
+    expect(text).not.toContain('USD');
+    expect(text).not.toContain('อัตราแลกเปลี่ยน');
+    expect(text).not.toContain('แปลงแล้ว');
+    expect(text).toContain('1,700 บาท');
   });
 });

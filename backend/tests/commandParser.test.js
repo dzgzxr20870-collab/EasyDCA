@@ -276,4 +276,58 @@ describe('commandParser.service', () => {
       expect(normalizeText(42)).toBe('');
     });
   });
+
+  // ── Round 2: "ขายทั้งหมด" + ราคาเป็น USD ──────────────────────────────────
+  describe('SELL ALL — ขาย [SYMBOL] ทั้งหมด', () => {
+    test('"ขาย NVDA ทั้งหมด" → SELL + sellAll:true (ไม่มี quantity/amountThb)', () => {
+      expect(parseCommand('ขาย NVDA ทั้งหมด')).toEqual({
+        command: COMMANDS.SELL,
+        params: { symbol: 'NVDA', sellAll: true },
+      });
+    });
+
+    test('พิมพ์เล็ก + Whitespace เกิน: "ขาย  btc   ทั้งหมด"', () => {
+      expect(parseCommand('ขาย  btc   ทั้งหมด')).toEqual({
+        command: COMMANDS.SELL,
+        params: { symbol: 'BTC', sellAll: true },
+      });
+    });
+
+    test('รองรับ "sell BTC ทั้งหมด" (คำสั่งอังกฤษ)', () => {
+      expect(parseCommand('sell BTC ทั้งหมด')).toEqual({
+        command: COMMANDS.SELL,
+        params: { symbol: 'BTC', sellAll: true },
+      });
+    });
+  });
+
+  describe('ราคาเป็น USD — ซื้อ/ขาย [SYMBOL] [QTY] หุ้น ราคา [PRICE] USD', () => {
+    test('"ซื้อ MSFT 2 หุ้น ราคา 300 USD" → priceCurrency:USD', () => {
+      expect(parseCommand('ซื้อ MSFT 2 หุ้น ราคา 300 USD')).toEqual({
+        command: COMMANDS.BUY,
+        params: { symbol: 'MSFT', quantity: 2, pricePerUnit: 300, priceCurrency: 'USD' },
+      });
+    });
+
+    test('ใช้กับคำสั่งขายได้: "ขาย NVDA 1 หุ้น ราคา 900 USD"', () => {
+      expect(parseCommand('ขาย NVDA 1 หุ้น ราคา 900 USD')).toEqual({
+        command: COMMANDS.SELL,
+        params: { symbol: 'NVDA', quantity: 1, pricePerUnit: 900, priceCurrency: 'USD' },
+      });
+    });
+
+    test('ไม่ระบุหน่วย → ไม่มี Key priceCurrency (Default THB, Shape เดิม)', () => {
+      expect(parseCommand('ซื้อ PTT 50 หุ้น ราคา 34')).toEqual({
+        command: COMMANDS.BUY,
+        params: { symbol: 'PTT', quantity: 50, pricePerUnit: 34 },
+      });
+    });
+
+    test('ระบุ "บาท" ท้ายราคา → ยังคง Default THB (ไม่ใส่ priceCurrency)', () => {
+      expect(parseCommand('ซื้อ PTT 50 หุ้น ราคา 34 บาท')).toEqual({
+        command: COMMANDS.BUY,
+        params: { symbol: 'PTT', quantity: 50, pricePerUnit: 34 },
+      });
+    });
+  });
 });

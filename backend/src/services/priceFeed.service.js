@@ -199,6 +199,21 @@ async function getUsdThbRate(apiKey) {
   return rate;
 }
 
+// Public wrapper: อัตราแลกเปลี่ยน USD→THB (จำนวน THB ต่อ 1 USD) สำหรับแปลง "ราคา
+// ที่ผู้ใช้พิมพ์เป็น USD" → THB ในคำสั่งซื้อ/ขาย — Reuse getUsdThbRate(apiKey) +
+// fxRateCache เดิม (ไม่เขียน FX Conversion ใหม่) อ่าน TWELVE_DATA_API_KEY จาก env
+// เองแบบเดียวกับ getUsStockPriceThb คืน null ถ้า Key ไม่ได้ตั้ง / ดึง Rate ไม่ได้
+// (Caller ต้องโยน Error ให้ผู้ใช้ ไม่ Fallback เป็นเรตเดา)
+async function getUsdThbFxRate() {
+  const apiKey = process.env.TWELVE_DATA_API_KEY;
+  if (!apiKey) {
+    console.error('[priceFeed] Twelve Data API key (TWELVE_DATA_API_KEY) is not configured');
+    return null;
+  }
+
+  return getUsdThbRate(apiKey);
+}
+
 // ราคาหุ้นสหรัฐเป็น THB = ราคา USD × อัตราแลกเปลี่ยน USD/THB
 // (rate = จำนวน THB ต่อ 1 USD จึงต้อง "คูณ" ไม่ใช่ "หาร") — Cache ราคา THB 60s
 // คืน null ถ้า Key ไม่ได้ตั้ง / ราคา / rate อย่างใดอย่างหนึ่งหาไม่ได้
@@ -266,5 +281,6 @@ async function getCurrentPrice(symbol) {
 
 module.exports = {
   getCurrentPrice,
+  getUsdThbFxRate,
   COINGECKO_IDS,
 };

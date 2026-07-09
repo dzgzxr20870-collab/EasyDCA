@@ -8,6 +8,7 @@ const priceFeedService = require('../src/services/priceFeed.service');
 const {
   processBuyCommand,
   processSellCommand,
+  validateBuy,
   calculateHeldQuantity,
   TransactionServiceError,
   MAX_FREE_ASSETS,
@@ -377,5 +378,169 @@ describe('TransactionServiceError', () => {
     expect(error).toBeInstanceOf(TransactionServiceError);
     expect(error.code).toBe('ASSET_NOT_FOUND');
     expect(error.details).toMatchObject({ symbol: 'XRP' });
+  });
+});
+
+// ── Round 2: "ขายทั้งหมด" (params.sellAll) ──────────────────────────────────
+describe('processSellCommand — ขายทั้งหมด (sellAll)', () => {
+  const ASSET_BTC = { id: 'asset-uuid-btc', userId: USER_ID, symbol: 'BTC', type: 'crypto' };
+
+  test('คำนวณ amountThb = heldQuantity × ราคาตลาดปัจจุบัน (ขายหมดเหลือ 0)', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_BTC);
+    // ยอดคงเหลือ = 0.5 (จากประวัติ — Reuse calculateHeldQuantity)
+    transactionRepository.findAllByAsset.mockResolvedValue([
+      { type: 'buy', quantity: 0.3 },
+      { type: 'buy', quantity: 0.2 },
+    ]);
+    // ราคาตลาด ณ ตอนนี้ = 2,000,000 บาท/BTC
+    priceFeedService.getCurrentPrice.mockResolvedValue(2000000);
+
+    const result = await processSellCommand(USER_ID, { symbol: 'BTC', sellAll: true });
+
+    expect(priceFeedService.getCurrentPrice).toHaveBeenCalledWith('BTC');
+    // 0.5 × 2,000,000 = 1,000,000
+    expect(transactionRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'sell',
+        assetId: ASSET_BTC.id,
+        quantity: 0.5,
+        pricePerUnit: 2000000,
+        amountThb: 1000000,
+        source: 'line',
+      })
+    );
+    expect(result).toMatchObject({
+      symbol: 'BTC',
+      quantity: 0.5,
+      amountThb: 1000000,
+      remainingQuantity: 0,
+      // ราคามาจาก Price Feed (ไม่ใช่ที่ User พิมพ์) → priceSource ตาม Type จริง
+      priceSource: 'coingecko',
+    });
+  });
+
+  test('หุ้นสหรัฐ (NVDA) ขายทั้งหมด → priceSource เป็น twelvedata', async () => {
+    const ASSET_NVDA = { id: 'asset-nvda', userId: USER_ID, symbol: 'NVDA', type: 'stock_us' };
+    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_NVDA);
+    transactionRepository.findAllByAsset.mockResolvedValue([{ type: 'buy', quantity: 3 }]);
+    priceFeedService.getCurrentPrice.mockResolvedValue(3500);
+
+    const result = await processSellCommand(USER_ID, { symbol: 'NVDA', sellAll: true });
+
+    expect(result).toMatchObject({ quantity: 3, amountThb: 10500, priceSource: 'twelvedata' });
+  });
+
+  test('Symbol ไม่มีในพอร์ตเลย (ไม่เคยซื้อ) → ASSET_NOT_FOUND', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue(null);
+
+    await expect(
+      processSellCommand(USER_ID, { symbol: 'DOGE', sellAll: true })
+    ).rejects.toMatchObject({ code: 'ASSET_NOT_FOUND' });
+
+    expect(transactionRepository.findAllByAsset).not.toHaveBeenCalled();
+    expect(priceFeedService.getCurrentPrice).not.toHaveBeenCalled();
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
+
+  test('Holding เป็น 0 อยู่แล้ว (ขายไปหมดก่อนหน้า) → NOTHING_TO_SELL', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_BTC);
+    // buy 0.5 แล้ว sell 0.5 → held = 0
+    transactionRepository.findAllByAsset.mockResolvedValue([
+      { type: 'buy', quantity: 0.5 },
+      { type: 'sell', quantity: 0.5 },
+    ]);
+
+    await expect(
+      processSellCommand(USER_ID, { symbol: 'BTC', sellAll: true })
+    ).rejects.toMatchObject({ code: 'NOTHING_TO_SELL' });
+
+    // ยังไม่ทันดึงราคา/บันทึก
+    expect(priceFeedService.getCurrentPrice).not.toHaveBeenCalled();
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
+
+  test('ดึงราคาตลาดไม่ได้ (Price Feed คืน null) → MARKET_PRICE_UNAVAILABLE (ไม่เดาราคา/0)', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_BTC);
+    transactionRepository.findAllByAsset.mockResolvedValue([{ type: 'buy', quantity: 0.5 }]);
+    priceFeedService.getCurrentPrice.mockResolvedValue(null);
+
+    await expect(
+      processSellCommand(USER_ID, { symbol: 'BTC', sellAll: true })
+    ).rejects.toMatchObject({ code: 'MARKET_PRICE_UNAVAILABLE' });
+
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
+});
+
+// ── Round 2: ราคาเป็น USD (priceCurrency: 'USD') ────────────────────────────
+describe('ราคาเป็น USD → แปลงเป็น THB ด้วย FX Rate', () => {
+  const ASSET_MSFT = { id: 'asset-msft', userId: USER_ID, symbol: 'MSFT', type: 'stock_us' };
+
+  test('processBuyCommand: 2 หุ้น × 300 USD, rate 35 → บันทึกเป็น THB (10500/หน่วย, รวม 21000)', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_MSFT);
+    priceFeedService.getUsdThbFxRate.mockResolvedValue(35);
+
+    const result = await processBuyCommand(USER_ID, {
+      symbol: 'MSFT',
+      quantity: 2,
+      pricePerUnit: 300,
+      priceCurrency: 'USD',
+    });
+
+    expect(priceFeedService.getUsdThbFxRate).toHaveBeenCalled();
+    // amountThb ที่บันทึกลง DB ต้องเป็น THB เสมอ
+    expect(transactionRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'buy',
+        quantity: 2,
+        pricePerUnit: 10500,
+        amountThb: 21000,
+      })
+    );
+    expect(result).toMatchObject({ quantity: 2, pricePerUnit: 10500, amountThb: 21000, priceSource: 'user' });
+  });
+
+  test('validateBuy คืน amounts.fx (USD ที่พิมพ์ + เรต) สำหรับ Preview', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_MSFT);
+    priceFeedService.getUsdThbFxRate.mockResolvedValue(35);
+
+    const { amounts } = await validateBuy(USER_ID, {
+      symbol: 'MSFT',
+      quantity: 2,
+      pricePerUnit: 300,
+      priceCurrency: 'USD',
+    });
+
+    expect(amounts).toMatchObject({
+      quantity: 2,
+      pricePerUnit: 10500,
+      amountThb: 21000,
+      priceSource: 'user',
+      fx: { currency: 'USD', rate: 35, pricePerUnitOriginal: 300, amountOriginal: 600 },
+    });
+  });
+
+  test('ดึง FX Rate ไม่ได้ (null) → FX_RATE_UNAVAILABLE (ไม่บันทึก ไม่เดาเรต)', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_MSFT);
+    priceFeedService.getUsdThbFxRate.mockResolvedValue(null);
+
+    await expect(
+      processBuyCommand(USER_ID, { symbol: 'MSFT', quantity: 2, pricePerUnit: 300, priceCurrency: 'USD' })
+    ).rejects.toMatchObject({ code: 'FX_RATE_UNAVAILABLE' });
+
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
+
+  test('ไม่ระบุ USD (Default THB) → ไม่เรียก FX Rate, ราคาคงเดิม', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_MSFT);
+
+    const result = await processBuyCommand(USER_ID, {
+      symbol: 'MSFT',
+      quantity: 2,
+      pricePerUnit: 300,
+    });
+
+    expect(priceFeedService.getUsdThbFxRate).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ pricePerUnit: 300, amountThb: 600 });
   });
 });

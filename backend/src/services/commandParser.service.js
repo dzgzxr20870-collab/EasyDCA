@@ -38,11 +38,20 @@ function isValidSymbol(symbol) {
 
 const NUMBER = '([\\d,]+(?:\\.\\d+)?)';
 const SYMBOL = '(\\S+)';
+// หน่วยสกุลเงินท้ายราคาต่อหน่วย (ไม่บังคับ) — รองรับ "usd" (ให้ transaction.service
+// แปลงเป็นบาทด้วย FX Rate) และ "บาท" (Default เดิม) หลัง normalizeText ทำ
+// toLowerCase ให้แล้ว "USD"→"usd" เป็นกลุ่มจับ (Capturing) เพิ่มเป็น match ตำแหน่งที่
+// 4 ของ DETAILED_BUY/SELL — match[1..3] เดิม (symbol/qty/price) จึงไม่ขยับ
+const PRICE_UNIT = '(?:\\s*(usd|บาท))?';
 
-const DETAILED_BUY = new RegExp(`^(?:ซื้อ|buy)\\s+${SYMBOL}\\s+${NUMBER}\\s*หุ้น\\s*ราคา\\s*${NUMBER}$`);
+const DETAILED_BUY = new RegExp(`^(?:ซื้อ|buy)\\s+${SYMBOL}\\s+${NUMBER}\\s*หุ้น\\s*ราคา\\s*${NUMBER}${PRICE_UNIT}$`);
 const SIMPLE_BUY = new RegExp(`^(?:ซื้อ|buy)\\s+${SYMBOL}\\s+${NUMBER}\\s*(?:บาท)?$`);
-const DETAILED_SELL = new RegExp(`^(?:ขาย|sell)\\s+${SYMBOL}\\s+${NUMBER}\\s*หุ้น\\s*ราคา\\s*${NUMBER}$`);
+const DETAILED_SELL = new RegExp(`^(?:ขาย|sell)\\s+${SYMBOL}\\s+${NUMBER}\\s*หุ้น\\s*ราคา\\s*${NUMBER}${PRICE_UNIT}$`);
 const SIMPLE_SELL = new RegExp(`^(?:ขาย|sell)\\s+${SYMBOL}\\s+${NUMBER}\\s*(?:บาท)?$`);
+// "ขาย NVDA ทั้งหมด" — ขายยอดคงเหลือทั้งหมดตามราคาตลาดปัจจุบัน (transaction.service
+// เติมจำนวน=ยอดคงเหลือ + ราคา=ราคาตลาด) ไม่ชนกับ SIMPLE_SELL เพราะ "ทั้งหมด"
+// ไม่ใช่ตัวเลข จึงไม่ Match รูปแบบจำนวนเงิน
+const SELL_ALL = new RegExp(`^(?:ขาย|sell)\\s+${SYMBOL}\\s+ทั้งหมด$`);
 const PORTFOLIO = /^(?:พอต|พอร์ต|พอร์ท|portfolio|port)$/;
 const PROFIT = new RegExp(`^(?:กำไร|profit)\\s+${SYMBOL}$`);
 const HISTORY = /^(?:ประวัติ|history)$/;
@@ -83,6 +92,9 @@ function parseCommand(rawText) {
         symbol: match[1].toUpperCase(),
         quantity: parseNumber(match[2]),
         pricePerUnit: parseNumber(match[3]),
+        // ใส่ priceCurrency เฉพาะเมื่อพิมพ์ "usd" — ไม่ใส่ Key ตอน Default (บาท)
+        // เพื่อคง Shape params เดิม (เทสต์เดิมใช้ toEqual เทียบ Object ตรงๆ)
+        ...(match[4] === 'usd' ? { priceCurrency: 'USD' } : {}),
       },
     };
   }
@@ -106,6 +118,8 @@ function parseCommand(rawText) {
         symbol: match[1].toUpperCase(),
         quantity: parseNumber(match[2]),
         pricePerUnit: parseNumber(match[3]),
+        // ใส่ priceCurrency เฉพาะเมื่อพิมพ์ "usd" (เช่นเดียวกับ DETAILED_BUY)
+        ...(match[4] === 'usd' ? { priceCurrency: 'USD' } : {}),
       },
     };
   }
@@ -117,6 +131,19 @@ function parseCommand(rawText) {
       params: {
         symbol: match[1].toUpperCase(),
         amountThb: parseNumber(match[2]),
+      },
+    };
+  }
+
+  // ตรวจ SELL_ALL หลัง SIMPLE_SELL — "ขาย <SYMBOL> ทั้งหมด" ไม่ Match รูปแบบขายอื่น
+  // (ไม่มีตัวเลขจำนวน/ราคา) จึงมาถึงตรงนี้ได้โดยไม่ถูกดักไปก่อน
+  match = text.match(SELL_ALL);
+  if (match && isValidSymbol(match[1])) {
+    return {
+      command: COMMANDS.SELL,
+      params: {
+        symbol: match[1].toUpperCase(),
+        sellAll: true,
       },
     };
   }
