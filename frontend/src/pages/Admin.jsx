@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getToken, apiGet } from '../lib/api.js';
+import { getToken, apiGet, apiPost } from '../lib/api.js';
 // Reuse Style Pattern เดียวกับ Dashboard ปกติ (การ์ด/ตาราง) — Admin เป็น Internal Tool
 // จึงไม่ทำ CSS ใหม่ ใช้คลาส dashboard-* เดิมผ่าน wrapper .dashboard-page
 import './Dashboard.css';
@@ -43,6 +43,33 @@ function formatDate(value) {
     day: '2-digit',
   }).format(new Date(value));
 }
+
+// ── Broadcast (Round 4c) ────────────────────────────────────────────────
+// value ตรงกับที่ Backend รับ (targetGroup/messageType) — Backend Validate ซ้ำอีกชั้น
+const BROADCAST_TARGET_OPTIONS = [
+  { value: 'all', label: 'ทั้งหมด' },
+  { value: 'free', label: 'เฉพาะ Free' },
+  { value: 'premium', label: 'เฉพาะ Premium' },
+];
+
+const BROADCAST_TYPE_OPTIONS = [
+  { value: 'news', label: 'ข่าว' },
+  { value: 'system_update', label: 'อัพเดทระบบ' },
+  { value: 'promotion', label: 'โปรโมชั่น' },
+  { value: 'other', label: 'อื่นๆ' },
+];
+
+// ร่าง Template ภาษาไทยสั้นๆ ตามประเภท — เมื่อเลือกประเภทจะใส่ลง Textarea ให้อัตโนมัติ
+// (User แก้ไขต่อได้อิสระ) 'other' เว้นว่างให้พิมพ์เอง
+const BROADCAST_TEMPLATES = {
+  news: '📢 ข่าวสารจาก EasyDCA\n\n[พิมพ์เนื้อหาข่าวที่นี่]',
+  system_update: '🔧 อัพเดทระบบ EasyDCA\n\nเราได้ปรับปรุง [ฟีเจอร์] เพื่อให้ใช้งานได้ดียิ่งขึ้น ขอบคุณที่ใช้บริการครับ',
+  promotion: '🎉 โปรโมชั่นพิเศษจาก EasyDCA!\n\n[รายละเอียดโปรโมชั่น / โค้ดส่วนลด]',
+  other: '',
+};
+
+// LINE Text Message จำกัด 5,000 อักขระ (ตรงกับ backend broadcast.service.MAX_MESSAGE_LENGTH)
+const MAX_BROADCAST_LENGTH = 5000;
 
 function Admin() {
   const navigate = useNavigate();
@@ -118,6 +145,68 @@ function Admin() {
 
     loadPayments();
   }, [ready, statusFilter]);
+
+  // ── Broadcast State (Round 4c) ───────────────────────────────────────────
+  const [bcTarget, setBcTarget] = useState('all');
+  const [bcType, setBcType] = useState('news');
+  const [bcMessage, setBcMessage] = useState(BROADCAST_TEMPLATES.news);
+  const [bcShowPreview, setBcShowPreview] = useState(false);
+  const [bcSending, setBcSending] = useState(false);
+  const [bcResult, setBcResult] = useState(null);
+  const [bcError, setBcError] = useState(null);
+
+  // นับจำนวนผู้รับล่วงหน้าจาก users ที่โหลดมาแล้ว (Round 4b) — ไม่ยิง Request ใหม่
+  // ใช้ isPremiumActive ที่ Backend คำนวณมาให้ (ไม่ตัดสิน Premium เองฝั่ง Client)
+  function countRecipients(target) {
+    return users.filter((u) => {
+      if (target === 'premium') return u.isPremiumActive;
+      if (target === 'free') return !u.isPremiumActive;
+      return true; // 'all'
+    }).length;
+  }
+
+  // เปลี่ยนประเภทข้อความ → เติม Template ให้อัตโนมัติ (ล้าง Preview/ผลเดิม)
+  function handleTypeChange(e) {
+    const type = e.target.value;
+    setBcType(type);
+    setBcMessage(BROADCAST_TEMPLATES[type] ?? '');
+    setBcShowPreview(false);
+    setBcResult(null);
+  }
+
+  // ส่งจริง — เป็นขั้นที่ 2 ของ 2-Step Confirm (ขั้นแรก = ปุ่ม Preview ให้ตรวจข้อความ)
+  // ต้องผ่าน window.confirm ที่ระบุจำนวนคนก่อน ถึงจะยิง POST จริง (กันมือลั่น)
+  async function handleBroadcastSend() {
+    setBcError(null);
+
+    if (bcMessage.trim().length === 0) {
+      setBcError('กรุณาพิมพ์ข้อความก่อนส่ง');
+      return;
+    }
+    if (bcMessage.length > MAX_BROADCAST_LENGTH) {
+      setBcError(`ข้อความยาวเกิน ${MAX_BROADCAST_LENGTH} อักขระ`);
+      return;
+    }
+
+    const count = countRecipients(bcTarget);
+    const ok = window.confirm(`ยืนยันส่งข้อความหาผู้ใช้ ${count} คน?`);
+    if (!ok) return;
+
+    setBcSending(true);
+    setBcResult(null);
+    try {
+      const result = await apiPost('/api/v1/admin/broadcast', {
+        targetGroup: bcTarget,
+        messageType: bcType,
+        message: bcMessage,
+      });
+      setBcResult(result);
+    } catch (err) {
+      setBcError(`ส่งไม่สำเร็จ: ${err.message}`);
+    } finally {
+      setBcSending(false);
+    }
+  }
 
   if (!ready) {
     return (
@@ -252,6 +341,101 @@ function Admin() {
                 </tbody>
               </table>
             </div>
+          )}
+        </section>
+
+        {/* Section ประชาสัมพันธ์ / Broadcast (Round 4c) */}
+        <section className="dashboard-section">
+          <h2>📢 ประชาสัมพันธ์ / Broadcast</h2>
+
+          <div className="dashboard-filter">
+            <label htmlFor="bc-target">กลุ่มเป้าหมาย:</label>
+            <select
+              id="bc-target"
+              value={bcTarget}
+              onChange={(e) => {
+                setBcTarget(e.target.value);
+                setBcResult(null);
+              }}
+            >
+              {BROADCAST_TARGET_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+
+            <label htmlFor="bc-type">ประเภทข้อความ:</label>
+            <select id="bc-type" value={bcType} onChange={handleTypeChange}>
+              {BROADCAST_TYPE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <p className="dashboard-card-sub">
+            จะส่งหาผู้ใช้ในกลุ่มนี้ประมาณ <strong>{countRecipients(bcTarget)}</strong> คน
+            (นับจากรายชื่อที่โหลดในหน้านี้)
+          </p>
+
+          <textarea
+            rows={7}
+            value={bcMessage}
+            onChange={(e) => {
+              setBcMessage(e.target.value);
+              setBcResult(null);
+            }}
+            placeholder="พิมพ์ข้อความที่จะส่ง..."
+            style={{
+              width: '100%',
+              boxSizing: 'border-box',
+              padding: '0.75rem',
+              fontFamily: 'inherit',
+              fontSize: '0.95rem',
+              borderRadius: 8,
+              resize: 'vertical',
+            }}
+          />
+          <div className="dashboard-card-sub">
+            {bcMessage.length} / {MAX_BROADCAST_LENGTH} อักขระ
+          </div>
+
+          <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}>
+            <button
+              type="button"
+              className="dashboard-chip"
+              onClick={() => setBcShowPreview((v) => !v)}
+            >
+              {bcShowPreview ? 'ซ่อน Preview' : 'Preview'}
+            </button>
+            <button
+              type="button"
+              className="dashboard-logout-btn"
+              onClick={handleBroadcastSend}
+              disabled={bcSending || bcMessage.trim().length === 0}
+            >
+              {bcSending ? 'กำลังส่ง...' : 'ยืนยันส่ง'}
+            </button>
+          </div>
+
+          {bcShowPreview && (
+            <div style={{ marginTop: '0.75rem' }}>
+              <div className="dashboard-card-sub">ตัวอย่างข้อความที่จะส่งจริง:</div>
+              <pre className="dashboard-cmd" style={{ whiteSpace: 'pre-wrap' }}>
+                {bcMessage}
+              </pre>
+            </div>
+          )}
+
+          {bcError && <p className="dashboard-message error">{bcError}</p>}
+
+          {bcResult && (
+            <p className="dashboard-message">
+              ✅ ส่งเสร็จแล้ว — ผู้รับทั้งหมด {bcResult.totalRecipients} คน (สำเร็จ{' '}
+              {bcResult.successCount} / ล้มเหลว {bcResult.failureCount})
+            </p>
           )}
         </section>
       </div>

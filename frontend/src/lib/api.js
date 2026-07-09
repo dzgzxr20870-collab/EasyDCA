@@ -27,4 +27,32 @@ async function apiGet(path) {
   return response.json();
 }
 
-export { getToken, apiGet };
+// POST พร้อมแนบ Token/จัดการ 401 แบบเดียวกับ apiGet (Logic แนบ Token มีที่เดียว)
+// Error จาก Backend (เช่น 400 INVALID_MESSAGE) โยนเป็น Error(message = error code) ให้
+// Caller แสดงผลเองได้
+async function apiPost(path, body) {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${getToken()}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  // Token หมดอายุ/ไม่ถูกต้อง → เคลียร์แล้วบังคับ Login ใหม่ทันที (เหมือน apiGet)
+  if (response.status === 401) {
+    localStorage.removeItem(TOKEN_KEY);
+    window.location.href = '/';
+    throw new Error('UNAUTHORIZED');
+  }
+
+  if (!response.ok) {
+    const errBody = await response.json().catch(() => null);
+    throw new Error(errBody?.error || `Request failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+export { getToken, apiGet, apiPost };

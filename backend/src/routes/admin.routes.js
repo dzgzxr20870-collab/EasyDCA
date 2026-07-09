@@ -17,4 +17,8 @@ router.get('/users', adminController.listUsers);
 router.get('/payments', adminController.listPayments);
 router.get('/stats', adminController.getStats);
 
+// Broadcast (Round 4c) — ยิง Push หา User จริงจำนวนมาก (Write/Side-effect)
+// Validate + 2-Step Confirm ฝั่ง Frontend + Validate ซ้ำใน Controller ก่อนส่งจริง
+router.post('/broadcast', adminController.broadcast);
+
 module.exports = router;

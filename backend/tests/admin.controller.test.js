@@ -1,6 +1,15 @@
 jest.mock('../src/repositories/user.repository');
 jest.mock('../src/repositories/payment.repository');
 jest.mock('../src/repositories/asset.repository');
+// Mock broadcast.service ทั้งก้อน แต่คง Constant (TARGET_GROUPS/MESSAGE_TYPES/
+// MAX_MESSAGE_LENGTH) ให้ Controller ใช้ Validate ได้จริง (automock จะทำให้ Constant
+// หายกลายเป็น undefined → .includes พัง) — Logic การส่งจริงทดสอบใน broadcast.service.test
+jest.mock('../src/services/broadcast.service', () => ({
+  sendBroadcast: jest.fn(),
+  TARGET_GROUPS: ['all', 'free', 'premium'],
+  MESSAGE_TYPES: ['news', 'system_update', 'promotion', 'other'],
+  MAX_MESSAGE_LENGTH: 5000,
+}));
 // entitlement.service + thaiDate.util ไม่ Mock (Pure Logic ไม่มี DB Call) — ใช้ตัวจริง
 // เพื่อยืนยันว่า Controller เรียก isPremiumActive/bangkokYearMonth จริง ไม่คำนวณเอง
 // (Pattern เดียวกับ dashboard.controller.test ที่ใช้ entitlement ตัวจริง)
@@ -8,7 +17,8 @@ jest.mock('../src/repositories/asset.repository');
 const userRepository = require('../src/repositories/user.repository');
 const paymentRepository = require('../src/repositories/payment.repository');
 const assetRepository = require('../src/repositories/asset.repository');
-const { ping, listUsers, listPayments, getStats } = require('../src/controllers/admin.controller');
+const broadcastService = require('../src/services/broadcast.service');
+const { ping, listUsers, listPayments, getStats, broadcast } = require('../src/controllers/admin.controller');
 
 function mockRes() {
   const res = {};
@@ -193,6 +203,103 @@ describe('getStats', () => {
 
     const res = mockRes();
     await getStats({}, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith({ error: 'INTERNAL_ERROR' });
+  });
+});
+
+describe('broadcast', () => {
+  const adminReq = (body) => ({ user: { id: 'a1', lineUserId: 'Uadmin1', role: 'admin' }, body });
+
+  test('Body ถูกต้อง → เรียก service ด้วย sentBy จาก req.user.lineUserId แล้วคืนผลนับ', async () => {
+    broadcastService.sendBroadcast.mockResolvedValue({
+      totalRecipients: 5,
+      successCount: 4,
+      failureCount: 1,
+    });
+
+    const res = mockRes();
+    await broadcast(
+      adminReq({ targetGroup: 'free', messageType: 'promotion', message: '  ลด 50%  ' }),
+      res
+    );
+
+    expect(broadcastService.sendBroadcast).toHaveBeenCalledWith({
+      targetGroup: 'free',
+      messageType: 'promotion',
+      message: '  ลด 50%  ',
+      sentBy: 'Uadmin1',
+    });
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({ totalRecipients: 5, successCount: 4, failureCount: 1 });
+  });
+
+  test('targetGroup ไม่รู้จัก → 400 INVALID_TARGET_GROUP, ไม่เรียก service', async () => {
+    const res = mockRes();
+    await broadcast(adminReq({ targetGroup: 'vip', messageType: 'news', message: 'x' }), res);
+
+    expect(broadcastService.sendBroadcast).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({ error: 'INVALID_TARGET_GROUP' });
+  });
+
+  test('messageType ไม่รู้จัก → 400 INVALID_MESSAGE_TYPE', async () => {
+    const res = mockRes();
+    await broadcast(adminReq({ targetGroup: 'all', messageType: 'spam', message: 'x' }), res);
+
+    expect(broadcastService.sendBroadcast).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({ error: 'INVALID_MESSAGE_TYPE' });
+  });
+
+  test('message ว่าง (มีแต่ช่องว่าง) → 400 INVALID_MESSAGE', async () => {
+    const res = mockRes();
+    await broadcast(adminReq({ targetGroup: 'all', messageType: 'news', message: '   ' }), res);
+
+    expect(broadcastService.sendBroadcast).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({ error: 'INVALID_MESSAGE' });
+  });
+
+  test('message ไม่ใช่ String → 400 INVALID_MESSAGE', async () => {
+    const res = mockRes();
+    await broadcast(adminReq({ targetGroup: 'all', messageType: 'news', message: 123 }), res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({ error: 'INVALID_MESSAGE' });
+  });
+
+  test('message ยาวเกิน 5000 อักขระ → 400 MESSAGE_TOO_LONG', async () => {
+    const res = mockRes();
+    await broadcast(
+      adminReq({ targetGroup: 'all', messageType: 'news', message: 'ก'.repeat(5001) }),
+      res
+    );
+
+    expect(broadcastService.sendBroadcast).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({ error: 'MESSAGE_TOO_LONG' });
+  });
+
+  test('message ยาวพอดี 5000 อักขระ → ผ่าน Validate (เรียก service)', async () => {
+    broadcastService.sendBroadcast.mockResolvedValue({ totalRecipients: 0, successCount: 0, failureCount: 0 });
+
+    const res = mockRes();
+    await broadcast(
+      adminReq({ targetGroup: 'all', messageType: 'news', message: 'ก'.repeat(5000) }),
+      res
+    );
+
+    expect(broadcastService.sendBroadcast).toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  test('service throw → 500 INTERNAL_ERROR', async () => {
+    broadcastService.sendBroadcast.mockRejectedValue(new Error('boom'));
+
+    const res = mockRes();
+    await broadcast(adminReq({ targetGroup: 'all', messageType: 'news', message: 'x' }), res);
 
     expect(res.status).toHaveBeenCalledWith(500);
     expect(res.json).toHaveBeenCalledWith({ error: 'INTERNAL_ERROR' });
