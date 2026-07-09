@@ -16,6 +16,7 @@ const { scheduleExpirePayments } = require('./jobs/paymentExpiry.job');
 const { schedulePlanDowngrade } = require('./jobs/planDowngrade.job');
 const { scheduleReminderPush } = require('./jobs/dcaReminder.job');
 const { schedulePurgeStaleSetupSessions } = require('./jobs/reminderSetupCleanup.job');
+const { schedulePurgeStaleBulkImportSessions } = require('./jobs/bulkImportCleanup.job');
 const {
   scheduleWeeklySummaryPush,
   scheduleMonthlySummaryPush,
@@ -80,6 +81,9 @@ app.listen(config.app.port, () => {
   scheduleReminderPush();
   // Purge Reminder Setup Session ที่หมดอายุค้าง ตี 3 (reminderSetupCleanup.job.js)
   schedulePurgeStaleSetupSessions();
+  // Purge Bulk Import Session ที่หมดอายุค้าง ตี 3 (bulkImportCleanup.job.js —
+  // Phase 3 Round 6) — Pending Batch เองถูก Cron pendingCleanup.job.js Cover ให้แล้ว
+  schedulePurgeStaleBulkImportSessions();
   // Push สรุปพอร์ตรายสัปดาห์ (อาทิตย์ 08:00) และรายเดือน (วันที่ 1 08:00)
   // Asia/Bangkok (portfolioSummary.job.js)
   scheduleWeeklySummaryPush();

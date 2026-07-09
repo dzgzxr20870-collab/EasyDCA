@@ -331,3 +331,108 @@ describe('commandParser.service', () => {
     });
   });
 });
+
+describe('IMPORT_PORTFOLIO — เข้าโหมดนำเข้าพอร์ต', () => {
+  test('"นำเข้าพอร์ต" → COMMANDS.IMPORT_PORTFOLIO', () => {
+    expect(parseCommand('นำเข้าพอร์ต')).toEqual({ command: COMMANDS.IMPORT_PORTFOLIO, params: {} });
+  });
+
+  test('Alias "นำเข้าพอต" / "import" → เหมือนกัน', () => {
+    expect(parseCommand('นำเข้าพอต')).toEqual({ command: COMMANDS.IMPORT_PORTFOLIO, params: {} });
+    expect(parseCommand('import')).toEqual({ command: COMMANDS.IMPORT_PORTFOLIO, params: {} });
+  });
+
+  test('มีข้อความอื่นต่อท้าย → ไม่ Match (ต้องพิมพ์คำสั่งเดี่ยวๆ)', () => {
+    expect(parseCommand('นำเข้าพอร์ต BTC')).toEqual({ command: COMMANDS.UNKNOWN, params: {} });
+  });
+});
+
+describe('parseBulkImportLines — Batch นำเข้าพอร์ตหลายบรรทัด (Phase 3 Round 6)', () => {
+  const { parseBulkImportLines } = require('../src/services/commandParser.service');
+
+  test('ทุกบรรทัดผ่าน (THB + USD ปนกัน, มีวันที่ + ไม่มีวันที่ปนกัน)', () => {
+    const text = [
+      'BTC 0.5 ต้นทุน 1500000',
+      'ETH 2 ต้นทุน 80000 วันที่ 01/03/2569',
+      'MSFT 3 ต้นทุน 300 USD',
+    ].join('\n');
+
+    const result = parseBulkImportLines(text);
+
+    expect(result.ok).toBe(true);
+    expect(result.empty).toBe(false);
+    expect(result.errors).toEqual([]);
+    expect(result.items).toEqual([
+      { line: 1, symbol: 'BTC', quantity: 0.5, pricePerUnit: 1500000 },
+      { line: 2, symbol: 'ETH', quantity: 2, pricePerUnit: 80000, date: '2026-03-01' },
+      { line: 3, symbol: 'MSFT', quantity: 3, pricePerUnit: 300, priceCurrency: 'USD' },
+    ]);
+  });
+
+  test('1 บรรทัดผิด Format จาก 3 บรรทัด → Reject ทั้ง Batch ระบุเลขบรรทัดถูกต้อง', () => {
+    const text = ['BTC 0.5 ต้นทุน 1500000', 'ETH สอง ต้นทุน 80000', 'MSFT 3 ต้นทุน 300'].join('\n');
+
+    const result = parseBulkImportLines(text);
+
+    expect(result.ok).toBe(false);
+    expect(result.empty).toBe(false);
+    expect(result.items).toEqual([]);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0].line).toBe(2);
+  });
+
+  test('มีบรรทัดผิดมากกว่า 1 บรรทัดพร้อมกัน → ระบุครบทุกบรรทัดที่ผิด ไม่ใช่แค่บรรทัดแรก', () => {
+    const text = ['BTC สอง ต้นทุน 100', 'ETH 2 ต้นทุน 80000', 'MSFT 3 ต้นทุน ไม่ใช่ตัวเลข'].join('\n');
+
+    const result = parseBulkImportLines(text);
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.map((e) => e.line)).toEqual([1, 3]);
+  });
+
+  test('วันที่รูปแบบผิด (32/13/2569) → Error ระบุบรรทัดพร้อมเหตุผลเรื่องวันที่', () => {
+    const result = parseBulkImportLines('BTC 0.5 ต้นทุน 1500000 วันที่ 32/13/2569');
+
+    expect(result.ok).toBe(false);
+    expect(result.errors).toEqual([{ line: 1, reason: expect.stringContaining('วันที่') }]);
+  });
+
+  test('จำนวนหรือต้นทุนเป็น 0 หรือติดลบ → Error', () => {
+    const result = parseBulkImportLines('BTC 0 ต้นทุน 1500000');
+    expect(result.ok).toBe(false);
+    expect(result.errors[0].line).toBe(1);
+  });
+
+  test('Batch ว่างเปล่า (string ว่าง) → empty:true, ไม่ใช่ errors', () => {
+    const result = parseBulkImportLines('');
+    expect(result).toEqual({ ok: false, empty: true, errors: [], items: [] });
+  });
+
+  test('Batch มีแต่บรรทัดว่าง/Whitespace → empty:true', () => {
+    const result = parseBulkImportLines('\n   \n\t\n');
+    expect(result.ok).toBe(false);
+    expect(result.empty).toBe(true);
+  });
+
+  test('บรรทัดว่างคั่นกลางระหว่างรายการ → ข้ามเงียบๆ ไม่นับเป็น Error, เลขบรรทัดยังถูกต้อง', () => {
+    const text = ['BTC 0.5 ต้นทุน 1500000', '', 'ETH 2 ต้นทุน 80000'].join('\n');
+    const result = parseBulkImportLines(text);
+
+    expect(result.ok).toBe(true);
+    expect(result.items).toEqual([
+      { line: 1, symbol: 'BTC', quantity: 0.5, pricePerUnit: 1500000 },
+      { line: 3, symbol: 'ETH', quantity: 2, pricePerUnit: 80000 },
+    ]);
+  });
+
+  test('เลขไทย + Comma ในบรรทัด Batch → Parse ได้เหมือนคำสั่งเดี่ยว', () => {
+    const result = parseBulkImportLines('BTC ๐.๕ ต้นทุน 1,500,000');
+    expect(result.ok).toBe(true);
+    expect(result.items[0]).toEqual({ line: 1, symbol: 'BTC', quantity: 0.5, pricePerUnit: 1500000 });
+  });
+
+  test('rawText ไม่ใช่ string → empty:true (ไม่ throw)', () => {
+    expect(parseBulkImportLines(null)).toEqual({ ok: false, empty: true, errors: [], items: [] });
+    expect(parseBulkImportLines(undefined)).toEqual({ ok: false, empty: true, errors: [], items: [] });
+  });
+});

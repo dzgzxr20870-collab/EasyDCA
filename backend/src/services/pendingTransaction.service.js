@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const pendingRepository = require('../repositories/pendingTransaction.repository');
 const transactionService = require('./transaction.service');
 const commandParser = require('./commandParser.service');
@@ -178,6 +179,111 @@ async function cancelPending(pendingId) {
   return cancelled;
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// Bulk Import Batch (Phase 3 Round 6 — นำเข้าพอร์ตแบบ Multi-line)
+// ═══════════════════════════════════════════════════════════════════════
+// "ไม่ Validate ที่นี่" — Caller (bulkImport.service.validateBatch) ต้อง Validate
+// ทุกรายการผ่าน transactionService.validateBuy มาให้ครบก่อนเรียก createBatch เสมอ
+// (แยก Validate ออกจาก Persist ตาม Requirement: ถ้าบรรทัดไหนไม่ผ่าน ต้องปฏิเสธ
+// ทั้ง Batch ก่อนเขียน DB แม้แต่แถวเดียว — createBatch คือขั้น "เขียนจริง" เท่านั้น)
+
+// สร้าง Batch ใหม่ — Insert เป็นหลายแถวใน pending_transactions ผูกด้วย batch_id
+// เดียวกัน (migration 008) เพื่อให้ Postback ยืนยัน/ยกเลิกทั้งก้อนใช้ปุ่มเดียวได้
+// validatedItems: [{ params, amounts, assetType }] จาก validateBuy ต่อรายการ —
+// commandType เป็น 'buy' เสมอ (Bulk Import คือการนำเข้าพอร์ตเริ่มต้น = รายการซื้อ
+// ทั้งหมด ไม่รองรับ 'sell' ในรอบนี้)
+async function createBatch(userId, validatedItems) {
+  const batchId = crypto.randomUUID();
+
+  const pendings = [];
+  for (const { params, amounts, assetType } of validatedItems) {
+    const pending = await pendingRepository.create({
+      userId,
+      portfolioId: params.portfolioId ?? null,
+      commandType: 'buy',
+      assetSymbol: params.symbol,
+      assetName: params.name ?? null,
+      assetType,
+      quantity: amounts.quantity,
+      pricePerUnit: amounts.pricePerUnit,
+      amountThb: amounts.amountThb,
+      feeThb: params.feeThb ?? 0,
+      txnDate: params.date ?? transactionService.todayInBangkok(),
+      batchId,
+    });
+
+    pendings.push({ ...pending, priceSource: amounts.priceSource, fx: amounts.fx ?? null });
+  }
+
+  return { batchId, pendings };
+}
+
+// ยืนยัน Batch ทั้งก้อน (ปุ่ม "ยืนยัน" บน Preview) — วนเรียก confirmPending() เดิม
+// ทีละแถว (Reuse Claim + processBuyCommand + attachTransaction ทั้งหมด ไม่เขียน
+// Insert Logic ใหม่ซ้ำ) แบบ Best-effort: 1 รายการล้มเหลว (เช่น DB Error ชั่วคราว)
+// ไม่ทำให้รายการอื่นในก้อนเดียวกันหยุดตาม — เก็บผลสำเร็จ/ล้มเหลวแยกกันคืนกลับ
+//
+// เหตุผลที่เลือก Best-effort แทน All-or-nothing: Supabase JS Client (PostgREST)
+// ไม่รองรับ Multi-statement DB Transaction จริง — All-or-nothing ต้องเขียน
+// Postgres RPC (SECURITY DEFINER) ใหม่ทั้งหมด ซึ่งตัดสินใจร่วมกับผู้ใช้แล้วว่า
+// Scope ใหญ่เกินไปสำหรับรอบนี้ (ดู Deviations ในรายงาน)
+//
+// throw BATCH_NOT_FOUND ถ้าไม่พบแถวใดเลยของ batchId นี้ (Postback ปลอม/Batch ถูก
+// Cron Purge ไปแล้ว) — ต่างจากรายการที่ resolve ไปแล้ว (ยัง findByBatchId เจอ
+// แต่ confirmPending แต่ละแถวจะ throw PENDING_ALREADY_RESOLVED/PENDING_EXPIRED เอง
+// ซึ่งถูกจับเป็น failed แยกรายการตามปกติ ไม่ throw ระดับ Batch)
+async function confirmBatch(batchId) {
+  const rows = await pendingRepository.findByBatchId(batchId);
+
+  if (rows.length === 0) {
+    throw new PendingTransactionError('BATCH_NOT_FOUND', `Batch ${batchId} not found`, { batchId });
+  }
+
+  const succeeded = [];
+  const failed = [];
+
+  for (const row of rows) {
+    try {
+      const { result } = await confirmPending(row.id);
+      succeeded.push(result);
+    } catch (err) {
+      failed.push({
+        symbol: row.assetSymbol,
+        code: err.code ?? 'INTERNAL_ERROR',
+        message: err.message,
+      });
+    }
+  }
+
+  return { total: rows.length, succeeded, failed };
+}
+
+// ยกเลิก Batch ทั้งก้อน (ปุ่ม "ยกเลิก" บน Preview) — วนเรียก cancelPending() เดิม
+// ทีละแถว Best-effort เช่นเดียวกับ confirmBatch (Idempotent ต่อแถวที่ resolve
+// ไปแล้ว — cancelPending เดิม throw PENDING_ALREADY_RESOLVED ซึ่งถูกจับเป็น
+// failed แยกรายการ ไม่ทำให้แถวอื่นในก้อนเดียวกันไม่ถูกยกเลิกตาม)
+async function cancelBatch(batchId) {
+  const rows = await pendingRepository.findByBatchId(batchId);
+
+  if (rows.length === 0) {
+    throw new PendingTransactionError('BATCH_NOT_FOUND', `Batch ${batchId} not found`, { batchId });
+  }
+
+  let cancelledCount = 0;
+  const failed = [];
+
+  for (const row of rows) {
+    try {
+      await cancelPending(row.id);
+      cancelledCount += 1;
+    } catch (err) {
+      failed.push({ id: row.id, code: err.code ?? 'INTERNAL_ERROR' });
+    }
+  }
+
+  return { total: rows.length, cancelled: cancelledCount, failed };
+}
+
 // ── สำหรับ Cron (การ Schedule จะทำในขั้น Controller/Job ถัดไป) ──────────────
 // ทำเครื่องหมาย Pending ที่หมดอายุแล้วทั้งหมดเป็น 'expired'
 async function expireOverduePending() {
@@ -198,4 +304,7 @@ module.exports = {
   cancelPending,
   expireOverduePending,
   purgeOldPending,
+  createBatch,
+  confirmBatch,
+  cancelBatch,
 };

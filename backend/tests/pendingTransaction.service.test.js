@@ -10,6 +10,9 @@ const {
   cancelPending,
   expireOverduePending,
   purgeOldPending,
+  createBatch,
+  confirmBatch,
+  cancelBatch,
   PendingTransactionError,
 } = require('../src/services/pendingTransaction.service');
 
@@ -330,5 +333,143 @@ describe('Cron helpers', () => {
     // cutoff ต้องอยู่ราว 24 ชม. ก่อนหน้า (น้อยกว่าเวลาปัจจุบันแน่นอน)
     expect(cutoffMs).toBeLessThan(before);
     expect(before - cutoffMs).toBeGreaterThanOrEqual(24 * 60 * 60 * 1000 - 5000);
+  });
+});
+
+describe('createBatch (Phase 3 Round 6 — Bulk Import)', () => {
+  test('Insert หลายแถวพร้อมกัน ผูก batch_id เดียวกันทุกแถว (commandType เสมอ = buy)', async () => {
+    const validatedItems = [
+      {
+        params: { symbol: 'BTC', date: '2026-07-10' },
+        amounts: { quantity: 0.5, pricePerUnit: 1500000, amountThb: 750000, priceSource: 'user' },
+        assetType: 'crypto',
+      },
+      {
+        params: { symbol: 'ETH', date: '2026-03-01' },
+        amounts: { quantity: 2, pricePerUnit: 80000, amountThb: 160000, priceSource: 'user' },
+        assetType: null,
+      },
+    ];
+
+    const result = await createBatch(USER_ID, validatedItems);
+
+    expect(pendingRepository.create).toHaveBeenCalledTimes(2);
+    const [call1, call2] = pendingRepository.create.mock.calls;
+    expect(call1[0]).toMatchObject({
+      userId: USER_ID,
+      commandType: 'buy',
+      assetSymbol: 'BTC',
+      assetType: 'crypto',
+      quantity: 0.5,
+      txnDate: '2026-07-10',
+      batchId: result.batchId,
+    });
+    expect(call2[0]).toMatchObject({
+      assetSymbol: 'ETH',
+      assetType: null,
+      txnDate: '2026-03-01',
+      batchId: result.batchId,
+    });
+    // ทั้งสองแถวใช้ batch_id เดียวกัน
+    expect(call1[0].batchId).toBe(call2[0].batchId);
+    expect(result.pendings).toHaveLength(2);
+  });
+
+  test('ไม่ระบุวันที่ในบรรทัด → ใช้ todayInBangkok() ของ transactionService (Reuse เดิม)', async () => {
+    await createBatch(USER_ID, [
+      {
+        params: { symbol: 'BTC' },
+        amounts: { quantity: 1, pricePerUnit: 100, amountThb: 100 },
+        assetType: 'crypto',
+      },
+    ]);
+
+    expect(pendingRepository.create.mock.calls[0][0].txnDate).toBe('2026-07-02');
+  });
+});
+
+describe('confirmBatch (Phase 3 Round 6 — Best-effort)', () => {
+  const BATCH_ID = 'batch-uuid-1';
+
+  test('ทุกแถวสำเร็จ → succeeded ครบ, failed ว่าง', async () => {
+    pendingRepository.findByBatchId.mockResolvedValue([
+      { id: 'p1', assetSymbol: 'BTC', status: 'pending', commandType: 'buy' },
+      { id: 'p2', assetSymbol: 'ETH', status: 'pending', commandType: 'buy' },
+    ]);
+    pendingRepository.claimForConfirm.mockImplementation(async (id) => ({
+      id,
+      commandType: 'buy',
+      userId: USER_ID,
+      assetSymbol: id === 'p1' ? 'BTC' : 'ETH',
+      quantity: 1,
+      pricePerUnit: 100,
+      feeThb: 0,
+      txnDate: '2026-07-10',
+      portfolioId: null,
+    }));
+    transactionService.processBuyCommand.mockResolvedValue({ transactionId: 'tx-x', symbol: 'BTC' });
+
+    const result = await confirmBatch(BATCH_ID);
+
+    expect(pendingRepository.findByBatchId).toHaveBeenCalledWith(BATCH_ID);
+    expect(result.total).toBe(2);
+    expect(result.succeeded).toHaveLength(2);
+    expect(result.failed).toEqual([]);
+  });
+
+  test('1 แถวล้มเหลว (DB Error ชั่วคราว) → แถวอื่นยังสำเร็จต่อ ไม่หยุดทั้ง Batch', async () => {
+    pendingRepository.findByBatchId.mockResolvedValue([
+      { id: 'p1', assetSymbol: 'BTC', status: 'pending', commandType: 'buy' },
+      { id: 'p2', assetSymbol: 'ETH', status: 'pending', commandType: 'buy' },
+    ]);
+    pendingRepository.claimForConfirm.mockImplementation(async (id) => ({
+      id,
+      commandType: 'buy',
+      userId: USER_ID,
+      assetSymbol: id === 'p1' ? 'BTC' : 'ETH',
+      quantity: 1,
+      pricePerUnit: 100,
+      feeThb: 0,
+      txnDate: '2026-07-10',
+      portfolioId: null,
+    }));
+    transactionService.processBuyCommand
+      .mockRejectedValueOnce(Object.assign(new Error('db blip'), { code: 'INTERNAL_ERROR' }))
+      .mockResolvedValueOnce({ transactionId: 'tx-2', symbol: 'ETH' });
+
+    const result = await confirmBatch(BATCH_ID);
+
+    expect(result.total).toBe(2);
+    expect(result.succeeded).toHaveLength(1);
+    expect(result.failed).toEqual([{ symbol: 'BTC', code: 'INTERNAL_ERROR', message: 'db blip' }]);
+  });
+
+  test('batchId ไม่พบแถวใดเลย → throw BATCH_NOT_FOUND', async () => {
+    pendingRepository.findByBatchId.mockResolvedValue([]);
+
+    await expect(confirmBatch(BATCH_ID)).rejects.toMatchObject({ code: 'BATCH_NOT_FOUND' });
+  });
+});
+
+describe('cancelBatch (Phase 3 Round 6)', () => {
+  const BATCH_ID = 'batch-uuid-1';
+
+  test('ยกเลิกทุกแถวในก้อน → cancelled ครบ, ไม่บันทึกอะไรลงพอร์ต', async () => {
+    pendingRepository.findByBatchId.mockResolvedValue([
+      { id: 'p1', status: 'pending' },
+      { id: 'p2', status: 'pending' },
+    ]);
+    pendingRepository.markCancelled.mockResolvedValue({ status: 'cancelled' });
+
+    const result = await cancelBatch(BATCH_ID);
+
+    expect(pendingRepository.markCancelled).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ total: 2, cancelled: 2, failed: [] });
+    expect(transactionService.processBuyCommand).not.toHaveBeenCalled();
+  });
+
+  test('batchId ไม่พบแถวใดเลย → throw BATCH_NOT_FOUND', async () => {
+    pendingRepository.findByBatchId.mockResolvedValue([]);
+    await expect(cancelBatch(BATCH_ID)).rejects.toMatchObject({ code: 'BATCH_NOT_FOUND' });
   });
 });

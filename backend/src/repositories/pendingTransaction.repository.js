@@ -19,6 +19,7 @@ function toPending(row) {
     amountThb: row.amount_thb,
     feeThb: row.fee_thb,
     txnDate: row.txn_date,
+    batchId: row.batch_id,
     status: row.status,
     expiresAt: row.expires_at,
     resolvedAt: row.resolved_at,
@@ -45,6 +46,10 @@ async function create(data) {
       amount_thb: data.amountThb,
       fee_thb: data.feeThb ?? 0,
       txn_date: data.txnDate,
+      // batch_id (migration 008) — nullable, ผูก N แถวที่มาจาก Bulk Import Batch
+      // เดียวกัน (Phase 3 Round 6) เพื่อให้ Postback ยืนยัน/ยกเลิกทั้งก้อนใช้ค่านี้
+      // ค้นหา ไม่ส่งมา (undefined) = NULL ตามปกติของ Flow ซื้อ/ขายทีละรายการเดิม
+      batch_id: data.batchId ?? null,
     })
     .select('*')
     .single();
@@ -68,6 +73,22 @@ async function findById(id) {
   }
 
   return toPending(data);
+}
+
+// ทุกแถวที่มาจาก Bulk Import Batch เดียวกัน (Phase 3 Round 6 — migration 008)
+// ใช้ตอน Confirm/Cancel ทั้งก้อนด้วยปุ่มเดียว (Postback พก batch_id ตัวเดียว
+// แทนที่จะพก pending id ทีละตัวซึ่งจะเกิน Limit ความยาวของ LINE Postback data)
+async function findByBatchId(batchId) {
+  const { data, error } = await supabaseAdmin
+    .from('pending_transactions')
+    .select('*')
+    .eq('batch_id', batchId);
+
+  if (error) {
+    throw new Error(`Failed to find pending transactions for batch ${batchId}: ${error.message}`);
+  }
+
+  return (data ?? []).map(toPending);
 }
 
 // เปลี่ยนสถานะ pending → confirmed แบบ Atomic (กัน Double-tap ปุ่มยืนยัน)
@@ -189,6 +210,7 @@ async function purgeResolvedBefore(cutoffIso) {
 module.exports = {
   create,
   findById,
+  findByBatchId,
   claimForConfirm,
   attachTransaction,
   markCancelled,

@@ -13,6 +13,8 @@ const entitlement = require('../services/entitlement.service');
 const symbolRegistry = require('../services/symbolRegistry.service');
 const lineService = require('../services/line.service');
 const storageService = require('../services/storage.service');
+const bulkImportSession = require('../services/bulkImportSession.service');
+const bulkImportService = require('../services/bulkImport.service');
 const flexMessage = require('../utils/flexMessage.util');
 
 const { COMMANDS } = commandParser;
@@ -131,6 +133,14 @@ async function routeCommand(user, parsed) {
       // REMINDER_NOT_FOUND ให้ catch แปลเป็นข้อความไทย
       const deleted = await reminderService.deleteReminder(user.id, parsed.params.symbol);
       return flexMessage.buildReminderDeletedMessage(deleted.symbol);
+    }
+
+    // ── Bulk Import (Phase 3 Round 6) — ข้อความที่ 1 ของ Flow 2 ข้อความ ─────────
+    // เริ่ม Session รอรับ Batch (ข้อความถัดไปของ User คนนี้) แล้วอธิบาย Format
+    // + ตัวอย่างให้พิมพ์ต่อ (routeText เป็นผู้ดักข้อความที่ 2 ด้วย Session นี้)
+    case COMMANDS.IMPORT_PORTFOLIO: {
+      await bulkImportSession.startSession(user.id);
+      return flexMessage.buildBulkImportInstructionsMessage();
     }
 
     case COMMANDS.UNKNOWN:
@@ -336,6 +346,20 @@ async function routePostback(user, data) {
       return flexMessage.buildPaymentNotifySubmittedMessage();
     }
 
+    // ── Bulk Import (Phase 3 Round 6) — ปุ่มยืนยัน/ยกเลิก Preview ทั้ง Batch ─────
+    // batchId (ไม่ใช่ pendingId) — ผูก N แถว pending_transactions ที่มาจาก Batch
+    // เดียวกัน (migration 008) ปุ่มเดียวจัดการทั้งก้อน — Error (BATCH_NOT_FOUND
+    // ถ้า Batch ไม่พบเลย) ทะลุขึ้นไปให้ replyWithError แปลไทยตามปกติ
+    case 'confirm_bulk_import': {
+      const result = await bulkImportService.confirmBatch(params.get('batchId'));
+      return flexMessage.buildBulkImportConfirmedMessage(result);
+    }
+
+    case 'cancel_bulk_import': {
+      await bulkImportService.cancelBatch(params.get('batchId'));
+      return flexMessage.buildCancelledMessage();
+    }
+
     // ── ปุ่ม Dashboard (Rich Menu) → ส่งลิงก์เปิด LIFF Dashboard ────────────────
     // ประกอบ URL จาก config.liff.id (ไม่ Hardcode) — Fallback ไป FRONTEND_URL
     // ถ้ายังไม่ได้ตั้ง LIFF_ID
@@ -388,8 +412,38 @@ async function routeText(user, text) {
     }
   }
 
+  // Bulk Import (Phase 3 Round 6) — ข้อความที่ 2 ของ Flow (Batch หลายบรรทัด)
+  // ตรวจแยกจาก Reminder Session ข้างต้น (คนละตาราง คนละ Flow) — ถ้า Reminder
+  // Session ข้างบน Match Step ได้แล้วจะ Return ไปก่อนถึงตรงนี้เสมอ
+  const bulkSession = await bulkImportSession.getCurrentSession(user.id);
+  if (bulkSession) {
+    return handleBulkImportBatchText(user, text);
+  }
+
   // ไม่เข้าเงื่อนไข Flow → ตอบข้อความ "ไม่เข้าใจคำสั่ง" ตามปกติ
   return flexMessage.buildUnknownCommandMessage();
+}
+
+// ประมวลผลข้อความที่ 2 ของ Flow นำเข้าพอร์ต (Batch หลายบรรทัด) — เรียก
+// bulkImportService.previewBatch (Parse + Validate + Persist Pending Batch ในทีเดียว)
+// ล้าง Session เฉพาะตอนสำเร็จเท่านั้น — Parse/Validate ไม่ผ่าน "ไม่ลบ" Session
+// เพื่อให้ผู้ใช้ส่ง Batch แก้ไขใหม่ได้ทันทีโดยไม่ต้องพิมพ์ "นำเข้าพอร์ต" ซ้ำ
+// (Pattern เดียวกับ reminderSetupFlow.handleAmountEntered ตอน INVALID_AMOUNT)
+async function handleBulkImportBatchText(user, text) {
+  const result = await bulkImportService.previewBatch(user.id, text, {
+    plan: user.plan,
+    planExpiresAt: user.planExpiresAt,
+  });
+
+  if (!result.ok) {
+    if (result.empty) {
+      return flexMessage.buildBulkImportEmptyMessage();
+    }
+    return flexMessage.buildBulkImportRejectedMessage(result.errors);
+  }
+
+  await bulkImportSession.clearSession(user.id);
+  return flexMessage.buildBulkImportPreviewMessage(result);
 }
 
 // แปล Error เป็นข้อความไทยแล้วตอบกลับ (ใช้ร่วมกันทั้ง Text และ Postback)

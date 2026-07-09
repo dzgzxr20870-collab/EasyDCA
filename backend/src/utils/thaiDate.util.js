@@ -95,6 +95,51 @@ function bangkokYearMonth(value) {
   return `${get('year')}-${get('month')}`;
 }
 
+// ── Parse วันที่ที่ผู้ใช้พิมพ์เอง "DD/MM/YYYY" (Phase 3 Round 6 — Bulk Import) ──
+// ต่างจาก formatThaiDate (ค.ศ.→พ.ศ. ทางเดียวสำหรับแสดงผล): ฟังก์ชันนี้ทำทางกลับ
+// (รับ Input ผู้ใช้ → ISO ค.ศ.) และต้องเดาว่าปีที่พิมพ์เป็น พ.ศ. หรือ ค.ศ.
+
+// ปี ค.ศ. ของธุรกรรมจริงไม่มีทางเกิน 2100 ในเร็วๆ นี้ ส่วนปี พ.ศ. ปัจจุบันอยู่ที่
+// 2568-2569 — ใช้ 2100 เป็นเส้นแบ่งที่ปลอดภัย (>= ถือเป็น พ.ศ. แล้วลบ 543)
+const BUDDHIST_ERA_THRESHOLD = 2100;
+
+// จำนวนวันของแต่ละเดือน (Index 0 = มกราคม) — เดือน 2 (กุมภาพันธ์) คำนวณปีอธิกสุรทิน
+// แยกต่างหากด้วย isLeapYear ด้านล่าง ไม่ Hardcode 28/29 ตรงๆ
+const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+function isLeapYear(year) {
+  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+}
+
+function daysInMonth(year, month) {
+  if (month === 2 && isLeapYear(year)) return 29;
+  return DAYS_IN_MONTH[month - 1];
+}
+
+// Parse "DD/MM/YYYY" (รองรับ D/M หลักเดียว, ปีต้อง 4 หลักเสมอกันตีความปีผิด) เป็น
+// ISO 'YYYY-MM-DD' (ค.ศ. เสมอ ตรงกับ transactions.date ที่เป็น DATE column)
+// คืน null ถ้ารูปแบบผิดหรือวันที่ไม่มีอยู่จริง (เช่น 31/02/2569) — ไม่เดา/ไม่ปัดเอง
+function parseDateInput(raw) {
+  if (typeof raw !== 'string') return null;
+
+  const match = raw.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!match) return null;
+
+  const day = Number(match[1]);
+  const month = Number(match[2]);
+  let year = Number(match[3]);
+
+  if (year >= BUDDHIST_ERA_THRESHOLD) {
+    year -= 543;
+  }
+
+  if (month < 1 || month > 12) return null;
+  if (day < 1 || day > daysInMonth(year, month)) return null;
+
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${year}-${pad(month)}-${pad(day)}`;
+}
+
 module.exports = {
   THAI_DAY_NAMES,
   THAI_MONTH_NAMES,
@@ -106,4 +151,5 @@ module.exports = {
   lastDayOfMonthOf,
   formatThaiDate,
   bangkokYearMonth,
+  parseDateInput,
 };

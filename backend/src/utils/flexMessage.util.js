@@ -73,12 +73,22 @@ const ERROR_MESSAGES = {
   PAYMENT_NOT_CONFIGURED: 'ระบบชำระเงินยังไม่พร้อมใช้งานในขณะนี้ กรุณาลองใหม่ภายหลังหรือติดต่อทีมงาน',
   SATANG_POOL_EXHAUSTED: 'ขณะนี้มีผู้ทำรายการพร้อมกันจำนวนมาก กรุณาลองกดอีกครั้งในอีกสักครู่',
   ALLOCATION_CONFLICT: 'ขณะนี้มีผู้ทำรายการพร้อมกันจำนวนมาก กรุณาลองกดอีกครั้งในอีกสักครู่',
+  // Bulk Import (bulkImport.service / pendingTransaction.service — Phase 3 Round 6)
+  BATCH_NOT_FOUND:
+    'ไม่พบรายการนำเข้าพอร์ตนี้ อาจหมดอายุหรือถูกดำเนินการไปแล้ว กรุณาพิมพ์ "นำเข้าพอร์ต" เพื่อเริ่มใหม่',
 };
 
 // Postback data encoding สำหรับปุ่มในข้อความ Preview — Controller ถอดด้วย
 // URLSearchParams รูปแบบ "action=<confirm|edit|cancel>&pendingId=<uuid>"
 function postbackData(action, pendingId) {
   return `action=${action}&pendingId=${pendingId}`;
+}
+
+// Postback data สำหรับปุ่มยืนยัน/ยกเลิก Bulk Import Batch ทั้งก้อน (Phase 3 Round 6)
+// พก batchId ตัวเดียวแทน pendingId หลายตัว (กันเกิน Limit ความยาว Postback data
+// ของ LINE เมื่อ Batch มีหลายรายการ — ดู migration 008)
+function postbackDataBatch(action, batchId) {
+  return `action=${action}&batchId=${batchId}`;
 }
 
 function formatNumber(value) {
@@ -1351,6 +1361,237 @@ function buildUnknownCommandMessage() {
   });
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// Bulk Import (Phase 3 Round 6 — นำเข้าพอร์ตแบบ Multi-line)
+// ═══════════════════════════════════════════════════════════════════════
+
+// ข้อความที่ 1 ของ Flow — ตอบทันทีที่พิมพ์ "นำเข้าพอร์ต" อธิบาย Format + ตัวอย่าง
+// (bulkImportSession Service เป็นผู้เริ่ม Session รอรับ Batch คู่กับข้อความนี้)
+function buildBulkImportInstructionsMessage() {
+  return bubble({
+    headerText: '📥 นำเข้าพอร์ต',
+    headerColor: COLOR.info,
+    headerBg: COLOR.profitBg,
+    bodyContents: [
+      textLine('พิมพ์รายการที่ต้องการนำเข้า บรรทัดละ 1 รายการ ส่งเป็นข้อความเดียว', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      textLine('รูปแบบ: SYMBOL จำนวน ต้นทุน ราคาต่อหน่วย [วันที่ DD/MM/YYYY]', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+      separator(),
+      textLine('BTC 0.5 ต้นทุน 1500000', { size: 'sm', color: COLOR.textSecondary }),
+      textLine('ETH 2 ต้นทุน 80000 วันที่ 01/03/2569', { size: 'sm', color: COLOR.textSecondary }),
+      textLine('MSFT 3 ต้นทุน 300 USD', { size: 'sm', color: COLOR.textSecondary }),
+      separator(),
+      textLine('ไม่ระบุวันที่ = ใช้วันนี้ • ระบุ USD ท้ายราคาได้ถ้าซื้อเป็นดอลลาร์', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+      textLine('ส่งภายใน 5 นาทีหลังพิมพ์คำสั่งนี้ มิฉะนั้นต้องเริ่มใหม่', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
+}
+
+// Batch ว่างเปล่า (ผู้ใช้ส่งข้อความว่าง/มีแต่ Whitespace หลังพิมพ์ "นำเข้าพอร์ต")
+function buildBulkImportEmptyMessage() {
+  return bubble({
+    headerText: '⚠️ ไม่พบรายการ',
+    headerColor: COLOR.warning,
+    headerBg: COLOR.warningBg,
+    bodyContents: [
+      textLine('ไม่พบรายการในข้อความนี้เลย กรุณาพิมพ์อย่างน้อย 1 บรรทัด', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      textLine('เช่น: BTC 0.5 ต้นทุน 1500000', { size: 'xs', color: COLOR.textSecondary }),
+    ],
+  });
+}
+
+// แปล Error 1 รายการของ Batch เป็นข้อความไทย — รองรับ 2 รูปแบบปนกันได้:
+//  - Parse-level (commandParser.parseBulkImportLines): { line, reason } (reason
+//    เป็นข้อความไทยสำเร็จรูปแล้ว)
+//  - Business-level (bulkImport.service.validateItems): { line, symbol, code }
+//    (code ต้องแปลผ่าน ERROR_MESSAGES ที่นี่ — Service Layer ไม่รู้จัก Map นี้)
+//  - Aggregate Asset Limit ทั้ง Batch: { line: null, code } (ไม่ผูกกับบรรทัดใด)
+function describeBulkImportError(error) {
+  const message = error.reason ?? ERROR_MESSAGES[error.code] ?? ERROR_MESSAGES.INTERNAL_ERROR;
+  const prefix = error.symbol ? `${error.symbol}: ` : '';
+
+  if (error.line === null || error.line === undefined) {
+    return `${prefix}${message}`;
+  }
+  return `บรรทัด ${error.line}: ${prefix}${message}`;
+}
+
+// Batch ถูกปฏิเสธทั้งก้อน (Parse หรือ Business Validation ไม่ผ่านอย่างน้อย 1 บรรทัด)
+// — แสดงทุกบรรทัดที่ผิดพร้อมเหตุผล (ไม่ใช่แค่บรรทัดแรก) ไม่มีอะไรถูกบันทึกลง DB เลย
+function buildBulkImportRejectedMessage(errors) {
+  const body = [
+    textLine('พบข้อผิดพลาดในรายการที่ส่งมา กรุณาแก้ไขแล้วส่งใหม่ทั้งก้อน', {
+      size: 'sm',
+      color: COLOR.textPrimary,
+    }),
+    separator(),
+    ...errors.map((error) =>
+      textLine(`• ${describeBulkImportError(error)}`, { size: 'sm', color: COLOR.loss })
+    ),
+  ];
+
+  return bubble({
+    headerText: '❌ นำเข้าพอร์ตไม่สำเร็จ',
+    headerColor: COLOR.loss,
+    headerBg: COLOR.lossBg,
+    bodyContents: body,
+  });
+}
+
+// Preview ก่อนบันทึกจริง (Batch Parse+Validate ผ่านหมดแล้ว) — ตารางรายการ +
+// ยอดรวม + ปุ่มยืนยัน/ยกเลิก (Postback พก batchId เดียว ไม่ใช่ pendingId ทีละตัว)
+function buildBulkImportPreviewMessage(batch) {
+  const body = [
+    textLine(`พบ ${batch.items.length} รายการ ตรวจสอบก่อนกด "ยืนยัน"`, {
+      size: 'sm',
+      color: COLOR.textPrimary,
+    }),
+    separator(),
+  ];
+
+  batch.items.forEach((item) => {
+    // รายการที่พิมพ์ราคาเป็น USD — โชว์ยอด USD ต้นฉบับ + เรตที่ใช้ เหมือน
+    // buildPreviewMessage (Parity กับคำสั่งซื้อเดี่ยว) ไม่ให้ผู้ใช้งงว่าทำไม
+    // ยอดบาทไม่ตรงกับตัวเลขที่พิมพ์ — item.fx มาจาก pendingTransaction.service.
+    // createBatch (Enrich ต่อจาก resolveQuantityAndPrice เดิม ไม่ได้ Persist ใน DB)
+    const isUsd = Boolean(item.fx && item.fx.currency === 'USD');
+
+    body.push(
+      textLine(item.assetSymbol, { weight: 'bold', color: COLOR.textPrimary }),
+      textLine(
+        `จำนวน: ${formatNumber(item.quantity)} ${item.assetSymbol} @ ${formatNumber(item.pricePerUnit)} บาท`,
+        { size: 'sm', color: COLOR.textSecondary }
+      )
+    );
+
+    if (isUsd) {
+      body.push(
+        textLine(`ราคาที่พิมพ์: ${formatNumber(item.fx.pricePerUnitOriginal)} USD/หน่วย`, {
+          size: 'sm',
+          color: COLOR.textSecondary,
+        }),
+        textLine(`อัตราแลกเปลี่ยน: 1 USD = ${formatNumber(item.fx.rate)} บาท`, {
+          size: 'xs',
+          color: COLOR.textSecondary,
+        })
+      );
+    }
+
+    body.push(
+      textLine(`มูลค่า: ${formatNumber(item.amountThb)} บาท • ${item.txnDate}`, {
+        size: 'sm',
+        color: COLOR.textSecondary,
+      }),
+      separator()
+    );
+  });
+
+  body.push(
+    textLine(`รวมทั้งหมด: ${formatNumber(batch.totalAmountThb)} บาท (${batch.items.length} รายการ)`, {
+      size: 'md',
+      weight: 'bold',
+      color: COLOR.textPrimary,
+    }),
+    textLine('ตรวจสอบแล้วกด "ยืนยัน" เพื่อบันทึกทุกรายการ (หมดอายุใน 5 นาที)', {
+      size: 'xs',
+      color: COLOR.textSecondary,
+    })
+  );
+
+  const footerButtons = [
+    {
+      type: 'button',
+      style: 'primary',
+      color: COLOR.profit,
+      action: {
+        type: 'postback',
+        label: '✅ ยืนยันทั้งหมด',
+        data: postbackDataBatch('confirm_bulk_import', batch.batchId),
+        displayText: 'ยืนยันนำเข้าพอร์ต',
+      },
+    },
+    {
+      type: 'button',
+      style: 'secondary',
+      action: {
+        type: 'postback',
+        label: '❌ ยกเลิก',
+        data: postbackDataBatch('cancel_bulk_import', batch.batchId),
+        displayText: 'ยกเลิกนำเข้าพอร์ต',
+      },
+    },
+  ];
+
+  return {
+    type: 'flex',
+    altText: `นำเข้าพอร์ต ${batch.items.length} รายการ รวม ${formatNumber(batch.totalAmountThb)} บาท`,
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: COLOR.profitBg,
+        paddingAll: '12px',
+        contents: [textLine('📥 ตรวจสอบก่อนนำเข้า', { weight: 'bold', color: COLOR.info })],
+      },
+      body: { type: 'box', layout: 'vertical', spacing: 'sm', contents: body },
+      footer: { type: 'box', layout: 'vertical', spacing: 'sm', contents: footerButtons },
+    },
+  };
+}
+
+// หลังกด "ยืนยันทั้งหมด" — ผลลัพธ์ Best-effort จาก pendingTransactionService.confirmBatch
+// (result: { total, succeeded, failed }) แสดงจำนวนสำเร็จเสมอ และรายการที่ล้มเหลว
+// (ถ้ามี) พร้อมเหตุผล ไม่ทำให้ผู้ใช้เข้าใจผิดว่าทุกอย่างสำเร็จเมื่อมีบางรายการพลาด
+function buildBulkImportConfirmedMessage(result) {
+  const allSucceeded = result.failed.length === 0;
+
+  const body = [
+    textLine(`บันทึกสำเร็จ ${result.succeeded.length}/${result.total} รายการ`, {
+      size: 'md',
+      weight: 'bold',
+      color: allSucceeded ? COLOR.profit : COLOR.warning,
+    }),
+  ];
+
+  if (!allSucceeded) {
+    body.push(
+      separator(),
+      textLine('รายการที่ไม่สำเร็จ (ลองพิมพ์ "ซื้อ" รายการนี้เพิ่มเองภายหลัง):', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      ...result.failed.map((f) =>
+        textLine(`• ${f.symbol ?? '-'}: ${ERROR_MESSAGES[f.code] ?? ERROR_MESSAGES.INTERNAL_ERROR}`, {
+          size: 'xs',
+          color: COLOR.loss,
+        })
+      )
+    );
+  }
+
+  return bubble({
+    headerText: allSucceeded ? '✅ นำเข้าพอร์ตสำเร็จ' : '⚠️ นำเข้าพอร์ตสำเร็จบางส่วน',
+    headerColor: allSucceeded ? COLOR.profit : COLOR.warning,
+    headerBg: allSucceeded ? COLOR.profitBg : COLOR.warningBg,
+    bodyContents: body,
+  });
+}
+
 module.exports = {
   ERROR_MESSAGES,
   buildBuyConfirmMessage,
@@ -1383,6 +1624,11 @@ module.exports = {
   buildPaymentQrMessage,
   buildPaymentNotifySubmittedMessage,
   buildSlipReceivedMessage,
+  buildBulkImportInstructionsMessage,
+  buildBulkImportEmptyMessage,
+  buildBulkImportRejectedMessage,
+  buildBulkImportPreviewMessage,
+  buildBulkImportConfirmedMessage,
   buildDashboardLinkMessage,
   buildPlanDowngradedMessage,
   buildErrorMessage,

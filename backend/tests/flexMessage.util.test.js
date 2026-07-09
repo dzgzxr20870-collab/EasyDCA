@@ -386,3 +386,155 @@ describe('buildSlipReceivedMessage + Admin message แนบสลิป (Round 
     expect(JSON.stringify(msg)).toContain('action=approve_payment&paymentId=pay-1');
   });
 });
+
+describe('Bulk Import Flex Builders (Phase 3 Round 6)', () => {
+  const {
+    buildBulkImportInstructionsMessage,
+    buildBulkImportEmptyMessage,
+    buildBulkImportRejectedMessage,
+    buildBulkImportPreviewMessage,
+    buildBulkImportConfirmedMessage,
+  } = require('../src/utils/flexMessage.util');
+
+  test('buildBulkImportInstructionsMessage → มี Format + ตัวอย่างครบ', () => {
+    const text = JSON.stringify(buildBulkImportInstructionsMessage());
+    expect(text).toContain('BTC 0.5 ต้นทุน 1500000');
+    expect(text).toContain('วันที่ 01/03/2569');
+    expect(text).toContain('MSFT 3 ต้นทุน 300 USD');
+  });
+
+  test('buildBulkImportEmptyMessage → แจ้งไม่พบรายการ', () => {
+    const text = JSON.stringify(buildBulkImportEmptyMessage());
+    expect(text).toContain('ไม่พบรายการ');
+  });
+
+  test('buildBulkImportRejectedMessage → แสดงทุกบรรทัดที่ผิด (Parse-level: reason พร้อมใช้)', () => {
+    const msg = buildBulkImportRejectedMessage([
+      { line: 2, reason: 'รูปแบบไม่ถูกต้อง (ตัวอย่าง: BTC 0.5 ต้นทุน 1500000)' },
+      { line: 5, reason: 'วันที่ไม่ถูกต้อง (32/13/2569)' },
+    ]);
+    const text = JSON.stringify(msg);
+
+    expect(text).toContain('บรรทัด 2');
+    expect(text).toContain('รูปแบบไม่ถูกต้อง');
+    expect(text).toContain('บรรทัด 5');
+    expect(text).toContain('วันที่ไม่ถูกต้อง');
+  });
+
+  test('buildBulkImportRejectedMessage → Business-level (code) แปลผ่าน ERROR_MESSAGES', () => {
+    const msg = buildBulkImportRejectedMessage([
+      { line: 3, symbol: 'AAAA', code: 'VALIDATION_ERROR' },
+    ]);
+    const text = JSON.stringify(msg);
+
+    expect(text).toContain('บรรทัด 3');
+    expect(text).toContain('AAAA');
+    expect(text).toContain('ไม่รู้จักสินทรัพย์นี้');
+  });
+
+  test('buildBulkImportRejectedMessage → Aggregate Asset Limit (line:null) ไม่มี "บรรทัด" นำหน้า', () => {
+    const msg = buildBulkImportRejectedMessage([{ line: null, code: 'ASSET_LIMIT_REACHED' }]);
+    const text = JSON.stringify(msg);
+
+    expect(text).not.toContain('บรรทัด null');
+    expect(text).toContain('Free');
+  });
+
+  test('buildBulkImportPreviewMessage → ตารางรายการ + ยอดรวม + ปุ่ม Postback พก batchId', () => {
+    const msg = buildBulkImportPreviewMessage({
+      batchId: 'batch-1',
+      totalAmountThb: 1000000,
+      items: [
+        { assetSymbol: 'BTC', quantity: 0.5, pricePerUnit: 1500000, amountThb: 750000, txnDate: '2026-07-10' },
+        { assetSymbol: 'ETH', quantity: 2, pricePerUnit: 80000, amountThb: 160000, txnDate: '2026-03-01' },
+      ],
+    });
+    const text = JSON.stringify(msg);
+
+    expect(text).toContain('BTC');
+    expect(text).toContain('ETH');
+    expect(text).toContain('1,000,000');
+    expect(text).toContain('action=confirm_bulk_import&batchId=batch-1');
+    expect(text).toContain('action=cancel_bulk_import&batchId=batch-1');
+    // Regression Guard: ไม่มี Item ไหนมี fx (Batch เป็น THB ล้วน) → ต้องไม่มี
+    // ข้อความ USD/เรตหลุดมาปนโดยไม่ตั้งใจ
+    expect(text).not.toContain('USD');
+    expect(text).not.toContain('อัตราแลกเปลี่ยน');
+    expect(text).not.toContain('ราคาที่พิมพ์');
+  });
+
+  test('buildBulkImportPreviewMessage → Item ที่มี fx (USD) โชว์ราคาที่พิมพ์ USD/หน่วย + เรตที่ใช้', () => {
+    const msg = buildBulkImportPreviewMessage({
+      batchId: 'batch-2',
+      totalAmountThb: 10500,
+      items: [
+        {
+          assetSymbol: 'MSFT',
+          quantity: 3,
+          pricePerUnit: 3500,
+          amountThb: 10500,
+          txnDate: '2026-07-10',
+          fx: { currency: 'USD', rate: 35, pricePerUnitOriginal: 300, amountOriginal: 900 },
+        },
+      ],
+    });
+    const text = JSON.stringify(msg);
+
+    expect(text).toContain('ราคาที่พิมพ์: 300 USD/หน่วย');
+    expect(text).toContain('อัตราแลกเปลี่ยน: 1 USD = 35 บาท');
+  });
+
+  test('buildBulkImportPreviewMessage → Batch ปนกัน (USD + THB) แสดงบรรทัด USD เฉพาะ Item ที่มี fx เท่านั้น', () => {
+    const msg = buildBulkImportPreviewMessage({
+      batchId: 'batch-3',
+      totalAmountThb: 760500,
+      items: [
+        { assetSymbol: 'BTC', quantity: 0.5, pricePerUnit: 1500000, amountThb: 750000, txnDate: '2026-07-10' },
+        {
+          assetSymbol: 'MSFT',
+          quantity: 3,
+          pricePerUnit: 3500,
+          amountThb: 10500,
+          txnDate: '2026-07-10',
+          fx: { currency: 'USD', rate: 35, pricePerUnitOriginal: 300, amountOriginal: 900 },
+        },
+      ],
+    });
+    const text = JSON.stringify(msg);
+
+    // BTC (ไม่มี fx) ต้องไม่มีบรรทัด USD ติดมาด้วย
+    const btcIndex = text.indexOf('BTC');
+    const msftIndex = text.indexOf('MSFT');
+    const btcSection = text.slice(btcIndex, msftIndex);
+    expect(btcSection).not.toContain('USD');
+    expect(btcSection).not.toContain('อัตราแลกเปลี่ยน');
+
+    // MSFT (มี fx) ต้องมีบรรทัด USD + เรต
+    const msftSection = text.slice(msftIndex);
+    expect(msftSection).toContain('300 USD/หน่วย');
+    expect(msftSection).toContain('1 USD = 35 บาท');
+  });
+
+  test('buildBulkImportConfirmedMessage → ทุกรายการสำเร็จ (ไม่มี failed)', () => {
+    const msg = buildBulkImportConfirmedMessage({ total: 2, succeeded: [{}, {}], failed: [] });
+    const text = JSON.stringify(msg);
+
+    expect(text).toContain('2/2');
+    expect(text).toContain('สำเร็จ');
+    expect(text).not.toContain('ไม่สำเร็จ');
+  });
+
+  test('buildBulkImportConfirmedMessage → สำเร็จบางส่วน แสดงรายการที่ล้มเหลวพร้อมเหตุผล', () => {
+    const msg = buildBulkImportConfirmedMessage({
+      total: 3,
+      succeeded: [{}, {}],
+      failed: [{ symbol: 'BTC', code: 'INSUFFICIENT_QUANTITY' }],
+    });
+    const text = JSON.stringify(msg);
+
+    expect(text).toContain('2/3');
+    expect(text).toContain('สำเร็จบางส่วน');
+    expect(text).toContain('BTC');
+    expect(text).toContain('มากกว่าที่คุณถือครองอยู่');
+  });
+});
