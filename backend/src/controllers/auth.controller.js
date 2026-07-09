@@ -10,7 +10,20 @@ const DEFAULT_DISPLAY_NAME = 'LINE User';
 // กับจาก LINE Chat เป็น Record เดียวกันเสมอ ไม่เกิด Record ซ้ำ
 async function resolveUser(profile) {
   const existing = await userRepository.findByLineUserId(profile.userId);
-  if (existing) return existing;
+  if (existing) {
+    // แก้บั๊กชื่อ Fallback ค้างถาวร: ถ้าตอนสมัครครั้งแรก getProfile/fetchLiffProfile
+    // ล้มเหลวชั่วคราวจนได้ชื่อ Default ไป แต่รอบนี้ Profile จริงมาแล้ว ให้ Sync ชื่อ
+    // ให้ทันที — ถ้า User มีชื่อจริงอยู่แล้ว (ไม่ใช่ Fallback) ไม่แตะ (ไม่ใช่ Name Sync
+    // ทั่วไปทุกครั้งที่ Login)
+    if (existing.displayName === DEFAULT_DISPLAY_NAME && profile.displayName) {
+      return userRepository.updateDisplayName(
+        existing.id,
+        profile.displayName,
+        profile.pictureUrl ?? existing.pictureUrl
+      );
+    }
+    return existing;
+  }
 
   const displayName = profile.displayName ?? DEFAULT_DISPLAY_NAME;
   const pictureUrl = profile.pictureUrl ?? null;

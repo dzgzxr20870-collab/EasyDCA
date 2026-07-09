@@ -89,6 +89,27 @@ async function findExpiredPremiumUsers(now = new Date()) {
   return (data ?? []).map(toUser);
 }
 
+// อัปเดตชื่อ/รูปโปรไฟล์ของ User เดิม — ใช้แก้บั๊กชื่อ Fallback "LINE User" ค้างถาวร
+// (resolveUser เจอ Profile จริงในรอบถัดไปหลังจาก getProfile ล้มเหลวตอนสมัครครั้งแรก)
+// Pattern เดียวกับ updatePlan ด้านบน
+async function updateDisplayName(userId, displayName, pictureUrl) {
+  const { data, error } = await supabaseAdmin
+    .from('users')
+    .update({
+      display_name: displayName,
+      picture_url: pictureUrl,
+    })
+    .eq('id', userId)
+    .select('*')
+    .single();
+
+  if (error) {
+    throw new Error(`Failed to update display name for user ${userId}: ${error.message}`);
+  }
+
+  return toUser(data);
+}
+
 async function updatePlan(userId, plan, expiresAt) {
   const { data, error } = await supabaseAdmin
     .from('users')
@@ -113,4 +134,5 @@ module.exports = {
   create,
   findExpiredPremiumUsers,
   updatePlan,
+  updateDisplayName,
 };

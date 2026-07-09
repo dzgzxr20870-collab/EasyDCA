@@ -6,6 +6,8 @@ jest.mock('../src/config/supabase', () => {
   query.select = jest.fn(() => query);
   query.eq = jest.fn(() => query);
   query.lt = jest.fn();
+  query.update = jest.fn(() => query);
+  query.single = jest.fn();
   const supabaseAdmin = { from: jest.fn(() => query) };
   return { supabaseAdmin, __query: query };
 });
@@ -50,5 +52,44 @@ describe('findExpiredPremiumUsers', () => {
   test('DB error → throw', async () => {
     __query.lt.mockResolvedValue({ data: null, error: { message: 'db blip' } });
     await expect(userRepository.findExpiredPremiumUsers(new Date())).rejects.toThrow('db blip');
+  });
+});
+
+describe('updateDisplayName', () => {
+  test('อัปเดต display_name/picture_url ด้วย id ที่ระบุ แล้ว map เป็น user object (Pattern เดียวกับ updatePlan)', async () => {
+    __query.single.mockResolvedValue({
+      data: {
+        id: 'u1',
+        line_user_id: 'U1',
+        display_name: 'สมชาย ใจดี',
+        picture_url: 'https://profile.line-scdn.net/abc123',
+        plan: 'free',
+      },
+      error: null,
+    });
+
+    const result = await userRepository.updateDisplayName(
+      'u1',
+      'สมชาย ใจดี',
+      'https://profile.line-scdn.net/abc123'
+    );
+
+    expect(supabaseAdmin.from).toHaveBeenCalledWith('users');
+    expect(__query.update).toHaveBeenCalledWith({
+      display_name: 'สมชาย ใจดี',
+      picture_url: 'https://profile.line-scdn.net/abc123',
+    });
+    expect(__query.eq).toHaveBeenCalledWith('id', 'u1');
+    expect(result).toMatchObject({
+      id: 'u1',
+      lineUserId: 'U1',
+      displayName: 'สมชาย ใจดี',
+      pictureUrl: 'https://profile.line-scdn.net/abc123',
+    });
+  });
+
+  test('DB error → throw', async () => {
+    __query.single.mockResolvedValue({ data: null, error: { message: 'db blip' } });
+    await expect(userRepository.updateDisplayName('u1', 'x', null)).rejects.toThrow('db blip');
   });
 });

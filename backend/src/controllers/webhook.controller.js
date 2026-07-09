@@ -34,7 +34,25 @@ const DEFAULT_DISPLAY_NAME = 'LINE User';
 
 async function resolveUser(lineUserId) {
   const existing = await userRepository.findByLineUserId(lineUserId);
-  if (existing) return existing;
+  if (existing) {
+    // แก้บั๊กชื่อ Fallback ค้างถาวร: ถ้าตอนสมัครครั้งแรก getProfile ล้มเหลวชั่วคราว
+    // จนได้ชื่อ Default ไป แต่รอบนี้ดึง Profile จริงได้แล้ว ให้ Sync ชื่อทันที —
+    // getProfile ห้าม throw (คืน null ถ้า API ล้มเหลว) จึงต้องเช็ค profile ก่อน
+    // เข้าถึง .displayName เสมอ (ต่างจาก auth.controller ที่ profile ไม่มีทาง null)
+    // ถ้ารอบนี้ก็ดึงไม่ได้อีก (profile เป็น null) หรือ User มีชื่อจริงอยู่แล้ว
+    // (ไม่ใช่ Fallback) → ไม่แตะ คืน existing เดิม
+    if (existing.displayName === DEFAULT_DISPLAY_NAME) {
+      const profile = await lineService.getProfile(lineUserId);
+      if (profile?.displayName) {
+        return userRepository.updateDisplayName(
+          existing.id,
+          profile.displayName,
+          profile.pictureUrl ?? existing.pictureUrl
+        );
+      }
+    }
+    return existing;
+  }
 
   // Auto-register ตาม SRS.md § 2.3 [1] — พยายามดึง Profile จริงจาก LINE ก่อน
   // แต่ getProfile ห้าม throw (คืน null แทนถ้า API ล้มเหลว) เพื่อไม่ให้

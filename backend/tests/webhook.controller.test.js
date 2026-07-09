@@ -983,6 +983,58 @@ describe('handleEvent — User Auto-register', () => {
     expect(userRepository.create).not.toHaveBeenCalled();
     expect(lineService.getProfile).not.toHaveBeenCalled();
   });
+
+  // ── Round 3: แก้บั๊กชื่อ Fallback "LINE User" ค้างถาวร ───────────────────────
+  test('User เดิมมีชื่อ "LINE User" (Fallback ค้าง) + Profile รอบนี้ได้ชื่อจริง → Sync ชื่อสำเร็จ', async () => {
+    const staleUser = { id: 'user-1', lineUserId: 'U123', plan: 'free', displayName: 'LINE User', pictureUrl: null };
+    userRepository.findByLineUserId.mockResolvedValue(staleUser);
+    lineService.getProfile.mockResolvedValue({
+      displayName: 'สมชาย ใจดี',
+      pictureUrl: 'https://profile.line-scdn.net/abc123',
+    });
+    userRepository.updateDisplayName.mockResolvedValue({
+      ...staleUser,
+      displayName: 'สมชาย ใจดี',
+      pictureUrl: 'https://profile.line-scdn.net/abc123',
+    });
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+
+    await handleEvent(textEvent('สวัสดี'));
+
+    expect(lineService.getProfile).toHaveBeenCalledWith('U123');
+    expect(userRepository.updateDisplayName).toHaveBeenCalledWith(
+      'user-1',
+      'สมชาย ใจดี',
+      'https://profile.line-scdn.net/abc123'
+    );
+    expect(userRepository.create).not.toHaveBeenCalled();
+  });
+
+  test('User เดิมมีชื่อ "LINE User" + Profile รอบนี้ก็ดึงไม่ได้อีก (null) → ไม่ Error คืน existing เดิม', async () => {
+    const staleUser = { id: 'user-1', lineUserId: 'U123', plan: 'free', displayName: 'LINE User', pictureUrl: null };
+    userRepository.findByLineUserId.mockResolvedValue(staleUser);
+    lineService.getProfile.mockResolvedValue(null);
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+
+    await handleEvent(textEvent('สวัสดี'));
+
+    expect(lineService.getProfile).toHaveBeenCalledWith('U123');
+    expect(userRepository.updateDisplayName).not.toHaveBeenCalled();
+    expect(userRepository.create).not.toHaveBeenCalled();
+    expect(lineService.replyMessage).toHaveBeenCalledTimes(1);
+  });
+
+  test('User เดิมมีชื่อจริงอยู่แล้ว (ไม่ใช่ "LINE User") → ไม่ Sync ไม่เรียก getProfile', async () => {
+    const namedUser = { id: 'user-1', lineUserId: 'U123', plan: 'free', displayName: 'สมชาย ใจดี', pictureUrl: null };
+    userRepository.findByLineUserId.mockResolvedValue(namedUser);
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+
+    await handleEvent(textEvent('สวัสดี'));
+
+    expect(lineService.getProfile).not.toHaveBeenCalled();
+    expect(userRepository.updateDisplayName).not.toHaveBeenCalled();
+    expect(userRepository.create).not.toHaveBeenCalled();
+  });
 });
 
 describe('handleEvent — Non-text events', () => {
