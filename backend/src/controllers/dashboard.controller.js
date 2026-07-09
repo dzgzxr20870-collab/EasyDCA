@@ -79,6 +79,9 @@ async function getMe(req, res) {
       planExpiresAt: user.planExpiresAt ?? null,
       isPremiumActive: entitlementService.isPremiumActive(user),
       assetLimit: entitlementService.getActiveAssetLimit(user),
+      // role มาจาก JWT (req.user.role) ที่ requireAuth แนบไว้ — Frontend ใช้ตัดสิน
+      // ว่าจะเปิด Route /admin ให้ไหม (Source เดียวกับที่ requireAdmin ใช้ ไม่คำนวณซ้ำ)
+      role: req.user.role,
     });
   } catch (err) {
     console.error(`[dashboard] getMe failed: ${err.message}`);

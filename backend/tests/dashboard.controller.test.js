@@ -262,6 +262,17 @@ describe('getMe', () => {
     );
   });
 
+  test('คืน role จาก req.user (JWT) ตรงๆ — Admin เห็น role: admin ใน /me', async () => {
+    userRepository.findById.mockResolvedValue({ id: USER_ID, plan: 'free', planExpiresAt: null });
+
+    const req = mockReq({ user: { id: USER_ID, lineUserId: 'Uadmin1', role: 'admin' } });
+    const res = mockRes();
+    await getMe(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ role: 'admin' }));
+  });
+
   test('User ไม่พบ (findById คืน null) → 404 USER_NOT_FOUND', async () => {
     userRepository.findById.mockResolvedValue(null);
 

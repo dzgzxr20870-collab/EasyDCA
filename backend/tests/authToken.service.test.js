@@ -1,8 +1,12 @@
-// Mock config/env เพื่อคุม jwtSecret / jwtExpiresIn แบบ Deterministic
+// Mock config/env เพื่อคุม jwtSecret / jwtExpiresIn และรายชื่อ Admin แบบ Deterministic
+// (payment.adminLineUserIds ถูกใช้ผ่าน admin.util → issueUserToken คำนวณ role)
 jest.mock('../src/config/env', () => ({
   auth: {
     jwtSecret: 'test_secret_key_for_jwt',
     jwtExpiresIn: '7d',
+  },
+  payment: {
+    adminLineUserIds: ['Uadmin1', 'Uadmin2'],
   },
 }));
 
@@ -27,6 +31,29 @@ describe('issueUserToken', () => {
     const decoded = jwt.verify(token, JWT_SECRET);
     expect(decoded.sub).toBe('user-2');
     expect(decoded.lineUserId).toBe('U456');
+  });
+
+  test('User ที่ lineUserId อยู่ใน ADMIN_LINE_USER_IDS → role: admin', () => {
+    const token = issueUserToken({ id: 'admin-1', lineUserId: 'Uadmin1' });
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    expect(decoded.role).toBe('admin');
+  });
+
+  test('User ปกติ (ไม่อยู่ในรายชื่อ Admin) → role: user', () => {
+    const token = issueUserToken({ id: 'user-1', lineUserId: 'U123' });
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    expect(decoded.role).toBe('user');
+  });
+
+  test('role คำนวณจาก Backend เท่านั้น — ไม่ Trust ค่าที่แนบมากับ user object', () => {
+    // แม้ Client จะยัด role: 'admin' มากับ object แต่ lineUserId ไม่ใช่ Admin
+    // → Token ต้องได้ role: 'user' (คำนวณใหม่จาก ADMIN_LINE_USER_IDS เสมอ)
+    const token = issueUserToken({ id: 'user-9', lineUserId: 'U999', role: 'admin' });
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    expect(decoded.role).toBe('user');
   });
 });
 

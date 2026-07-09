@@ -10,6 +10,7 @@ const webhookRoutes = require('./routes/webhook.routes');
 const authRoutes = require('./routes/auth.routes');
 const dashboardRoutes = require('./routes/dashboard.routes');
 const paymentRoutes = require('./routes/payment.routes');
+const adminRoutes = require('./routes/admin.routes');
 const { scheduleExpirePending, schedulePurgeOld } = require('./jobs/pendingCleanup.job');
 const { scheduleExpirePayments } = require('./jobs/paymentExpiry.job');
 const { schedulePlanDowngrade } = require('./jobs/planDowngrade.job');
@@ -58,6 +59,10 @@ app.use('/api/v1/dashboard', dashboardRoutes);
 
 // Mount Payment Routes (Phase 2 Step 3 — Premium ผ่าน PromptPay QR) ที่ /api/v1/payment
 app.use('/api/v1/payment', paymentRoutes);
+
+// Mount Admin Routes (Phase 3 Round 4a — Admin Auth) ที่ /api/v1/admin
+// ทุก Route ภายในผ่าน requireAuth + requireAdmin (ดู admin.routes.js)
+app.use('/api/v1/admin', adminRoutes);
 
 // Railway Health Check (ดู docs/DEPLOYMENT.md § 3.1)
 app.get('/health', (req, res) => {
