@@ -351,7 +351,10 @@ async function routePostback(user, data) {
     // เดียวกัน (migration 008) ปุ่มเดียวจัดการทั้งก้อน — Error (BATCH_NOT_FOUND
     // ถ้า Batch ไม่พบเลย) ทะลุขึ้นไปให้ replyWithError แปลไทยตามปกติ
     case 'confirm_bulk_import': {
-      const result = await bulkImportService.confirmBatch(params.get('batchId'));
+      const result = await bulkImportService.confirmBatch(params.get('batchId'), {
+        plan: user.plan,
+        planExpiresAt: user.planExpiresAt,
+      });
       return flexMessage.buildBulkImportConfirmedMessage(result);
     }
 

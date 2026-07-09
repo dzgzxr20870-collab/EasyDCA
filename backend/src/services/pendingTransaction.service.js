@@ -232,7 +232,14 @@ async function createBatch(userId, validatedItems) {
 // Cron Purge ไปแล้ว) — ต่างจากรายการที่ resolve ไปแล้ว (ยัง findByBatchId เจอ
 // แต่ confirmPending แต่ละแถวจะ throw PENDING_ALREADY_RESOLVED/PENDING_EXPIRED เอง
 // ซึ่งถูกจับเป็น failed แยกรายการตามปกติ ไม่ throw ระดับ Batch)
-async function confirmBatch(batchId) {
+//
+// ⚠️ Bug Fix: ต้องรับ options ({ plan, planExpiresAt }) แล้ว Thread ต่อให้
+// confirmPending ทุกแถว — confirmPending → processBuyCommand → validateBuy
+// ใช้ options.plan ตัดสิน Asset Limit ถ้าไม่ส่งมา validateBuy จะ Fallback เป็น
+// 'free' เสมอ (Fail-closed Default ที่ transaction.service ตั้งใจไว้) ทำให้
+// Premium โดนเช็คเป็น Free ผิดๆ ตอน Confirm (Preview ตอนนั้นถูกอยู่แล้วเพราะ
+// bulkImportService.previewBatch ส่ง options มาถูกทาง แยกคนละ Call Chain กับ Confirm)
+async function confirmBatch(batchId, options = {}) {
   const rows = await pendingRepository.findByBatchId(batchId);
 
   if (rows.length === 0) {
@@ -244,7 +251,7 @@ async function confirmBatch(batchId) {
 
   for (const row of rows) {
     try {
-      const { result } = await confirmPending(row.id);
+      const { result } = await confirmPending(row.id, options);
       succeeded.push(result);
     } catch (err) {
       failed.push({

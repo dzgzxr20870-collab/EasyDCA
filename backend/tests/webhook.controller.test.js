@@ -978,7 +978,7 @@ describe('handleEvent — Bulk Import (Phase 3 Round 6)', () => {
     expect(lastReplyText()).toContain('ไม่เข้าใจคำสั่ง');
   });
 
-  test('Postback confirm_bulk_import → เรียก confirmBatch แล้ว reply สรุปผล Best-effort', async () => {
+  test('Postback confirm_bulk_import → เรียก confirmBatch พร้อม options (plan/planExpiresAt) แล้ว reply สรุปผล Best-effort', async () => {
     bulkImportService.confirmBatch.mockResolvedValue({
       total: 2,
       succeeded: [{ symbol: 'BTC' }, { symbol: 'ETH' }],
@@ -987,8 +987,35 @@ describe('handleEvent — Bulk Import (Phase 3 Round 6)', () => {
 
     await handleEvent(postbackEvent('action=confirm_bulk_import&batchId=batch-1'));
 
-    expect(bulkImportService.confirmBatch).toHaveBeenCalledWith('batch-1');
+    // Bug Fix: ต้อง Thread options เดียวกับ case 'confirm' เดี่ยว ไม่ใช่แค่ batchId
+    // (ถ้าไม่ส่ง options ไป confirmBatch จะ Fallback plan='free' ที่ transaction.
+    // service ทำให้ Premium โดนเช็ค Asset Limit ผิดเป็น Free)
+    expect(bulkImportService.confirmBatch).toHaveBeenCalledWith('batch-1', {
+      plan: 'free',
+      planExpiresAt: undefined,
+    });
     expect(lastReplyText()).toContain('2/2');
+  });
+
+  test('Postback confirm_bulk_import: User เป็น Premium → confirmBatch ได้รับ options plan="premium" + planExpiresAt จริง', async () => {
+    userRepository.findByLineUserId.mockResolvedValue({
+      ...FREE_USER,
+      plan: 'premium',
+      planExpiresAt: '2026-08-04T00:00:00.000Z',
+    });
+    bulkImportService.confirmBatch.mockResolvedValue({
+      total: 3,
+      succeeded: [{ symbol: 'BTC' }, { symbol: 'ETH' }, { symbol: 'MSFT' }],
+      failed: [],
+    });
+
+    await handleEvent(postbackEvent('action=confirm_bulk_import&batchId=batch-premium'));
+
+    expect(bulkImportService.confirmBatch).toHaveBeenCalledWith('batch-premium', {
+      plan: 'premium',
+      planExpiresAt: '2026-08-04T00:00:00.000Z',
+    });
+    expect(lastReplyText()).toContain('3/3');
   });
 
   test('Postback confirm_bulk_import บางรายการล้มเหลว → reply แจ้งสำเร็จบางส่วนพร้อมเหตุผล', async () => {

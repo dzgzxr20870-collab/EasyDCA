@@ -135,8 +135,8 @@ async function previewBatch(userId, rawText, options = {}) {
 
 // ยืนยัน/ยกเลิก Batch — Wrapper บาง ๆ ให้ Controller เรียกผ่าน Service Layer เดียวกัน
 // (ไม่แตะ pendingTransactionService ตรงจาก Controller — Layering เดียวกับจุดอื่น)
-async function confirmBatch(batchId) {
-  return pendingTransactionService.confirmBatch(batchId);
+async function confirmBatch(batchId, options = {}) {
+  return pendingTransactionService.confirmBatch(batchId, options);
 }
 
 async function cancelBatch(batchId) {

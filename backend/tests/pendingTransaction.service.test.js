@@ -449,6 +449,86 @@ describe('confirmBatch (Phase 3 Round 6 — Best-effort)', () => {
 
     await expect(confirmBatch(BATCH_ID)).rejects.toMatchObject({ code: 'BATCH_NOT_FOUND' });
   });
+
+  // ── Bug Fix: confirmBatch ต้อง Thread options (plan/planExpiresAt) ให้ทุกแถว ──
+  // ก่อนแก้: confirmBatch(batchId) ไม่รับ options เลย → confirmPending(row.id) ทุกแถว
+  // ได้ options={} (Default) → transactionService เห็น plan ว่างเสมอ → Fallback
+  // เป็น 'free' (Fail-closed Default ของ validateBuy) ทำให้ Premium โดนเช็ค Asset
+  // Limit เป็น Free ผิดๆ ตอน Confirm (ทั้งที่ Preview ผ่านเพราะ previewBatch ส่ง
+  // options ถูกทางอยู่แล้ว คนละ Call Chain กัน) — จำลอง Business Rule จริงด้วย
+  // processBuyCommand Mock ที่เช็ค options.plan เอง (transactionService ถูก Mock
+  // ทั้งไฟล์อยู่แล้วในเทสต์นี้ จึงต้องจำลองพฤติกรรม validateBuy ตรงนี้)
+  describe('Bug Fix: Thread options ให้ทุกแถวใน Batch (ไม่ใช่แค่แถวแรก)', () => {
+    const ROWS = [
+      { id: 'p1', assetSymbol: 'BTC', status: 'pending', commandType: 'buy' },
+      { id: 'p2', assetSymbol: 'ETH', status: 'pending', commandType: 'buy' },
+      { id: 'p3', assetSymbol: 'MSFT', status: 'pending', commandType: 'buy' },
+    ];
+
+    beforeEach(() => {
+      pendingRepository.findByBatchId.mockResolvedValue(ROWS);
+      pendingRepository.claimForConfirm.mockImplementation(async (id) => ({
+        id,
+        commandType: 'buy',
+        userId: USER_ID,
+        assetSymbol: ROWS.find((r) => r.id === id).assetSymbol,
+        quantity: 1,
+        pricePerUnit: 100,
+        feeThb: 0,
+        txnDate: '2026-07-10',
+        portfolioId: null,
+      }));
+      // จำลอง validateBuy จริง: Reject ด้วย ASSET_LIMIT_REACHED ถ้า options.plan
+      // ไม่ใช่ 'premium' (คือพฤติกรรมจริงของ Free Plan ที่ Asset ใหม่เกิน 2 ตัว)
+      transactionService.processBuyCommand.mockImplementation(async (userId, params, options) => {
+        if (options?.plan !== 'premium') {
+          const err = new Error('Free plan is limited to 2 active assets');
+          err.code = 'ASSET_LIMIT_REACHED';
+          throw err;
+        }
+        return { transactionId: `tx-${params.symbol}`, symbol: params.symbol };
+      });
+    });
+
+    test('Premium (options.plan=premium ส่งเข้ามาจริง) + 3 Asset ใหม่ → สำเร็จหมด ไม่โดน ASSET_LIMIT_REACHED', async () => {
+      const result = await confirmBatch(BATCH_ID, {
+        plan: 'premium',
+        planExpiresAt: '2026-08-04T00:00:00.000Z',
+      });
+
+      expect(result.total).toBe(3);
+      expect(result.succeeded).toHaveLength(3);
+      expect(result.failed).toEqual([]);
+
+      // ยืนยันว่า options ถูกส่งถึง processBuyCommand ของ "ทุกแถว" ไม่ใช่แค่แถวแรก
+      expect(transactionService.processBuyCommand).toHaveBeenCalledTimes(3);
+      transactionService.processBuyCommand.mock.calls.forEach((call) => {
+        expect(call[2]).toEqual({ plan: 'premium', planExpiresAt: '2026-08-04T00:00:00.000Z' });
+      });
+    });
+
+    test('Free plan (Regression) → ยังโดน ASSET_LIMIT_REACHED เหมือนเดิม ไม่ใช่ผ่านหมดเพราะแก้บั๊กผิดจุด', async () => {
+      const result = await confirmBatch(BATCH_ID, { plan: 'free', planExpiresAt: null });
+
+      expect(result.total).toBe(3);
+      expect(result.succeeded).toHaveLength(0);
+      expect(result.failed).toEqual([
+        { symbol: 'BTC', code: 'ASSET_LIMIT_REACHED', message: 'Free plan is limited to 2 active assets' },
+        { symbol: 'ETH', code: 'ASSET_LIMIT_REACHED', message: 'Free plan is limited to 2 active assets' },
+        { symbol: 'MSFT', code: 'ASSET_LIMIT_REACHED', message: 'Free plan is limited to 2 active assets' },
+      ]);
+    });
+
+    test('ไม่ส่ง options มาเลย (Caller เก่า/ลืมส่ง) → Default {} → เห็นเหมือน Free ทุกแถว (ยืนยัน Fail-closed Default เดิมยังทำงาน)', async () => {
+      const result = await confirmBatch(BATCH_ID);
+
+      expect(result.succeeded).toHaveLength(0);
+      expect(result.failed).toHaveLength(3);
+      transactionService.processBuyCommand.mock.calls.forEach((call) => {
+        expect(call[2]).toEqual({});
+      });
+    });
+  });
 });
 
 describe('cancelBatch (Phase 3 Round 6)', () => {

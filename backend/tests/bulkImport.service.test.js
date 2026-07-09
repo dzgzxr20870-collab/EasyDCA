@@ -276,11 +276,27 @@ describe('previewBatch — สำเร็จทั้ง Batch', () => {
 });
 
 describe('confirmBatch / cancelBatch — Wrapper บาง ๆ', () => {
-  test('confirmBatch ส่งต่อให้ pendingTransactionService.confirmBatch', async () => {
+  test('confirmBatch ส่งต่อ batchId + options ให้ pendingTransactionService.confirmBatch (Bug Fix: Thread options)', async () => {
     pendingTransactionService.confirmBatch.mockResolvedValue({ total: 2, succeeded: [], failed: [] });
-    const result = await bulkImportService.confirmBatch('batch-1');
-    expect(pendingTransactionService.confirmBatch).toHaveBeenCalledWith('batch-1');
+
+    const result = await bulkImportService.confirmBatch('batch-1', {
+      plan: 'premium',
+      planExpiresAt: '2026-08-04T00:00:00.000Z',
+    });
+
+    expect(pendingTransactionService.confirmBatch).toHaveBeenCalledWith('batch-1', {
+      plan: 'premium',
+      planExpiresAt: '2026-08-04T00:00:00.000Z',
+    });
     expect(result).toEqual({ total: 2, succeeded: [], failed: [] });
+  });
+
+  test('confirmBatch ไม่ส่ง options มา → ส่งต่อ {} (Default) ไม่ throw', async () => {
+    pendingTransactionService.confirmBatch.mockResolvedValue({ total: 1, succeeded: [], failed: [] });
+
+    await bulkImportService.confirmBatch('batch-2');
+
+    expect(pendingTransactionService.confirmBatch).toHaveBeenCalledWith('batch-2', {});
   });
 
   test('cancelBatch ส่งต่อให้ pendingTransactionService.cancelBatch', async () => {
