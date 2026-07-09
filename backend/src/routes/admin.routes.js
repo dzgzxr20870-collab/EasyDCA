@@ -12,4 +12,9 @@ router.use(requireAdmin);
 
 router.get('/ping', adminController.ping);
 
+// Admin Dashboard (Round 4b) — ทุก Endpoint Read-only (ไม่มี Write/Mutation)
+router.get('/users', adminController.listUsers);
+router.get('/payments', adminController.listPayments);
+router.get('/stats', adminController.getStats);
+
 module.exports = router;

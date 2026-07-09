@@ -6,6 +6,7 @@ jest.mock('../src/config/supabase', () => {
   query.select = jest.fn(() => query);
   query.eq = jest.fn(() => query);
   query.lt = jest.fn();
+  query.order = jest.fn(() => query);
   query.update = jest.fn(() => query);
   query.single = jest.fn();
   const supabaseAdmin = { from: jest.fn(() => query) };
@@ -52,6 +53,37 @@ describe('findExpiredPremiumUsers', () => {
   test('DB error → throw', async () => {
     __query.lt.mockResolvedValue({ data: null, error: { message: 'db blip' } });
     await expect(userRepository.findExpiredPremiumUsers(new Date())).rejects.toThrow('db blip');
+  });
+});
+
+describe('findAll', () => {
+  test('คืน User ทั้งหมด (order created_at DESC) แล้ว map เป็น user objects', async () => {
+    __query.order.mockResolvedValueOnce({
+      data: [
+        { id: 'u2', line_user_id: 'U2', display_name: 'B', plan: 'premium', created_at: '2026-07-02' },
+        { id: 'u1', line_user_id: 'U1', display_name: 'A', plan: 'free', created_at: '2026-07-01' },
+      ],
+      error: null,
+    });
+
+    const result = await userRepository.findAll();
+
+    expect(supabaseAdmin.from).toHaveBeenCalledWith('users');
+    expect(__query.select).toHaveBeenCalledWith('*');
+    expect(__query.order).toHaveBeenCalledWith('created_at', { ascending: false });
+    expect(result).toHaveLength(2);
+    expect(result[0]).toMatchObject({ id: 'u2', lineUserId: 'U2', plan: 'premium' });
+    expect(result[1]).toMatchObject({ id: 'u1', displayName: 'A', plan: 'free' });
+  });
+
+  test('ไม่มี User เลย (data = []) → คืน []', async () => {
+    __query.order.mockResolvedValueOnce({ data: [], error: null });
+    expect(await userRepository.findAll()).toEqual([]);
+  });
+
+  test('DB error → throw', async () => {
+    __query.order.mockResolvedValueOnce({ data: null, error: { message: 'db down' } });
+    await expect(userRepository.findAll()).rejects.toThrow('db down');
   });
 });
 

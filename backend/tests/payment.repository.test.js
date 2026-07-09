@@ -19,6 +19,71 @@ beforeEach(() => {
   jest.clearAllMocks();
 });
 
+describe('findAll', () => {
+  test('ไม่ส่ง status → คืนทุกสถานะ (order created_at DESC) + Join displayName', async () => {
+    __query.order.mockResolvedValueOnce({
+      data: [
+        {
+          id: 'pay-2',
+          user_id: 'user-2',
+          billing_period: 'yearly',
+          amount_thb: 590.42,
+          status: 'confirmed',
+          confirmed_at: '2026-07-03T00:00:00.000Z',
+          created_at: '2026-07-02T00:00:00.000Z',
+          users: { display_name: 'สมหญิง' },
+        },
+      ],
+      error: null,
+    });
+
+    const result = await paymentRepository.findAll();
+
+    expect(supabaseAdmin.from).toHaveBeenCalledWith('payments');
+    expect(__query.select).toHaveBeenCalledWith('*, users(display_name)');
+    // ไม่มี Filter status
+    expect(__query.eq).not.toHaveBeenCalled();
+    expect(__query.order).toHaveBeenCalledWith('created_at', { ascending: false });
+    expect(result[0]).toMatchObject({
+      id: 'pay-2',
+      userId: 'user-2',
+      amountThb: 590.42,
+      billingPeriod: 'yearly',
+      status: 'confirmed',
+      displayName: 'สมหญิง',
+    });
+  });
+
+  test('ส่ง status → กรองด้วย .eq(status) ก่อน order', async () => {
+    __query.order.mockResolvedValueOnce({ data: [], error: null });
+
+    await paymentRepository.findAll({ status: 'confirmed' });
+
+    expect(__query.eq).toHaveBeenCalledWith('status', 'confirmed');
+    expect(__query.order).toHaveBeenCalledWith('created_at', { ascending: false });
+  });
+
+  test('User ที่ Join ไม่เจอ (users = null) → displayName: null (ไม่ crash)', async () => {
+    __query.order.mockResolvedValueOnce({
+      data: [{ id: 'pay-3', user_id: 'user-3', amount_thb: 59, status: 'pending', users: null }],
+      error: null,
+    });
+
+    const result = await paymentRepository.findAll();
+    expect(result[0].displayName).toBeNull();
+  });
+
+  test('ไม่มี Payment เลย (data = []) → คืน []', async () => {
+    __query.order.mockResolvedValueOnce({ data: [], error: null });
+    expect(await paymentRepository.findAll()).toEqual([]);
+  });
+
+  test('DB error → throw', async () => {
+    __query.order.mockResolvedValueOnce({ data: null, error: { message: 'boom' } });
+    await expect(paymentRepository.findAll()).rejects.toThrow('boom');
+  });
+});
+
 describe('findPendingByUserId', () => {
   test('มีคำขอ pending → คืน payment ล่าสุด (order created_at DESC, limit 1)', async () => {
     __query.maybeSingle.mockResolvedValue({

@@ -70,3 +70,46 @@ describe('findUserIdsWithActiveAssets', () => {
     await expect(assetRepository.findUserIdsWithActiveAssets()).rejects.toThrow('db down');
   });
 });
+
+describe('countActiveSymbolsGroupedByUser', () => {
+  test('Query assets is_active=true แล้วนับ Distinct symbol แยกราย user', async () => {
+    __query.eq.mockResolvedValue({
+      data: [
+        { user_id: 'u1', symbol: 'BTC' },
+        { user_id: 'u1', symbol: 'ETH' },
+        { user_id: 'u2', symbol: 'PTT' },
+      ],
+      error: null,
+    });
+
+    const result = await assetRepository.countActiveSymbolsGroupedByUser();
+
+    expect(supabaseAdmin.from).toHaveBeenCalledWith('assets');
+    expect(__query.select).toHaveBeenCalledWith('user_id, symbol');
+    expect(__query.eq).toHaveBeenCalledWith('is_active', true);
+    expect(result).toEqual({ u1: 2, u2: 1 });
+  });
+
+  test('symbol ซ้ำของ user เดียวกัน (ข้าม Portfolio) นับเป็น 1 (Distinct)', async () => {
+    __query.eq.mockResolvedValue({
+      data: [
+        { user_id: 'u1', symbol: 'BTC' },
+        { user_id: 'u1', symbol: 'BTC' },
+      ],
+      error: null,
+    });
+
+    const result = await assetRepository.countActiveSymbolsGroupedByUser();
+    expect(result).toEqual({ u1: 1 });
+  });
+
+  test('ไม่มี Asset Active เลย → คืน {} (User ไม่มีสินทรัพย์ = ไม่มี key)', async () => {
+    __query.eq.mockResolvedValue({ data: [], error: null });
+    expect(await assetRepository.countActiveSymbolsGroupedByUser()).toEqual({});
+  });
+
+  test('Supabase error → throw', async () => {
+    __query.eq.mockResolvedValue({ data: null, error: { message: 'db down' } });
+    await expect(assetRepository.countActiveSymbolsGroupedByUser()).rejects.toThrow('db down');
+  });
+});

@@ -68,6 +68,21 @@ async function create(lineUserId, displayName, pictureUrl) {
   return toUser(data);
 }
 
+// คืน User ทั้งหมด (ใหม่→เก่า) สำหรับ Admin Dashboard (Round 4b) — Read-only List
+// ยังไม่ทำ Pagination (Beta ยังมี User หลักสิบ ข้อมูลน้อย ถ้าจำเป็นค่อยเพิ่มทีหลัง)
+async function findAll() {
+  const { data, error } = await supabaseAdmin
+    .from('users')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    throw new Error(`Failed to find all users: ${error.message}`);
+  }
+
+  return (data ?? []).map(toUser);
+}
+
 // หา user ที่ plan='premium' แต่ plan_expires_at เลยเวลาปัจจุบันไปแล้ว (หมดอายุ)
 // — Downgrade Cron (planDowngrade.job) ใช้ปรับกลับเป็น Free + แจ้งผู้ใช้
 // หมายเหตุ: กรอง plan_expires_at IS NOT NULL โดยปริยายผ่าน .lt() (แถวที่ค่าเป็น
@@ -131,6 +146,7 @@ async function updatePlan(userId, plan, expiresAt) {
 module.exports = {
   findByLineUserId,
   findById,
+  findAll,
   create,
   findExpiredPremiumUsers,
   updatePlan,

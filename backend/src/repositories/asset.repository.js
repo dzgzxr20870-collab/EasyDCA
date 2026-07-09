@@ -114,6 +114,35 @@ async function findUserIdsWithActiveAssets() {
   return Array.from(seen.values());
 }
 
+// คืน "จำนวน Symbol ที่ต่างกัน (Distinct) ของ Asset Active" แยกราย user_id เป็น
+// object { [userId]: count } — ใช้ในหน้า Admin Dashboard (Round 4b) แสดง assetCount
+// ต่อ User โดยยิง Query เดียวสำหรับทุก User (เลี่ยง N+1 ที่จะเกิดถ้าเรียก
+// countActiveByUser ทีละคน) Dedupe ราย symbol เพราะ Premium อาจถือ symbol เดียวกัน
+// ข้ามหลาย Portfolio (นับเป็น 1 สินทรัพย์ตาม "distinct symbol")
+async function countActiveSymbolsGroupedByUser() {
+  const { data, error } = await supabaseAdmin
+    .from('assets')
+    .select('user_id, symbol')
+    .eq('is_active', true);
+
+  if (error) {
+    throw new Error(`Failed to count active symbols grouped by user: ${error.message}`);
+  }
+
+  const symbolsByUser = new Map();
+  for (const row of data ?? []) {
+    if (!symbolsByUser.has(row.user_id)) symbolsByUser.set(row.user_id, new Set());
+    symbolsByUser.get(row.user_id).add(row.symbol);
+  }
+
+  const counts = {};
+  for (const [userId, symbols] of symbolsByUser) {
+    counts[userId] = symbols.size;
+  }
+
+  return counts;
+}
+
 async function countActiveByUser(userId) {
   const { count, error } = await supabaseAdmin
     .from('assets')
@@ -134,5 +163,6 @@ module.exports = {
   findActiveByUser,
   findByIds,
   countActiveByUser,
+  countActiveSymbolsGroupedByUser,
   findUserIdsWithActiveAssets,
 };

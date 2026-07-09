@@ -53,6 +53,34 @@ async function create(data) {
   return toPayment(row);
 }
 
+// คืน Payment ทั้งหมด (ใหม่→เก่า) สำหรับ Admin Dashboard (Round 4b) — Read-only List
+// Join users(display_name) มาในคราวเดียว (เลี่ยง N+1) — status เป็น Filter Optional
+// (ไม่ส่ง = คืนทุกสถานะ) | ค่า status ที่รับคือค่าจริงใน DB: pending/confirmed/
+// rejected/expired (ไม่มี 'approved' — "อนุมัติแล้ว" = 'confirmed')
+// ยังไม่ทำ Pagination เช่นเดียวกับ user.repository.findAll (ข้อมูล Beta น้อย)
+async function findAll({ status } = {}) {
+  let query = supabaseAdmin.from('payments').select('*, users(display_name)');
+
+  if (status) {
+    query = query.eq('status', status);
+  }
+
+  // ปิดท้ายด้วย order เสมอ (เป็น Method สุดท้ายที่ await) — PostgREST ให้ลำดับ
+  // filter/order สลับกันได้ ไม่กระทบผลลัพธ์
+  const { data, error } = await query.order('created_at', { ascending: false });
+
+  if (error) {
+    throw new Error(`Failed to find all payments: ${error.message}`);
+  }
+
+  // แนบ displayName จากตาราง users ที่ Join มา (toPayment เดิมไม่รู้จักคอลัมน์ Join
+  // จึงประกอบเพิ่มที่ชั้นนี้ ไม่แก้ toPayment ให้ผูกกับ Join)
+  return (data ?? []).map((row) => ({
+    ...toPayment(row),
+    displayName: row.users?.display_name ?? null,
+  }));
+}
+
 async function findById(id) {
   const { data, error } = await supabaseAdmin
     .from('payments')
@@ -182,6 +210,7 @@ async function markExpired(id) {
 
 module.exports = {
   create,
+  findAll,
   findById,
   findPendingByUserId,
   findPendingSatangTagsByBaseAmount,

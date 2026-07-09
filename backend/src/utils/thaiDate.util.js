@@ -79,6 +79,22 @@ function formatThaiDate(value) {
   return `${day} ${THAI_MONTH_NAMES[month - 1]} ${year + 543}`;
 }
 
+// คืน "ปี-เดือน" (คริสต์ศักราช, 'YYYY-MM') ตามเขตเวลา Asia/Bangkok — ใช้เทียบว่า
+// สอง Timestamp อยู่ในเดือนปฏิทินเดียวกันไหม (เช่น Admin Dashboard revenueThisMonth:
+// นับ Payment ที่ confirmed_at อยู่ในเดือนปัจจุบันของไทย) ใช้ Intl แบบเดียวกับ
+// formatThaiDate จึง Handle Timezone/ข้ามเที่ยงคืน UTC ถูกต้อง ไม่เขียน Date Logic ใหม่
+// รับได้ทั้ง Date และ ISO string (เหมือน formatThaiDate)
+function bangkokYearMonth(value) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Bangkok',
+    year: 'numeric',
+    month: '2-digit',
+  }).formatToParts(new Date(value));
+
+  const get = (type) => parts.find((p) => p.type === type)?.value;
+  return `${get('year')}-${get('month')}`;
+}
+
 module.exports = {
   THAI_DAY_NAMES,
   THAI_MONTH_NAMES,
@@ -89,4 +105,5 @@ module.exports = {
   dayOfWeekOf,
   lastDayOfMonthOf,
   formatThaiDate,
+  bangkokYearMonth,
 };
