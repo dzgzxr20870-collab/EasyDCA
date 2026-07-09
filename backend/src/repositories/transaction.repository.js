@@ -88,6 +88,27 @@ async function findAllByUser(userId) {
   }));
 }
 
+// คืน user_id (Distinct) ของ User ทุกคนที่มี Transaction อย่างน้อย 1 รายการ —
+// ใช้เป็นรายชื่อ User ที่ Cron Snapshot มูลค่าพอต (portfolioSnapshot.job) ต้องวน
+// บันทึกให้ทุกวัน
+//
+// PostgREST ไม่มี DISTINCT ตรงๆ — ดึงเฉพาะคอลัมน์ user_id ทุกแถวแล้ว Dedupe ในชั้น
+// App (Pattern เดียวกับ asset.repository.findUserIdsWithActiveAssets)
+async function findAllUserIdsWithTransactions() {
+  const { data, error } = await supabaseAdmin.from('transactions').select('user_id');
+
+  if (error) {
+    throw new Error(`Failed to find user ids with transactions: ${error.message}`);
+  }
+
+  const seen = new Set();
+  for (const row of data) {
+    seen.add(row.user_id);
+  }
+
+  return Array.from(seen);
+}
+
 async function findAllByAsset(assetId) {
   const { data, error } = await supabaseAdmin
     .from('transactions')
@@ -106,4 +127,5 @@ module.exports = {
   findRecentByUser,
   findAllByUser,
   findAllByAsset,
+  findAllUserIdsWithTransactions,
 };

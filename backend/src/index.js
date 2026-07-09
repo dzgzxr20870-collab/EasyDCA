@@ -19,6 +19,7 @@ const {
   scheduleWeeklySummaryPush,
   scheduleMonthlySummaryPush,
 } = require('./jobs/portfolioSummary.job');
+const { schedulePortfolioSnapshot } = require('./jobs/portfolioSnapshot.job');
 
 const app = express();
 
@@ -82,6 +83,8 @@ app.listen(config.app.port, () => {
   scheduleExpirePayments();
   // Downgrade ผู้ใช้ Premium ที่หมดอายุกลับเป็น Free ทุกวันตี 1 (planDowngrade.job.js)
   schedulePlanDowngrade();
+  // เก็บ Snapshot มูลค่าพอตของทุก User ทุกวันเที่ยงคืน Asia/Bangkok (portfolioSnapshot.job.js)
+  schedulePortfolioSnapshot();
 });
 
 module.exports = app;
