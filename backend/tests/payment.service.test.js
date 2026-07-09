@@ -312,3 +312,20 @@ describe('expireOverduePayments', () => {
     expect(count).toBe(1);
   });
 });
+
+describe('attachSlipImage', () => {
+  test('Wrapper บาง ๆ → ส่งต่อ paymentId/url ให้ repository.updateSlipImageUrl แล้วคืนผล', async () => {
+    paymentRepository.updateSlipImageUrl.mockResolvedValue({
+      id: 'pay-1',
+      slipImageUrl: 'https://cdn.test/slip.jpg',
+    });
+
+    const result = await paymentService.attachSlipImage('pay-1', 'https://cdn.test/slip.jpg');
+
+    expect(paymentRepository.updateSlipImageUrl).toHaveBeenCalledWith(
+      'pay-1',
+      'https://cdn.test/slip.jpg'
+    );
+    expect(result).toMatchObject({ id: 'pay-1', slipImageUrl: 'https://cdn.test/slip.jpg' });
+  });
+});

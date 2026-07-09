@@ -173,6 +173,25 @@ async function claimForRejection(id, adminLineUserId) {
   return toPayment(data);
 }
 
+// ผูก URL รูปสลิปเข้ากับคำขอ — อัปเดตเฉพาะ slip_image_url ไม่แตะ status/ฟิลด์อื่น
+// ไม่มี Guard status='pending' (ต่างจาก claimForApproval/claimForRejection) เพราะนี่
+// ไม่ใช่การเปลี่ยนสถานะสุดท้ายของ Payment แค่แนบไฟล์เพิ่ม — คืน payment ที่อัปเดตแล้ว
+// (หรือ null ถ้าไม่พบ id นั้น)
+async function updateSlipImageUrl(id, slipImageUrl) {
+  const { data, error } = await supabaseAdmin
+    .from('payments')
+    .update({ slip_image_url: slipImageUrl })
+    .eq('id', id)
+    .select('*')
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Failed to update slip image url for payment ${id}: ${error.message}`);
+  }
+
+  return toPayment(data);
+}
+
 // คำขอ pending ทั้งหมดที่เลย expires_at ไปแล้ว (สำหรับ Cron หมดอายุ)
 async function findExpiredPending(now = new Date()) {
   const nowIso = now.toISOString();
@@ -216,6 +235,7 @@ module.exports = {
   findPendingSatangTagsByBaseAmount,
   claimForApproval,
   claimForRejection,
+  updateSlipImageUrl,
   findExpiredPending,
   markExpired,
 };

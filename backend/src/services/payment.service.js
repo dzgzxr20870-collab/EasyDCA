@@ -154,6 +154,13 @@ async function findPendingByUserId(userId) {
   return paymentRepository.findPendingByUserId(userId);
 }
 
+// ผูก URL รูปสลิปเข้ากับคำขอ (Wrapper บาง ๆ ให้ Controller เรียกผ่าน Service Layer
+// แทนแตะ Repository ตรง — Layering เดียวกับ findPendingByUserId) ไม่ยิง LINE/Storage
+// API ที่ชั้นนี้ (Controller เป็นผู้ดึง Content + อัปโหลดแล้วส่ง URL ที่ได้เข้ามา)
+async function attachSlipImage(paymentId, slipImageUrl) {
+  return paymentRepository.updateSlipImageUrl(paymentId, slipImageUrl);
+}
+
 // ดึงคำขอเพื่อ "สร้างรูป QR ซ้ำ" ให้ Endpoint qr.png — ต้องยัง pending เท่านั้น
 // throw PAYMENT_NOT_FOUND ทั้งกรณีไม่พบและกรณีสถานะไม่ใช่ pending (Endpoint แปลง
 // เป็น 404 เหมือนกัน) — ผู้เรียกต้องใช้ payment.amountThb จากที่นี่ (ค่าใน DB)
@@ -258,6 +265,7 @@ module.exports = {
   allocateSatangTag,
   requestPayment,
   findPendingByUserId,
+  attachSlipImage,
   getPendingPaymentForQr,
   notifyPaymentSubmitted,
   approvePayment,

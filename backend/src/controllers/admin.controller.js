@@ -65,6 +65,7 @@ async function listPayments(req, res) {
       amountThb: p.amountThb,
       billingPeriod: p.billingPeriod,
       status: p.status,
+      slipImageUrl: p.slipImageUrl ?? null,
       createdAt: p.createdAt,
       confirmedAt: p.confirmedAt ?? null,
     }));

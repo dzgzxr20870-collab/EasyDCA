@@ -4,6 +4,7 @@
 jest.mock('../src/config/supabase', () => {
   const query = {};
   query.select = jest.fn(() => query);
+  query.update = jest.fn(() => query);
   query.eq = jest.fn(() => query);
   query.order = jest.fn(() => query);
   query.limit = jest.fn(() => query);
@@ -120,5 +121,39 @@ describe('findPendingByUserId', () => {
   test('DB error → throw', async () => {
     __query.maybeSingle.mockResolvedValue({ data: null, error: { message: 'boom' } });
     await expect(paymentRepository.findPendingByUserId('user-1')).rejects.toThrow('boom');
+  });
+});
+
+describe('updateSlipImageUrl', () => {
+  test('อัปเดตเฉพาะ slip_image_url ตาม id (ไม่แตะ status) → คืน payment ที่อัปเดต', async () => {
+    __query.maybeSingle.mockResolvedValue({
+      data: {
+        id: 'pay-1',
+        user_id: 'user-1',
+        amount_thb: 59.17,
+        status: 'pending',
+        slip_image_url: 'https://cdn.test/slip.jpg',
+      },
+      error: null,
+    });
+
+    const result = await paymentRepository.updateSlipImageUrl('pay-1', 'https://cdn.test/slip.jpg');
+
+    expect(supabaseAdmin.from).toHaveBeenCalledWith('payments');
+    expect(__query.update).toHaveBeenCalledWith({ slip_image_url: 'https://cdn.test/slip.jpg' });
+    expect(__query.eq).toHaveBeenCalledWith('id', 'pay-1');
+    // ไม่มี Guard status='pending' (ต่างจาก claimForApproval) — .eq เรียกครั้งเดียว (id)
+    expect(__query.eq).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ id: 'pay-1', slipImageUrl: 'https://cdn.test/slip.jpg' });
+  });
+
+  test('ไม่พบ id → คืน null', async () => {
+    __query.maybeSingle.mockResolvedValue({ data: null, error: null });
+    expect(await paymentRepository.updateSlipImageUrl('nope', 'url')).toBeNull();
+  });
+
+  test('DB error → throw', async () => {
+    __query.maybeSingle.mockResolvedValue({ data: null, error: { message: 'boom' } });
+    await expect(paymentRepository.updateSlipImageUrl('pay-1', 'url')).rejects.toThrow('boom');
   });
 });

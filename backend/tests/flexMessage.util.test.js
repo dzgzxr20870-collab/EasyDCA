@@ -348,3 +348,41 @@ describe('buildPreviewMessage — ราคาเป็น USD', () => {
     expect(text).toContain('1,700 บาท');
   });
 });
+
+describe('buildSlipReceivedMessage + Admin message แนบสลิป (Round 5)', () => {
+  const {
+    buildSlipReceivedMessage,
+    buildAdminPaymentRequestMessage,
+  } = require('../src/utils/flexMessage.util');
+
+  test('buildSlipReceivedMessage → ยืนยัน "ได้รับสลิป" + รอ Admin ตรวจสอบ', () => {
+    const text = JSON.stringify(buildSlipReceivedMessage());
+    expect(text).toContain('ได้รับ');
+    expect(text).toContain('รอ Admin');
+  });
+
+  test('Admin message: มี slipImageUrl → แนบรูปเป็น hero พร้อม action เปิด URL เต็ม', () => {
+    const msg = buildAdminPaymentRequestMessage(
+      { id: 'pay-1', amountThb: 59.17, billingPeriod: 'monthly', slipImageUrl: 'https://cdn.test/slip.jpg' },
+      'สมชาย'
+    );
+
+    expect(msg.contents.hero).toBeDefined();
+    expect(msg.contents.hero.url).toBe('https://cdn.test/slip.jpg');
+    expect(msg.contents.hero.action.uri).toBe('https://cdn.test/slip.jpg');
+    // ปุ่มอนุมัติ/ปฏิเสธเดิมยังอยู่ครบ
+    const text = JSON.stringify(msg);
+    expect(text).toContain('action=approve_payment&paymentId=pay-1');
+    expect(text).toContain('action=reject_payment&paymentId=pay-1');
+  });
+
+  test('Admin message: ไม่มี slipImageUrl → ไม่มี hero (Flow เดิมไม่พัง)', () => {
+    const msg = buildAdminPaymentRequestMessage(
+      { id: 'pay-1', amountThb: 59.17, billingPeriod: 'monthly' },
+      'สมชาย'
+    );
+
+    expect(msg.contents.hero).toBeUndefined();
+    expect(JSON.stringify(msg)).toContain('action=approve_payment&paymentId=pay-1');
+  });
+});

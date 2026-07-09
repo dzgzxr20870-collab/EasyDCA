@@ -3,6 +3,9 @@ const config = require('../config/env');
 const LINE_REPLY_URL = 'https://api.line.me/v2/bot/message/reply';
 const LINE_PUSH_URL = 'https://api.line.me/v2/bot/message/push';
 const LINE_PROFILE_URL = 'https://api.line.me/v2/bot/profile';
+// Content API อยู่คนละ Host (api-data) กับ Messaging API ปกติ (api) — ใช้ดึง Binary
+// ของ Image/Video/File Message (เช่น รูปสลิปโอนเงิน)
+const LINE_CONTENT_URL = 'https://api-data.line.me/v2/bot/message';
 
 // ส่งข้อความตอบกลับผ่าน LINE Reply API
 // สำคัญ: ห้าม throw ออกไป ไม่ว่า LINE จะตอบผิดพลาดอย่างไร เพราะ Webhook
@@ -87,8 +90,33 @@ async function pushMessage(to, messages) {
   }
 }
 
+// ดึง Binary Content ของ Message (รูปภาพ/ไฟล์) จาก LINE Content API
+// คืน { buffer, contentType } — buffer เป็น Node Buffer, contentType จาก Response Header
+//
+// ⚠️ ต่างจาก getProfile โดยตั้งใจ: ที่นี่ "ต้อง throw เมื่อล้มเหลว" เพื่อให้ Caller
+// (Webhook image handler) รู้ว่าดึงสลิปไม่ได้ แล้วข้ามการอัปโหลด/บันทึกไป — Caller
+// เป็นผู้ห่อ try/catch เองเพื่อไม่ให้ Webhook ทั้งก้อนพัง (Pattern เดียวกับ pushMessage)
+async function getMessageContent(messageId) {
+  const response = await fetch(`${LINE_CONTENT_URL}/${messageId}/content`, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${config.line.channelAccessToken}`,
+    },
+  });
+
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(`LINE Content API failed: ${response.status} ${detail}`);
+  }
+
+  const contentType = response.headers.get('content-type') || 'application/octet-stream';
+  const arrayBuffer = await response.arrayBuffer();
+  return { buffer: Buffer.from(arrayBuffer), contentType };
+}
+
 module.exports = {
   replyMessage,
   pushMessage,
   getProfile,
+  getMessageContent,
 };

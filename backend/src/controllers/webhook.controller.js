@@ -12,6 +12,7 @@ const paymentService = require('../services/payment.service');
 const entitlement = require('../services/entitlement.service');
 const symbolRegistry = require('../services/symbolRegistry.service');
 const lineService = require('../services/line.service');
+const storageService = require('../services/storage.service');
 const flexMessage = require('../utils/flexMessage.util');
 
 const { COMMANDS } = commandParser;
@@ -400,13 +401,50 @@ async function replyWithError(replyToken, err) {
   await lineService.replyMessage(replyToken, flexMessage.buildErrorMessage(code));
 }
 
+// ประมวลผล Image Message — ผู้ใช้ส่งรูปสลิปการโอนเงินเข้ามาใน LINE OA
+// ผูกรูปเข้ากับคำขอชำระเงินที่ยัง pending "ล่าสุด" ของผู้ใช้ (Reuse findPendingByUserId)
+//  - ไม่มีคำขอ pending เลย → ไม่ทำอะไร ไม่ตอบอะไร (ผู้ใช้อาจส่งรูปอื่นที่ไม่เกี่ยวกับ
+//    การชำระเงิน — ไม่ควร Error หรือตอบข้อความที่สร้างความสับสน)
+//  - มีคำขอ pending → ดึง Content รูป → อัปโหลด Storage → เซฟ URL → ตอบยืนยัน "ได้รับสลิป"
+//
+// ⚠️ ตอบยืนยันเฉพาะเมื่อ "บันทึกสำเร็จ" เท่านั้น ถ้าขั้นใดล้มเหลว (LINE Content API/
+// Storage ล่ม) จะ throw ขึ้นไปให้ handleEvent จับ Log ไว้เฉย ๆ โดยไม่แจ้งผู้ใช้ว่าพลาด
+// (Admin แค่จะไม่เห็นรูปตอนอนุมัติ ซึ่งไม่ Block การอนุมัติได้ตามปกติ)
+async function handleImage(event) {
+  const user = await resolveUser(event.source?.userId);
+
+  const pending = await paymentService.findPendingByUserId(user.id);
+  if (!pending) {
+    return;
+  }
+
+  const { buffer, contentType } = await lineService.getMessageContent(event.message.id);
+  const slipImageUrl = await storageService.uploadPaymentSlip(pending.id, buffer, contentType);
+  await paymentService.attachSlipImage(pending.id, slipImageUrl);
+
+  await lineService.replyMessage(event.replyToken, flexMessage.buildSlipReceivedMessage());
+}
+
 // ประมวลผล 1 Event จาก LINE — ต้องไม่ throw ออกไป เพื่อไม่ให้ Event อื่น
 // หรือ Webhook Handler ทั้งตัวพังตาม (SRS.md § 6.4)
 async function handleEvent(event) {
-  // รองรับ Text Message และ Postback (ปุ่มยืนยัน/แก้ไข/ยกเลิก) — Event อื่น
-  // (follow/unfollow/image) ข้ามไปก่อน
+  // รองรับ Text Message, Postback (ปุ่ม) และ Image Message (สลิปโอนเงิน)
+  // Event อื่น (follow/unfollow/sticker ฯลฯ) ข้ามไปก่อน
   const isText = event.type === 'message' && event.message?.type === 'text';
   const isPostback = event.type === 'postback';
+  const isImage = event.type === 'message' && event.message?.type === 'image';
+
+  // Image แยกจาก Text/Postback: ห้าม reply ข้อความ Error หาผู้ใช้ (รูปอาจไม่เกี่ยวกับ
+  // การชำระเงิน) — พลาดตรงไหนแค่ Log แล้วปล่อยผ่าน (Error Isolation เต็มรูปแบบ)
+  if (isImage) {
+    try {
+      await handleImage(event);
+    } catch (err) {
+      console.error(`[webhook] handleImage failed: ${err.message}`);
+    }
+    return;
+  }
+
   if (!isText && !isPostback) {
     return;
   }

@@ -96,6 +96,7 @@ describe('listPayments', () => {
       {
         id: 'p1', userId: 'u1', displayName: 'สมชาย', amountThb: 59.17,
         billingPeriod: 'monthly', status: 'pending',
+        slipImageUrl: 'https://cdn.test/slip.jpg',
         createdAt: '2026-07-01', confirmedAt: null,
       },
     ]);
@@ -107,8 +108,25 @@ describe('listPayments', () => {
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json.mock.calls[0][0].payments[0]).toEqual({
       id: 'p1', userId: 'u1', displayName: 'สมชาย', amountThb: 59.17,
-      billingPeriod: 'monthly', status: 'pending', createdAt: '2026-07-01', confirmedAt: null,
+      billingPeriod: 'monthly', status: 'pending',
+      slipImageUrl: 'https://cdn.test/slip.jpg',
+      createdAt: '2026-07-01', confirmedAt: null,
     });
+  });
+
+  test('Payment ไม่มีสลิป (slipImageUrl undefined) → คืน slipImageUrl: null', async () => {
+    paymentRepository.findAll.mockResolvedValue([
+      {
+        id: 'p2', userId: 'u2', displayName: 'สมหญิง', amountThb: 590,
+        billingPeriod: 'yearly', status: 'confirmed',
+        createdAt: '2026-07-02', confirmedAt: '2026-07-03',
+      },
+    ]);
+
+    const res = mockRes();
+    await listPayments({ query: {} }, res);
+
+    expect(res.json.mock.calls[0][0].payments[0].slipImageUrl).toBeNull();
   });
 
   test('status=confirmed (ค่าจริงใน DB) → ส่งต่อให้ Repository', async () => {

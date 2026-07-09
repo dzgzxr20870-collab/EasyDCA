@@ -20,6 +20,7 @@ jest.mock('../src/services/reminderSetupFlow.service', () => {
   };
 });
 jest.mock('../src/services/line.service');
+jest.mock('../src/services/storage.service');
 jest.mock('../src/services/payment.service');
 jest.mock('../src/services/entitlement.service');
 // Override เฉพาะค่าที่ Postback Premium/Dashboard ใช้ (adminIds/liff.id/publicBaseUrl)
@@ -54,6 +55,7 @@ const historyService = require('../src/services/history.service');
 const reminderService = require('../src/services/dcaReminder.service');
 const reminderSetupFlow = require('../src/services/reminderSetupFlow.service');
 const lineService = require('../src/services/line.service');
+const storageService = require('../src/services/storage.service');
 const paymentService = require('../src/services/payment.service');
 const entitlement = require('../src/services/entitlement.service');
 const commandParser = require('../src/services/commandParser.service');
@@ -1037,23 +1039,110 @@ describe('handleEvent — User Auto-register', () => {
   });
 });
 
-describe('handleEvent — Non-text events', () => {
-  test('Event ประเภท image → ข้ามไป ไม่ประมวลผล ไม่ Error', async () => {
-    const event = {
+describe('handleEvent — Image (แนบสลิปตอนแจ้งชำระ)', () => {
+  function imageEvent(messageId = 'img-1') {
+    return {
       type: 'message',
-      replyToken: 'rt',
+      replyToken: 'reply-token-1',
       source: { userId: 'U123' },
-      message: { type: 'image', id: 'img-1' },
+      message: { type: 'image', id: messageId },
     };
+  }
 
-    await handleEvent(event);
+  test('มีคำขอ pending → ดึง Content → อัปโหลด → เซฟ URL → reply ยืนยันได้รับสลิป', async () => {
+    paymentService.findPendingByUserId.mockResolvedValue({ id: 'pay-1', status: 'pending' });
+    lineService.getMessageContent.mockResolvedValue({
+      buffer: Buffer.from([1, 2, 3]),
+      contentType: 'image/jpeg',
+    });
+    storageService.uploadPaymentSlip.mockResolvedValue('https://cdn.test/payment-slips/pay-1-1.jpg');
+    paymentService.attachSlipImage.mockResolvedValue({ id: 'pay-1' });
+
+    await handleEvent(imageEvent('img-1'));
+
+    expect(paymentService.findPendingByUserId).toHaveBeenCalledWith(FREE_USER.id);
+    expect(lineService.getMessageContent).toHaveBeenCalledWith('img-1');
+    expect(storageService.uploadPaymentSlip).toHaveBeenCalledWith(
+      'pay-1',
+      Buffer.from([1, 2, 3]),
+      'image/jpeg'
+    );
+    expect(paymentService.attachSlipImage).toHaveBeenCalledWith(
+      'pay-1',
+      'https://cdn.test/payment-slips/pay-1-1.jpg'
+    );
+    expect(lastReplyText()).toContain('ได้รับ');
+  });
+
+  test('ไม่มีคำขอ pending → ไม่ดึงรูป ไม่อัปโหลด ไม่ตอบอะไร (รูปทั่วไปที่ไม่เกี่ยวกับชำระเงิน)', async () => {
+    paymentService.findPendingByUserId.mockResolvedValue(null);
+
+    await handleEvent(imageEvent());
+
+    expect(lineService.getMessageContent).not.toHaveBeenCalled();
+    expect(storageService.uploadPaymentSlip).not.toHaveBeenCalled();
+    expect(paymentService.attachSlipImage).not.toHaveBeenCalled();
+    expect(lineService.replyMessage).not.toHaveBeenCalled();
+  });
+
+  test('LINE Content API ดึงไม่สำเร็จ → ไม่ Crash, ไม่ตอบ Error หาผู้ใช้, ไม่อัปโหลด', async () => {
+    paymentService.findPendingByUserId.mockResolvedValue({ id: 'pay-1', status: 'pending' });
+    lineService.getMessageContent.mockRejectedValue(new Error('LINE Content API failed: 404'));
+
+    await expect(handleEvent(imageEvent())).resolves.toBeUndefined();
+
+    expect(storageService.uploadPaymentSlip).not.toHaveBeenCalled();
+    expect(paymentService.attachSlipImage).not.toHaveBeenCalled();
+    expect(lineService.replyMessage).not.toHaveBeenCalled();
+  });
+
+  test('อัปโหลด Storage ล้มเหลว → ไม่ Crash Webhook, ไม่เซฟ URL, ไม่ตอบ Error หาผู้ใช้', async () => {
+    paymentService.findPendingByUserId.mockResolvedValue({ id: 'pay-1', status: 'pending' });
+    lineService.getMessageContent.mockResolvedValue({
+      buffer: Buffer.from([1]),
+      contentType: 'image/jpeg',
+    });
+    storageService.uploadPaymentSlip.mockRejectedValue(new Error('bucket not found'));
+
+    await expect(handleEvent(imageEvent())).resolves.toBeUndefined();
+
+    expect(paymentService.attachSlipImage).not.toHaveBeenCalled();
+    expect(lineService.replyMessage).not.toHaveBeenCalled();
+  });
+
+  test('ส่งรูปซ้ำหลายรูปสำหรับ Payment เดียวกัน → ผูกทุกครั้ง (URL ล่าสุดชนะ)', async () => {
+    paymentService.findPendingByUserId.mockResolvedValue({ id: 'pay-1', status: 'pending' });
+    lineService.getMessageContent
+      .mockResolvedValueOnce({ buffer: Buffer.from([1]), contentType: 'image/jpeg' })
+      .mockResolvedValueOnce({ buffer: Buffer.from([2]), contentType: 'image/jpeg' });
+    storageService.uploadPaymentSlip
+      .mockResolvedValueOnce('https://cdn.test/slip-1.jpg')
+      .mockResolvedValueOnce('https://cdn.test/slip-2.jpg');
+    paymentService.attachSlipImage.mockResolvedValue({ id: 'pay-1' });
+
+    await handleEvent(imageEvent('img-1'));
+    await handleEvent(imageEvent('img-2'));
+
+    expect(paymentService.attachSlipImage).toHaveBeenNthCalledWith(1, 'pay-1', 'https://cdn.test/slip-1.jpg');
+    expect(paymentService.attachSlipImage).toHaveBeenNthCalledWith(2, 'pay-1', 'https://cdn.test/slip-2.jpg');
+  });
+});
+
+describe('handleEvent — Non-text events', () => {
+  test('Event ประเภท follow → ข้ามไป ไม่ประมวลผล', async () => {
+    await handleEvent({ type: 'follow', replyToken: 'rt', source: { userId: 'U123' } });
 
     expect(userRepository.findByLineUserId).not.toHaveBeenCalled();
     expect(lineService.replyMessage).not.toHaveBeenCalled();
   });
 
-  test('Event ประเภท follow → ข้ามไป ไม่ประมวลผล', async () => {
-    await handleEvent({ type: 'follow', replyToken: 'rt', source: { userId: 'U123' } });
+  test('Event ประเภท sticker → ข้ามไป ไม่ประมวลผล (ไม่ใช่ text/postback/image)', async () => {
+    await handleEvent({
+      type: 'message',
+      replyToken: 'rt',
+      source: { userId: 'U123' },
+      message: { type: 'sticker', id: 's-1' },
+    });
 
     expect(userRepository.findByLineUserId).not.toHaveBeenCalled();
     expect(lineService.replyMessage).not.toHaveBeenCalled();

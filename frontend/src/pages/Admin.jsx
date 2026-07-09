@@ -323,6 +323,7 @@ function Admin() {
                     <th>จำนวนเงิน</th>
                     <th>แพลน</th>
                     <th>สถานะ</th>
+                    <th>สลิป</th>
                     <th>วันที่แจ้ง</th>
                     <th>วันที่อนุมัติ</th>
                   </tr>
@@ -334,6 +335,17 @@ function Admin() {
                       <td>{formatBaht(p.amountThb)}</td>
                       <td>{p.billingPeriod === 'yearly' ? 'รายปี' : 'รายเดือน'}</td>
                       <td>{STATUS_LABEL[p.status] ?? p.status}</td>
+                      {/* คลิกเปิดรูปสลิปเต็มใน Tab ใหม่ (rel=noreferrer กัน URL รั่วผ่าน Referer)
+                          ไม่มีสลิป (ผู้ใช้ยังไม่ส่งรูป) → แสดง '-' */}
+                      <td>
+                        {p.slipImageUrl ? (
+                          <a href={p.slipImageUrl} target="_blank" rel="noreferrer">
+                            ดูสลิป
+                          </a>
+                        ) : (
+                          '-'
+                        )}
+                      </td>
                       <td>{formatDate(p.createdAt)}</td>
                       <td>{formatDate(p.confirmedAt)}</td>
                     </tr>

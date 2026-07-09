@@ -911,21 +911,37 @@ function buildAdminPaymentRequestMessage(payment, userDisplayName) {
     },
   ];
 
+  const contents = {
+    type: 'bubble',
+    header: {
+      type: 'box',
+      layout: 'vertical',
+      backgroundColor: COLOR.warningBg,
+      paddingAll: '12px',
+      contents: [textLine('💰 คำขอชำระเงินใหม่', { weight: 'bold', color: COLOR.warning })],
+    },
+    body: { type: 'box', layout: 'vertical', spacing: 'sm', contents: body },
+    footer: { type: 'box', layout: 'vertical', spacing: 'sm', contents: footerButtons },
+  };
+
+  // แนบรูปสลิปเป็น Hero ถ้าผู้ใช้ส่งมาแล้ว (slip_image_url ถูกเซฟจาก Image Handler) —
+  // แตะรูปเพื่อเปิดเต็มใน Browser ได้ (uri action) ช่วย Admin ตรวจยอดก่อนกดอนุมัติ
+  // ถ้ายังไม่มีสลิป (ผู้ใช้กดแจ้งชำระก่อนส่งรูป) ก็ไม่แนบ Hero — Flow เดิมทำงานปกติ
+  if (payment.slipImageUrl) {
+    contents.hero = {
+      type: 'image',
+      url: payment.slipImageUrl,
+      size: 'full',
+      aspectMode: 'fit',
+      aspectRatio: '3:4',
+      action: { type: 'uri', label: 'ดูสลิป', uri: payment.slipImageUrl },
+    };
+  }
+
   return {
     type: 'flex',
     altText: `คำขอชำระเงินใหม่ ${formatNumber(payment.amountThb)} บาท`,
-    contents: {
-      type: 'bubble',
-      header: {
-        type: 'box',
-        layout: 'vertical',
-        backgroundColor: COLOR.warningBg,
-        paddingAll: '12px',
-        contents: [textLine('💰 คำขอชำระเงินใหม่', { weight: 'bold', color: COLOR.warning })],
-      },
-      body: { type: 'box', layout: 'vertical', spacing: 'sm', contents: body },
-      footer: { type: 'box', layout: 'vertical', spacing: 'sm', contents: footerButtons },
-    },
+    contents,
   };
 }
 
@@ -1222,6 +1238,25 @@ function buildPaymentNotifySubmittedMessage() {
   });
 }
 
+// ตอบผู้ใช้เมื่อได้รับรูปสลิปและผูกเข้ากับคำขอ pending สำเร็จ (Image Handler ใน Webhook)
+function buildSlipReceivedMessage() {
+  return bubble({
+    headerText: '🧾 ได้รับสลิปแล้ว',
+    headerColor: COLOR.info,
+    headerBg: COLOR.profitBg,
+    bodyContents: [
+      textLine('ได้รับรูปสลิปการโอนเงินแล้ว กำลังรอ Admin ตรวจสอบ', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      textLine('เมื่ออนุมัติแล้วระบบจะแจ้งเตือนและเปิดสิทธิ์ Premium ให้ทันที', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
+}
+
 // ── ปุ่มเปิด Web Dashboard (LIFF) — action type uri (เปิดใน LINE In-App Browser)
 function buildDashboardLinkMessage(dashboardUrl) {
   return {
@@ -1347,6 +1382,7 @@ module.exports = {
   buildPremiumStatusMessage,
   buildPaymentQrMessage,
   buildPaymentNotifySubmittedMessage,
+  buildSlipReceivedMessage,
   buildDashboardLinkMessage,
   buildPlanDowngradedMessage,
   buildErrorMessage,
