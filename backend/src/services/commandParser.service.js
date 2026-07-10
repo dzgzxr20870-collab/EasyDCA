@@ -13,6 +13,8 @@ const COMMANDS = {
   // Phase 3 Round 6 — เข้าสู่โหมดนำเข้าพอร์ตแบบ Multi-line (2 ข้อความ: คำสั่งนี้
   // ก่อน แล้ว Batch หลายบรรทัดเป็นข้อความถัดไป — ดู bulkImportSession.service)
   IMPORT_PORTFOLIO: 'IMPORT_PORTFOLIO',
+  // Phase 3 Round 8 — Export รายงาน PDF/Excel (Premium) ผ่านคำสั่ง LINE Chat
+  EXPORT_REPORT: 'EXPORT_REPORT',
   UNKNOWN: 'UNKNOWN',
 };
 
@@ -83,6 +85,12 @@ const DELETE_REMINDER = new RegExp(`^ลบเตือน\\s+${SYMBOL}$`);
 // คำสั่งเข้าโหมด (ข้อความที่ 1 ของ Flow 2 ข้อความ) — Pattern การรับหลาย Alias
 // เดียวกับ PORTFOLIO ด้านบน (ชื่อไทยเต็ม/ย่อ + English)
 const IMPORT_PORTFOLIO = /^(?:นำเข้าพอร์ต|นำเข้าพอต|import)$/;
+
+// ── Export รายงาน (Phase 3 Round 8) — "ส่งออกรายงาน [ช่วงเวลา]" ─────────────
+// รับ 3 รูปแบบ: (เปล่า → เดือนนี้) / "เดือนนี้" / "ปีนี้" / "DD/MM/YYYY - DD/MM/YYYY"
+// (Custom Range — Reuse parseDateInput เดียวกับ Bulk Import Round 6)
+const EXPORT_REPORT = /^ส่งออกรายงาน(?:\s+(.+))?$/;
+const EXPORT_DATE_RANGE = /^(\d{1,2}\/\d{1,2}\/\d{4})\s*-\s*(\d{1,2}\/\d{1,2}\/\d{4})$/;
 
 // รูปแบบ 1 บรรทัดของ Batch: "SYMBOL QTY ต้นทุน PRICE[หน่วยเงิน] [วันที่ DD/MM/YYYY]"
 // ทั้ง "หน่วยเงิน" และ "วันที่" ไม่บังคับ — ไม่มีคำสั่ง "ซื้อ"/"หุ้น"/"ราคา" นำหน้า
@@ -314,6 +322,31 @@ function parseCommand(rawText) {
 
   if (IMPORT_PORTFOLIO.test(text)) {
     return { command: COMMANDS.IMPORT_PORTFOLIO, params: {} };
+  }
+
+  match = text.match(EXPORT_REPORT);
+  if (match) {
+    const rest = (match[1] ?? '').trim();
+
+    if (!rest || rest === 'เดือนนี้') {
+      return { command: COMMANDS.EXPORT_REPORT, params: { range: 'month' } };
+    }
+    if (rest === 'ปีนี้') {
+      return { command: COMMANDS.EXPORT_REPORT, params: { range: 'year' } };
+    }
+
+    const dr = rest.match(EXPORT_DATE_RANGE);
+    if (dr) {
+      const from = parseDateInput(dr[1]);
+      const to = parseDateInput(dr[2]);
+      if (from && to && from <= to) {
+        return { command: COMMANDS.EXPORT_REPORT, params: { range: 'custom', from, to } };
+      }
+    }
+
+    // ขึ้นต้นด้วย "ส่งออกรายงาน" แต่ส่วนที่เหลือ Parse ไม่ได้ → Controller ตอบวิธีใช้
+    // ที่ถูกต้องพร้อมตัวอย่าง (ไม่ปล่อย Error ดิบ — Design ข้อ 1)
+    return { command: COMMANDS.EXPORT_REPORT, params: { invalid: true } };
   }
 
   return unknown();

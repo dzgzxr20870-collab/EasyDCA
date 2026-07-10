@@ -55,4 +55,31 @@ async function apiPost(path, body) {
   return response.json();
 }
 
-export { getToken, apiGet, apiPost };
+// ดาวน์โหลดไฟล์ Binary (เช่น รายงาน PDF/Excel) — แยกจาก apiGet เพราะ Response เป็น
+// Blob ไม่ใช่ JSON (Round 8) คง Logic แนบ Token/จัดการ 401 แบบเดียวกัน คืน
+// { blob, filename } (filename ดึงจาก Content-Disposition ที่ Backend ตั้งมา)
+async function apiDownload(path) {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    headers: { Authorization: `Bearer ${getToken()}` },
+  });
+
+  if (response.status === 401) {
+    localStorage.removeItem(TOKEN_KEY);
+    window.location.href = '/';
+    throw new Error('UNAUTHORIZED');
+  }
+
+  if (!response.ok) {
+    // Error Body เป็น JSON ({ error: CODE }) — โยน code ให้ Caller แสดงผลเอง
+    const body = await response.json().catch(() => null);
+    throw new Error(body?.error || `Request failed: ${response.status}`);
+  }
+
+  const blob = await response.blob();
+  const disposition = response.headers.get('Content-Disposition') || '';
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  const filename = match ? match[1] : 'EasyDCA-Report';
+  return { blob, filename };
+}
+
+export { getToken, apiGet, apiPost, apiDownload };

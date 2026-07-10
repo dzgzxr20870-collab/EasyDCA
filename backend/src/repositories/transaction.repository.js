@@ -109,6 +109,34 @@ async function findAllUserIdsWithTransactions() {
   return Array.from(seen);
 }
 
+// ดึง Transaction ของ User ที่ date อยู่ในช่วง [from, to] (ทั้งสองฝั่ง Inclusive)
+// พร้อม Join assets เพื่อได้ symbol มาในคราวเดียว (เลี่ยง N+1) — ใช้สำหรับ Export
+// รายงาน (Phase 3 Round 8) ที่ต้องกรอง "ประวัติธุรกรรม" ตามช่วงเวลาที่ผู้ใช้เลือก
+// (ต่างจาก findAllByUser ที่คืนทั้งพอร์ต) from/to เป็น 'YYYY-MM-DD' (transactions.date
+// เป็น DATE column — เทียบ String ได้ตรงตัว) เรียง date ASC, created_at ASC เพื่อให้
+// รายงานอ่านไล่จากเก่า→ใหม่เหมือน Bank Statement
+async function findByUserAndDateRange(userId, from, to) {
+  const { data, error } = await supabaseAdmin
+    .from('transactions')
+    .select('*, assets(symbol)')
+    .eq('user_id', userId)
+    .gte('date', from)
+    .lte('date', to)
+    .order('date', { ascending: true })
+    .order('created_at', { ascending: true });
+
+  if (error) {
+    throw new Error(
+      `Failed to find transactions in range for user ${userId}: ${error.message}`
+    );
+  }
+
+  return data.map((row) => ({
+    ...toTransaction(row),
+    symbol: row.assets?.symbol ?? null,
+  }));
+}
+
 async function findAllByAsset(assetId) {
   const { data, error } = await supabaseAdmin
     .from('transactions')
@@ -126,6 +154,7 @@ module.exports = {
   create,
   findRecentByUser,
   findAllByUser,
+  findByUserAndDateRange,
   findAllByAsset,
   findAllUserIdsWithTransactions,
 };

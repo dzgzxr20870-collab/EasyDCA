@@ -25,6 +25,7 @@ jest.mock('../src/services/payment.service');
 jest.mock('../src/services/entitlement.service');
 jest.mock('../src/services/bulkImportSession.service');
 jest.mock('../src/services/bulkImport.service');
+jest.mock('../src/services/reportExport.service');
 jest.mock('../src/services/mutualFund.service');
 jest.mock('../src/repositories/asset.repository');
 // Override เฉพาะค่าที่ Postback Premium/Dashboard ใช้ (adminIds/liff.id/publicBaseUrl)
@@ -63,6 +64,7 @@ const storageService = require('../src/services/storage.service');
 const paymentService = require('../src/services/payment.service');
 const bulkImportSession = require('../src/services/bulkImportSession.service');
 const bulkImportService = require('../src/services/bulkImport.service');
+const reportExportService = require('../src/services/reportExport.service');
 const mutualFundService = require('../src/services/mutualFund.service');
 const assetRepository = require('../src/repositories/asset.repository');
 const entitlement = require('../src/services/entitlement.service');
@@ -1487,5 +1489,179 @@ describe('handleEvent — กองทุนรวมไทย (Round 7)', () =>
     const reply = lastReplyText();
     expect(reply).toContain('ไม่พบชนิดหน่วยลงทุน');
     expect(reply).not.toContain('FUND_CLASS_NOT_FOUND');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// Export รายงาน PDF/Excel (Phase 3 Round 8)
+// ═══════════════════════════════════════════════════════════════════════
+describe('handleEvent — Export รายงาน (Round 8) — คำสั่ง "ส่งออกรายงาน"', () => {
+  test('ไม่ใช่ Premium → reply ฟีเจอร์ Premium (resolveRange ไม่ถูกเรียก — Gate ก่อนเสมอ)', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.EXPORT_REPORT,
+      params: { range: 'month' },
+    });
+    entitlement.isPremiumActive.mockReturnValue(false);
+
+    await handleEvent(textEvent('ส่งออกรายงาน'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('Premium');
+    // CTA อัพเกรด (Reuse ปุ่มแพ็กเกจเดิม)
+    expect(reply).toContain('action=request_payment&period=monthly');
+    expect(reportExportService.resolveRange).not.toHaveBeenCalled();
+  });
+
+  test('Premium + Parse ได้ (month) → resolveRange แล้ว reply Quick Reply PDF/Excel + Label', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.EXPORT_REPORT,
+      params: { range: 'month' },
+    });
+    entitlement.isPremiumActive.mockReturnValue(true);
+    reportExportService.resolveRange.mockReturnValue({
+      from: '2026-07-01',
+      to: '2026-07-31',
+      label: 'เดือนกรกฎาคม 2569',
+    });
+
+    await handleEvent(textEvent('ส่งออกรายงาน'));
+
+    expect(reportExportService.resolveRange).toHaveBeenCalledWith({ range: 'month' });
+    const reply = lastReplyText();
+    expect(reply).toContain('เดือนกรกฎาคม 2569');
+    expect(reply).toContain('action=export_report&format=pdf&rt=month');
+    expect(reply).toContain('action=export_report&format=excel&rt=month');
+  });
+
+  test('Parse ไม่ผ่าน (invalid) → reply วิธีใช้ทันที ไม่เช็ค Premium (isPremiumActive ไม่ถูกเรียก)', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.EXPORT_REPORT,
+      params: { invalid: true },
+    });
+
+    await handleEvent(textEvent('ส่งออกรายงาน อาทิตย์นี้'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('ส่งออกรายงาน');
+    expect(reply).toContain('ปีนี้'); // ตัวอย่างใน Help message
+    expect(entitlement.isPremiumActive).not.toHaveBeenCalled();
+    expect(reportExportService.resolveRange).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleEvent — Export รายงาน (Round 8) — Postback เลือกรูปแบบไฟล์', () => {
+  const BUFFER = Buffer.from('%PDF-fake-report');
+
+  test('ไม่ใช่ Premium (เช็คซ้ำตอน Postback) → reply Premium, generatePortfolioReport ไม่ถูกเรียก', async () => {
+    entitlement.isPremiumActive.mockReturnValue(false);
+
+    await handleEvent(postbackEvent('action=export_report&format=pdf&rt=month'));
+
+    expect(lastReplyText()).toContain('Premium');
+    expect(reportExportService.generatePortfolioReport).not.toHaveBeenCalled();
+    expect(storageService.uploadReport).not.toHaveBeenCalled();
+  });
+
+  test('Premium + rt=month → Generate → uploadReport ด้วย Buffer → การ์ดดาวน์โหลด (Argument Trace ครบ)', async () => {
+    entitlement.isPremiumActive.mockReturnValue(true);
+    reportExportService.generatePortfolioReport.mockResolvedValue({
+      buffer: BUFFER,
+      filename: 'EasyDCA-Report-2026-07-01_2026-07-31.pdf',
+      mimeType: 'application/pdf',
+    });
+    reportExportService.resolveRange.mockReturnValue({
+      from: '2026-07-01',
+      to: '2026-07-31',
+      label: 'เดือนกรกฎาคม 2569',
+    });
+    storageService.uploadReport.mockResolvedValue({
+      path: 'user-1-123.pdf',
+      signedUrl: 'https://cdn.supabase.test/reports/user-1-123.pdf?token=abc',
+      expiresInSeconds: 900,
+    });
+
+    await handleEvent(postbackEvent('action=export_report&format=pdf&rt=month'));
+
+    // ส่ง range ถูกต้องเข้า Service
+    expect(reportExportService.generatePortfolioReport).toHaveBeenCalledWith(FREE_USER.id, {
+      format: 'pdf',
+      range: { range: 'month' },
+    });
+    // uploadReport รับ Buffer ที่ generate คืนมา + format ตรง
+    expect(storageService.uploadReport).toHaveBeenCalledWith(FREE_USER.id, BUFFER, 'pdf');
+
+    const reply = lastReplyText();
+    // signedUrl จาก uploadReport → ปุ่มดาวน์โหลด
+    expect(reply).toContain('https://cdn.supabase.test/reports/user-1-123.pdf?token=abc');
+    // expiresInSeconds 900 → expiresMinutes 15 (Cross-file Trace)
+    expect(reply).toContain('15 นาที');
+    // rangeLabel จาก resolveRange
+    expect(reply).toContain('เดือนกรกฎาคม 2569');
+  });
+
+  test('rt=custom → ถอด from/to จาก Postback แล้วส่ง range custom เข้า Service', async () => {
+    entitlement.isPremiumActive.mockReturnValue(true);
+    reportExportService.generatePortfolioReport.mockResolvedValue({
+      buffer: BUFFER,
+      filename: 'r.xlsx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    reportExportService.resolveRange.mockReturnValue({
+      from: '2026-01-01',
+      to: '2026-06-30',
+      label: '1 มกราคม 2569 - 30 มิถุนายน 2569',
+    });
+    storageService.uploadReport.mockResolvedValue({
+      path: 'user-1-9.xlsx',
+      signedUrl: 'https://cdn/reports/user-1-9.xlsx?t=z',
+      expiresInSeconds: 900,
+    });
+
+    await handleEvent(
+      postbackEvent('action=export_report&format=excel&rt=custom&from=2026-01-01&to=2026-06-30')
+    );
+
+    expect(reportExportService.generatePortfolioReport).toHaveBeenCalledWith(FREE_USER.id, {
+      format: 'excel',
+      range: { range: 'custom', from: '2026-01-01', to: '2026-06-30' },
+    });
+  });
+
+  test('generatePortfolioReport throw ReportServiceError → แปลไทยเฉพาะ, uploadReport ไม่ถูกเรียก', async () => {
+    entitlement.isPremiumActive.mockReturnValue(true);
+    reportExportService.generatePortfolioReport.mockRejectedValue(
+      Object.assign(new Error('bad range'), { code: 'EXPORT_INVALID_RANGE' })
+    );
+
+    await handleEvent(postbackEvent('action=export_report&format=pdf&rt=custom&from=x&to=y'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('ช่วงเวลาที่ระบุไม่ถูกต้อง');
+    expect(reply).not.toContain('EXPORT_INVALID_RANGE');
+    // Generate ล้มเหลว → ไม่พยายาม Upload ต่อ
+    expect(storageService.uploadReport).not.toHaveBeenCalled();
+  });
+
+  test('uploadReport throw (ไม่มี code) → แปลงเป็น EXPORT_GENERATION_FAILED ("สร้างรายงานไม่สำเร็จ") ไม่ Crash', async () => {
+    entitlement.isPremiumActive.mockReturnValue(true);
+    reportExportService.generatePortfolioReport.mockResolvedValue({
+      buffer: BUFFER,
+      filename: 'r.pdf',
+      mimeType: 'application/pdf',
+    });
+    reportExportService.resolveRange.mockReturnValue({
+      from: '2026-07-01',
+      to: '2026-07-31',
+      label: 'เดือนกรกฎาคม 2569',
+    });
+    // storageService.uploadReport throw Error ธรรมดา (ไม่มี .code) — เช่น Bucket ไม่มี
+    storageService.uploadReport.mockRejectedValue(new Error('bucket not found'));
+
+    await handleEvent(postbackEvent('action=export_report&format=pdf&rt=month'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('สร้างรายงานไม่สำเร็จ');
+    expect(reply).not.toContain('bucket not found'); // ไม่หลุด Error ดิบ
+    expect(reply).not.toContain('เกิดข้อผิดพลาดบางอย่าง'); // ไม่ตกเป็น INTERNAL_ERROR ทั่วไป
   });
 });

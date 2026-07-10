@@ -12,7 +12,7 @@ import {
   Tooltip,
   Legend,
 } from 'chart.js';
-import { apiGet } from '../lib/api.js';
+import { apiGet, apiDownload } from '../lib/api.js';
 import './Dashboard.css';
 
 ChartJS.register(
@@ -113,6 +113,14 @@ function Dashboard() {
   // ใช้ได้ปกติ เพราะเป็น Production Web App จริงที่ผู้ใช้เข้าเว็บผ่าน Browser
   // ไม่ใช่ Sandbox Artifact ของ Claude ที่ห้ามใช้ Browser Storage
   const [theme, setTheme] = useState(() => localStorage.getItem(THEME_KEY) || 'light');
+
+  // Export รายงาน (Round 8) — Modal เลือกช่วงเวลา + รูปแบบไฟล์ แล้วดาวน์โหลด Blob
+  const [showExport, setShowExport] = useState(false);
+  const [exportRange, setExportRange] = useState('month');
+  const [exportFrom, setExportFrom] = useState('');
+  const [exportTo, setExportTo] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState(null);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -295,6 +303,51 @@ function Dashboard() {
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
   }
 
+  // สร้างรายงานตามช่วง/รูปแบบที่เลือก → รับ Blob → Trigger ดาวน์โหลดด้วย <a> ชั่วคราว
+  // format = 'pdf' | 'excel' (ปุ่มส่งค่ามาตรงๆ) — Backend เช็ค Premium เอง (403 ถ้าไม่ใช่)
+  async function handleExport(format) {
+    setExportError(null);
+
+    if (exportRange === 'custom' && (!exportFrom || !exportTo)) {
+      setExportError('กรุณาเลือกวันเริ่มต้นและวันสิ้นสุด');
+      return;
+    }
+    if (exportRange === 'custom' && exportFrom > exportTo) {
+      setExportError('วันเริ่มต้นต้องไม่เกินวันสิ้นสุด');
+      return;
+    }
+
+    setExporting(true);
+    try {
+      const params = new URLSearchParams({ format, range: exportRange });
+      if (exportRange === 'custom') {
+        params.set('from', exportFrom);
+        params.set('to', exportTo);
+      }
+
+      const { blob, filename } = await apiDownload(`/api/v1/reports/export?${params.toString()}`);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setShowExport(false);
+    } catch (err) {
+      if (err.message === 'EXPORT_PREMIUM_REQUIRED') {
+        setExportError('การส่งออกรายงานเป็นฟีเจอร์สำหรับสมาชิก Premium — กรุณาอัพเกรดผ่านเมนู Premium ใน LINE');
+      } else if (err.message === 'EXPORT_INVALID_RANGE') {
+        setExportError('ช่วงเวลาที่เลือกไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง');
+      } else {
+        setExportError('สร้างรายงานไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+      }
+    } finally {
+      setExporting(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="dashboard-page">
@@ -319,6 +372,17 @@ function Dashboard() {
       <header className="dashboard-header">
         <div className="dashboard-logo">EasyDCA</div>
         <div className="dashboard-header-actions">
+          <button
+            type="button"
+            className="dashboard-export-btn"
+            onClick={() => {
+              setExportError(null);
+              setShowExport(true);
+            }}
+            title="ส่งออกรายงาน PDF/Excel"
+          >
+            📑 Export
+          </button>
           <button
             type="button"
             className="dashboard-theme-btn"
@@ -681,6 +745,92 @@ function Dashboard() {
           </div>
         )}
       </div>
+
+      {/* ── Modal Export รายงาน (Round 8) ──────────────────────────────────── */}
+      {showExport && (
+        <div className="dashboard-modal-overlay" onClick={() => !exporting && setShowExport(false)}>
+          <div className="dashboard-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="dashboard-modal-header">
+              <h3>📑 ส่งออกรายงาน</h3>
+              <button
+                type="button"
+                className="dashboard-modal-close"
+                onClick={() => setShowExport(false)}
+                disabled={exporting}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="dashboard-modal-body">
+              <p className="dashboard-modal-label">ช่วงเวลา (ประวัติธุรกรรม)</p>
+              <div className="dashboard-chip-group">
+                {[
+                  { id: 'month', label: 'เดือนนี้' },
+                  { id: 'year', label: 'ปีนี้' },
+                  { id: 'custom', label: 'กำหนดเอง' },
+                ].map((r) => (
+                  <button
+                    key={r.id}
+                    type="button"
+                    className={`dashboard-chip${exportRange === r.id ? ' on' : ''}`}
+                    onClick={() => setExportRange(r.id)}
+                  >
+                    {r.label}
+                  </button>
+                ))}
+              </div>
+
+              {exportRange === 'custom' && (
+                <div className="dashboard-modal-dates">
+                  <label>
+                    ตั้งแต่
+                    <input
+                      type="date"
+                      value={exportFrom}
+                      onChange={(e) => setExportFrom(e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    ถึง
+                    <input
+                      type="date"
+                      value={exportTo}
+                      onChange={(e) => setExportTo(e.target.value)}
+                    />
+                  </label>
+                </div>
+              )}
+
+              <p className="dashboard-modal-hint">
+                * สรุปพอร์ตปัจจุบันจะแสดงมูลค่า ณ ตอนนี้เสมอ — ช่วงเวลานี้ใช้กรองเฉพาะประวัติธุรกรรม
+              </p>
+
+              {exportError && <p className="dashboard-modal-error">{exportError}</p>}
+
+              <p className="dashboard-modal-label">รูปแบบไฟล์</p>
+              <div className="dashboard-modal-formats">
+                <button
+                  type="button"
+                  className="dashboard-format-btn pdf"
+                  onClick={() => handleExport('pdf')}
+                  disabled={exporting}
+                >
+                  {exporting ? 'กำลังสร้าง...' : '📄 ดาวน์โหลด PDF'}
+                </button>
+                <button
+                  type="button"
+                  className="dashboard-format-btn excel"
+                  onClick={() => handleExport('excel')}
+                  disabled={exporting}
+                >
+                  {exporting ? 'กำลังสร้าง...' : '📊 ดาวน์โหลด Excel'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

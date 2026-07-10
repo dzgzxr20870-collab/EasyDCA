@@ -11,6 +11,7 @@ const authRoutes = require('./routes/auth.routes');
 const dashboardRoutes = require('./routes/dashboard.routes');
 const paymentRoutes = require('./routes/payment.routes');
 const adminRoutes = require('./routes/admin.routes');
+const reportsRoutes = require('./routes/reports.routes');
 const { scheduleExpirePending, schedulePurgeOld } = require('./jobs/pendingCleanup.job');
 const { scheduleExpirePayments } = require('./jobs/paymentExpiry.job');
 const { schedulePlanDowngrade } = require('./jobs/planDowngrade.job');
@@ -64,6 +65,10 @@ app.use('/api/v1/payment', paymentRoutes);
 // Mount Admin Routes (Phase 3 Round 4a — Admin Auth) ที่ /api/v1/admin
 // ทุก Route ภายในผ่าน requireAuth + requireAdmin (ดู admin.routes.js)
 app.use('/api/v1/admin', adminRoutes);
+
+// Mount Reports Routes (Phase 3 Round 8 — Export PDF/Excel) ที่ /api/v1/reports
+// ทุก Route ผ่าน requireAuth + เช็ค Premium ในชั้น Controller (ดู reports.controller.js)
+app.use('/api/v1/reports', reportsRoutes);
 
 // Railway Health Check (ดู docs/DEPLOYMENT.md § 3.1)
 app.get('/health', (req, res) => {

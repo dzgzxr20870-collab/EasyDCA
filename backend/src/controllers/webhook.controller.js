@@ -17,6 +17,7 @@ const lineService = require('../services/line.service');
 const storageService = require('../services/storage.service');
 const bulkImportSession = require('../services/bulkImportSession.service');
 const bulkImportService = require('../services/bulkImport.service');
+const reportExportService = require('../services/reportExport.service');
 const flexMessage = require('../utils/flexMessage.util');
 
 const { COMMANDS } = commandParser;
@@ -230,6 +231,22 @@ async function routeCommand(user, parsed) {
     case COMMANDS.IMPORT_PORTFOLIO: {
       await bulkImportSession.startSession(user.id);
       return flexMessage.buildBulkImportInstructionsMessage();
+    }
+
+    // ── Export รายงาน (Phase 3 Round 8) — ข้อความที่ 1: เลือกช่วงเวลาจากคำสั่ง ───
+    // Premium-only เช็ค isPremiumActive (Reuse entitlement.service) ก่อนถามรูปแบบไฟล์
+    // ผ่านแล้ว → Quick Reply เลือก PDF/Excel (Postback พก range ไปสร้างไฟล์ต่อ)
+    case COMMANDS.EXPORT_REPORT: {
+      // Parse ช่วงเวลาไม่ผ่าน → บอกวิธีใช้ที่ถูกต้อง (ไม่ Error ดิบ — Design ข้อ 1)
+      if (parsed.params.invalid) {
+        return flexMessage.buildExportFormatHelpMessage();
+      }
+      if (!entitlement.isPremiumActive(user)) {
+        return flexMessage.buildExportPremiumRequiredMessage();
+      }
+      // Resolve เพื่อได้ label ไทยแสดงยืนยันช่วง + Validate (custom from<=to) อีกชั้น
+      const resolved = reportExportService.resolveRange(parsed.params);
+      return flexMessage.buildExportFormatQuickReply(parsed.params, resolved.label);
     }
 
     case COMMANDS.UNKNOWN:
@@ -495,6 +512,49 @@ async function routePostback(user, data) {
     // แล้วตก UNKNOWN โดยไม่ได้ตั้งใจ (ดู Comment ใน setupRichMenu.js)
     case 'add_guide': {
       return flexMessage.buildAddGuideMessage();
+    }
+
+    // ── Export รายงาน (Phase 3 Round 8) — ข้อความที่ 2: เลือกรูปแบบไฟล์แล้ว ──────
+    // เช็ค Premium ซ้ำ (กันสถานะเปลี่ยนระหว่างกดปุ่ม) → Generate ไฟล์ (Reuse Logic
+    // เดียวกับ LIFF) → อัปโหลด Storage Bucket 'reports' (Private) + Signed URL 15 นาที
+    // → ตอบการ์ดปุ่มดาวน์โหลด
+    case 'export_report': {
+      if (!entitlement.isPremiumActive(user)) {
+        return flexMessage.buildExportPremiumRequiredMessage();
+      }
+
+      const format = params.get('format');
+      const rt = params.get('rt');
+      const range =
+        rt === 'custom'
+          ? { range: 'custom', from: params.get('from'), to: params.get('to') }
+          : { range: rt };
+
+      // ห่อ Generate+Upload: Error ที่มี code เฉพาะอยู่แล้ว (ReportServiceError เช่น
+      // EXPORT_INVALID_RANGE/EXPORT_INVALID_FORMAT) ปล่อยผ่านให้ replyWithError แปลตรงๆ
+      // ส่วน Error ที่ไม่มี code (เช่น storageService.uploadReport ที่ throw Error ธรรมดา
+      // — Bucket ไม่มี/Sign ล้มเหลว) แปลงเป็น EXPORT_GENERATION_FAILED เพื่อให้ผู้ใช้เห็น
+      // ข้อความเฉพาะ "สร้างรายงานไม่สำเร็จ" แทน INTERNAL_ERROR ทั่วไป
+      try {
+        const { buffer } = await reportExportService.generatePortfolioReport(user.id, {
+          format,
+          range,
+        });
+        const resolved = reportExportService.resolveRange(range);
+        const upload = await storageService.uploadReport(user.id, buffer, format);
+
+        return flexMessage.buildReportReadyMessage({
+          signedUrl: upload.signedUrl,
+          format,
+          rangeLabel: resolved.label,
+          expiresMinutes: Math.round(upload.expiresInSeconds / 60),
+        });
+      } catch (err) {
+        if (err.code) throw err; // ReportServiceError ที่มี code เฉพาะ → คงไว้
+        throw Object.assign(new Error(`export report failed: ${err.message}`), {
+          code: 'EXPORT_GENERATION_FAILED',
+        });
+      }
     }
 
     default:

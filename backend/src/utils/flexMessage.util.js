@@ -90,6 +90,13 @@ const ERROR_MESSAGES = {
   // Bulk Import (bulkImport.service / pendingTransaction.service — Phase 3 Round 6)
   BATCH_NOT_FOUND:
     'ไม่พบรายการนำเข้าพอร์ตนี้ อาจหมดอายุหรือถูกดำเนินการไปแล้ว กรุณาพิมพ์ "นำเข้าพอร์ต" เพื่อเริ่มใหม่',
+  // Export รายงาน (Phase 3 Round 8 — reportExport.service)
+  EXPORT_INVALID_RANGE:
+    'ช่วงเวลาที่ระบุไม่ถูกต้อง กรุณาพิมพ์เช่น "ส่งออกรายงาน เดือนนี้", "ส่งออกรายงาน ปีนี้" หรือ "ส่งออกรายงาน 01/01/2569 - 30/06/2569"',
+  EXPORT_INVALID_FORMAT: 'รูปแบบไฟล์ไม่ถูกต้อง กรุณาเลือก PDF หรือ Excel จากปุ่มที่ระบบส่งให้',
+  EXPORT_USER_NOT_FOUND: 'ไม่พบบัญชีผู้ใช้ของคุณ กรุณาลองใหม่อีกครั้งภายหลัง',
+  EXPORT_GENERATION_FAILED:
+    'สร้างรายงานไม่สำเร็จในขณะนี้ กรุณาลองใหม่อีกครั้งภายหลัง หากยังไม่ได้ให้ติดต่อทีมงาน',
 };
 
 // Postback data encoding สำหรับปุ่มในข้อความ Preview — Controller ถอดด้วย
@@ -1747,8 +1754,167 @@ function buildBulkImportConfirmedMessage(result) {
   });
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// Export รายงาน PDF/Excel (Phase 3 Round 8 — Premium Feature)
+// ═══════════════════════════════════════════════════════════════════════
+
+// Postback data ของปุ่มเลือกรูปแบบไฟล์ — พก range type (rt) + from/to (เฉพาะ custom)
+// เพื่อให้ Handler Regenerate ได้โดยไม่ต้องเก็บ Session (LINE Postback ≤ 300 ตัวอักษร
+// พอสำหรับ format + วันที่) rt=month/year → Handler Re-resolve ช่วงตามวันปัจจุบันเอง
+function exportPostback(format, params) {
+  const base =
+    params.range === 'custom'
+      ? `rt=custom&from=${params.from}&to=${params.to}`
+      : `rt=${params.range}`;
+  return `action=export_report&format=${format}&${base}`;
+}
+
+// Quick Reply ให้เลือก PDF/Excel หลังพิมพ์ "ส่งออกรายงาน [ช่วงเวลา]" (Premium ผ่านแล้ว)
+// label = ข้อความช่วงเวลาไทยจาก reportExport.resolveRange (แสดงให้ผู้ใช้ยืนยันช่วงที่เลือก)
+function buildExportFormatQuickReply(params, label) {
+  const items = [
+    {
+      type: 'action',
+      action: {
+        type: 'postback',
+        label: '📄 PDF',
+        data: exportPostback('pdf', params),
+        displayText: 'ส่งออกรายงานเป็น PDF',
+      },
+    },
+    {
+      type: 'action',
+      action: {
+        type: 'postback',
+        label: '📊 Excel',
+        data: exportPostback('excel', params),
+        displayText: 'ส่งออกรายงานเป็น Excel',
+      },
+    },
+  ];
+
+  return {
+    type: 'text',
+    text: `จะส่งออกรายงานช่วง "${label}" เป็นไฟล์แบบไหนดีครับ?`,
+    quickReply: { items },
+  };
+}
+
+// การ์ดแจ้งลิงก์ดาวน์โหลดรายงาน (หลังสร้างไฟล์ + อัปโหลด Storage + Signed URL สำเร็จ)
+// ปุ่ม "ดาวน์โหลดรายงาน" = uri action ชี้ไป Signed URL + คำเตือนหมดอายุตาม TTL จริง
+// arg = { signedUrl, format ('pdf'|'excel'), rangeLabel, expiresMinutes }
+function buildReportReadyMessage({ signedUrl, format, rangeLabel, expiresMinutes }) {
+  const formatLabel = format === 'excel' ? 'Excel (.xlsx)' : 'PDF (.pdf)';
+
+  return {
+    type: 'flex',
+    altText: 'รายงานพร้อมดาวน์โหลดแล้ว',
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: COLOR.profitBg,
+        paddingAll: '12px',
+        contents: [textLine('📑 รายงานพร้อมแล้ว', { weight: 'bold', color: COLOR.profit })],
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: [
+          textLine(`ช่วงเวลา: ${rangeLabel}`, { size: 'sm', color: COLOR.textPrimary }),
+          textLine(`รูปแบบไฟล์: ${formatLabel}`, { size: 'sm', color: COLOR.textSecondary }),
+          textLine(`⚠️ ลิงก์นี้จะหมดอายุใน ${expiresMinutes} นาที กรุณาดาวน์โหลดทันที`, {
+            size: 'xs',
+            color: COLOR.warning,
+          }),
+        ],
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: [
+          {
+            type: 'button',
+            style: 'primary',
+            color: COLOR.profit,
+            action: { type: 'uri', label: '⬇️ ดาวน์โหลดรายงาน', uri: signedUrl },
+          },
+        ],
+      },
+    },
+  };
+}
+
+// ข้อความแจ้งว่า Export เป็นฟีเจอร์ Premium พร้อม CTA อัพเกรด (Reuse ปุ่มแพ็กเกจเดิม)
+function buildExportPremiumRequiredMessage() {
+  const body = [
+    textLine('Export รายงานเป็นฟีเจอร์สมาชิก Premium 👑', {
+      size: 'md',
+      weight: 'bold',
+      color: COLOR.textPrimary,
+    }),
+    textLine('อัพเกรดเป็น Premium เพื่อส่งออกรายงานสรุปพอร์ต + ประวัติธุรกรรมเป็น PDF/Excel ได้', {
+      size: 'sm',
+      color: COLOR.textSecondary,
+    }),
+    separator(),
+    textLine('เลือกแพ็กเกจด้านล่างเพื่ออัพเกรดได้เลย', { size: 'sm', color: COLOR.textPrimary }),
+  ];
+
+  return {
+    type: 'flex',
+    altText: 'Export รายงานเป็นฟีเจอร์ Premium',
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: COLOR.warningBg,
+        paddingAll: '12px',
+        contents: [textLine('👑 ฟีเจอร์ Premium', { weight: 'bold', color: COLOR.warning })],
+      },
+      body: { type: 'box', layout: 'vertical', spacing: 'sm', contents: body },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: premiumPeriodButtons('รายเดือน 59 บาท', 'รายปี 590 บาท'),
+      },
+    },
+  };
+}
+
+// อธิบายรูปแบบคำสั่งที่ถูกต้องเมื่อ Parse ช่วงเวลาไม่ได้ (ไม่ปล่อย Error ดิบ)
+function buildExportFormatHelpMessage() {
+  return bubble({
+    headerText: '📑 ส่งออกรายงาน',
+    headerColor: COLOR.info,
+    headerBg: COLOR.profitBg,
+    bodyContents: [
+      textLine('พิมพ์คำสั่งส่งออกรายงานตามรูปแบบด้านล่างได้เลย', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      textLine('• ส่งออกรายงาน  (ค่าเริ่มต้น = เดือนนี้)', { size: 'sm', color: COLOR.textSecondary }),
+      textLine('• ส่งออกรายงาน เดือนนี้', { size: 'sm', color: COLOR.textSecondary }),
+      textLine('• ส่งออกรายงาน ปีนี้', { size: 'sm', color: COLOR.textSecondary }),
+      textLine('• ส่งออกรายงาน 01/01/2569 - 30/06/2569', {
+        size: 'sm',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
+}
+
 module.exports = {
   ERROR_MESSAGES,
+  buildExportFormatQuickReply,
+  buildReportReadyMessage,
+  buildExportPremiumRequiredMessage,
+  buildExportFormatHelpMessage,
   buildBuyConfirmMessage,
   buildSellConfirmMessage,
   buildProfitMessage,

@@ -509,3 +509,142 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Export รายงาน (Round 8) — ปุ่ม Header + Modal เลือกช่วงเวลา/รูปแบบไฟล์
+   ═══════════════════════════════════════════════════════════════════════ */
+.dashboard-export-btn {
+  background: var(--dca-green);
+  border: 1px solid var(--dca-green);
+  color: #ffffff;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dashboard-export-btn:hover {
+  background: var(--dca-green-2);
+}
+
+.dashboard-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  z-index: 1000;
+}
+
+.dashboard-modal {
+  background: var(--dca-card);
+  color: var(--dca-text);
+  border: 1px solid var(--dca-border);
+  border-radius: 14px;
+  box-shadow: var(--dca-shadow);
+  width: 100%;
+  max-width: 420px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.dashboard-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--dca-border);
+}
+
+.dashboard-modal-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.dashboard-modal-close {
+  background: none;
+  border: none;
+  color: var(--dca-text-muted);
+  font-size: 1.2rem;
+  cursor: pointer;
+}
+
+.dashboard-modal-body {
+  padding: 20px;
+}
+
+.dashboard-modal-label {
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+
+.dashboard-modal-dates {
+  display: flex;
+  gap: 12px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.dashboard-modal-dates label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.85rem;
+  color: var(--dca-text-muted);
+}
+
+.dashboard-modal-dates input {
+  background: var(--dca-card-alt);
+  border: 1px solid var(--dca-border);
+  color: var(--dca-text);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.dashboard-modal-hint {
+  font-size: 0.78rem;
+  color: var(--dca-text-muted);
+  margin: 14px 0;
+}
+
+.dashboard-modal-error {
+  color: var(--dca-neg);
+  font-size: 0.85rem;
+  margin: 10px 0;
+}
+
+.dashboard-modal-formats {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.dashboard-format-btn {
+  flex: 1;
+  border-radius: 10px;
+  padding: 12px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--dca-border);
+}
+
+.dashboard-format-btn.pdf {
+  background: var(--dca-neg);
+  color: #ffffff;
+  border-color: var(--dca-neg);
+}
+
+.dashboard-format-btn.excel {
+  background: var(--dca-green);
+  color: #ffffff;
+  border-color: var(--dca-green);
+}
+
+.dashboard-format-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
