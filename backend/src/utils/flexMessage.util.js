@@ -1909,8 +1909,243 @@ function buildExportFormatHelpMessage() {
   });
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// AI Slip OCR (Phase 3 Round 9 — Premium Feature)
+// ═══════════════════════════════════════════════════════════════════════
+
+// Postback data ของปุ่ม [ยืนยัน]/[แก้ไข] บนการ์ด OCR — พกค่าที่ AI อ่านได้ (Symbol/
+// ทิศทาง/จำนวน+ราคา หรือ ยอดรวม/วันที่ ISO) เพื่อให้ Handler สร้าง Pending ได้โดยไม่
+// ต้องเก็บ Session (LINE Postback ≤ 300 ตัวอักษร พอสำหรับข้อมูล 1 รายการ)
+function ocrPostback(action, ocr) {
+  const p = new URLSearchParams();
+  p.set('action', action);
+  p.set('sym', ocr.symbol);
+  p.set('side', ocr.side === 'sell' ? 'sell' : 'buy');
+  if (ocr.quantity !== null && ocr.pricePerUnit !== null) {
+    p.set('qty', String(ocr.quantity));
+    p.set('price', String(ocr.pricePerUnit));
+  } else if (ocr.amountThb !== null) {
+    p.set('amt', String(ocr.amountThb));
+  }
+  // วันที่ส่งเฉพาะปุ่มยืนยัน (Path Postback ไม่ผ่าน Command Parser ที่ไม่รองรับวันที่)
+  if (action === 'ocr_confirm' && ocr.dateIso) p.set('date', ocr.dateIso);
+  return p.toString();
+}
+
+// การ์ด Preview หลัง AI อ่านสลิปสำเร็จ — แสดง Field ที่อ่านได้/อ่านไม่ได้ชัดเจน + ปุ่ม
+// [ยืนยันบันทึก] (เฉพาะเมื่อข้อมูลครบพอสร้างธุรกรรม) และ [แก้ไข] เสมอ พร้อม Disclaimer
+// ว่าเป็นการอ่านข้อมูลด้วย AI ไม่ใช่คำแนะนำการลงทุน (กฎเหล็ก PROJECT_BRIEF)
+function buildOcrPreviewMessage(ocr) {
+  const isBuy = ocr.side !== 'sell';
+  const sideLabel = isBuy ? 'ซื้อ' : 'ขาย';
+  const naText = 'อ่านไม่ได้ (กรุณากรอกเอง)';
+
+  // สร้างธุรกรรมได้เมื่อมี Symbol + (จำนวน&ราคา) หรือ (ยอดรวมบาท) อย่างใดอย่างหนึ่ง
+  const confirmable =
+    Boolean(ocr.symbol) &&
+    ((ocr.quantity !== null && ocr.pricePerUnit !== null) || ocr.amountThb !== null);
+
+  const body = [
+    textLine(`${isBuy ? '🟢' : '🔴'} ${sideLabel} ${ocr.symbol}`, {
+      size: 'lg',
+      weight: 'bold',
+      color: COLOR.textPrimary,
+    }),
+    textLine(
+      `จำนวน: ${ocr.quantity !== null ? `${formatNumber(ocr.quantity)} ${ocr.symbol}` : naText}`,
+      { size: 'sm', color: ocr.quantity !== null ? COLOR.textSecondary : COLOR.warning }
+    ),
+    textLine(
+      `ราคาต่อหน่วย: ${ocr.pricePerUnit !== null ? `${formatNumber(ocr.pricePerUnit)} บาท` : naText}`,
+      { size: 'sm', color: ocr.pricePerUnit !== null ? COLOR.textSecondary : COLOR.warning }
+    ),
+  ];
+  if (ocr.amountThb !== null) {
+    body.push(
+      textLine(`ยอดรวม: ${formatNumber(ocr.amountThb)} บาท`, { size: 'sm', color: COLOR.textSecondary })
+    );
+  }
+  body.push(
+    textLine(`วันที่: ${ocr.date ?? 'วันนี้ (ไม่พบวันที่ในสลิป)'}`, {
+      size: 'sm',
+      color: COLOR.textSecondary,
+    }),
+    separator(),
+    textLine('* ระบบอ่านข้อมูลจากรูปด้วย AI เท่านั้น ไม่ใช่คำแนะนำการลงทุน กรุณาตรวจสอบก่อนกดยืนยัน', {
+      size: 'xs',
+      color: COLOR.textSecondary,
+    }),
+    textLine(`* โควตาอ่านสลิปเดือนนี้เหลือ ${ocr.remainingQuota}/${ocr.quotaLimit} ครั้ง`, {
+      size: 'xs',
+      color: COLOR.textSecondary,
+    })
+  );
+
+  const footerButtons = [];
+  if (confirmable) {
+    footerButtons.push({
+      type: 'button',
+      style: 'primary',
+      color: isBuy ? COLOR.profit : COLOR.loss,
+      action: {
+        type: 'postback',
+        label: '✅ ยืนยันบันทึก',
+        data: ocrPostback('ocr_confirm', ocr),
+        displayText: 'ยืนยันบันทึกรายการจากสลิป',
+      },
+    });
+  }
+  footerButtons.push({
+    type: 'button',
+    style: 'secondary',
+    action: {
+      type: 'postback',
+      label: confirmable ? '✏️ แก้ไข' : '✏️ กรอกเอง',
+      data: ocrPostback('ocr_edit', ocr),
+      displayText: 'แก้ไขรายการจากสลิป',
+    },
+  });
+
+  return {
+    type: 'flex',
+    altText: `อ่านสลิป ${sideLabel} ${ocr.symbol}`,
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: COLOR.profitBg,
+        paddingAll: '12px',
+        contents: [textLine('🧾 อ่านสลิปแล้ว ตรวจสอบก่อนบันทึก', { weight: 'bold', color: COLOR.info })],
+      },
+      body: { type: 'box', layout: 'vertical', spacing: 'sm', contents: body },
+      footer: { type: 'box', layout: 'vertical', spacing: 'sm', contents: footerButtons },
+    },
+  };
+}
+
+// ข้อความ [แก้ไข] — Prefill คำสั่งซื้อ/ขายให้ผู้ใช้ Copy ไปแก้เฉพาะจุดที่ผิดแล้วส่งใหม่
+// เข้า Command Parser เดิม (ไม่เขียน Parser ใหม่) — prefillText มาจาก Controller
+function buildOcrEditPrefillMessage(prefillText) {
+  return bubble({
+    headerText: '✏️ แก้ไขรายการ',
+    headerColor: COLOR.info,
+    headerBg: COLOR.profitBg,
+    bodyContents: [
+      textLine('คัดลอกข้อความด้านล่าง แก้ไขให้ถูกต้อง แล้วส่งกลับมาเพื่อบันทึก', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      textLine(prefillText, { size: 'md', weight: 'bold', color: COLOR.textPrimary }),
+      textLine('* ส่วนที่เป็น <...> คือค่าที่ AI อ่านไม่ได้ กรุณากรอกแทนที่ก่อนส่ง', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
+}
+
+// อ่านสลิปเป็นฟีเจอร์ Premium — ตอบเมื่อผู้ใช้ที่ไม่ใช่ Premium ส่งรูป (ไม่มีคำขอชำระเงิน
+// ค้าง) พร้อม CTA อัพเกรด (Reuse ปุ่มแพ็กเกจเดิม premiumPeriodButtons)
+function buildOcrPremiumRequiredMessage() {
+  const body = [
+    textLine('อ่านสลิปด้วย AI เป็นฟีเจอร์สมาชิก Premium 👑', {
+      size: 'md',
+      weight: 'bold',
+      color: COLOR.textPrimary,
+    }),
+    textLine('อัพเกรดเป็น Premium เพื่อส่งรูปสลิปให้ระบบอ่านและกรอกรายการซื้อ/ขายให้อัตโนมัติ', {
+      size: 'sm',
+      color: COLOR.textSecondary,
+    }),
+    separator(),
+    textLine('เลือกแพ็กเกจด้านล่างเพื่ออัพเกรดได้เลย', { size: 'sm', color: COLOR.textPrimary }),
+  ];
+
+  return {
+    type: 'flex',
+    altText: 'อ่านสลิปเป็นฟีเจอร์ Premium',
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: COLOR.warningBg,
+        paddingAll: '12px',
+        contents: [textLine('👑 ฟีเจอร์ Premium', { weight: 'bold', color: COLOR.warning })],
+      },
+      body: { type: 'box', layout: 'vertical', spacing: 'sm', contents: body },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: premiumPeriodButtons('รายเดือน 59 บาท', 'รายปี 590 บาท'),
+      },
+    },
+  };
+}
+
+// ข้อความ Error ของ Flow OCR (Quota/ไม่ใช่สลิป/หลายรายการ/Rate Limit/ล้มเหลว) เป็นไทย
+// ทั้งหมด ไม่ปล่อย Error ดิบ — ทุกกรณีย้ำว่า "ไม่ถูกนับโควตา" ตามที่เกี่ยวข้อง
+const OCR_ERROR = {
+  OCR_QUOTA_EXCEEDED: {
+    header: '⚠️ ใช้ครบโควตาเดือนนี้แล้ว',
+    color: COLOR.warning,
+    bg: COLOR.warningBg,
+    message:
+      'คุณใช้สิทธิ์อ่านสลิปด้วย AI ครบ 50 ครั้งในเดือนนี้แล้ว สิทธิ์จะรีเซ็ตในเดือนถัดไป ระหว่างนี้ยังพิมพ์คำสั่งซื้อ/ขายเองได้ตามปกติ',
+  },
+  OCR_NOT_A_SLIP: {
+    header: '🔍 ไม่พบข้อมูลการซื้อขาย',
+    color: COLOR.warning,
+    bg: COLOR.warningBg,
+    message:
+      'ไม่พบข้อมูลการซื้อ/ขายสินทรัพย์ในรูปนี้ กรุณาส่งรูปสลิปที่ชัดเจน หรือพิมพ์คำสั่งเอง เช่น "ซื้อ BTC 0.01 หุ้น ราคา 3400000" (ครั้งนี้ไม่ถูกนับโควตา)',
+  },
+  OCR_MULTIPLE_ITEMS: {
+    header: '📄 พบหลายรายการในรูป',
+    color: COLOR.info,
+    bg: COLOR.profitBg,
+    message:
+      'รูปนี้มีหลายรายการ ระบบยังไม่รองรับการอ่าน Statement หลายรายการต่อรูป กรุณาใช้คำสั่ง "นำเข้าพอร์ต" เพื่อนำเข้าหลายรายการ หรือส่งสลิปทีละรายการ (ครั้งนี้ไม่ถูกนับโควตา)',
+  },
+  OCR_RATE_LIMITED: {
+    header: '⏳ ส่งเร็วเกินไป',
+    color: COLOR.warning,
+    bg: COLOR.warningBg,
+    message: 'คุณส่งรูปถี่เกินไป กรุณารอสักครู่ (ประมาณ 10 วินาที) แล้วส่งใหม่อีกครั้ง',
+  },
+  OCR_FAILED: {
+    header: '⚠️ อ่านสลิปไม่สำเร็จ',
+    color: COLOR.warning,
+    bg: COLOR.warningBg,
+    message:
+      'อ่านสลิปไม่สำเร็จในขณะนี้ กรุณาลองส่งรูปใหม่อีกครั้งภายหลัง หรือพิมพ์คำสั่งซื้อ/ขายเอง (การอ่านที่ไม่สำเร็จไม่ถูกนับโควตา)',
+  },
+  OCR_NOT_CONFIGURED: {
+    header: '⚠️ ระบบยังไม่พร้อม',
+    color: COLOR.warning,
+    bg: COLOR.warningBg,
+    message: 'ระบบอ่านสลิปด้วย AI ยังไม่พร้อมใช้งานในขณะนี้ กรุณาลองใหม่ภายหลังหรือติดต่อทีมงาน',
+  },
+};
+
+function buildOcrErrorMessage(code) {
+  const e = OCR_ERROR[code] ?? OCR_ERROR.OCR_FAILED;
+  return bubble({
+    headerText: e.header,
+    headerColor: e.color,
+    headerBg: e.bg,
+    bodyContents: [textLine(e.message, { size: 'sm', color: COLOR.textPrimary })],
+  });
+}
+
 module.exports = {
   ERROR_MESSAGES,
+  buildOcrPreviewMessage,
+  buildOcrEditPrefillMessage,
+  buildOcrPremiumRequiredMessage,
+  buildOcrErrorMessage,
   buildExportFormatQuickReply,
   buildReportReadyMessage,
   buildExportPremiumRequiredMessage,

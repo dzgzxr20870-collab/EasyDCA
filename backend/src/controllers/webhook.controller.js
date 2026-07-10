@@ -18,6 +18,7 @@ const storageService = require('../services/storage.service');
 const bulkImportSession = require('../services/bulkImportSession.service');
 const bulkImportService = require('../services/bulkImport.service');
 const reportExportService = require('../services/reportExport.service');
+const slipOcrService = require('../services/slipOcr.service');
 const flexMessage = require('../utils/flexMessage.util');
 
 const { COMMANDS } = commandParser;
@@ -557,6 +558,53 @@ async function routePostback(user, data) {
       }
     }
 
+    // ── AI Slip OCR (Round 9): ผู้ใช้กด "ยืนยันบันทึก" จากการ์ดที่ AI อ่านสลิป ────────
+    // เช็ค Premium ซ้ำ (กันสถานะเปลี่ยนระหว่างกดปุ่ม) → ประกอบเป็นคำสั่ง BUY/SELL แล้ว
+    // "Route ผ่าน routeCommand เดิม" (Reuse type resolution + fund + createPending +
+    // validateBuy/validateSell ทั้งหมด) → เข้า Preview→Confirm ปกติเหมือนคำสั่งพิมพ์เอง
+    // ทุกประการ ไม่ Skip Validation ใดๆ (ตาม Design ข้อ 6)
+    case 'ocr_confirm': {
+      if (!entitlement.isPremiumActive(user)) {
+        return flexMessage.buildOcrPremiumRequiredMessage();
+      }
+
+      const side = params.get('side') === 'sell' ? 'sell' : 'buy';
+      const command = side === 'sell' ? COMMANDS.SELL : COMMANDS.BUY;
+
+      const commandParams = { symbol: String(params.get('sym') ?? '').toUpperCase() };
+      const amt = params.get('amt');
+      if (amt !== null) {
+        commandParams.amountThb = Number(amt);
+      } else {
+        commandParams.quantity = Number(params.get('qty'));
+        commandParams.pricePerUnit = Number(params.get('price'));
+      }
+      const dateIso = params.get('date');
+      if (dateIso) commandParams.date = dateIso; // ISO 'YYYY-MM-DD' (createPending ใช้ตรงๆ)
+
+      return routeCommand(user, { command, params: commandParams });
+    }
+
+    // ── AI Slip OCR (Round 9): ผู้ใช้กด "แก้ไข" → ตอบข้อความ Prefill ให้ Copy ไปแก้ ───
+    // ประกอบรูปแบบคำสั่งซื้อ/ขายเดิม (Reuse Command Parser เดิม ไม่เขียนใหม่) ค่าที่ AI
+    // อ่านไม่ได้ (qty/price ไม่มีใน Postback) แทนด้วย <...> ให้ผู้ใช้กรอกแล้วส่งกลับมา
+    case 'ocr_edit': {
+      const sideLabel = params.get('side') === 'sell' ? 'ขาย' : 'ซื้อ';
+      const sym = String(params.get('sym') ?? '').toUpperCase();
+      const amt = params.get('amt');
+
+      let prefill;
+      if (amt !== null) {
+        prefill = `${sideLabel} ${sym} ${amt}`;
+      } else {
+        const qty = params.get('qty') ?? '<จำนวน>';
+        const price = params.get('price') ?? '<ราคา>';
+        prefill = `${sideLabel} ${sym} ${qty} หุ้น ราคา ${price}`;
+      }
+
+      return flexMessage.buildOcrEditPrefillMessage(prefill);
+    }
+
     default:
       return flexMessage.buildUnknownCommandMessage();
   }
@@ -635,28 +683,59 @@ async function replyWithError(replyToken, err) {
   await lineService.replyMessage(replyToken, flexMessage.buildErrorMessage(code));
 }
 
-// ประมวลผล Image Message — ผู้ใช้ส่งรูปสลิปการโอนเงินเข้ามาใน LINE OA
-// ผูกรูปเข้ากับคำขอชำระเงินที่ยัง pending "ล่าสุด" ของผู้ใช้ (Reuse findPendingByUserId)
-//  - ไม่มีคำขอ pending เลย → ไม่ทำอะไร ไม่ตอบอะไร (ผู้ใช้อาจส่งรูปอื่นที่ไม่เกี่ยวกับ
-//    การชำระเงิน — ไม่ควร Error หรือตอบข้อความที่สร้างความสับสน)
-//  - มีคำขอ pending → ดึง Content รูป → อัปโหลด Storage → เซฟ URL → ตอบยืนยัน "ได้รับสลิป"
+// ประมวลผล Image Message — แยก 2 กรณีตามลำดับความสำคัญ:
+//  1) มีคำขอชำระเงิน pending ค้าง → สลิปโอนเงิน Premium (Round 5) — ผูกรูปเข้าคำขอ
+//  2) ไม่มีคำขอ pending → สลิปซื้อ/ขายสินทรัพย์ (Round 9 — AI OCR, Premium เท่านั้น)
 //
-// ⚠️ ตอบยืนยันเฉพาะเมื่อ "บันทึกสำเร็จ" เท่านั้น ถ้าขั้นใดล้มเหลว (LINE Content API/
-// Storage ล่ม) จะ throw ขึ้นไปให้ handleEvent จับ Log ไว้เฉย ๆ โดยไม่แจ้งผู้ใช้ว่าพลาด
-// (Admin แค่จะไม่เห็นรูปตอนอนุมัติ ซึ่งไม่ Block การอนุมัติได้ตามปกติ)
+// การจัดลำดับ "มี pending payment ก่อน" ทำให้ Flow Round 5 เดิมไม่ถูกกระทบ (ผู้ใช้ที่
+// กำลังจ่ายเงินและส่งสลิปโอน ยังเข้าทางเดิมเสมอ) — เฉพาะกรณี "ไม่มีคำขอชำระเงินค้าง"
+// เท่านั้นที่ตีความรูปเป็นสลิปสินทรัพย์
 async function handleImage(event) {
   const user = await resolveUser(event.source?.userId);
 
   const pending = await paymentService.findPendingByUserId(user.id);
-  if (!pending) {
-    return;
+  if (pending) {
+    return handlePaymentSlipImage(event, pending);
   }
 
+  return handleAssetSlipImage(event, user);
+}
+
+// ── (Round 5) สลิปโอนเงิน Premium — มีคำขอ pending ค้าง ────────────────────
+// ⚠️ ตอบยืนยันเฉพาะเมื่อ "บันทึกสำเร็จ" เท่านั้น ถ้าขั้นใดล้มเหลว (LINE Content API/
+// Storage ล่ม) จะ throw ขึ้นไปให้ handleEvent จับ Log ไว้เฉย ๆ โดยไม่แจ้งผู้ใช้ว่าพลาด
+// (Admin แค่จะไม่เห็นรูปตอนอนุมัติ ซึ่งไม่ Block การอนุมัติได้ตามปกติ)
+async function handlePaymentSlipImage(event, pending) {
   const { buffer, contentType } = await lineService.getMessageContent(event.message.id);
   const slipImageUrl = await storageService.uploadPaymentSlip(pending.id, buffer, contentType);
   await paymentService.attachSlipImage(pending.id, slipImageUrl);
 
   await lineService.replyMessage(event.replyToken, flexMessage.buildSlipReceivedMessage());
+}
+
+// ── (Round 9) สลิปซื้อ/ขายสินทรัพย์ — AI OCR (Premium เท่านั้น) ──────────────
+// ไม่ใช่ Premium → ตอบชวนอัพเกรดทันที (ไม่เรียก Claude — ประหยัดค่าใช้จ่าย)
+// Premium → ดึงรูป → slipOcr.extractSlip (มี Rate Limit + Quota + เรียก Claude Vision)
+//           → ตอบการ์ด Preview พร้อมปุ่มยืนยัน/แก้ไข
+//
+// ต่างจาก Payment Slip: กรณีนี้ "ตอบผู้ใช้เสมอ" (รวม Error) จึงห่อ try/catch เองในนี้
+// แล้วแปลง code เป็นข้อความไทยเฉพาะผ่าน buildOcrErrorMessage (Quota เต็ม/ไม่ใช่สลิป/
+// หลายรายการ/Rate Limit/ล้มเหลว) — replyMessage เองไม่ throw อยู่แล้ว
+async function handleAssetSlipImage(event, user) {
+  if (!entitlement.isPremiumActive(user)) {
+    await lineService.replyMessage(event.replyToken, flexMessage.buildOcrPremiumRequiredMessage());
+    return;
+  }
+
+  try {
+    const { buffer, contentType } = await lineService.getMessageContent(event.message.id);
+    const ocr = await slipOcrService.extractSlip(user.id, buffer, contentType);
+    await lineService.replyMessage(event.replyToken, flexMessage.buildOcrPreviewMessage(ocr));
+  } catch (err) {
+    // getMessageContent (ไม่มี code) → OCR_FAILED | SlipOcrError → code เฉพาะ
+    console.error(`[webhook] asset slip OCR failed (code=${err.code ?? 'OCR_FAILED'}): ${err.message}`);
+    await lineService.replyMessage(event.replyToken, flexMessage.buildOcrErrorMessage(err.code));
+  }
 }
 
 // ประมวลผล 1 Event จาก LINE — ต้องไม่ throw ออกไป เพื่อไม่ให้ Event อื่น

@@ -26,6 +26,7 @@ jest.mock('../src/services/entitlement.service');
 jest.mock('../src/services/bulkImportSession.service');
 jest.mock('../src/services/bulkImport.service');
 jest.mock('../src/services/reportExport.service');
+jest.mock('../src/services/slipOcr.service');
 jest.mock('../src/services/mutualFund.service');
 jest.mock('../src/repositories/asset.repository');
 // Override เฉพาะค่าที่ Postback Premium/Dashboard ใช้ (adminIds/liff.id/publicBaseUrl)
@@ -65,6 +66,7 @@ const paymentService = require('../src/services/payment.service');
 const bulkImportSession = require('../src/services/bulkImportSession.service');
 const bulkImportService = require('../src/services/bulkImport.service');
 const reportExportService = require('../src/services/reportExport.service');
+const slipOcrService = require('../src/services/slipOcr.service');
 const mutualFundService = require('../src/services/mutualFund.service');
 const assetRepository = require('../src/repositories/asset.repository');
 const entitlement = require('../src/services/entitlement.service');
@@ -1242,15 +1244,61 @@ describe('handleEvent — Image (แนบสลิปตอนแจ้งช�
     expect(lastReplyText()).toContain('ได้รับ');
   });
 
-  test('ไม่มีคำขอ pending → ไม่ดึงรูป ไม่อัปโหลด ไม่ตอบอะไร (รูปทั่วไปที่ไม่เกี่ยวกับชำระเงิน)', async () => {
+  // Round 9: ไม่มีคำขอ pending → ไม่ใช่ Payment Slip อีกต่อไป แต่เป็น Asset Slip (R9)
+  test('ไม่มีคำขอ pending + ไม่ใช่ Premium → ตอบชวนอัพเกรด (ไม่ดึงรูป ไม่เรียก OCR)', async () => {
     paymentService.findPendingByUserId.mockResolvedValue(null);
+    entitlement.isPremiumActive.mockReturnValue(false);
 
     await handleEvent(imageEvent());
 
     expect(lineService.getMessageContent).not.toHaveBeenCalled();
+    expect(slipOcrService.extractSlip).not.toHaveBeenCalled();
     expect(storageService.uploadPaymentSlip).not.toHaveBeenCalled();
-    expect(paymentService.attachSlipImage).not.toHaveBeenCalled();
-    expect(lineService.replyMessage).not.toHaveBeenCalled();
+    expect(lastReplyText()).toContain('Premium');
+  });
+
+  test('ไม่มีคำขอ pending + Premium → OCR สำเร็จ → reply การ์ด Preview พร้อมปุ่มยืนยัน', async () => {
+    paymentService.findPendingByUserId.mockResolvedValue(null);
+    entitlement.isPremiumActive.mockReturnValue(true);
+    lineService.getMessageContent.mockResolvedValue({
+      buffer: Buffer.from([9]),
+      contentType: 'image/jpeg',
+    });
+    slipOcrService.extractSlip.mockResolvedValue({
+      symbol: 'BTC', side: 'buy', quantity: 0.5, pricePerUnit: 1500000, amountThb: 750000,
+      date: '05/07/2026', dateIso: '2026-07-05', confidence: 'high', remainingQuota: 49, quotaLimit: 50,
+    });
+
+    await handleEvent(imageEvent('img-x'));
+
+    expect(slipOcrService.extractSlip).toHaveBeenCalledWith('user-1', Buffer.from([9]), 'image/jpeg');
+    // ไม่ไปทาง Payment Slip เดิม
+    expect(storageService.uploadPaymentSlip).not.toHaveBeenCalled();
+    const reply = lastReplyText();
+    expect(reply).toContain('BTC');
+    expect(reply).toContain('action=ocr_confirm');
+  });
+
+  test('ไม่มีคำขอ pending + Premium + โควตาเต็ม → ตอบข้อความโควตา (ไม่ Crash)', async () => {
+    paymentService.findPendingByUserId.mockResolvedValue(null);
+    entitlement.isPremiumActive.mockReturnValue(true);
+    lineService.getMessageContent.mockResolvedValue({ buffer: Buffer.from([9]), contentType: 'image/jpeg' });
+    slipOcrService.extractSlip.mockRejectedValue(
+      Object.assign(new Error('quota'), { code: 'OCR_QUOTA_EXCEEDED' })
+    );
+
+    await expect(handleEvent(imageEvent())).resolves.toBeUndefined();
+    expect(lastReplyText()).toContain('โควตา');
+  });
+
+  test('ไม่มีคำขอ pending + Premium + ดึงรูปไม่ได้ → ตอบ OCR_FAILED (ไม่ Crash, ไม่เรียก OCR)', async () => {
+    paymentService.findPendingByUserId.mockResolvedValue(null);
+    entitlement.isPremiumActive.mockReturnValue(true);
+    lineService.getMessageContent.mockRejectedValue(new Error('LINE Content API failed: 404'));
+
+    await expect(handleEvent(imageEvent())).resolves.toBeUndefined();
+    expect(slipOcrService.extractSlip).not.toHaveBeenCalled();
+    expect(lastReplyText()).toContain('อ่านสลิปไม่สำเร็จ');
   });
 
   test('LINE Content API ดึงไม่สำเร็จ → ไม่ Crash, ไม่ตอบ Error หาผู้ใช้, ไม่อัปโหลด', async () => {
@@ -1663,5 +1711,75 @@ describe('handleEvent — Export รายงาน (Round 8) — Postback เ�
     expect(reply).toContain('สร้างรายงานไม่สำเร็จ');
     expect(reply).not.toContain('bucket not found'); // ไม่หลุด Error ดิบ
     expect(reply).not.toContain('เกิดข้อผิดพลาดบางอย่าง'); // ไม่ตกเป็น INTERNAL_ERROR ทั่วไป
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// AI Slip OCR (Phase 3 Round 9) — Postback ยืนยัน/แก้ไข จากการ์ดที่ AI อ่านสลิป
+// ═══════════════════════════════════════════════════════════════════════
+describe('handleEvent — AI Slip OCR Postback (Round 9)', () => {
+  test('ocr_confirm (Premium) → Route เป็นคำสั่ง BUY → createPending (Validate เดิม) → Preview', async () => {
+    entitlement.isPremiumActive.mockReturnValue(true);
+    pendingService.createPending.mockResolvedValue({
+      id: 'p-ocr', commandType: 'buy', assetSymbol: 'BTC',
+      quantity: 0.5, pricePerUnit: 1500000, amountThb: 750000, priceSource: 'user',
+    });
+
+    await handleEvent(
+      postbackEvent('action=ocr_confirm&sym=BTC&side=buy&qty=0.5&price=1500000&date=2026-07-05')
+    );
+
+    // Reuse createPending เดิม (type=crypto เติมจาก symbolRegistry จริง) + date ISO ผ่านตรง
+    expect(pendingService.createPending).toHaveBeenCalledWith(
+      FREE_USER.id,
+      expect.objectContaining({
+        command: COMMANDS.BUY,
+        params: expect.objectContaining({
+          symbol: 'BTC',
+          quantity: 0.5,
+          pricePerUnit: 1500000,
+          date: '2026-07-05',
+        }),
+      }),
+      { plan: 'free' }
+    );
+    expect(lastReplyText()).toContain('BTC');
+  });
+
+  test('ocr_confirm (มีแต่ยอดรวม amt) → Route BUY ด้วย amountThb', async () => {
+    entitlement.isPremiumActive.mockReturnValue(true);
+    pendingService.createPending.mockResolvedValue({
+      id: 'p-ocr2', commandType: 'buy', assetSymbol: 'BTC',
+      quantity: 0.0005, pricePerUnit: 2000000, amountThb: 1000, priceSource: 'coingecko',
+    });
+
+    await handleEvent(postbackEvent('action=ocr_confirm&sym=BTC&side=buy&amt=1000'));
+
+    expect(pendingService.createPending).toHaveBeenCalledWith(
+      FREE_USER.id,
+      expect.objectContaining({ params: expect.objectContaining({ symbol: 'BTC', amountThb: 1000 }) }),
+      { plan: 'free' }
+    );
+  });
+
+  test('ocr_confirm ไม่ใช่ Premium (Plan เปลี่ยนระหว่างกดปุ่ม) → Premium required, ไม่ createPending', async () => {
+    entitlement.isPremiumActive.mockReturnValue(false);
+
+    await handleEvent(postbackEvent('action=ocr_confirm&sym=BTC&side=buy&qty=0.5&price=1500000'));
+
+    expect(pendingService.createPending).not.toHaveBeenCalled();
+    expect(lastReplyText()).toContain('Premium');
+  });
+
+  test('ocr_edit → ตอบข้อความ Prefill คำสั่งซื้อให้ Copy แก้ (เข้า Parser เดิม)', async () => {
+    await handleEvent(postbackEvent('action=ocr_edit&sym=BTC&side=buy&qty=0.5&price=1500000'));
+    expect(lastReplyText()).toContain('ซื้อ BTC 0.5 หุ้น ราคา 1500000');
+  });
+
+  test('ocr_edit ค่าที่ AI อ่านไม่ได้ (ไม่มี qty/price) → ใส่ <จำนวน>/<ราคา> ให้กรอกแทน', async () => {
+    await handleEvent(postbackEvent('action=ocr_edit&sym=BTC&side=buy'));
+    const reply = lastReplyText();
+    expect(reply).toContain('<จำนวน>');
+    expect(reply).toContain('<ราคา>');
   });
 });
