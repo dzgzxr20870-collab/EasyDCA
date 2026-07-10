@@ -30,6 +30,16 @@ const ERROR_MESSAGES = {
   // หรือราคายังว่าง (เช่นก่อนตลาดเปิด) — ไม่เดาราคา ให้ผู้ใช้ลองใหม่/ระบุราคาเอง
   GOLD_PRICE_UNAVAILABLE:
     'ดึงราคาทองคำปัจจุบันไม่ได้ในขณะนี้ (ราคายังไม่อัพเดตหรือระบบราคาขัดข้องชั่วคราว) กรุณาลองใหม่ภายหลัง หรือระบุราคาต้นทุนเองตอนซื้อ เช่น "ซื้อ GOLD 1 หุ้น ราคา 71000"',
+  // กองทุนรวมไทย (Round 7 — SEC Open Data API)
+  MUTUAL_FUND_NAV_UNAVAILABLE:
+    'ดึงราคา NAV ของกองทุนนี้ไม่ได้ในขณะนี้ (NAV ยังไม่อัพเดตหรือระบบ ก.ล.ต. ขัดข้องชั่วคราว) กรุณาลองใหม่ภายหลัง หรือระบุราคาต้นทุนเองตอนซื้อ',
+  MUTUAL_FUND_LIST_UNAVAILABLE:
+    'ค้นหารายชื่อกองทุนไม่ได้ในขณะนี้ (ระบบข้อมูลกองทุนขัดข้องชั่วคราว) กรุณาลองใหม่อีกครั้งภายหลัง',
+  FUND_CLASS_NOT_FOUND:
+    'ไม่พบชนิดหน่วยลงทุนที่เลือก อาจมีการเปลี่ยนแปลงข้อมูล กรุณาพิมพ์คำสั่งซื้อกองทุนใหม่อีกครั้ง',
+  // ยังไม่ได้ตั้งค่า SEC_API_SUBSCRIPTION_KEY / SEC_FUND_MASTER_LIST_PATH (Config ไม่พร้อม)
+  SEC_NOT_CONFIGURED:
+    'ระบบข้อมูลกองทุนรวมยังไม่พร้อมใช้งานในขณะนี้ กรุณาลองใหม่ภายหลังหรือติดต่อทีมงาน',
   // "ขาย <SYMBOL> ทั้งหมด" — Asset ยังมีอยู่แต่ยอดคงเหลือเป็น 0 (ขายไปหมดแล้ว)
   NOTHING_TO_SELL:
     'สินทรัพย์นี้ถูกขายไปหมดแล้ว ไม่มียอดคงเหลือให้ขายเพิ่ม ลองพิมพ์ "พอต" เพื่อดูสินทรัพย์ที่คุณถืออยู่',
@@ -130,6 +140,15 @@ function priceSourceNote(priceSource) {
   // (ไม่ใช่ API ทางการ) อาจล่าช้า/คลาดเคลื่อนจากหน้าร้านได้เล็กน้อย
   if (priceSource === 'thaigold') {
     return textLine('* ราคาอ้างอิงจากสมาคมค้าทองคำฯ (ผ่าน API ชุมชน) อาจคลาดเคลื่อน/ล่าช้าจากหน้าร้านเล็กน้อย', {
+      size: 'xs',
+      color: COLOR.textSecondary,
+    });
+  }
+
+  // กองทุนรวม (Round 7) — NAV จาก ก.ล.ต. (SEC) อัปเดตวันละครั้ง ราคาที่ใช้อาจเป็น
+  // ของวันทำการก่อนหน้า (NAV วันนี้ประกาศตอนเย็น/วันถัดไป)
+  if (priceSource === 'secnav') {
+    return textLine('* ราคา NAV อ้างอิงจาก ก.ล.ต. (SEC) ล่าสุด อาจเป็นราคาของวันทำการก่อนหน้า', {
       size: 'xs',
       color: COLOR.textSecondary,
     });
@@ -263,6 +282,10 @@ function buildProfitMessage(profit) {
 
   const body = [
     textLine(profit.symbol, { size: 'lg', weight: 'bold', color: COLOR.textPrimary }),
+    // กองทุนรวม (Round 7) — ระบุ Class + วันที่ NAV ที่ใช้คำนวณ (null สำหรับสินทรัพย์อื่น)
+    ...(profit.fundClassName
+      ? [textLine(`ชนิดหน่วยลงทุน: ${profit.fundClassName}`, { size: 'sm', color: COLOR.info })]
+      : []),
     textLine(`จำนวนที่ถือ: ${formatNumber(profit.heldQuantity)} ${profit.symbol}`, {
       size: 'sm',
       color: COLOR.textSecondary,
@@ -458,11 +481,21 @@ function buildPreviewMessage(pending) {
 
   const body = [
     textLine(pending.assetSymbol, { size: 'lg', weight: 'bold', color: COLOR.textPrimary }),
+  ];
+
+  // กองทุนรวม (Round 7) — ระบุชนิดหน่วยลงทุน (Class) ให้ชัด ไม่ใช่แค่ชื่อย่อดิบ
+  if (pending.fundClassName) {
+    body.push(
+      textLine(`ชนิดหน่วยลงทุน: ${pending.fundClassName}`, { size: 'sm', color: COLOR.info })
+    );
+  }
+
+  body.push(
     textLine(`จำนวน: ${formatNumber(pending.quantity)} ${pending.assetSymbol}`, {
       size: 'sm',
       color: COLOR.textSecondary,
-    }),
-  ];
+    })
+  );
 
   if (isUsd) {
     body.push(
@@ -788,6 +821,75 @@ function textWithQuickReply(text, items = []) {
     text,
     quickReply: { items: [...items, cancelSetupItem()] },
   };
+}
+
+// ── กองทุนรวม (Round 7): เลือกชนิดหน่วยลงทุน (Fund Class) ──────────────────
+// Postback พก projId + class + พารามิเตอร์ซื้อเดิม (amt หรือ qty+price) เพื่อให้
+// Handler สร้าง Pending ได้โดยไม่ต้องเก็บ Session (LINE Postback ≤ 300 ตัวอักษร
+// พอสำหรับ projId + class + ยอด) — Encode ด้วย URLSearchParams (Controller ถอด
+// ด้วย URLSearchParams เดียวกัน) รองรับ Class ที่มี "(", ")" ในชื่อ
+function fundBuyPostback(action, projId, fundClassName, buy = {}) {
+  const p = new URLSearchParams();
+  p.set('action', action);
+  p.set('projId', projId);
+  if (fundClassName) p.set('class', fundClassName);
+  if (buy.amountThb !== undefined && buy.amountThb !== null) p.set('amt', String(buy.amountThb));
+  if (buy.quantity !== undefined && buy.quantity !== null) p.set('qty', String(buy.quantity));
+  if (buy.pricePerUnit !== undefined && buy.pricePerUnit !== null) p.set('price', String(buy.pricePerUnit));
+  return p.toString();
+}
+
+// project = { projId, projAbbrName, classes: [{ fundClassName, fundClassDetail }] }
+// buy = { amountThb } หรือ { quantity, pricePerUnit } (พารามิเตอร์ซื้อจากคำสั่งเดิม)
+// แสดงทุก Class + fund_class_detail ประกอบ และปุ่ม "ไม่แน่ใจ / เลือกให้อัตโนมัติ"
+// เป็นตัวเลือกสุดท้ายเสมอ (Scope ข้อ 3)
+function buildFundClassPickerMessage(project, buy = {}) {
+  const classes = (project.classes ?? []).slice(0, 12);
+
+  const items = classes.map((c) => ({
+    type: 'action',
+    action: {
+      type: 'postback',
+      label: String(c.fundClassName).slice(0, 20), // LINE label ≤ 20 ตัวอักษร
+      data: fundBuyPostback('fund_buy', project.projId, c.fundClassName, buy),
+      displayText: `เลือก ${c.fundClassName}`,
+    },
+  }));
+
+  // ปุ่ม "ไม่แน่ใจ" ท้ายสุด — Handler Auto-select ตาม Priority (ดู mutualFund.service)
+  items.push({
+    type: 'action',
+    action: {
+      type: 'postback',
+      label: '🤖 ไม่แน่ใจ เลือกให้',
+      data: fundBuyPostback('fund_buy_auto', project.projId, null, buy),
+      displayText: 'เลือกชนิดหน่วยลงทุนให้อัตโนมัติ',
+    },
+  });
+
+  const lines = classes
+    .map((c) => `• ${c.fundClassName}${c.fundClassDetail ? ` — ${c.fundClassDetail}` : ''}`)
+    .join('\n');
+  const text =
+    `กองทุน ${project.projAbbrName} มีหลายชนิดหน่วยลงทุน กรุณาเลือกชนิดที่ต้องการบันทึกครับ:\n${lines}`;
+
+  return { type: 'text', text, quickReply: { items } };
+}
+
+// ไม่พบกองทุนที่ค้นหา (Scope ข้อ 4) — ไม่ทำ Did-you-mean
+function buildFundNotFoundMessage(query) {
+  return bubble({
+    headerText: '🔍 ไม่พบกองทุน',
+    headerColor: COLOR.warning,
+    headerBg: COLOR.warningBg,
+    bodyContents: [
+      textLine(`ไม่พบกองทุนชื่อย่อ "${query}" ในระบบ`, { size: 'sm', color: COLOR.textPrimary }),
+      textLine('กรุณาตรวจสอบชื่อย่อกองทุนให้ถูกต้องอีกครั้ง (เช่น K-SELECT, SCBRM)', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
 }
 
 // ── ขั้น 1: เลือก Symbol ที่ถืออยู่ในพอร์ต ────────────────────────────────
@@ -1682,6 +1784,8 @@ module.exports = {
   buildBulkImportRejectedMessage,
   buildBulkImportPreviewMessage,
   buildBulkImportConfirmedMessage,
+  buildFundClassPickerMessage,
+  buildFundNotFoundMessage,
   buildDashboardLinkMessage,
   buildPlanDowngradedMessage,
   buildErrorMessage,

@@ -137,6 +137,35 @@ async function resolveQuantityAndPrice(params, side = 'buy') {
   }
 
   if (isPresent(params.amountThb)) {
+    // ── กองทุนรวมไทย: ซื้อด้วยจำนวนเงิน (ไม่พิมพ์ราคา) → ใช้ NAV ล่าสุด (Round 7) ──
+    // กองทุนมี NAV เดียว (last_val) ใช้ทั้งราคาต้นทุน Default และ Mark-to-market ต่าง
+    // จากทอง (Buy/Sell แยก) — ต้องมี projId + fundClassName (Webhook เติมให้ก่อนแล้ว
+    // ทั้งกรณี Asset ใหม่และ Asset เดิม) มิฉะนั้นถือว่าเป็น 'fund' แบบ Manual ไม่ดึง SEC
+    if (params.type === 'fund' && params.projId && params.fundClassName) {
+      let nav;
+      try {
+        nav = await priceFeedService.getMutualFundNav(params.projId, params.fundClassName);
+      } catch (err) {
+        // ไม่เดาราคา — แยก SEC ไม่ config ออกจาก NAV ดึงไม่ได้ เพื่อข้อความไทยที่ตรง
+        const code = err.code === 'SEC_NOT_CONFIGURED' ? 'SEC_NOT_CONFIGURED' : 'MUTUAL_FUND_NAV_UNAVAILABLE';
+        throw new TransactionServiceError(
+          code,
+          `Cannot derive fund quantity for ${params.symbol}: ${err.message}`,
+          { symbol: params.symbol }
+        );
+      }
+
+      const amountThb = Number(params.amountThb);
+      const pricePerUnit = nav.lastVal;
+      const quantity = roundToEight(amountThb / pricePerUnit);
+      return {
+        quantity,
+        pricePerUnit,
+        amountThb: roundToTwo(amountThb),
+        priceSource: 'secnav',
+      };
+    }
+
     // ── ทอง: ซื้อด้วยจำนวนเงิน (ไม่พิมพ์ราคาต้นทุน) — Phase 3 Round 7 ──────────
     // ใช้ราคา "ขายออก" (sell) เป็นต้นทุนต่อหน่วย (ราคาที่ลูกค้าจ่ายจริงตอนซื้อทองใหม่)
     // แล้วหาร quantity จากจำนวนเงิน — ต่างจาก Crypto/หุ้นที่ใช้ getCurrentPrice (ซึ่ง
@@ -294,7 +323,10 @@ async function processBuyCommand(userId, params, options = {}) {
       portfolioId,
       params.symbol,
       params.name ?? params.symbol,
-      assetType
+      assetType,
+      // กองทุนรวม (Round 7) — เก็บ Class ที่เลือกไว้ถาวรเพื่อ Mark-to-market ตรง Class
+      // (สินทรัพย์อื่น projId/fundClassName = undefined → คอลัมน์เป็น null)
+      { projId: params.projId, fundClassName: params.fundClassName }
     );
   }
 

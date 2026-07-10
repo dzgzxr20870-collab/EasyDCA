@@ -11,6 +11,8 @@ const pendingService = require('../services/pendingTransaction.service');
 const paymentService = require('../services/payment.service');
 const entitlement = require('../services/entitlement.service');
 const symbolRegistry = require('../services/symbolRegistry.service');
+const mutualFundService = require('../services/mutualFund.service');
+const assetRepository = require('../repositories/asset.repository');
 const lineService = require('../services/line.service');
 const storageService = require('../services/storage.service');
 const bulkImportSession = require('../services/bulkImportSession.service');
@@ -67,6 +69,86 @@ async function resolveUser(lineUserId) {
   return userRepository.create(lineUserId, displayName, pictureUrl);
 }
 
+// ดึงพารามิเตอร์ซื้อจาก params (จำนวนเงิน หรือ จำนวน+ราคา) — ใช้พก/สร้าง Pending
+// ของกองทุน (กองทุนไม่รองรับ priceCurrency USD — NAV เป็น THB อยู่แล้ว)
+function extractBuyParams(params) {
+  if (params.amountThb !== undefined && params.amountThb !== null) {
+    return { amountThb: params.amountThb };
+  }
+  return { quantity: params.quantity, pricePerUnit: params.pricePerUnit };
+}
+
+// ถอดพารามิเตอร์ซื้อจาก Postback (amt / qty+price) ที่ Class Picker ส่งมา
+function decodeBuyParamsFromPostback(qs) {
+  const amt = qs.get('amt');
+  if (amt !== null) return { amountThb: Number(amt) };
+  return { quantity: Number(qs.get('qty')), pricePerUnit: Number(qs.get('price')) };
+}
+
+// สร้าง Pending Preview ของกองทุน (หลังได้ Class ครบแล้ว) — Reuse createPending เดิม
+async function createFundPendingReply(user, { projId, fundClassName, symbol, name, buy }) {
+  const parsed = {
+    command: COMMANDS.BUY,
+    params: { symbol, type: 'fund', projId, fundClassName, name, ...buy },
+  };
+  const pending = await pendingService.createPending(user.id, parsed, {
+    plan: user.plan,
+    planExpiresAt: user.planExpiresAt,
+  });
+  return flexMessage.buildPreviewMessage(pending);
+}
+
+// พยายามจัดการคำสั่งซื้อกองทุน (Round 7) — เรียกเฉพาะ BUY ที่ Symbol ไม่ใช่ประเภท
+// Static (Crypto/หุ้น/ทอง) คืน:
+//   - Flex Message (Class Picker) ถ้าต้องถามเลือก Class → Controller ตอบเลย
+//   - null ถ้า "จัดการเสร็จในตัว params แล้ว" (เติม type/projId/class ให้ parsed) →
+//     ให้ Flow createPending เดิมทำต่อ | หรือ "ไม่ใช่กองทุน/ค้นไม่ได้" → ปล่อยผ่าน
+//     ให้ createPending throw VALIDATION_ERROR (ไม่รู้จักสินทรัพย์) ตามเดิม
+async function tryResolveFundBuy(user, parsed) {
+  const symbol = parsed.params.symbol;
+  const portfolioId = parsed.params.portfolioId ?? null;
+
+  // 1) ถือกองทุนนี้อยู่แล้ว → Reuse Class เดิม (ไม่ถามซ้ำ) เติม projId/class ให้ parsed
+  const existing = await assetRepository.findByUserAndSymbol(user.id, symbol, portfolioId);
+  if (existing) {
+    if (existing.type === 'fund' && existing.projId && existing.fundClassName) {
+      parsed.params.type = 'fund';
+      parsed.params.projId = existing.projId;
+      parsed.params.fundClassName = existing.fundClassName;
+      parsed.params.name = existing.name;
+    }
+    // Asset เดิม (ชนิดใดก็ตาม) — ปล่อยให้ createPending ทำต่อ (มี Asset อยู่แล้ว)
+    return null;
+  }
+
+  // 2) Symbol ใหม่ — ลองค้น SEC Master List (SEC ไม่ config/ล่ม → ปล่อยผ่านเงียบๆ
+  //    ไม่ให้กระทบ Flow ซื้อสินทรัพย์อื่น — Fail Isolated)
+  let result;
+  try {
+    result = await mutualFundService.resolveFundForBuy(symbol);
+  } catch (err) {
+    console.error(`[webhook] fund resolve failed for ${symbol}: ${err.code ?? err.message}`);
+    return null;
+  }
+
+  if (result.status === 'not_found') return null; // ไม่ใช่กองทุน → generic unknown asset
+
+  const buy = extractBuyParams(parsed.params);
+
+  if (result.status === 'multiple') {
+    // หลาย Class → ถามผู้ใช้ผ่าน Quick Reply (มีปุ่ม "ไม่แน่ใจ")
+    return flexMessage.buildFundClassPickerMessage(result.project, buy);
+  }
+
+  // single → เติม params ให้ครบแล้วปล่อยให้ createPending สร้าง Preview เลย
+  const fc = result.fundClass;
+  parsed.params.type = 'fund';
+  parsed.params.projId = fc.projId;
+  parsed.params.fundClassName = fc.fundClassName;
+  parsed.params.name = result.project.projNameTh || result.project.projAbbrName || symbol;
+  return null;
+}
+
 async function routeCommand(user, parsed) {
   switch (parsed.command) {
     case COMMANDS.BUY:
@@ -78,6 +160,13 @@ async function routeCommand(user, parsed) {
       if (parsed.command === COMMANDS.BUY && !parsed.params.type) {
         const type = symbolRegistry.lookupType(parsed.params.symbol);
         if (type) parsed.params.type = type;
+      }
+
+      // กองทุนรวม (Round 7) — BUY Symbol ที่ยังไม่รู้ type (ไม่ใช่ Crypto/หุ้น/ทอง)
+      // อาจเป็นกองทุน → Resolve จาก SEC ก่อน (อาจตอบ Class Picker กลับไปเลย)
+      if (parsed.command === COMMANDS.BUY && !parsed.params.type) {
+        const fundReply = await tryResolveFundBuy(user, parsed);
+        if (fundReply) return fundReply;
       }
 
       // Flow ใหม่ (SRS.md § 2.3 [4-5]): ไม่บันทึกทันที — Validate แล้วสร้าง
@@ -361,6 +450,34 @@ async function routePostback(user, data) {
     case 'cancel_bulk_import': {
       await bulkImportService.cancelBatch(params.get('batchId'));
       return flexMessage.buildCancelledMessage();
+    }
+
+    // ── กองทุนรวม (Round 7): ผู้ใช้เลือกชนิดหน่วยลงทุน (Class) จาก Quick Reply ────
+    // fund_buy = เลือก Class เจาะจง | fund_buy_auto = "ไม่แน่ใจ" ให้ระบบเลือกตาม
+    // Priority — ทั้งคู่ Re-derive รายละเอียดจาก Master List (Cache) แล้วสร้าง Preview
+    // Error (SEC_NOT_CONFIGURED/MUTUAL_FUND_*/FUND_CLASS_NOT_FOUND) ทะลุขึ้นไปให้
+    // replyWithError แปลไทย
+    case 'fund_buy': {
+      const fc = await mutualFundService.getFundClass(params.get('projId'), params.get('class'));
+      return createFundPendingReply(user, {
+        projId: fc.projId,
+        fundClassName: fc.fundClassName,
+        symbol: fc.projAbbrName || params.get('projId'),
+        name: fc.projNameTh || fc.projAbbrName || fc.fundClassName,
+        buy: decodeBuyParamsFromPostback(params),
+      });
+    }
+
+    case 'fund_buy_auto': {
+      const project = await mutualFundService.getProjectById(params.get('projId'));
+      const fc = mutualFundService.autoSelectClass(project);
+      return createFundPendingReply(user, {
+        projId: project.projId,
+        fundClassName: fc.fundClassName,
+        symbol: project.projAbbrName || project.projId,
+        name: project.projNameTh || project.projAbbrName || fc.fundClassName,
+        buy: decodeBuyParamsFromPostback(params),
+      });
     }
 
     // ── ปุ่ม Dashboard (Rich Menu) → ส่งลิงก์เปิด LIFF Dashboard ────────────────

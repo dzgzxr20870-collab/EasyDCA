@@ -75,8 +75,12 @@ async function getAssetProfit(userId, symbol, portfolioId = null) {
   // (getCurrentPrice จะกลืน Error เป็น null → PRICE_FEED_NOT_IMPLEMENTED ที่สื่อผิด)
   // และ (2) เก็บ updatedAt/ราคาไว้ Enrich USD ต่อ
   const isGold = asset.type === 'gold_bar' || asset.type === 'gold_ornament';
+  // กองทุนรวม (Round 7) — ต้องมี proj_id + fund_class_name (เก็บไว้ตอนซื้อ) จึงดึง
+  // NAV ตรง Class ได้ ('fund' แบบ Manual ที่ไม่มี projId → ถือว่าไม่รองรับ Price Feed)
+  const isFund = asset.type === 'fund' && asset.projId && asset.fundClassName;
 
   let currentPrice;
+  let fundNavDate = null;
   if (isGold) {
     let gold;
     try {
@@ -89,6 +93,18 @@ async function getAssetProfit(userId, symbol, portfolioId = null) {
       );
     }
     currentPrice = gold.buy;
+  } else if (isFund) {
+    // Mark-to-market กองทุน = NAV ล่าสุด (last_val) ตรง Class — เรียก getMutualFundNav
+    // ตรง (ไม่ผ่าน getCurrentPrice เพราะ symbol อย่างเดียวไม่พอ ต้องใช้ proj_id+class)
+    let nav;
+    try {
+      nav = await priceFeedService.getMutualFundNav(asset.projId, asset.fundClassName);
+    } catch (err) {
+      const code = err.code === 'SEC_NOT_CONFIGURED' ? 'SEC_NOT_CONFIGURED' : 'MUTUAL_FUND_NAV_UNAVAILABLE';
+      throw new ProfitServiceError(code, `Fund NAV unavailable for ${symbol}`, { symbol });
+    }
+    currentPrice = nav.lastVal;
+    fundNavDate = nav.navDate;
   } else {
     currentPrice = await priceFeedService.getCurrentPrice(symbol);
     if (currentPrice === null) {
@@ -133,11 +149,15 @@ async function getAssetProfit(userId, symbol, portfolioId = null) {
     currentValue,
     profitLoss,
     profitLossPercent,
-    // priceSource ตาม Asset Type จริง (coingecko/twelvedata/thaigold) เพื่อให้ Flex
-    // Message แสดงคำเตือนราคาอ้างอิงจากแหล่งที่ถูกต้อง (priceSourceNote)
-    priceSource: resolvePriceSource(asset.symbol),
+    // priceSource ตาม Asset Type จริง (coingecko/twelvedata/thaigold/secnav) เพื่อให้
+    // Flex Message แสดงคำเตือนราคาอ้างอิงจากแหล่งที่ถูกต้อง (priceSourceNote) —
+    // funds ไม่มีใน symbolRegistry จึงกำหนด 'secnav' ตรงจาก isFund
+    priceSource: isFund ? 'secnav' : resolvePriceSource(asset.symbol),
     // usd = null สำหรับสินทรัพย์ที่ไม่ใช่ทอง หรือทองที่ดึงเรต FX ไม่ได้
     usd,
+    // กองทุนรวม (Round 7) — ข้อมูลประกอบการแสดงผล (Class + วันที่ NAV) null ถ้าไม่ใช่กองทุน
+    fundClassName: isFund ? asset.fundClassName : null,
+    navDate: fundNavDate,
   };
 }
 

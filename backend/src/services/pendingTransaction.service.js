@@ -33,6 +33,10 @@ function toCommitParams(pending) {
     feeThb: pending.feeThb !== null && pending.feeThb !== undefined ? Number(pending.feeThb) : 0,
     date: pending.txnDate,
     portfolioId: pending.portfolioId ?? null,
+    // กองทุนรวม (Round 7) — ส่งต่อ Class ที่เลือกไว้ให้ processBuyCommand สร้าง Asset
+    // พร้อม proj_id/fund_class_name (undefined สำหรับสินทรัพย์อื่น)
+    projId: pending.projId ?? undefined,
+    fundClassName: pending.fundClassName ?? undefined,
   };
 }
 
@@ -77,6 +81,9 @@ async function createPending(userId, parsed, options = {}) {
     amountThb: amounts.amountThb,
     feeThb: params.feeThb ?? 0,
     txnDate: params.date ?? transactionService.todayInBangkok(),
+    // กองทุนรวม (Round 7) — พก Class ผ่าน Flow Preview→Confirm (null สำหรับสินทรัพย์อื่น)
+    projId: params.projId ?? null,
+    fundClassName: params.fundClassName ?? null,
   });
 
   // priceSource + fx + goldUsd ไม่มี Column รองรับใน pending_transactions (ตรวจ

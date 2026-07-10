@@ -25,6 +25,8 @@ jest.mock('../src/services/payment.service');
 jest.mock('../src/services/entitlement.service');
 jest.mock('../src/services/bulkImportSession.service');
 jest.mock('../src/services/bulkImport.service');
+jest.mock('../src/services/mutualFund.service');
+jest.mock('../src/repositories/asset.repository');
 // Override เฉพาะค่าที่ Postback Premium/Dashboard ใช้ (adminIds/liff.id/publicBaseUrl)
 // ให้ Deterministic — คงค่าอื่นจาก config จริง (.env) ไว้
 jest.mock('../src/config/env', () => {
@@ -61,6 +63,8 @@ const storageService = require('../src/services/storage.service');
 const paymentService = require('../src/services/payment.service');
 const bulkImportSession = require('../src/services/bulkImportSession.service');
 const bulkImportService = require('../src/services/bulkImport.service');
+const mutualFundService = require('../src/services/mutualFund.service');
+const assetRepository = require('../src/repositories/asset.repository');
 const entitlement = require('../src/services/entitlement.service');
 const commandParser = require('../src/services/commandParser.service');
 const { handleEvent } = require('../src/controllers/webhook.controller');
@@ -103,6 +107,10 @@ beforeEach(() => {
   reminderSetupFlow.getCurrentSession.mockResolvedValue(null);
   // Default: ไม่มี Bulk Import Session ค้าง — Test ของ Flow นำเข้าพอร์ตจะ Override เอง
   bulkImportSession.getCurrentSession.mockResolvedValue(null);
+  // Default: ไม่ถือ Asset ใดอยู่ + ค้นกองทุนไม่พบ (Symbol ที่ไม่รู้จักถือเป็น unknown asset)
+  // — Test ของ Flow กองทุนจะ Override เอง
+  assetRepository.findByUserAndSymbol.mockResolvedValue(null);
+  mutualFundService.resolveFundForBuy.mockResolvedValue({ status: 'not_found' });
 });
 
 describe('handleEvent — BUY/SELL สร้าง Preview รอ Confirm', () => {
@@ -1304,5 +1312,180 @@ describe('handleEvent — Non-text events', () => {
 
     expect(userRepository.findByLineUserId).not.toHaveBeenCalled();
     expect(lineService.replyMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleEvent — กองทุนรวมไทย (Round 7)', () => {
+  test('(a) ซื้อกองทุน Class เดียว → ไม่ถาม, สร้าง Preview เลย (params เติม type/projId/class)', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.BUY,
+      params: { symbol: 'SCBRM', amountThb: 5000 },
+    });
+    mutualFundService.resolveFundForBuy.mockResolvedValue({
+      status: 'single',
+      project: { projId: 'M0002', projAbbrName: 'SCBRM', projNameTh: 'ไทยพาณิชย์ RM' },
+      fundClass: { projId: 'M0002', fundClassName: 'SCBRM' },
+    });
+    pendingService.createPending.mockResolvedValue({
+      id: 'pf-1', commandType: 'buy', assetSymbol: 'SCBRM', fundClassName: 'SCBRM',
+      quantity: 500, pricePerUnit: 10, amountThb: 5000, priceSource: 'secnav',
+    });
+
+    await handleEvent(textEvent('ซื้อ SCBRM 5000'));
+
+    expect(pendingService.createPending).toHaveBeenCalledWith(
+      FREE_USER.id,
+      expect.objectContaining({
+        command: COMMANDS.BUY,
+        params: expect.objectContaining({
+          symbol: 'SCBRM', type: 'fund', projId: 'M0002', fundClassName: 'SCBRM',
+        }),
+      }),
+      { plan: 'free' }
+    );
+    expect(lastReplyText()).toContain('SCBRM');
+  });
+
+  test('(b) ซื้อกองทุนหลาย Class → ตอบ Class Picker (ไม่สร้าง Pending) + มีปุ่ม "ไม่แน่ใจ"', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.BUY,
+      params: { symbol: 'K-SELECT', amountThb: 5000 },
+    });
+    mutualFundService.resolveFundForBuy.mockResolvedValue({
+      status: 'multiple',
+      project: {
+        projId: 'M0001', projAbbrName: 'K-SELECT', projNameTh: 'เค ซีเล็คท์',
+        classes: [
+          { fundClassName: 'K-SELECT-A(A)', fundClassDetail: 'สะสมมูลค่า' },
+          { fundClassName: 'K-SELECT-A(D)', fundClassDetail: 'จ่ายปันผล' },
+        ],
+      },
+    });
+
+    await handleEvent(textEvent('ซื้อ K-SELECT 5000'));
+
+    expect(pendingService.createPending).not.toHaveBeenCalled();
+    const reply = lastReplyText();
+    expect(reply).toContain('action=fund_buy&projId=M0001');
+    expect(reply).toContain('amt=5000');
+    expect(reply).toContain('action=fund_buy_auto');
+  });
+
+  test('(c) Postback fund_buy_auto ("ไม่แน่ใจ") → Auto-select แล้วสร้าง Preview', async () => {
+    mutualFundService.getProjectById.mockResolvedValue({
+      projId: 'M0001', projAbbrName: 'K-SELECT', projNameTh: 'เค ซีเล็คท์',
+      classes: [{ projId: 'M0001', fundClassName: 'K-SELECT-A(A)' }],
+    });
+    mutualFundService.autoSelectClass.mockReturnValue({ projId: 'M0001', fundClassName: 'K-SELECT-A(A)' });
+    pendingService.createPending.mockResolvedValue({
+      id: 'pf-2', commandType: 'buy', assetSymbol: 'K-SELECT', fundClassName: 'K-SELECT-A(A)',
+      quantity: 400, pricePerUnit: 12.5, amountThb: 5000, priceSource: 'secnav',
+    });
+
+    await handleEvent(postbackEvent('action=fund_buy_auto&projId=M0001&amt=5000'));
+
+    expect(mutualFundService.autoSelectClass).toHaveBeenCalled();
+    expect(pendingService.createPending).toHaveBeenCalledWith(
+      FREE_USER.id,
+      expect.objectContaining({
+        params: expect.objectContaining({ type: 'fund', projId: 'M0001', fundClassName: 'K-SELECT-A(A)', amountThb: 5000 }),
+      }),
+      { plan: 'free' }
+    );
+    expect(lastReplyText()).toContain('K-SELECT-A(A)');
+  });
+
+  test('Postback fund_buy (เลือก Class เจาะจง) → Re-derive จาก Master List แล้วสร้าง Preview', async () => {
+    mutualFundService.getFundClass.mockResolvedValue({
+      projId: 'M0001', fundClassName: 'K-SELECT-A(D)', projAbbrName: 'K-SELECT',
+      projNameTh: 'เค ซีเล็คท์', fundClassDetail: 'จ่ายปันผล',
+    });
+    pendingService.createPending.mockResolvedValue({
+      id: 'pf-3', commandType: 'buy', assetSymbol: 'K-SELECT', fundClassName: 'K-SELECT-A(D)',
+      quantity: 100, pricePerUnit: 12.34, amountThb: 1234, priceSource: 'user',
+    });
+
+    await handleEvent(postbackEvent('action=fund_buy&projId=M0001&class=K-SELECT-A(D)&qty=100&price=12.34'));
+
+    expect(mutualFundService.getFundClass).toHaveBeenCalledWith('M0001', 'K-SELECT-A(D)');
+    expect(pendingService.createPending).toHaveBeenCalledWith(
+      FREE_USER.id,
+      expect.objectContaining({
+        params: expect.objectContaining({
+          type: 'fund', projId: 'M0001', fundClassName: 'K-SELECT-A(D)', quantity: 100, pricePerUnit: 12.34,
+        }),
+      }),
+      { plan: 'free' }
+    );
+  });
+
+  test('ซื้อกองทุนที่ถืออยู่แล้ว → Reuse Class เดิม ไม่ค้น Master List ซ้ำ', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.BUY,
+      params: { symbol: 'K-SELECT', amountThb: 2000 },
+    });
+    assetRepository.findByUserAndSymbol.mockResolvedValue({
+      id: 'a-fund', type: 'fund', symbol: 'K-SELECT', name: 'เค ซีเล็คท์',
+      projId: 'M0001', fundClassName: 'K-SELECT-A(A)',
+    });
+    pendingService.createPending.mockResolvedValue({
+      id: 'pf-4', commandType: 'buy', assetSymbol: 'K-SELECT', fundClassName: 'K-SELECT-A(A)',
+      quantity: 160, pricePerUnit: 12.5, amountThb: 2000, priceSource: 'secnav',
+    });
+
+    await handleEvent(textEvent('ซื้อ K-SELECT 2000'));
+
+    expect(mutualFundService.resolveFundForBuy).not.toHaveBeenCalled();
+    expect(pendingService.createPending).toHaveBeenCalledWith(
+      FREE_USER.id,
+      expect.objectContaining({
+        params: expect.objectContaining({ type: 'fund', projId: 'M0001', fundClassName: 'K-SELECT-A(A)' }),
+      }),
+      { plan: 'free' }
+    );
+  });
+
+  test('(g) Symbol ไม่พบทั้งใน static + กองทุน → ตกเป็น unknown asset (VALIDATION_ERROR แปลไทย)', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.BUY,
+      params: { symbol: 'NOTEXIST', quantity: 1, pricePerUnit: 10 },
+    });
+    mutualFundService.resolveFundForBuy.mockResolvedValue({ status: 'not_found' });
+    const err = new Error('Creating a new asset requires an asset type');
+    err.code = 'VALIDATION_ERROR';
+    pendingService.createPending.mockRejectedValue(err);
+
+    await handleEvent(textEvent('ซื้อ NOTEXIST 1 หุ้น ราคา 10'));
+
+    expect(lastReplyText()).toContain('ไม่รู้จักสินทรัพย์นี้');
+  });
+
+  test('(f) SEC ล่ม/ไม่ config ตอนค้นกองทุน → Fail Isolated (ปล่อยผ่านเป็น unknown asset ไม่ Crash)', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.BUY,
+      params: { symbol: 'K-SELECT', quantity: 1, pricePerUnit: 10 },
+    });
+    mutualFundService.resolveFundForBuy.mockRejectedValue(
+      Object.assign(new Error('nc'), { code: 'SEC_NOT_CONFIGURED' })
+    );
+    const err = new Error('unknown');
+    err.code = 'VALIDATION_ERROR';
+    pendingService.createPending.mockRejectedValue(err);
+
+    await handleEvent(textEvent('ซื้อ K-SELECT 1 หุ้น ราคา 10'));
+
+    expect(lastReplyText()).toContain('ไม่รู้จักสินทรัพย์นี้');
+  });
+
+  test('Postback fund_buy: FUND_CLASS_NOT_FOUND → แปลเป็นข้อความไทย', async () => {
+    const err = new Error('nf');
+    err.code = 'FUND_CLASS_NOT_FOUND';
+    mutualFundService.getFundClass.mockRejectedValue(err);
+
+    await handleEvent(postbackEvent('action=fund_buy&projId=M0001&class=X&amt=1000'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('ไม่พบชนิดหน่วยลงทุน');
+    expect(reply).not.toContain('FUND_CLASS_NOT_FOUND');
   });
 });

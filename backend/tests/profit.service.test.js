@@ -81,6 +81,9 @@ describe('getAssetProfit — คำนวณกำไร/ขาดทุน', ()
       priceSource: 'coingecko',
       // usd = null สำหรับสินทรัพย์ที่ไม่ใช่ทอง (Phase 3 Round 7)
       usd: null,
+      // fund fields = null สำหรับสินทรัพย์ที่ไม่ใช่กองทุน (Round 7)
+      fundClassName: null,
+      navDate: null,
     });
   });
 
@@ -251,5 +254,67 @@ describe('getAssetProfit — ทองคำ (Phase 3 Round 7)', () => {
 
     expect(priceFeedService.getGoldPriceThb).toHaveBeenCalledWith('gold_ornament');
     expect(result.currentPrice).toBe(69523.76);
+  });
+});
+
+describe('getAssetProfit — กองทุนรวมไทย (Round 7 Mark-to-market)', () => {
+  const ASSET_FUND = {
+    id: 'asset-fund', userId: USER_ID, symbol: 'K-SELECT', type: 'fund',
+    projId: 'M0001', fundClassName: 'K-SELECT-A(A)',
+  };
+
+  test('(e) กำไรกองทุน → ใช้ NAV ล่าสุด (last_val) เป็นราคาปัจจุบัน + priceSource secnav', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_FUND);
+    transactionRepository.findAllByAsset.mockResolvedValue([
+      { type: 'buy', quantity: 100, amountThb: 1000 }, // ต้นทุนเฉลี่ย 10
+    ]);
+    priceFeedService.getMutualFundNav.mockResolvedValue({ navDate: '2024-11-22', lastVal: 12.5 });
+
+    const result = await getAssetProfit(USER_ID, 'K-SELECT');
+
+    expect(priceFeedService.getMutualFundNav).toHaveBeenCalledWith('M0001', 'K-SELECT-A(A)');
+    expect(result.currentPrice).toBe(12.5);
+    expect(result.currentValue).toBe(1250); // 100 * 12.5
+    expect(result.profitLoss).toBe(250);
+    expect(result.priceSource).toBe('secnav');
+    expect(result.fundClassName).toBe('K-SELECT-A(A)');
+    expect(result.navDate).toBe('2024-11-22');
+    // ไม่หลงไปเรียก getCurrentPrice (Path กองทุนแยกออกมา)
+    expect(priceFeedService.getCurrentPrice).not.toHaveBeenCalled();
+  });
+
+  test('(f) ดึง NAV ไม่ได้ → MUTUAL_FUND_NAV_UNAVAILABLE (ไม่ใช่ PRICE_FEED_NOT_IMPLEMENTED)', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_FUND);
+    transactionRepository.findAllByAsset.mockResolvedValue([{ type: 'buy', quantity: 100, amountThb: 1000 }]);
+    priceFeedService.getMutualFundNav.mockRejectedValue(
+      Object.assign(new Error('down'), { code: 'MUTUAL_FUND_NAV_UNAVAILABLE' })
+    );
+
+    await expect(getAssetProfit(USER_ID, 'K-SELECT')).rejects.toMatchObject({
+      code: 'MUTUAL_FUND_NAV_UNAVAILABLE',
+    });
+  });
+
+  test('SEC ไม่ config → SEC_NOT_CONFIGURED (ข้อความไทยแยกจาก NAV ล่ม)', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_FUND);
+    transactionRepository.findAllByAsset.mockResolvedValue([{ type: 'buy', quantity: 100, amountThb: 1000 }]);
+    priceFeedService.getMutualFundNav.mockRejectedValue(
+      Object.assign(new Error('nc'), { code: 'SEC_NOT_CONFIGURED' })
+    );
+
+    await expect(getAssetProfit(USER_ID, 'K-SELECT')).rejects.toMatchObject({ code: 'SEC_NOT_CONFIGURED' });
+  });
+
+  test('fund แบบ Manual (ไม่มี projId) → ตกไป path ปกติ (getCurrentPrice) ไม่เรียก NAV', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue({
+      id: 'a', userId: USER_ID, symbol: 'XFUND', type: 'fund', projId: null, fundClassName: null,
+    });
+    transactionRepository.findAllByAsset.mockResolvedValue([{ type: 'buy', quantity: 10, amountThb: 100 }]);
+    priceFeedService.getCurrentPrice.mockResolvedValue(null);
+
+    await expect(getAssetProfit(USER_ID, 'XFUND')).rejects.toMatchObject({
+      code: 'PRICE_FEED_NOT_IMPLEMENTED',
+    });
+    expect(priceFeedService.getMutualFundNav).not.toHaveBeenCalled();
   });
 });

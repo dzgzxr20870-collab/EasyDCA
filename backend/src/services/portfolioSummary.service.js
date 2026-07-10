@@ -35,11 +35,25 @@ async function buildSummaryForUser(userId, periodLabel) {
     // getPortfolioSummary กรอง heldQuantity <= 0 ออกให้แล้ว แต่กันไว้อีกชั้น
     if (holding.heldQuantity <= 0) continue;
 
-    const price = await priceFeedService.getCurrentPrice(holding.symbol);
+    // กองทุนรวม (Round 7) — ดึง NAV ตรง Class (proj_id+fund_class_name) แทน
+    // getCurrentPrice (ที่รับ symbol อย่างเดียวไม่พอ) — ห่อ try/catch คืน null เอง
+    // เพื่อให้ Cron สรุปพอร์ต "ข้าม" กองทุนที่ NAV ดึงไม่ได้ (นับ excluded) แทน
+    // การพังทั้งงาน (Fail Isolated เหมือนสินทรัพย์ราคาไม่ได้ตัวอื่น)
+    let price;
+    if (holding.type === 'fund' && holding.projId && holding.fundClassName) {
+      try {
+        const nav = await priceFeedService.getMutualFundNav(holding.projId, holding.fundClassName);
+        price = nav.lastVal;
+      } catch (err) {
+        price = null;
+      }
+    } else {
+      price = await priceFeedService.getCurrentPrice(holding.symbol);
+    }
 
     // ไม่มีราคาตลาด (หุ้นไทยที่ยังไม่มี Feed / API ล้มเหลว) → ไม่รวมเข้ายอดคำนวณ
     // กำไร-ขาดทุน แต่นับไว้เพื่อบอก User ว่าตัวเลขนี้ไม่ครบทุก Asset
-    if (price === null) {
+    if (price === null || price === undefined) {
       excludedCount += 1;
       continue;
     }

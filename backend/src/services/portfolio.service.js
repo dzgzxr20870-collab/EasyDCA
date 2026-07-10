@@ -52,6 +52,10 @@ async function getPortfolioSummary(userId) {
       symbol: asset.symbol,
       name: asset.name,
       type: asset.type,
+      // กองทุนรวม (Round 7) — พา proj_id/fund_class_name ไปให้ portfolioSummary ดึง NAV
+      // ตรง Class (null สำหรับสินทรัพย์อื่น) ไม่กระทบ Consumer เดิมที่ไม่ได้อ่าน Field นี้
+      projId: asset.projId ?? null,
+      fundClassName: asset.fundClassName ?? null,
       heldQuantity,
       totalInvested,
       averageCost,

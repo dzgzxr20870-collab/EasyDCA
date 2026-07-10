@@ -633,3 +633,107 @@ describe('ทองคำ (Phase 3 Round 7) — แสดงราคา THB + U
     expect(text).not.toContain('บาททองคำ');
   });
 });
+
+describe('กองทุนรวมไทย (Round 7) — Class Picker + Fund Display', () => {
+  const {
+    buildFundClassPickerMessage,
+    buildFundNotFoundMessage,
+    buildPreviewMessage,
+    buildProfitMessage,
+    buildErrorMessage,
+  } = require('../src/utils/flexMessage.util');
+
+  const PROJECT = {
+    projId: 'M0001',
+    projAbbrName: 'K-SELECT',
+    classes: [
+      { fundClassName: 'K-SELECT-A(A)', fundClassDetail: 'ชนิดสะสมมูลค่า' },
+      { fundClassName: 'K-SELECT-A(D)', fundClassDetail: 'ชนิดจ่ายปันผล' },
+      { fundClassName: 'K-SELECT-C(A)', fundClassDetail: 'ชนิดผู้ลงทุนสถาบัน' },
+    ],
+  };
+
+  test('(b) Class Picker → มีปุ่มครบทุก Class + fund_class_detail + ปุ่ม "ไม่แน่ใจ" ท้ายสุด', () => {
+    const msg = buildFundClassPickerMessage(PROJECT, { amountThb: 5000 });
+
+    // ข้อความแสดง detail ประกอบ
+    expect(msg.text).toContain('K-SELECT-A(A)');
+    expect(msg.text).toContain('ชนิดสะสมมูลค่า');
+
+    const items = msg.quickReply.items;
+    // 3 Class + 1 ปุ่มไม่แน่ใจ = 4 items
+    expect(items).toHaveLength(4);
+    // ปุ่มสุดท้ายคือ "ไม่แน่ใจ" → action fund_buy_auto
+    const last = items[items.length - 1];
+    expect(last.action.label).toContain('ไม่แน่ใจ');
+    expect(last.action.data).toContain('action=fund_buy_auto');
+    expect(last.action.data).toContain('projId=M0001');
+    // ปุ่ม Class พก projId + class + ยอด (amt) — encode "(A)" ปลอดภัย
+    expect(items[0].action.data).toContain('action=fund_buy');
+    expect(items[0].action.data).toContain('projId=M0001');
+    expect(items[0].action.data).toContain('amt=5000');
+    // class ถูก encode (มี ( ) ) → ถอดกลับได้เป็น K-SELECT-A(A)
+    const params = new URLSearchParams(items[0].action.data);
+    expect(params.get('class')).toBe('K-SELECT-A(A)');
+  });
+
+  test('Class Picker กับคำสั่งพิมพ์จำนวน+ราคา → Postback พก qty+price', () => {
+    const msg = buildFundClassPickerMessage(PROJECT, { quantity: 100, pricePerUnit: 12.34 });
+    const params = new URLSearchParams(msg.quickReply.items[0].action.data);
+    expect(params.get('qty')).toBe('100');
+    expect(params.get('price')).toBe('12.34');
+    expect(params.get('amt')).toBeNull();
+  });
+
+  test('(g) buildFundNotFoundMessage → แจ้งไม่พบ + แนะนำตรวจสอบชื่อย่อ', () => {
+    const text = JSON.stringify(buildFundNotFoundMessage('XXX'));
+    expect(text).toContain('ไม่พบกองทุน');
+    expect(text).toContain('XXX');
+  });
+
+  test('buildPreviewMessage กองทุน → แสดงชนิดหน่วยลงทุน (Class) ไม่ใช่แค่ชื่อย่อ', () => {
+    const text = JSON.stringify(
+      buildPreviewMessage({
+        id: 'p1', commandType: 'buy', assetSymbol: 'K-SELECT',
+        fundClassName: 'K-SELECT-A(A)',
+        quantity: 100, pricePerUnit: 12.5, amountThb: 1250,
+        priceSource: 'secnav', fx: null,
+      })
+    );
+    expect(text).toContain('ชนิดหน่วยลงทุน: K-SELECT-A(A)');
+    // priceSourceNote secnav
+    expect(text).toContain('ก.ล.ต.');
+  });
+
+  test('buildProfitMessage กองทุน → แสดง Class + note NAV จาก ก.ล.ต.', () => {
+    const text = JSON.stringify(
+      buildProfitMessage({
+        symbol: 'K-SELECT', fundClassName: 'K-SELECT-A(A)', navDate: '2024-11-22',
+        heldQuantity: 100, averageCost: 10, totalInvested: 1000,
+        currentPrice: 12.5, currentValue: 1250, profitLoss: 250, profitLossPercent: 25,
+        priceSource: 'secnav', usd: null,
+      })
+    );
+    expect(text).toContain('K-SELECT-A(A)');
+    expect(text).toContain('ก.ล.ต.');
+  });
+
+  test('buildErrorMessage(MUTUAL_FUND_NAV_UNAVAILABLE / SEC_NOT_CONFIGURED) → ข้อความไทย ไม่โชว์ Code', () => {
+    const t1 = JSON.stringify(buildErrorMessage('MUTUAL_FUND_NAV_UNAVAILABLE'));
+    expect(t1).toContain('NAV');
+    expect(t1).not.toContain('MUTUAL_FUND_NAV_UNAVAILABLE');
+    const t2 = JSON.stringify(buildErrorMessage('SEC_NOT_CONFIGURED'));
+    expect(t2).toContain('กองทุนรวมยังไม่พร้อม');
+    expect(t2).not.toContain('SEC_NOT_CONFIGURED');
+  });
+
+  test('สินทรัพย์ปกติ (ไม่มี fundClassName) → Preview ไม่มีบรรทัด "ชนิดหน่วยลงทุน" (ไม่ Regression)', () => {
+    const text = JSON.stringify(
+      buildPreviewMessage({
+        id: 'p1', commandType: 'buy', assetSymbol: 'PTT',
+        quantity: 50, pricePerUnit: 34, amountThb: 1700, priceSource: 'user', fx: null,
+      })
+    );
+    expect(text).not.toContain('ชนิดหน่วยลงทุน');
+  });
+});

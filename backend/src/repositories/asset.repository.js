@@ -10,6 +10,9 @@ function toAsset(row) {
     symbol: row.symbol,
     name: row.name,
     type: row.type,
+    // กองทุนรวมไทย (Round 7) — เก็บ Class ที่ถือจริง (nullable สำหรับสินทรัพย์อื่น)
+    projId: row.proj_id ?? null,
+    fundClassName: row.fund_class_name ?? null,
     isActive: row.is_active,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -36,7 +39,10 @@ async function findByUserAndSymbol(userId, symbol, portfolioId) {
   return toAsset(data);
 }
 
-async function create(userId, portfolioId, symbol, name, type) {
+// fundInfo (Optional) = { projId, fundClassName } สำหรับ Asset ประเภทกองทุนรวม
+// (Round 7) — สินทรัพย์อื่นไม่ส่งมา → เป็น null ตามปกติ (Backward Compatible กับ
+// Caller เดิมที่เรียกด้วย 5 Argument)
+async function create(userId, portfolioId, symbol, name, type, fundInfo = {}) {
   const { data, error } = await supabaseAdmin
     .from('assets')
     .insert({
@@ -45,6 +51,8 @@ async function create(userId, portfolioId, symbol, name, type) {
       symbol,
       name,
       type,
+      proj_id: fundInfo.projId ?? null,
+      fund_class_name: fundInfo.fundClassName ?? null,
     })
     .select('*')
     .single();
