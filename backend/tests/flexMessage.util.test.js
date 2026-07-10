@@ -538,3 +538,98 @@ describe('Bulk Import Flex Builders (Phase 3 Round 6)', () => {
     expect(text).toContain('มากกว่าที่คุณถือครองอยู่');
   });
 });
+
+describe('ทองคำ (Phase 3 Round 7) — แสดงราคา THB + USD', () => {
+  const {
+    buildProfitMessage,
+    buildPreviewMessage,
+    buildErrorMessage,
+  } = require('../src/utils/flexMessage.util');
+
+  test('buildErrorMessage(GOLD_PRICE_UNAVAILABLE) → ข้อความไทยเรื่องราคาทอง (ไม่โชว์ Code ดิบ)', () => {
+    const text = JSON.stringify(buildErrorMessage('GOLD_PRICE_UNAVAILABLE'));
+    expect(text).toContain('ราคาทองคำ');
+    expect(text).not.toContain('GOLD_PRICE_UNAVAILABLE');
+  });
+
+  test('buildProfitMessage ทอง (priceSource thaigold + usd) → โชว์ทั้ง THB และ USD + หมายเหตุแหล่งราคา', () => {
+    const msg = buildProfitMessage({
+      symbol: 'GOLD',
+      heldQuantity: 2,
+      averageCost: 70000,
+      totalInvested: 140000,
+      currentPrice: 70950,
+      currentValue: 141900,
+      profitLoss: 1900,
+      profitLossPercent: 1.36,
+      priceSource: 'thaigold',
+      usd: { usdThbRate: 35, currentPriceUsd: 2027.14, currentValueUsd: 4054.29 },
+    });
+    const text = JSON.stringify(msg);
+
+    // THB เดิมยังอยู่
+    expect(text).toContain('70,950');
+    expect(text).toContain('141,900');
+    // USD คู่กัน
+    expect(text).toContain('2,027.14 USD/บาททองคำ');
+    expect(text).toContain('1 USD = 35 บาท');
+    expect(text).toContain('4,054.29 USD');
+    // หมายเหตุแหล่งราคาทอง
+    expect(text).toContain('สมาคมค้าทองคำ');
+  });
+
+  test('buildProfitMessage ทองแต่ usd = null (ดึงเรตไม่ได้) → โชว์ THB อย่างเดียว ไม่มีบรรทัด USD', () => {
+    const msg = buildProfitMessage({
+      symbol: 'GOLD',
+      heldQuantity: 1,
+      averageCost: 70000,
+      totalInvested: 70000,
+      currentPrice: 70950,
+      currentValue: 70950,
+      profitLoss: 950,
+      profitLossPercent: 1.36,
+      priceSource: 'thaigold',
+      usd: null,
+    });
+    const text = JSON.stringify(msg);
+
+    expect(text).toContain('70,950');
+    expect(text).not.toContain('USD');
+  });
+
+  test('buildPreviewMessage ทอง (goldUsd) → โชว์ราคาต้นทุน USD อ้างอิงคู่กับ THB', () => {
+    const msg = buildPreviewMessage({
+      id: 'pending-gold',
+      commandType: 'buy',
+      assetSymbol: 'GOLD',
+      quantity: 1,
+      pricePerUnit: 71150,
+      amountThb: 71150,
+      priceSource: 'thaigold',
+      fx: null,
+      goldUsd: { usdThbRate: 35, pricePerUnitUsd: 2032.86 },
+    });
+    const text = JSON.stringify(msg);
+
+    expect(text).toContain('71,150'); // THB
+    expect(text).toContain('2,032.86 USD/บาททองคำ'); // USD อ้างอิง
+    expect(text).toContain('1 USD = 35 บาท');
+  });
+
+  test('buildPreviewMessage สินทรัพย์ปกติ (ไม่มี goldUsd) → ไม่มีบรรทัด USD/บาททองคำ (ไม่ Regression)', () => {
+    const msg = buildPreviewMessage({
+      id: 'pending-ptt',
+      commandType: 'buy',
+      assetSymbol: 'PTT',
+      quantity: 50,
+      pricePerUnit: 34,
+      amountThb: 1700,
+      priceSource: 'user',
+      fx: null,
+    });
+    const text = JSON.stringify(msg);
+
+    expect(text).toContain('1,700');
+    expect(text).not.toContain('บาททองคำ');
+  });
+});

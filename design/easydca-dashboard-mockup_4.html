@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EasyDCA — Dashboard Mockup (ผู้ใช้งาน)</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+
+  /* ===== THEME TOKENS ===== */
+  :root{
+    --green:#06c755; --green-2:#00a86b; --blue:#38bdf8;
+    --pos:#22c55e; --neg:#f87171; --gold:#f5c518;
+    /* dark (default) */
+    --bg:#0b1220; --card:#111a2b; --card-2:#0e1626; --line:#1e2b40;
+    --text:#e6edf5; --text-2:#dbe6f2; --muted:#8ea0b6;
+    --shadow:0 4px 24px rgba(0,0,0,.35);
+    --hatch:rgba(255,255,255,.03);
+  }
+  body[data-theme="light"]{
+    --bg:#f5f6f8; --card:#ffffff; --card-2:#eef1f5; --line:#e5e8ec;
+    --text:#1e293b; --text-2:#0f172a; --muted:#64748b;
+    --shadow:0 4px 24px rgba(0,0,0,.08);
+    --hatch:rgba(0,0,0,.03);
+  }
+
+  body { font-family:"Sarabun","Kanit","Segoe UI",-apple-system,sans-serif; background:var(--bg); color:var(--text); min-height:100vh; transition:background .25s,color .25s; }
+
+  /* ===== MOCKUP CONTROL BAR ===== */
+  .mock-bar{ background:var(--card-2); border-bottom:1px solid var(--line); padding:10px 18px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .m-label{ font-size:12px; color:var(--muted); }
+  .seg{ display:flex; background:var(--bg); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  .seg button{ background:none; border:none; color:var(--muted); padding:8px 16px; font-size:13px; font-weight:700; cursor:pointer; font-family:inherit; }
+  .seg button.on{ background:linear-gradient(135deg,var(--green),var(--green-2)); color:#fff; }
+  .mock-note{ font-size:11px; color:var(--muted); margin-left:auto; }
+
+  /* ===== APP NAV ===== */
+  .nav{ display:flex; align-items:center; justify-content:space-between; padding:14px 22px; background:var(--card); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:50; }
+  .logo{ font-size:20px; font-weight:800; color:var(--green); letter-spacing:.5px; }
+  .logo small{ color:var(--muted); font-weight:600; font-size:11px; display:block; letter-spacing:2px; }
+  .nav-r{ display:flex; align-items:center; gap:14px; }
+  .theme-btn{ background:var(--card-2); border:1px solid var(--line); color:var(--text); width:38px; height:38px; border-radius:10px; cursor:pointer; font-size:16px; }
+  .u-name{ font-size:13px; color:var(--text-2); text-align:right; }
+  .plan-chip{ font-size:10px; font-weight:800; padding:2px 8px; border-radius:20px; display:inline-block; margin-top:2px; }
+  .plan-chip.free{ background:var(--line); color:var(--muted); }
+  .plan-chip.prem{ background:rgba(6,199,85,.16); color:var(--green); border:1px solid rgba(6,199,85,.4); }
+  .avatar{ width:38px; height:38px; border-radius:50%; background:linear-gradient(135deg,var(--green),var(--blue)); display:flex; align-items:center; justify-content:center; font-weight:800; color:#fff; }
+
+  /* ===== TABS ===== */
+  .tabs{ display:flex; gap:4px; padding:14px 22px 0; border-bottom:1px solid var(--line); background:var(--card); overflow-x:auto; }
+  .tab{ padding:11px 18px; font-size:14px; font-weight:600; color:var(--muted); border:none; background:none; cursor:pointer; border-bottom:3px solid transparent; white-space:nowrap; font-family:inherit; }
+  .tab.on{ color:var(--green); border-bottom-color:var(--green); }
+
+  .wrap{ max-width:1080px; margin:0 auto; padding:22px; }
+  .page{ display:none; } .page.on{ display:block; }
+
+  /* ===== UPSELL / STATUS ===== */
+  .upsell{ background:linear-gradient(135deg,rgba(6,199,85,.14),rgba(56,189,248,.1)); border:1px solid rgba(6,199,85,.35); border-radius:16px; padding:18px 20px; margin-bottom:20px; display:flex; align-items:center; gap:18px; flex-wrap:wrap; }
+  .u-ico{ font-size:34px; }
+  .u-body{ flex:1; min-width:200px; }
+  .u-title{ font-size:15px; font-weight:800; color:var(--text); margin-bottom:4px; }
+  .u-sub{ font-size:12.5px; color:var(--muted); line-height:1.5; }
+  .u-progress{ height:7px; background:var(--line); border-radius:10px; overflow:hidden; margin-top:10px; max-width:260px; }
+  .u-progress>div{ height:100%; width:100%; background:linear-gradient(90deg,var(--gold),#f97316); }
+  .u-btn{ background:linear-gradient(135deg,var(--green),var(--green-2)); color:#fff; border:none; padding:12px 22px; border-radius:12px; font-size:14px; font-weight:800; cursor:pointer; white-space:nowrap; font-family:inherit; }
+  .prem-banner{ background:linear-gradient(135deg,rgba(6,199,85,.12),rgba(6,199,85,.02)); border:1px solid rgba(6,199,85,.3); border-radius:14px; padding:14px 18px; margin-bottom:20px; display:flex; align-items:center; gap:12px; font-size:13.5px; color:var(--text); }
+  .prem-banner b{ color:var(--green); }
+
+  /* ===== CARDS ===== */
+  .cards{ display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:22px; }
+  .card{ background:var(--card); border:1px solid var(--line); border-radius:16px; padding:18px; position:relative; overflow:hidden; box-shadow:var(--shadow); }
+  .card::before{ content:''; position:absolute; top:0; left:0; right:0; height:3px; background:linear-gradient(90deg,var(--green),var(--blue)); }
+  .c-label{ font-size:11.5px; color:var(--muted); margin-bottom:8px; }
+  .c-val{ font-size:24px; font-weight:800; letter-spacing:-.5px; }
+  .c-sub{ font-size:11.5px; margin-top:5px; color:var(--muted); }
+  .pos{ color:var(--pos); } .neg{ color:var(--neg); } .blue{ color:var(--blue); } .gold{ color:#d99e00; }
+  body[data-theme="dark"] .gold{ color:var(--gold); }
+
+  /* ===== BOX ===== */
+  .box{ background:var(--card); border:1px solid var(--line); border-radius:16px; padding:20px; margin-bottom:22px; box-shadow:var(--shadow); }
+  .box-h{ font-size:15px; font-weight:700; color:var(--text-2); margin-bottom:6px; display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+  .box-hint{ font-size:11px; color:var(--muted); font-weight:400; }
+  .info-tag{ display:inline-block; font-size:10px; font-weight:700; padding:2px 8px; border-radius:20px; background:rgba(245,197,24,.15); color:#b98900; border:1px solid rgba(245,197,24,.35); }
+  body[data-theme="dark"] .info-tag{ color:var(--gold); }
+
+  .chips{ display:flex; gap:8px; margin:14px 0 6px; flex-wrap:wrap; }
+  .chip{ padding:6px 14px; border-radius:20px; font-size:12px; cursor:pointer; border:1px solid var(--line); background:var(--card-2); color:var(--muted); font-weight:600; }
+  .chip.on{ background:var(--green); color:#fff; border-color:var(--green); }
+  .chip.locked{ opacity:.55; cursor:not-allowed; }
+  .grid2{ display:grid; grid-template-columns:1.3fr 1fr; gap:22px; }
+
+  /* ===== TABLE ===== */
+  .tbl{ width:100%; border-collapse:collapse; font-size:13.5px; }
+  .tbl th{ text-align:left; color:var(--muted); font-weight:600; font-size:12px; padding:10px 12px; border-bottom:1px solid var(--line); }
+  .tbl td{ padding:12px; border-bottom:1px solid var(--line); vertical-align:middle; color:var(--text); }
+  .tbl tr:last-child td{ border-bottom:none; }
+  .asset-c{ display:flex; align-items:center; gap:10px; }
+  .a-ico{ width:34px; height:34px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px; }
+  .a-sym{ font-size:11px; color:var(--muted); }
+  .badge{ display:inline-block; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:700; }
+  .b-buy{ background:rgba(34,197,94,.15); color:var(--pos); }
+  .b-sell{ background:rgba(248,113,113,.18); color:var(--neg); }
+  .lock-row td{ background:repeating-linear-gradient(45deg,var(--hatch),var(--hatch) 10px,transparent 10px,transparent 20px); color:var(--muted); text-align:center; font-size:13px; }
+  .lock-row .u-btn{ padding:7px 16px; font-size:12.5px; margin-left:10px; }
+
+  .legend{ margin-top:14px; display:flex; flex-direction:column; gap:8px; }
+  .lg{ display:flex; align-items:center; justify-content:space-between; font-size:13px; color:var(--text); }
+  .dot{ width:9px; height:9px; border-radius:50%; display:inline-block; margin-right:8px; }
+
+  /* ===== HOW-TO ===== */
+  .how{ display:grid; grid-template-columns:1fr 340px; gap:30px; align-items:start; }
+  .flow-step{ display:flex; gap:16px; }
+  .flow-l{ display:flex; flex-direction:column; align-items:center; }
+  .flow-n{ width:34px; height:34px; border-radius:50%; background:linear-gradient(135deg,var(--green),var(--green-2)); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:800; flex-shrink:0; }
+  .flow-v{ width:2px; flex:1; background:linear-gradient(var(--green),var(--blue)); min-height:22px; margin:4px 0; }
+  .flow-r{ padding-bottom:20px; }
+  .flow-t{ font-size:15px; font-weight:700; margin-bottom:5px; color:var(--text); }
+  .flow-d{ font-size:12.5px; color:var(--muted); line-height:1.55; }
+  .cmd{ background:var(--card-2); border-left:3px solid var(--green); border-radius:8px; padding:9px 13px; margin-top:8px; font-family:"Courier New",monospace; font-size:12.5px; color:var(--green); line-height:1.7; }
+
+  .phone{ width:300px; background:#e9edf2; border-radius:34px; padding:16px 10px; box-shadow:0 24px 60px rgba(0,0,0,.4); margin:0 auto; }
+  .screen{ background:#fff; border-radius:22px; overflow:hidden; }
+  .l-head{ background:var(--green); color:#fff; padding:12px 14px; display:flex; align-items:center; gap:10px; }
+  .l-head .t{ font-size:14px; font-weight:700; } .l-head .s{ font-size:10px; opacity:.85; }
+  .chat{ padding:12px; background:#8fd0a8; min-height:330px; display:flex; flex-direction:column; gap:9px; }
+  .m-user{ align-self:flex-end; background:#dcf8c6; color:#111; padding:9px 13px; border-radius:16px 16px 4px 16px; max-width:210px; font-size:12.5px; }
+  .fcard{ background:#fff; border-radius:12px; overflow:hidden; box-shadow:0 2px 8px rgba(0,0,0,.15); max-width:240px; align-self:flex-start; }
+  .fcard-h{ background:linear-gradient(135deg,#0e1626,#132038); color:var(--green); padding:10px 13px; font-size:12.5px; font-weight:700; }
+  .fcard-b{ padding:11px 13px; }
+  .frow{ display:flex; justify-content:space-between; font-size:11.5px; padding:3px 0; color:#333; }
+  .famt{ font-size:19px; font-weight:800; color:#0e1626; margin:5px 0; }
+  .fbtn{ background:var(--green); color:#fff; text-align:center; padding:9px; font-size:12.5px; font-weight:700; }
+  .rich{ background:#fff; display:grid; grid-template-columns:repeat(3,1fr); border-top:1px solid #eee; }
+  .rich div{ text-align:center; padding:9px 4px; font-size:9.5px; color:#555; border:.5px solid #f0f0f0; line-height:1.5; }
+
+  @media(max-width:820px){
+    .cards{ grid-template-columns:repeat(2,1fr); }
+    .grid2,.how{ grid-template-columns:1fr; }
+    .phone{ margin-top:10px; }
+    .mock-note{ display:none; }
+  }
+</style>
+</head>
+<body data-theme="dark">
+
+<div class="mock-bar">
+  <span class="m-label">👁 มุมมองผู้ใช้:</span>
+  <div class="seg">
+    <button id="segFree" class="on" onclick="setPlan('free')">👤 Free</button>
+    <button id="segPrem" onclick="setPlan('prem')">👑 Premium</button>
+  </div>
+  <span class="mock-note">* Mockup ดีไซน์ · ข้อมูลตัวอย่าง · สลับ Free/Premium และปุ่มธีม 🌙/☀️ มุมขวาบนได้</span>
+</div>
+
+<div class="nav">
+  <div class="logo">EasyDCA<small>DASHBOARD</small></div>
+  <div class="nav-r">
+    <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="สลับธีม">☀️</button>
+    <div class="u-name">คุณสมชาย<br><span id="planChip" class="plan-chip free">FREE</span></div>
+    <div class="avatar">ส</div>
+  </div>
+</div>
+
+<div class="tabs">
+  <button class="tab on" onclick="showPage('dash',this)">📊 ภาพรวม</button>
+  <button class="tab" onclick="showPage('assets',this)">💼 สินทรัพย์</button>
+  <button class="tab" onclick="showPage('hist',this)">📋 ประวัติ</button>
+  <button class="tab" onclick="showPage('how',this)">💬 วิธีใช้งาน</button>
+</div>
+
+<div class="wrap">
+
+  <!-- DASHBOARD -->
+  <div class="page on" id="page-dash">
+    <div class="upsell" id="upsellBanner">
+      <div class="u-ico">👑</div>
+      <div class="u-body">
+        <div class="u-title">ใช้ครบ 2/2 สินทรัพย์แล้ว — ปลดล็อกไม่จำกัดด้วย Premium</div>
+        <div class="u-sub">เพิ่มหุ้น/คริปโตได้ไม่จำกัด เพียง 59 บาท/เดือน หรือ 590 บาท/ปี (ประหยัด 2 เดือน)</div>
+        <div class="u-progress"><div></div></div>
+      </div>
+      <button class="u-btn">อัพเกรด Premium</button>
+    </div>
+
+    <div class="prem-banner" id="premBanner" style="display:none">
+      👑 <span>คุณเป็นสมาชิก <b>Premium</b> — เพิ่มสินทรัพย์ได้ไม่จำกัด · ใช้งานได้ถึง <b>1 ส.ค. 2026</b></span>
+    </div>
+
+    <div class="cards">
+      <div class="card"><div class="c-label">มูลค่าพอตรวม <span class="info-tag">live</span></div><div class="c-val blue" id="sumValue">฿22,300</div><div class="c-sub">เฉพาะสินทรัพย์ที่มีราคาตลาด</div></div>
+      <div class="card"><div class="c-label">เงินต้นรวม</div><div class="c-val" id="sumCost">฿21,000</div><div class="c-sub">ลงทุนสะสมทั้งพอร์ต</div></div>
+      <div class="card"><div class="c-label">กำไร / ขาดทุน</div><div class="c-val pos" id="sumPnl">+฿1,300</div><div class="c-sub pos" id="sumPnlSub">↑ +6.2% ผลตอบแทนรวม</div></div>
+      <div class="card"><div class="c-label">ออมเดือนนี้</div><div class="c-val gold" id="sumMonth">฿10,000</div><div class="c-sub">2 รายการ</div></div>
+    </div>
+
+    <div class="box">
+      <div class="box-h">
+        <span>📈 การเติบโตของพอร์ต</span>
+        <span class="box-hint">เส้นเงินต้น = ข้อมูลจริง · เส้นมูลค่าพอต = <span class="info-tag">เร็วๆ นี้ (รอ Snapshot)</span></span>
+      </div>
+      <div class="chips">
+        <span class="chip on" onclick="setRange(this)">3 เดือน</span>
+        <span class="chip" onclick="setRange(this)">6 เดือน</span>
+        <span class="chip" onclick="setRange(this)">1 ปี</span>
+        <span class="chip locked" title="รอ EasyDCA เพิ่มระบบภายหลัง">มากกว่า 1 ปี 🔒</span>
+      </div>
+      <canvas id="growthChart" height="95"></canvas>
+    </div>
+
+    <div class="grid2">
+      <div class="box" style="margin-bottom:0">
+        <div class="box-h"><span>🥧 สัดส่วนสินทรัพย์</span><span class="box-hint">ตามเงินลงทุนสะสม</span></div>
+        <div style="max-width:260px;margin:6px auto 0"><canvas id="allocChart" height="200"></canvas></div>
+        <div class="legend" id="allocLegend"></div>
+      </div>
+      <div class="box" style="margin-bottom:0">
+        <div class="box-h"><span>📅 เงินออมรายเดือน</span><span class="box-hint">รวมยอดซื้อต่อเดือน (จากประวัติ)</span></div>
+        <canvas id="monthlyChart" height="200"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- ASSETS -->
+  <div class="page" id="page-assets">
+    <div class="box">
+      <div class="box-h"><span>💼 สินทรัพย์ที่ถืออยู่</span><span class="box-hint" id="assetCount">2 สินทรัพย์</span></div>
+      <div style="overflow-x:auto">
+        <table class="tbl">
+          <thead><tr><th>สินทรัพย์</th><th>จำนวนถือ</th><th>ต้นทุนเฉลี่ย</th><th>มูลค่าปัจจุบัน</th><th>กำไร/ขาดทุน</th></tr></thead>
+          <tbody id="assetRows"></tbody>
+        </table>
+      </div>
+      <p class="box-hint" style="margin-top:14px">* สินทรัพย์ที่ยังไม่มีราคาตลาด (เช่น หุ้นไทย) จะแสดง "ไม่มีราคาตลาด" และไม่ถูกรวมในมูลค่า/กำไร</p>
+    </div>
+  </div>
+
+  <!-- HISTORY -->
+  <div class="page" id="page-hist">
+    <div class="box">
+      <div class="box-h">
+        <span>📋 ประวัติการซื้อ-ขาย</span>
+        <select id="histFilter" onchange="renderHistory()" style="background:var(--card-2);border:1px solid var(--line);color:var(--text);padding:7px 12px;border-radius:8px;font-size:13px;font-family:inherit">
+          <option value="all">ทั้งหมด</option><option value="NVDA">NVDA</option><option value="AAPL">AAPL</option><option value="TSLA">TSLA</option>
+        </select>
+      </div>
+      <div style="overflow-x:auto">
+        <table class="tbl">
+          <thead><tr><th>สินทรัพย์</th><th>ประเภท</th><th>จำนวนเงิน</th><th>ราคา/หน่วย</th><th>จำนวน</th><th>วันที่</th></tr></thead>
+          <tbody id="histRows"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- HOW TO -->
+  <div class="page" id="page-how">
+    <div class="how">
+      <div>
+        <div class="box-h" style="margin-bottom:18px"><span>💬 ใช้งานผ่าน LINE ได้เลย</span></div>
+        <div class="flow-step"><div class="flow-l"><div class="flow-n">1</div><div class="flow-v"></div></div>
+          <div class="flow-r"><div class="flow-t">พิมพ์คำสั่งซื้อ / ขาย</div>
+            <div class="flow-d">พิมพ์แบบสั้น (สินทรัพย์ + จำนวนเงิน) หรือแบบละเอียด (ระบุจำนวนหุ้น + ราคา)</div>
+            <div class="cmd">ซื้อ NVDA 1000<br>ซื้อ NVDA 100 หุ้น ราคา 150<br>ขาย NVDA 500<br>buy AAPL 2000</div></div></div>
+        <div class="flow-step"><div class="flow-l"><div class="flow-n">2</div><div class="flow-v"></div></div>
+          <div class="flow-r"><div class="flow-t">บอทดึงราคาตลาด + ให้ยืนยัน</div>
+            <div class="flow-d">ระบบดึงราคาปัจจุบัน คำนวณจำนวนหน่วยให้ แล้วให้กดยืนยันก่อนบันทึกลงพอร์ต</div></div></div>
+        <div class="flow-step"><div class="flow-l"><div class="flow-n">3</div><div class="flow-v"></div></div>
+          <div class="flow-r"><div class="flow-t">ดูพอร์ต · กำไร · ประวัติ</div>
+            <div class="flow-d">พิมพ์คำสั่งเดียวเพื่อดูสรุปในแชท หรือเปิด Dashboard นี้เพื่อดูกราฟเต็ม</div>
+            <div class="cmd">พอต<br>กำไร NVDA<br>ประวัติ<br>ย้อนกลับ</div></div></div>
+        <div class="flow-step"><div class="flow-l"><div class="flow-n">4</div></div>
+          <div class="flow-r"><div class="flow-t">ตั้งเตือน DCA อัตโนมัติ</div>
+            <div class="flow-d">ตั้งให้บอทเตือนลงทุนตามรอบ (รายสัปดาห์ / รายเดือน) ผ่านปุ่ม "⏰ ตั้งเตือน DCA" ในเมนู</div></div></div>
+      </div>
+      <div class="phone">
+        <div class="screen">
+          <div class="l-head"><div style="width:30px;height:30px;border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-size:16px">📈</div>
+            <div><div class="t">EasyDCA</div><div class="s">DCA ผ่าน LINE</div></div></div>
+          <div class="chat">
+            <div class="m-user">ซื้อ NVDA 1000</div>
+            <div class="fcard"><div class="fcard-h">🔍 ตรวจสอบรายการ</div>
+              <div class="fcard-b"><div class="famt">฿1,000</div>
+                <div class="frow"><span>สินทรัพย์</span><b>NVDA</b></div>
+                <div class="frow"><span>ประเภท</span><b style="color:var(--green)">ซื้อ</b></div>
+                <div class="frow"><span>ราคาตลาด</span><span>6,461.01 ฿</span></div>
+                <div class="frow"><span>ได้จำนวน</span><span>0.15477 หุ้น</span></div></div>
+              <div class="fbtn">✅ ยืนยันบันทึก</div></div>
+            <div class="m-user">พอต</div>
+            <div class="fcard"><div class="fcard-h" style="color:var(--green)">📊 สรุปพอร์ต</div>
+              <div class="fcard-b"><div class="frow"><span>เงินต้นรวม</span><b>฿21,000</b></div>
+                <div class="frow"><span>มูลค่าปัจจุบัน</span><b style="color:var(--green-2)">฿22,300</b></div>
+                <div class="frow"><span>กำไร</span><b style="color:var(--green)">+฿1,300 (+6.2%)</b></div></div>
+              <div class="fbtn" style="background:linear-gradient(135deg,#06c755,#38bdf8)">📈 เปิด Dashboard</div></div>
+          </div>
+          <div class="rich">
+            <div>➕<br>เพิ่มรายการ</div><div>📊<br>พอร์ต</div><div>📋<br>ประวัติ</div>
+            <div>📈<br>Dashboard</div><div>⏰<br>ตั้งเตือน</div><div>👑<br>Premium</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const ASSETS = {
+  NVDA:{ name:'NVIDIA', color:'#76b900', held:1.54774541, avgCost:6461.01, invested:10000, value:10800, pnl:800, pct:8.0 },
+  AAPL:{ name:'Apple',  color:'#9aa0a6', held:2.10000000, avgCost:5238.09, invested:11000, value:11500, pnl:500, pct:4.5 },
+  TSLA:{ name:'Tesla',  color:'#e82127', held:0.80000000, avgCost:8750.00, invested:7000,  value:6600,  pnl:-400, pct:-5.7 },
+};
+const FREE_SYMS=['NVDA','AAPL'], PREM_SYMS=['NVDA','AAPL','TSLA'];
+const HISTORY=[
+  {id:1,sym:'NVDA',type:'buy', amt:10000,price:6461.01,qty:1.54774541,date:'26 มิ.ย. 2026'},
+  {id:2,sym:'AAPL',type:'buy', amt:6000, price:5238.09,qty:1.14544000,date:'20 มิ.ย. 2026'},
+  {id:3,sym:'TSLA',type:'buy', amt:7000, price:8750.00,qty:0.80000000,date:'12 มิ.ย. 2026'},
+  {id:4,sym:'AAPL',type:'buy', amt:5000, price:5300.00,qty:0.94339000,date:'1 มิ.ย. 2026'},
+  {id:5,sym:'NVDA',type:'sell',amt:0,    price:6200.00,qty:0.05000000,date:'20 พ.ค. 2026'},
+];
+const MONTHS=['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.'];
+const COST_CUM=[4000,9000,14000,21000,26000,28000];
+const VALUE_CUM=[4050,9300,13600,22100,27200,28900];
+const MONTHLY_SAVE=[4000,5000,5000,7000,5000,2000];
+
+let PLAN='free', growth, alloc, monthly;
+const fmt=n=>'฿'+Number(n).toLocaleString('en-US',{maximumFractionDigits:0});
+const syms=()=>PLAN==='prem'?PREM_SYMS:FREE_SYMS;
+const cssVar=n=>getComputedStyle(document.body).getPropertyValue(n).trim();
+
+function setPlan(p){
+  PLAN=p;
+  segFree.classList.toggle('on',p==='free'); segPrem.classList.toggle('on',p==='prem');
+  const chip=document.getElementById('planChip');
+  chip.className='plan-chip '+(p==='prem'?'prem':'free');
+  chip.textContent=p==='prem'?'👑 PREMIUM':'FREE';
+  upsellBanner.style.display=p==='free'?'flex':'none';
+  premBanner.style.display=p==='prem'?'flex':'none';
+  renderSummary(); renderAssets(); renderHistory(); renderAlloc();
+}
+function renderSummary(){
+  const list=syms().map(s=>ASSETS[s]);
+  const cost=list.reduce((a,x)=>a+x.invested,0), val=list.reduce((a,x)=>a+x.value,0);
+  const pnl=val-cost, pct=pnl/cost*100;
+  sumValue.textContent=fmt(val); sumCost.textContent=fmt(cost);
+  sumPnl.textContent=(pnl>=0?'+':'')+fmt(pnl); sumPnl.className='c-val '+(pnl>=0?'pos':'neg');
+  sumPnlSub.textContent=(pnl>=0?'↑ +':'↓ ')+pct.toFixed(1)+'% ผลตอบแทนรวม';
+  sumPnlSub.className='c-sub '+(pnl>=0?'pos':'neg');
+  assetCount.textContent=list.length+' สินทรัพย์';
+}
+function renderAssets(){
+  const tb=document.getElementById('assetRows'); tb.innerHTML='';
+  syms().forEach(s=>{ const a=ASSETS[s], pos=a.pnl>=0;
+    tb.innerHTML+=`<tr><td><div class="asset-c"><div class="a-ico" style="background:${a.color}22;color:${a.color}">${s[0]}</div>
+      <div><div style="font-weight:700">${a.name}</div><div class="a-sym">${s}</div></div></div></td>
+      <td>${a.held.toFixed(8)}</td><td>${a.avgCost.toLocaleString('en-US',{minimumFractionDigits:2})} ฿</td>
+      <td class="blue">${fmt(a.value)}</td>
+      <td class="${pos?'pos':'neg'}">${pos?'+':''}${fmt(a.pnl)} <span style="font-size:11px">(${pos?'+':''}${a.pct}%)</span></td></tr>`; });
+  if(PLAN==='free') tb.innerHTML+=`<tr class="lock-row"><td colspan="5">🔒 เพิ่มสินทรัพย์ตัวที่ 3 ขึ้นไปได้ด้วย Premium<button class="u-btn">อัพเกรด 59฿/เดือน</button></td></tr>`;
+}
+function renderHistory(){
+  const f=document.getElementById('histFilter').value, allow=syms();
+  const rows=HISTORY.filter(h=>allow.includes(h.sym)).filter(h=>f==='all'||h.sym===f);
+  document.getElementById('histRows').innerHTML=rows.map(h=>{ const buy=h.type==='buy';
+    return `<tr><td style="font-weight:700">${h.sym}</td><td><span class="badge ${buy?'b-buy':'b-sell'}">${buy?'ซื้อ':'ขาย'}</span></td>
+      <td>${h.amt?fmt(h.amt):'—'}</td><td>${h.price.toLocaleString('en-US',{minimumFractionDigits:2})} ฿</td>
+      <td>${h.qty.toFixed(8)}</td><td style="color:var(--muted)">${h.date}</td></tr>`;
+  }).join('')||`<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:24px">ไม่มีรายการ</td></tr>`;
+}
+function chartScales(){
+  const tick=cssVar('--muted'), grid=cssVar('--line');
+  return { x:{ticks:{color:tick,font:{size:11}},grid:{color:grid}}, y:{ticks:{color:tick,font:{size:11},callback:v=>'฿'+v.toLocaleString()},grid:{color:grid}} };
+}
+function initCharts(){
+  growth=new Chart(growthChart,{ type:'line',
+    data:{ labels:MONTHS, datasets:[
+      { label:'มูลค่าพอต (เร็วๆ นี้)', data:VALUE_CUM, borderColor:'#38bdf8', backgroundColor:'rgba(56,189,248,.08)', fill:true, tension:.4, pointRadius:3, borderDash:[5,4] },
+      { label:'เงินต้นสะสม (จริง)', data:COST_CUM, borderColor:'#06c755', backgroundColor:'rgba(6,199,85,.10)', fill:true, tension:.4, pointRadius:3 } ]},
+    options:{ responsive:true, plugins:{legend:{labels:{color:cssVar('--muted'),font:{size:11}}}}, scales:chartScales() } });
+  monthly=new Chart(monthlyChart,{ type:'bar',
+    data:{ labels:MONTHS, datasets:[{ label:'ออม/เดือน', data:MONTHLY_SAVE, backgroundColor:'rgba(6,199,85,.7)', borderRadius:6 }]},
+    options:{ responsive:true, plugins:{legend:{display:false}}, scales:chartScales() } });
+  renderAlloc();
+}
+function renderAlloc(){
+  const list=syms().map(s=>({s,...ASSETS[s]})), total=list.reduce((a,x)=>a+x.invested,0);
+  const data={ labels:list.map(x=>x.s), datasets:[{ data:list.map(x=>x.invested), backgroundColor:list.map(x=>x.color), borderWidth:0, hoverOffset:6 }]};
+  if(alloc){ alloc.data=data; alloc.update(); }
+  else alloc=new Chart(allocChart,{ type:'doughnut', data, options:{ cutout:'66%', plugins:{legend:{display:false}} } });
+  document.getElementById('allocLegend').innerHTML=list.map(x=>`<div class="lg"><span><span class="dot" style="background:${x.color}"></span>${x.s} · ${x.name}</span><span style="color:var(--muted)">${(x.invested/total*100).toFixed(0)}%</span></div>`).join('');
+}
+function setRange(el){ document.querySelectorAll('.chip:not(.locked)').forEach(c=>c.classList.remove('on')); el.classList.add('on'); }
+function showPage(id,el){ document.querySelectorAll('.page').forEach(p=>p.classList.remove('on')); document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on')); document.getElementById('page-'+id).classList.add('on'); el.classList.add('on'); }
+function toggleTheme(){
+  const b=document.body, dark=b.getAttribute('data-theme')==='dark';
+  b.setAttribute('data-theme', dark?'light':'dark');
+  document.getElementById('themeBtn').textContent = dark?'🌙':'☀️';
+  [growth,monthly].forEach(c=>{ c.options.scales=chartScales(); c.options.plugins.legend.labels&&(c.options.plugins.legend.labels.color=cssVar('--muted')); c.update(); });
+}
+initCharts();
+setPlan('free');
+</script>
+</body>
+</html>

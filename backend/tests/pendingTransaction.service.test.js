@@ -63,6 +63,50 @@ describe('createPending — BUY', () => {
     expect(pending).toMatchObject({ id: PENDING_ID, priceSource: 'user' });
   });
 
+  test('ทอง (Phase 3 Round 7) → goldUsd จาก amounts Enrich เข้า Object ที่คืน (ไม่ Persist ลง DB)', async () => {
+    transactionService.validateBuy.mockResolvedValue({
+      asset: { id: 'a-gold', type: 'gold_bar' },
+      assetType: 'gold_bar',
+      newAsset: false,
+      amounts: {
+        quantity: 1,
+        pricePerUnit: 71150,
+        amountThb: 71150,
+        priceSource: 'thaigold',
+        goldUsd: { usdThbRate: 35, pricePerUnitUsd: 2032.86 },
+      },
+    });
+
+    const pending = await createPending(USER_ID, {
+      command: COMMANDS.BUY,
+      params: { symbol: 'GOLD', amountThb: 71150 },
+    });
+
+    // goldUsd ไม่ถูกส่งเข้า Insert Payload (ไม่มี Column) แต่ติดกลับมาใน Object ที่คืน
+    expect(pendingRepository.create.mock.calls[0][0]).not.toHaveProperty('goldUsd');
+    expect(pending).toMatchObject({
+      id: PENDING_ID,
+      priceSource: 'thaigold',
+      goldUsd: { usdThbRate: 35, pricePerUnitUsd: 2032.86 },
+    });
+  });
+
+  test('สินทรัพย์ปกติ (ไม่มี goldUsd ใน amounts) → goldUsd = null ใน Object ที่คืน', async () => {
+    transactionService.validateBuy.mockResolvedValue({
+      asset: { id: 'a-ptt', type: 'stock_th' },
+      assetType: 'stock_th',
+      newAsset: false,
+      amounts: { quantity: 50, pricePerUnit: 34, amountThb: 1700, priceSource: 'user' },
+    });
+
+    const pending = await createPending(USER_ID, {
+      command: COMMANDS.BUY,
+      params: { symbol: 'PTT', quantity: 50, pricePerUnit: 34 },
+    });
+
+    expect(pending.goldUsd).toBeNull();
+  });
+
   test('BUY ด้วย amountThb (Price Feed) → priceSource "coingecko" Enrich เข้า Object ที่คืน ไม่ Persist ลง DB', async () => {
     transactionService.validateBuy.mockResolvedValue({
       asset: { id: 'a-btc', type: 'crypto' },

@@ -67,6 +67,52 @@ const FX_RATE_CACHE_TTL_MS = 10 * 60 * 1000;
 const stockPriceCache = new Map();
 const fxRateCache = new Map();
 
+// ── ทองคำไทย (Phase 3 Round 7) ─────────────────────────────────────────────
+// Community API ที่ Scrape ราคาจากสมาคมค้าทองคำแห่งประเทศไทย (ไม่มี API ทางการ /
+// ไม่ต้อง Auth) — ยิงครั้งเดียวได้ราคาทั้งทองคำแท่งและทองรูปพรรณพร้อมกัน
+const THAI_GOLD_API_URL = 'https://api.chnwt.dev/thai-gold-api/latest';
+
+// TTL 10 นาที (เท่า FX Rate) — API ชุมชนไม่มี SLA + ราคาทองไทยอัปเดตไม่กี่ครั้ง/วัน
+// (ต่างจาก Crypto ที่ผันผวนวินาทีต่อวินาที) จึง Cache นานได้โดยไม่กระทบความแม่นยำ
+const GOLD_PRICE_CACHE_TTL_MS = 10 * 60 * 1000;
+
+// goldType (canonical — ตรงกับ assets.type) → Key ใน response.price ของ API
+// ⚠️ ยืนยันจาก Response จริง + Doc ทางการของ API: ทองรูปพรรณใช้ Key 'gold'
+// (ไม่ใช่ 'gold_ornament' ตามที่พรอมต์สมมติไว้) ส่วนทองคำแท่งใช้ 'gold_bar'
+const GOLD_API_PRICE_KEY = {
+  gold_bar: 'gold_bar',
+  gold_ornament: 'gold',
+};
+
+// Cache ราคาทอง TTL 10 นาที — Map<goldType, { buy, sell, updatedAt, expiresAt }>
+// (แยกจาก Cache อื่นทั้งหมด ไม่แตะ Logic เดิม)
+const goldPriceCache = new Map();
+
+// ── กองทุนรวมไทย (SEC Open Data API — Round 7) ──────────────────────────────
+// Endpoint 1 (Daily NAV) — Verified Live แล้ว (ยิงจริงได้ 401 เมื่อไม่มี Key)
+// จึง Hardcode Path นี้ได้ (ยืนยันแล้ว)
+const SEC_NAV_URL = 'https://api.sec.or.th/v2/fund/daily-info/nav';
+// Base สำหรับประกอบ Path Endpoint 2 (Master List) ที่มาจาก Env
+const SEC_API_BASE = 'https://api.sec.or.th';
+
+// ⚠️ Endpoint 2 (Fund Master List) — Path ยัง "UNVERIFIED" (ยังไม่เคยยิงจริง เพราะ
+// ยังไม่มี Key + Portal ต้อง Login) จึงอ่าน Path จาก Env เต็ม ห้าม Hardcode —
+// ถ้า Env ขึ้นต้นด้วยคำนี้ให้ถือว่า "ยังไม่ได้ตั้งค่า" (กันยิง Request ด้วย Path ปลอม)
+const SEC_PATH_PLACEHOLDER_PREFIX = 'UNVERIFIED';
+
+// TTL: NAV อัปเดตวันละครั้ง → Cache 6 ชม. | Master List เปลี่ยนน้อยมาก → 24 ชม.
+const NAV_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const FUND_MASTER_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+// จำนวนวันย้อนหลังที่ดึง NAV มาเผื่อหา "วันล่าสุดที่มี last_val จริง" (วันหยุด/ยังไม่
+// อัปเดต ค่าจะว่าง ต้อง Fallback ไปวันก่อนหน้า ไม่ปัดเป็น 0)
+const NAV_LOOKBACK_DAYS = 10;
+// เพดานจำนวนหน้าที่ไล่ next_cursor ของ Master List (กัน Loop ไม่รู้จบถ้า API เพี้ยน)
+const FUND_MASTER_MAX_PAGES = 200;
+
+const navCache = new Map(); // Map<`${projId}|${className}`, { navDate, lastVal, expiresAt }>
+let fundMasterCache = null; // { items: [...], expiresAt } — ทั้ง Master List (Cache รวม)
+
 // ยิง CoinGecko แล้วคืนราคา THB เป็น Number — คืน null ถ้าล้มเหลวทุกกรณี
 // (Network error, Timeout, Status ไม่ใช่ 2xx, Response ไม่มีราคาที่คาดไว้)
 // ไม่ throw เพื่อให้ getCurrentPrice จัดการ Fallback ได้ที่เดียว
@@ -244,19 +290,340 @@ async function getUsStockPriceThb(symbol) {
   return priceThb;
 }
 
+// แปลงราคาทองจาก String ของ API ("69,523.76") → Number (69523.76)
+// คืน null ถ้าว่าง/ไม่ใช่ตัวเลขบวก — เช่นก่อนตลาดเปิด API คืน "" (สังเกตจริงตอน
+// ~06:38 น. เวลาไทย) ต้องถือเป็น "ราคายังไม่พร้อม" ไม่ใช่ 0 (กันบันทึกราคา 0)
+function parseThaiGoldPrice(raw) {
+  if (typeof raw !== 'string') return null;
+  const cleaned = raw.replace(/,/g, '').trim();
+  if (cleaned === '') return null;
+  const n = Number(cleaned);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+// ยิง Thai Gold API แล้วแยกราคาทั้ง 2 ประเภท คืน
+//   { gold_bar: {buy,sell}|null, gold_ornament: {buy,sell}|null, updatedAt: string|null }
+// หรือ null ถ้า "ยิงไม่ได้จริง" (Network/Timeout/Status ไม่ 2xx/JSON เพี้ยน/status≠success)
+// — แยกแยะจากกรณี "ยิงได้แต่ราคาบางประเภทว่าง" (คืน object โดย Field ประเภทนั้นเป็น null)
+// เพื่อให้ getGoldPriceThb ตัดสิน GOLD_PRICE_UNAVAILABLE เฉพาะประเภทที่ขอได้ถูกต้อง
+async function fetchThaiGoldPrices() {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(THAI_GOLD_API_URL, { method: 'GET', signal: controller.signal });
+
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      console.error(`[priceFeed] Thai Gold API failed: ${response.status} ${detail}`);
+      return null;
+    }
+
+    const data = await response.json();
+    const price = data?.response?.price;
+    if (data?.status !== 'success' || !price) {
+      console.error('[priceFeed] Thai Gold API returned unexpected shape');
+      return null;
+    }
+
+    // ประกอบราคาต่อประเภท — ต้องได้ทั้ง buy และ sell เป็นเลขบวก มิฉะนั้นประเภทนั้น = null
+    const buildType = (node) => {
+      const buy = parseThaiGoldPrice(node?.buy);
+      const sell = parseThaiGoldPrice(node?.sell);
+      return buy !== null && sell !== null ? { buy, sell } : null;
+    };
+
+    return {
+      gold_bar: buildType(price.gold_bar),
+      gold_ornament: buildType(price.gold), // ⚠️ ทองรูปพรรณ = Key 'gold' ใน API
+      updatedAt:
+        [data.response.update_date, data.response.update_time].filter(Boolean).join(' ') || null,
+    };
+  } catch (err) {
+    console.error(`[priceFeed] Thai Gold API request error: ${err.message}`);
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// ราคาทองปัจจุบันเป็น THB ของประเภทที่ระบุ ({ buy, sell, updatedAt }) — Number ทั้งคู่
+//  - buy  = ราคาสมาคม "รับซื้อคืน" (ลูกค้าได้ราคานี้ตอนขาย → ใช้ตีมูลค่าพอร์ต/กำไร)
+//  - sell = ราคาสมาคม "ขายออก" (ลูกค้าจ่ายราคานี้ตอนซื้อทองใหม่ → ใช้เป็นต้นทุน Default)
+//
+// ⚠️ throw Error(code='GOLD_PRICE_UNAVAILABLE') ถ้าดึงไม่ได้/Format ผิด/ราคาประเภทนี้ว่าง
+// (ไม่เดาราคา) — ต่างจาก getCurrentPrice/getUsStockPriceThb ที่คืน null โดยเจตนา
+// (getCurrentPrice จะห่อ getGoldPriceThb ด้วย try/catch แล้วคืน null เองสำหรับ
+//  Use Case สรุปพอร์ตที่ต้องข้าม Asset ราคาไม่ได้แทนที่จะพังทั้งงาน)
+//
+// ยิง API ครั้งเดียวได้ราคาทั้ง 2 ประเภท → Cache ทั้งคู่พร้อมกัน (ลด Request ครึ่งหนึ่ง
+// เมื่อผู้ใช้ถือทองทั้ง 2 ประเภท)
+async function getGoldPriceThb(goldType) {
+  const priceKey = GOLD_API_PRICE_KEY[goldType];
+  if (!priceKey) {
+    const err = new Error(`Unknown gold type: ${goldType}`);
+    err.code = 'GOLD_PRICE_UNAVAILABLE';
+    throw err;
+  }
+
+  const cached = goldPriceCache.get(goldType);
+  if (cached && cached.expiresAt > Date.now()) {
+    return { buy: cached.buy, sell: cached.sell, updatedAt: cached.updatedAt };
+  }
+
+  const all = await fetchThaiGoldPrices();
+  if (all === null) {
+    const err = new Error('Thai gold price feed unavailable');
+    err.code = 'GOLD_PRICE_UNAVAILABLE';
+    throw err;
+  }
+
+  // Cache ทุกประเภทที่ได้ราคาครบ (ห้าม Cache null — Retry ได้ทันทีเหมือน Pattern Crypto)
+  const expiresAt = Date.now() + GOLD_PRICE_CACHE_TTL_MS;
+  for (const type of ['gold_bar', 'gold_ornament']) {
+    if (all[type]) {
+      goldPriceCache.set(type, { ...all[type], updatedAt: all.updatedAt, expiresAt });
+    }
+  }
+
+  const result = all[goldType];
+  if (!result) {
+    const err = new Error(`Gold price for ${goldType} is unavailable (empty/invalid)`);
+    err.code = 'GOLD_PRICE_UNAVAILABLE';
+    throw err;
+  }
+
+  return { buy: result.buy, sell: result.sell, updatedAt: all.updatedAt };
+}
+
+// สร้าง Error ที่มี code (Pattern เดียวกับ Service Error อื่น) ให้ Caller แปลไทยได้
+function secError(code, message) {
+  const err = new Error(message);
+  err.code = code;
+  return err;
+}
+
+// อ่าน Subscription Key จาก Env — คืน null ถ้าไม่ได้ตั้ง (ห้าม Hardcode)
+function getSecKey() {
+  const key = process.env.SEC_API_SUBSCRIPTION_KEY;
+  return key && key.trim() ? key.trim() : null;
+}
+
+// อ่าน Path ของ Endpoint 2 (Master List) จาก Env — คืน null ถ้ายังไม่ตั้ง หรือยังเป็น
+// Placeholder "UNVERIFIED..." (ถือว่ายังไม่ได้ตั้งค่า จะได้ไม่ยิง Request ด้วย Path ปลอม)
+function getFundMasterPath() {
+  const raw = process.env.SEC_FUND_MASTER_LIST_PATH;
+  if (!raw || !raw.trim()) return null;
+  const trimmed = raw.trim();
+  if (trimmed.toUpperCase().startsWith(SEC_PATH_PLACEHOLDER_PREFIX)) return null;
+  return trimmed;
+}
+
+// วันที่รูปแบบ YYYY-MM-DD (Asia/Bangkok) ย้อนหลัง n วันจากวันนี้ — ใช้ทำ Date Range
+// ให้ SEC NAV Endpoint (คำนวณเองในไฟล์นี้ ไม่ import transaction.service กัน Circular)
+function bangkokDateMinusDays(days) {
+  const now = Date.now();
+  const d = new Date(now - days * 24 * 60 * 60 * 1000);
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(d);
+}
+
+// แปลงค่า NAV (last_val) จาก API เป็น Number บวก — Defensive: รับได้ทั้ง number และ
+// string (เผื่อ Field จริงต่างจากตัวอย่าง) คืน null ถ้า null/0/ติดลบ/ไม่ใช่ตัวเลข
+// (กัน Mark-to-market ด้วยราคา 0 ตอน บลจ. ยังไม่อัปเดต NAV ของวัน)
+function parseNav(raw) {
+  if (raw === null || raw === undefined) return null;
+  const n = typeof raw === 'string' ? Number(raw.replace(/,/g, '').trim()) : Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+// ยิง SEC NAV Endpoint (Endpoint 1 — Verified) ดึง NAV ของ proj_id + fund_class_name
+// ในช่วง NAV_LOOKBACK_DAYS วันล่าสุด แล้วเลือก "วันที่ล่าสุดที่มี last_val ใช้ได้จริง"
+// คืน { navDate, lastVal } หรือ null ถ้ายิงไม่ได้/ไม่มีข้อมูลใช้ได้เลย (Caller ตัดสิน)
+async function fetchLatestFundNav(projId, fundClassName, apiKey) {
+  const endDate = bangkokDateMinusDays(0);
+  const startDate = bangkokDateMinusDays(NAV_LOOKBACK_DAYS);
+  const url =
+    `${SEC_NAV_URL}?proj_id=${encodeURIComponent(projId)}` +
+    `&fund_class_name=${encodeURIComponent(fundClassName)}` +
+    `&start_nav_date=${startDate}&end_nav_date=${endDate}&page_size=100`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { 'Ocp-Apim-Subscription-Key': apiKey },
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      console.error(`[priceFeed] SEC NAV API failed: ${response.status} ${detail}`);
+      return null;
+    }
+
+    const data = await response.json();
+    const items = Array.isArray(data?.items) ? data.items : null;
+    if (!items) {
+      console.error('[priceFeed] SEC NAV API returned unexpected shape (no items[])');
+      return null;
+    }
+
+    // เลือกเฉพาะ Row ของ Class ที่ขอ (Defensive — เผื่อ API ไม่กรอง fund_class_name ให้)
+    // ที่มี last_val ใช้ได้ แล้วเอา nav_date ล่าสุดสุด (Fallback ข้ามวันที่ค่าว่างเอง)
+    let best = null;
+    for (const item of items) {
+      if (item?.fund_class_name && item.fund_class_name !== fundClassName) continue;
+      const lastVal = parseNav(item?.last_val);
+      if (lastVal === null) continue;
+      const navDate = item?.nav_date ?? '';
+      if (!best || navDate > best.navDate) {
+        best = { navDate, lastVal };
+      }
+    }
+
+    return best; // null ถ้าไม่มี Row ไหนมี last_val ใช้ได้ในช่วงนั้น
+  } catch (err) {
+    console.error(`[priceFeed] SEC NAV request error: ${err.message}`);
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// NAV ล่าสุดของกองทุน (proj_id + fund_class_name) — { navDate, lastVal } เป็น Number
+// ⚠️ throw เสมอเมื่อดึงไม่ได้ (ไม่เดาราคา) เพื่อให้ Caller แปลเป็นข้อความไทยชัดเจน:
+//   - SEC_NOT_CONFIGURED         : ไม่ได้ตั้ง SEC_API_SUBSCRIPTION_KEY (ไม่ยิง Request)
+//   - MUTUAL_FUND_NAV_UNAVAILABLE: ดึงไม่ได้/ไม่มี last_val ใช้ได้ในช่วงที่ค้น
+// Cache 6 ชม. ต่อคู่ (projId|className) — ห้าม Cache ค่า Error (Retry ได้ทันที)
+async function getMutualFundNav(projId, fundClassName) {
+  if (!projId || !fundClassName) {
+    throw secError(
+      'MUTUAL_FUND_NAV_UNAVAILABLE',
+      `getMutualFundNav requires proj_id and fund_class_name (got ${projId}, ${fundClassName})`
+    );
+  }
+
+  const apiKey = getSecKey();
+  if (!apiKey) {
+    throw secError(
+      'SEC_NOT_CONFIGURED',
+      'SEC_API_SUBSCRIPTION_KEY is not configured — cannot fetch mutual fund NAV'
+    );
+  }
+
+  const cacheKey = `${projId}|${fundClassName}`;
+  const cached = navCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return { navDate: cached.navDate, lastVal: cached.lastVal };
+  }
+
+  const nav = await fetchLatestFundNav(projId, fundClassName, apiKey);
+  if (nav === null) {
+    throw secError(
+      'MUTUAL_FUND_NAV_UNAVAILABLE',
+      `No usable NAV for ${projId} / ${fundClassName} in the last ${NAV_LOOKBACK_DAYS} days`
+    );
+  }
+
+  navCache.set(cacheKey, { ...nav, expiresAt: Date.now() + NAV_CACHE_TTL_MS });
+  return nav;
+}
+
+// โหลด Fund Master List ทั้งหมด (Endpoint 2) แบบไล่ next_cursor — Cache 24 ชม.
+// ⚠️ throw SEC_NOT_CONFIGURED (ไม่ยิง Request) ถ้าไม่มี Key หรือ Path ยังเป็น
+// Placeholder/ไม่ได้ตั้ง | throw MUTUAL_FUND_LIST_UNAVAILABLE ถ้ายิงแล้วล้มเหลว
+// คืน Array ของ items (Raw จาก API) — Parse แบบ Defensive ที่ mutualFund.service
+async function fetchFundMasterList() {
+  if (fundMasterCache && fundMasterCache.expiresAt > Date.now()) {
+    return fundMasterCache.items;
+  }
+
+  const apiKey = getSecKey();
+  const path = getFundMasterPath();
+  if (!apiKey || !path) {
+    // (h) ยังไม่ได้ตั้งค่า → Fail Gracefully "โดยไม่ยิง Request ออกไปจริง"
+    throw secError(
+      'SEC_NOT_CONFIGURED',
+      'SEC fund master list is not configured (SEC_API_SUBSCRIPTION_KEY / SEC_FUND_MASTER_LIST_PATH) — request NOT sent'
+    );
+  }
+
+  const baseUrl = /^https?:\/\//i.test(path) ? path : `${SEC_API_BASE}${path.startsWith('/') ? '' : '/'}${path}`;
+
+  const items = [];
+  let cursor = null;
+  try {
+    for (let page = 0; page < FUND_MASTER_MAX_PAGES; page += 1) {
+      const url = `${baseUrl}?page_size=100${cursor ? `&next_cursor=${encodeURIComponent(cursor)}` : ''}`;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+      let data;
+      try {
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: { 'Ocp-Apim-Subscription-Key': apiKey },
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          const detail = await response.text().catch(() => '');
+          console.error(`[priceFeed] SEC fund list API failed: ${response.status} ${detail}`);
+          throw secError('MUTUAL_FUND_LIST_UNAVAILABLE', `SEC fund list HTTP ${response.status}`);
+        }
+        data = await response.json();
+      } finally {
+        clearTimeout(timeout);
+      }
+
+      const pageItems = Array.isArray(data?.items) ? data.items : [];
+      items.push(...pageItems);
+
+      // next_cursor ว่าง/ไม่มี → จบ Pagination
+      cursor = data?.next_cursor || null;
+      if (!cursor || pageItems.length === 0) break;
+    }
+  } catch (err) {
+    if (err.code) throw err;
+    console.error(`[priceFeed] SEC fund list request error: ${err.message}`);
+    throw secError('MUTUAL_FUND_LIST_UNAVAILABLE', `SEC fund list request error: ${err.message}`);
+  }
+
+  fundMasterCache = { items, expiresAt: Date.now() + FUND_MASTER_CACHE_TTL_MS };
+  return items;
+}
+
 // คืนราคาปัจจุบันของ Symbol เป็น THB (Number) หรือ null ถ้าหาไม่ได้
 //  - Symbol ไม่มีใน Mapping → คืน null ทันที ไม่ยิง API (ไม่เดา ไม่ throw)
 //  - CoinGecko/Twelve Data ล้มเหลว/Timeout → คืน null (Caller ต้อง Fallback เอง)
 // เจตนา: ไม่ throw เลย เพื่อให้ Caller (transaction.service) ตัดสินใจ Fallback
 // เป็น PRICE_FEED_NOT_IMPLEMENTED ได้เมื่อราคาหาไม่ได้จริง ไม่ใช่ Error ชนิดใหม่
+// หมายเหตุ: กองทุนรวม "ไม่" route ผ่าน getCurrentPrice เพราะ NAV ต้องใช้ proj_id +
+// fund_class_name (symbol อย่างเดียวไม่พอ) — profit/portfolio เรียก getMutualFundNav ตรง
 async function getCurrentPrice(symbol) {
   if (typeof symbol !== 'string') return null;
   const normalized = symbol.trim().toUpperCase();
 
+  const type = symbolRegistry.lookupType(normalized);
+
   // หุ้นสหรัฐ (stock_us) → Twelve Data (แปลง USD→THB) — จัดเส้นทางก่อนแล้ว return
   // ไม่แตะ Logic Crypto (CoinGecko) ด้านล่างเลย
-  if (symbolRegistry.lookupType(normalized) === 'stock_us') {
+  if (type === 'stock_us') {
     return getUsStockPriceThb(normalized);
+  }
+
+  // ทองคำ → ราคา "รับซื้อคืน" (buy) สำหรับตีมูลค่าพอร์ต/กำไร (Mark-to-market)
+  // getGoldPriceThb throw เมื่อดึงไม่ได้ แต่ getCurrentPrice ต้องคง Contract เดิม
+  // (คืน null ถ้าหาราคาไม่ได้) เพื่อให้ผู้เรียกที่ Loop สรุปพอร์ต (portfolioSummary)
+  // "ข้าม" Asset ที่ราคาไม่ได้แทนการพังทั้งงาน — จึงห่อ try/catch คืน null ที่นี่
+  if (type === 'gold_bar' || type === 'gold_ornament') {
+    try {
+      const gold = await getGoldPriceThb(type);
+      return gold.buy;
+    } catch (err) {
+      return null;
+    }
   }
 
   const coingeckoId = COINGECKO_IDS[normalized];
@@ -282,5 +649,8 @@ async function getCurrentPrice(symbol) {
 module.exports = {
   getCurrentPrice,
   getUsdThbFxRate,
+  getGoldPriceThb,
+  getMutualFundNav,
+  fetchFundMasterList,
   COINGECKO_IDS,
 };

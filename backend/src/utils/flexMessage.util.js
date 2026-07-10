@@ -26,6 +26,10 @@ const ERROR_MESSAGES = {
     'ไม่มีการถือครองสินทรัพย์นี้อยู่ในขณะนี้ จึงยังคำนวณกำไร/ขาดทุนไม่ได้ ลองพิมพ์ "พอต" เพื่อดูสินทรัพย์ที่คุณถืออยู่',
   PRICE_FEED_NOT_IMPLEMENTED:
     'การบันทึกด้วยจำนวนเงินรองรับเฉพาะบางสินทรัพย์ (เช่น Crypto อย่าง BTC/ETH) เท่านั้น สำหรับสินทรัพย์อื่นกรุณาระบุจำนวนหน่วยและราคา เช่น "ซื้อ PTT 50 หุ้น ราคา 34"',
+  // ทองคำ (Phase 3 Round 7) — ดึงราคาจากสมาคมค้าทองคำฯ (Community API) ไม่สำเร็จ
+  // หรือราคายังว่าง (เช่นก่อนตลาดเปิด) — ไม่เดาราคา ให้ผู้ใช้ลองใหม่/ระบุราคาเอง
+  GOLD_PRICE_UNAVAILABLE:
+    'ดึงราคาทองคำปัจจุบันไม่ได้ในขณะนี้ (ราคายังไม่อัพเดตหรือระบบราคาขัดข้องชั่วคราว) กรุณาลองใหม่ภายหลัง หรือระบุราคาต้นทุนเองตอนซื้อ เช่น "ซื้อ GOLD 1 หุ้น ราคา 71000"',
   // "ขาย <SYMBOL> ทั้งหมด" — Asset ยังมีอยู่แต่ยอดคงเหลือเป็น 0 (ขายไปหมดแล้ว)
   NOTHING_TO_SELL:
     'สินทรัพย์นี้ถูกขายไปหมดแล้ว ไม่มียอดคงเหลือให้ขายเพิ่ม ลองพิมพ์ "พอต" เพื่อดูสินทรัพย์ที่คุณถืออยู่',
@@ -122,7 +126,41 @@ function priceSourceNote(priceSource) {
     });
   }
 
+  // ทองคำ (Phase 3 Round 7) — ราคาอ้างอิงจากสมาคมค้าทองคำฯ ผ่าน API ชุมชน
+  // (ไม่ใช่ API ทางการ) อาจล่าช้า/คลาดเคลื่อนจากหน้าร้านได้เล็กน้อย
+  if (priceSource === 'thaigold') {
+    return textLine('* ราคาอ้างอิงจากสมาคมค้าทองคำฯ (ผ่าน API ชุมชน) อาจคลาดเคลื่อน/ล่าช้าจากหน้าร้านเล็กน้อย', {
+      size: 'xs',
+      color: COLOR.textSecondary,
+    });
+  }
+
   return null;
+}
+
+// บรรทัดแสดงราคาอ้างอิง USD ของทอง (Phase 3 Round 7) — ใช้ทั้งใน Preview (goldUsd จาก
+// transaction.service) และหน้ากำไร (usd จาก profit.service) รูปแบบ Field ต่างกันเล็กน้อย
+// จึงรับเป็น Argument ตรงๆ คืน [] ถ้าไม่มีข้อมูล (เพื่อ Spread เข้า body ได้เสมอ)
+function goldUsdLines({ usdThbRate, pricePerUnitUsd, currentPriceUsd, currentValueUsd }) {
+  const lines = [];
+  const priceUsd = pricePerUnitUsd ?? currentPriceUsd;
+  if (priceUsd !== undefined && priceUsd !== null) {
+    lines.push(
+      textLine(`≈ ${formatNumber(priceUsd)} USD/บาททองคำ (เรต 1 USD = ${formatNumber(usdThbRate)} บาท)`, {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      })
+    );
+  }
+  if (currentValueUsd !== undefined && currentValueUsd !== null) {
+    lines.push(
+      textLine(`มูลค่าปัจจุบัน ≈ ${formatNumber(currentValueUsd)} USD`, {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      })
+    );
+  }
+  return lines;
 }
 
 function bubble({ headerText, headerColor, headerBg, bodyContents }) {
@@ -251,6 +289,12 @@ function buildProfitMessage(profit) {
       { size: 'md', weight: 'bold', color: plColor }
     ),
   ];
+
+  // ทอง (Phase 3 Round 7): แสดงราคา/มูลค่าปัจจุบันเป็น USD คู่กับ THB (profit.usd
+  // จาก profit.service — null ถ้าไม่ใช่ทองหรือดึงเรต FX ไม่ได้ → ไม่แสดงบรรทัด USD)
+  if (profit.usd) {
+    body.push(...goldUsdLines(profit.usd));
+  }
 
   const note = priceSourceNote(profit.priceSource);
   if (note) body.push(note);
@@ -441,7 +485,16 @@ function buildPreviewMessage(pending) {
     textLine(`ราคาต่อหน่วย: ${formatNumber(pending.pricePerUnit)} บาท${isUsd ? ' (แปลงแล้ว)' : ''}`, {
       size: 'sm',
       color: COLOR.textSecondary,
-    }),
+    })
+  );
+
+  // ทอง (Phase 3 Round 7): แสดงราคาต้นทุนอ้างอิงเป็น USD คู่กับ THB (pending.goldUsd
+  // จาก transaction.service — null ถ้าไม่ใช่ทองหรือดึงเรต FX ไม่ได้ → ไม่แสดง)
+  if (pending.goldUsd) {
+    body.push(...goldUsdLines(pending.goldUsd));
+  }
+
+  body.push(
     textLine(`มูลค่ารวม: ${formatNumber(pending.amountThb)} บาท${isUsd ? ' (แปลงแล้ว)' : ''}`, {
       size: 'md',
       weight: 'bold',

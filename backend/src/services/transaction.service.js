@@ -11,7 +11,28 @@ const entitlement = require('./entitlement.service');
 function resolvePriceSource(symbol) {
   const type = symbolRegistry.lookupType(symbol);
   if (type === 'stock_us') return 'twelvedata';
+  if (type === 'gold_bar' || type === 'gold_ornament') return 'thaigold';
   return 'coingecko';
+}
+
+// คืน goldType ('gold_bar'|'gold_ornament') ถ้า Symbol เป็นทอง มิฉะนั้น null
+// (Phase 3 Round 7) — ใช้จัดเส้นทางไป Thai Gold Feed แยกจาก Crypto/หุ้น
+function getGoldType(symbol) {
+  const type = symbolRegistry.lookupType(symbol);
+  return type === 'gold_bar' || type === 'gold_ornament' ? type : null;
+}
+
+// Enrich ราคาทอง (THB) ด้วยราคาอ้างอิง USD สำหรับแสดงใน Preview (Phase 3 Round 7)
+// Reuse getUsdThbFxRate เดิม (ไม่เขียน FX ใหม่) — คืน null ถ้าดึงเรตไม่ได้ (ไม่ได้ตั้ง
+// Key / Twelve Data ล่ม) เพื่อให้ Preview แสดง THB อย่างเดียวได้ ไม่ Block การซื้อ
+// (USD เป็นแค่ข้อมูลอ้างอิงประกอบ ไม่ใช่ยอดที่บันทึกลง DB)
+async function buildGoldUsdRef(pricePerUnitThb) {
+  const rate = await priceFeedService.getUsdThbFxRate();
+  if (rate === null) return null;
+  return {
+    usdThbRate: rate,
+    pricePerUnitUsd: roundToTwo(pricePerUnitThb / rate),
+  };
 }
 
 // PRD.md — Free Plan บันทึกได้สูงสุด 2 สินทรัพย์ Active
@@ -56,7 +77,12 @@ function isPresent(value) {
 
 // async เพราะกรณี amountThb ต้องเรียก Price Feed (I/O) มาหาร quantity —
 // Caller ทุกจุด (validateBuy/validateSell) ต้อง await ผลลัพธ์
-async function resolveQuantityAndPrice(params) {
+//
+// side ('buy'|'sell') ใช้เฉพาะกรณีทองที่ให้จำนวนเงิน (Branch amountThb) เพราะทอง
+// ราคาซื้อ (sell = ขายออก) ≠ ราคาขาย (buy = รับซื้อคืน) ต้องเลือก Field ให้ตรงฝั่ง —
+// Crypto/หุ้นใช้ราคาตลาดค่าเดียวไม่แยกฝั่ง จึงไม่กระทบ (Default 'buy' เพื่อ Backward
+// Compat กับ Caller เดิมที่ไม่ส่ง side มา)
+async function resolveQuantityAndPrice(params, side = 'buy') {
   if (isPresent(params.quantity) && isPresent(params.pricePerUnit)) {
     const quantity = Number(params.quantity);
     const pricePerUnitInput = Number(params.pricePerUnit);
@@ -94,15 +120,55 @@ async function resolveQuantityAndPrice(params) {
 
     // priceSource: 'user' — ราคาที่ User ระบุเองตรงๆ (ไม่ได้มาจาก Price Feed)
     // ใช้แยกแยะใน Preview/Confirm Message ว่าควรเตือนเรื่องราคาอ้างอิงไหม
-    return {
+    const resolved = {
       quantity,
       pricePerUnit: pricePerUnitInput,
       amountThb: roundToTwo(quantity * pricePerUnitInput),
       priceSource: 'user',
     };
+
+    // ทอง: ผู้ใช้พิมพ์ราคาต้นทุนเอง (THB) — Enrich ราคาอ้างอิง USD ให้ Preview แสดง
+    // ทั้ง THB และ USD (Phase 3 Round 7) ไม่กระทบยอด THB ที่บันทึกจริง
+    if (getGoldType(params.symbol)) {
+      resolved.goldUsd = await buildGoldUsdRef(pricePerUnitInput);
+    }
+
+    return resolved;
   }
 
   if (isPresent(params.amountThb)) {
+    // ── ทอง: ซื้อด้วยจำนวนเงิน (ไม่พิมพ์ราคาต้นทุน) — Phase 3 Round 7 ──────────
+    // ใช้ราคา "ขายออก" (sell) เป็นต้นทุนต่อหน่วย (ราคาที่ลูกค้าจ่ายจริงตอนซื้อทองใหม่)
+    // แล้วหาร quantity จากจำนวนเงิน — ต่างจาก Crypto/หุ้นที่ใช้ getCurrentPrice (ซึ่ง
+    // สำหรับทองคืนราคา buy สำหรับตีมูลค่าพอร์ต ไม่ใช่ราคาต้นทุนตอนซื้อ) จึงต้องเรียก
+    // getGoldPriceThb ตรงเพื่อเลือก Field sell โดยเฉพาะ ดักก่อนถึง getCurrentPrice
+    const goldType = getGoldType(params.symbol);
+    if (goldType) {
+      let gold;
+      try {
+        gold = await priceFeedService.getGoldPriceThb(goldType);
+      } catch (err) {
+        // ดึงราคาทองไม่ได้ (API ล่ม/ราคาว่างก่อนตลาดเปิด) — ไม่เดาราคา
+        throw new TransactionServiceError(
+          'GOLD_PRICE_UNAVAILABLE',
+          `Cannot derive gold quantity for ${params.symbol}: gold price feed unavailable`,
+          { symbol: params.symbol }
+        );
+      }
+
+      const amountThb = Number(params.amountThb);
+      // ซื้อ = จ่ายราคา "ขายออก" (sell) ; ขาย = ได้ราคา "รับซื้อคืน" (buy)
+      const pricePerUnit = side === 'sell' ? gold.buy : gold.sell;
+      const quantity = roundToEight(amountThb / pricePerUnit);
+      return {
+        quantity,
+        pricePerUnit,
+        amountThb: roundToTwo(amountThb),
+        priceSource: 'thaigold',
+        goldUsd: await buildGoldUsdRef(pricePerUnit),
+      };
+    }
+
     // มีแต่จำนวนเงิน (เช่น "ซื้อ BTC 1000") — ต้องใช้ราคาตลาดปัจจุบันมาหาร
     // เป็น quantity ลองดึงราคาจริงจาก Price Feed ก่อน (รองรับเฉพาะ Crypto ตอนนี้)
     const pricePerUnit = await priceFeedService.getCurrentPrice(params.symbol);
@@ -298,11 +364,14 @@ async function validateSell(userId, params) {
       );
     }
 
-    const allAmounts = await resolveQuantityAndPrice({
-      ...params,
-      quantity: heldForAll,
-      pricePerUnit: marketPrice,
-    });
+    const allAmounts = await resolveQuantityAndPrice(
+      {
+        ...params,
+        quantity: heldForAll,
+        pricePerUnit: marketPrice,
+      },
+      'sell'
+    );
     // ราคามาจาก Price Feed ไม่ใช่ที่ User พิมพ์เอง — ตั้ง priceSource ตาม Type จริง
     // (coingecko/twelvedata) เพื่อให้ Preview เตือนที่มาของราคา (priceSourceNote)
     allAmounts.priceSource = resolvePriceSource(params.symbol);
@@ -310,7 +379,7 @@ async function validateSell(userId, params) {
     return { asset, amounts: allAmounts, heldQuantity: heldForAll };
   }
 
-  const amounts = await resolveQuantityAndPrice(params);
+  const amounts = await resolveQuantityAndPrice(params, 'sell');
 
   // ── Race Condition Warning (DATABASE.md § 12) ──────────────────────────
   // การขายต้องตรวจ "ขายเกินยอดคงเหลือ" ภายใน DB Transaction เดียวที่ Lock

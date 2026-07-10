@@ -142,7 +142,11 @@ CREATE TABLE assets (
   symbol       TEXT        NOT NULL,
   name         TEXT        NOT NULL,
   type         TEXT        NOT NULL
-               CHECK (type IN ('crypto', 'stock_th', 'stock_us', 'etf', 'fund')),
+               CHECK (type IN ('crypto', 'stock_th', 'stock_us', 'etf', 'fund', 'gold_bar', 'gold_ornament')),
+  -- กองทุนรวมไทย (Round 7) — เก็บ proj_id + fund_class_name ของ SEC ไว้ Mark-to-market
+  -- (nullable: สินทรัพย์ชนิดอื่นไม่ใช้) ดู migration 010
+  proj_id          TEXT,
+  fund_class_name  TEXT,
   is_active    BOOLEAN     NOT NULL DEFAULT true,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),

@@ -79,6 +79,8 @@ describe('getAssetProfit — คำนวณกำไร/ขาดทุน', ()
       profitLoss: 10000,
       profitLossPercent: 33.33,
       priceSource: 'coingecko',
+      // usd = null สำหรับสินทรัพย์ที่ไม่ใช่ทอง (Phase 3 Round 7)
+      usd: null,
     });
   });
 
@@ -164,5 +166,90 @@ describe('ProfitServiceError', () => {
     expect(error).toBeInstanceOf(ProfitServiceError);
     expect(error.code).toBe('ASSET_NOT_FOUND');
     expect(error.details).toMatchObject({ symbol: 'BTC' });
+  });
+});
+
+describe('getAssetProfit — ทองคำ (Phase 3 Round 7)', () => {
+  const ASSET_GOLD = { id: 'asset-gold', userId: USER_ID, symbol: 'GOLD', type: 'gold_bar' };
+  const ASSET_GOLDORN = { id: 'asset-goldorn', userId: USER_ID, symbol: 'GOLDORN', type: 'gold_ornament' };
+
+  test('กำไรทอง → ใช้ราคา "รับซื้อคืน" (buy) เป็นราคาปัจจุบัน (ไม่ใช่ sell)', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_GOLD);
+    transactionRepository.findAllByAsset.mockResolvedValue([
+      { type: 'buy', quantity: 1, amountThb: 70000 }, // ต้นทุน 70,000
+    ]);
+    priceFeedService.getGoldPriceThb.mockResolvedValue({ buy: 70950, sell: 71150, updatedAt: 'x' });
+    priceFeedService.getUsdThbFxRate.mockResolvedValue(35);
+
+    const result = await getAssetProfit(USER_ID, 'GOLD');
+
+    expect(priceFeedService.getGoldPriceThb).toHaveBeenCalledWith('gold_bar');
+    // ใช้ buy (70950) เป็นราคาปัจจุบัน → มูลค่า 70950, กำไร 950
+    expect(result.currentPrice).toBe(70950);
+    expect(result.currentValue).toBe(70950);
+    expect(result.profitLoss).toBe(950);
+    expect(result.priceSource).toBe('thaigold');
+    // ไม่หลงไปเรียก getCurrentPrice (Path ทองแยกออกมา)
+    expect(priceFeedService.getCurrentPrice).not.toHaveBeenCalled();
+  });
+
+  test('ทอง → Enrich USD (ราคา/มูลค่าปัจจุบันเป็น USD) ด้วย getUsdThbFxRate', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_GOLD);
+    transactionRepository.findAllByAsset.mockResolvedValue([
+      { type: 'buy', quantity: 2, amountThb: 140000 },
+    ]);
+    priceFeedService.getGoldPriceThb.mockResolvedValue({ buy: 70000, sell: 71000, updatedAt: 'x' });
+    priceFeedService.getUsdThbFxRate.mockResolvedValue(35);
+
+    const result = await getAssetProfit(USER_ID, 'GOLD');
+
+    // currentPrice 70000 THB → 2000 USD ; currentValue 140000 THB → 4000 USD
+    expect(result.usd).toEqual({
+      usdThbRate: 35,
+      currentPriceUsd: 2000,
+      currentValueUsd: 4000,
+    });
+  });
+
+  test('ทอง + ดึง FX ไม่ได้ (null) → usd = null แต่ยังคำนวณกำไร THB ได้ปกติ', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_GOLD);
+    transactionRepository.findAllByAsset.mockResolvedValue([
+      { type: 'buy', quantity: 1, amountThb: 70000 },
+    ]);
+    priceFeedService.getGoldPriceThb.mockResolvedValue({ buy: 70950, sell: 71150, updatedAt: 'x' });
+    priceFeedService.getUsdThbFxRate.mockResolvedValue(null);
+
+    const result = await getAssetProfit(USER_ID, 'GOLD');
+
+    expect(result.currentPrice).toBe(70950);
+    expect(result.usd).toBeNull();
+  });
+
+  test('ดึงราคาทองไม่ได้ (feed throw) → GOLD_PRICE_UNAVAILABLE (ไม่ใช่ PRICE_FEED_NOT_IMPLEMENTED)', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_GOLD);
+    transactionRepository.findAllByAsset.mockResolvedValue([
+      { type: 'buy', quantity: 1, amountThb: 70000 },
+    ]);
+    priceFeedService.getGoldPriceThb.mockRejectedValue(
+      Object.assign(new Error('feed down'), { code: 'GOLD_PRICE_UNAVAILABLE' })
+    );
+
+    await expect(getAssetProfit(USER_ID, 'GOLD')).rejects.toMatchObject({
+      code: 'GOLD_PRICE_UNAVAILABLE',
+    });
+  });
+
+  test('ทองรูปพรรณ (gold_ornament) → เรียก getGoldPriceThb ด้วย type ที่ถูก ไม่ปนกับทองคำแท่ง', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_GOLDORN);
+    transactionRepository.findAllByAsset.mockResolvedValue([
+      { type: 'buy', quantity: 1, amountThb: 71000 },
+    ]);
+    priceFeedService.getGoldPriceThb.mockResolvedValue({ buy: 69523.76, sell: 71950, updatedAt: 'x' });
+    priceFeedService.getUsdThbFxRate.mockResolvedValue(35);
+
+    const result = await getAssetProfit(USER_ID, 'GOLDORN');
+
+    expect(priceFeedService.getGoldPriceThb).toHaveBeenCalledWith('gold_ornament');
+    expect(result.currentPrice).toBe(69523.76);
   });
 });

@@ -19,10 +19,17 @@ describe('symbolRegistry.lookupType — Symbol ที่รู้จัก', () 
     expect(lookupType('NVDA')).toBe('stock_us');
   });
 
+  test('ทองคำ → คืน type gold_bar / gold_ornament (Phase 3 Round 7)', () => {
+    expect(lookupType('GOLD')).toBe('gold_bar');
+    expect(lookupType('GOLDORN')).toBe('gold_ornament');
+  });
+
   test('รับ Symbol แบบ case-insensitive และตัดช่องว่างหัวท้าย', () => {
     expect(lookupType('btc')).toBe('crypto');
     expect(lookupType('  ptt  ')).toBe('stock_th');
     expect(lookupType('AaPl')).toBe('stock_us');
+    expect(lookupType('gold')).toBe('gold_bar');
+    expect(lookupType('  goldorn  ')).toBe('gold_ornament');
   });
 });
 
@@ -42,7 +49,9 @@ describe('symbolRegistry.lookupType — Symbol ที่ไม่รู้จั
 
 describe('symbolRegistry — ความถูกต้องของ type ทั้ง Registry', () => {
   test('ทุก type ต้องอยู่ในชุดที่ DATABASE.md อนุญาต', () => {
-    const allowed = new Set(['crypto', 'stock_th', 'stock_us', 'etf', 'fund']);
+    const allowed = new Set([
+      'crypto', 'stock_th', 'stock_us', 'etf', 'fund', 'gold_bar', 'gold_ornament',
+    ]);
     for (const type of Object.values(SYMBOL_TYPES)) {
       expect(allowed.has(type)).toBe(true);
     }

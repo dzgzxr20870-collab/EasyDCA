@@ -11,6 +11,7 @@ const symbolRegistry = require('./symbolRegistry.service');
 function resolvePriceSource(symbol) {
   const type = symbolRegistry.lookupType(symbol);
   if (type === 'stock_us') return 'twelvedata';
+  if (type === 'gold_bar' || type === 'gold_ornament') return 'thaigold';
   return 'coingecko';
 }
 
@@ -68,15 +69,37 @@ async function getAssetProfit(userId, symbol, portfolioId = null) {
 
   const totalInvested = calculateTotalInvested(transactions);
 
-  const currentPrice = await priceFeedService.getCurrentPrice(symbol);
-  if (currentPrice === null) {
-    // Symbol ไม่รองรับ Price Feed (เช่นหุ้น) หรือ CoinGecko ล้มเหลว/Timeout —
-    // ใช้ Error Code เดิมที่มีอยู่แล้ว ไม่สร้างใหม่ซ้ำซ้อน
-    throw new ProfitServiceError(
-      'PRICE_FEED_NOT_IMPLEMENTED',
-      `No live price feed available for ${symbol}`,
-      { symbol }
-    );
+  // ── ทอง (Phase 3 Round 7): Mark-to-market ใช้ราคา "รับซื้อคืน" (buy) ─────────
+  // เรียก getGoldPriceThb ตรง (ไม่ผ่าน getCurrentPrice) เพื่อ (1) โยน Error เฉพาะ
+  // GOLD_PRICE_UNAVAILABLE ให้ผู้ใช้เข้าใจว่าเป็นปัญหาราคาทอง ไม่ใช่ "ไม่รองรับ"
+  // (getCurrentPrice จะกลืน Error เป็น null → PRICE_FEED_NOT_IMPLEMENTED ที่สื่อผิด)
+  // และ (2) เก็บ updatedAt/ราคาไว้ Enrich USD ต่อ
+  const isGold = asset.type === 'gold_bar' || asset.type === 'gold_ornament';
+
+  let currentPrice;
+  if (isGold) {
+    let gold;
+    try {
+      gold = await priceFeedService.getGoldPriceThb(asset.type);
+    } catch (err) {
+      throw new ProfitServiceError(
+        'GOLD_PRICE_UNAVAILABLE',
+        `Gold price feed unavailable for ${symbol}`,
+        { symbol }
+      );
+    }
+    currentPrice = gold.buy;
+  } else {
+    currentPrice = await priceFeedService.getCurrentPrice(symbol);
+    if (currentPrice === null) {
+      // Symbol ไม่รองรับ Price Feed (เช่นหุ้น) หรือ CoinGecko ล้มเหลว/Timeout —
+      // ใช้ Error Code เดิมที่มีอยู่แล้ว ไม่สร้างใหม่ซ้ำซ้อน
+      throw new ProfitServiceError(
+        'PRICE_FEED_NOT_IMPLEMENTED',
+        `No live price feed available for ${symbol}`,
+        { symbol }
+      );
+    }
   }
 
   // totalInvested > 0 เสมอเมื่อ heldQuantity > 0 (ต้องมี buy มากกว่า sell) จึง
@@ -85,6 +108,21 @@ async function getAssetProfit(userId, symbol, portfolioId = null) {
   const currentValue = roundToTwo(heldQuantity * currentPrice);
   const profitLoss = roundToTwo(currentValue - totalInvested);
   const profitLossPercent = roundToTwo((profitLoss / totalInvested) * 100);
+
+  // USD Enrichment สำหรับทอง (Phase 3 Round 7) — Reuse getUsdThbFxRate เดิม
+  // แสดงราคา/มูลค่าปัจจุบันเป็น USD คู่กับ THB บนหน้ากำไร คืน null ถ้าดึงเรตไม่ได้
+  // (ไม่ Block การแสดงผล THB) — เฉพาะทองเท่านั้น (สินทรัพย์อื่นไม่แสดง USD ที่นี่)
+  let usd = null;
+  if (isGold) {
+    const rate = await priceFeedService.getUsdThbFxRate();
+    if (rate !== null) {
+      usd = {
+        usdThbRate: rate,
+        currentPriceUsd: roundToTwo(currentPrice / rate),
+        currentValueUsd: roundToTwo(currentValue / rate),
+      };
+    }
+  }
 
   return {
     symbol: asset.symbol,
@@ -95,9 +133,11 @@ async function getAssetProfit(userId, symbol, portfolioId = null) {
     currentValue,
     profitLoss,
     profitLossPercent,
-    // priceSource ตาม Asset Type จริง (coingecko/twelvedata) เพื่อให้ Flex Message
-    // แสดงคำเตือนราคาอ้างอิงจากแหล่งที่ถูกต้อง (priceSourceNote)
+    // priceSource ตาม Asset Type จริง (coingecko/twelvedata/thaigold) เพื่อให้ Flex
+    // Message แสดงคำเตือนราคาอ้างอิงจากแหล่งที่ถูกต้อง (priceSourceNote)
     priceSource: resolvePriceSource(asset.symbol),
+    // usd = null สำหรับสินทรัพย์ที่ไม่ใช่ทอง หรือทองที่ดึงเรต FX ไม่ได้
+    usd,
   };
 }
 

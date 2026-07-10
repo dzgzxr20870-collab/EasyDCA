@@ -83,6 +83,18 @@ module.exports = {
   twelveData: {
     apiKey: process.env.TWELVE_DATA_API_KEY || null,
   },
+  // SEC Open Data API — Price Feed กองทุนรวมไทย (Round 7)
+  // ⚠️ ไม่บังคับใน REQUIRED_ENV_VARS — ถ้าไม่ตั้งค่า priceFeed/mutualFund service จะ
+  // Fail Gracefully (โยน SEC_NOT_CONFIGURED โดยไม่ยิง Request) ไม่ Crash ทั้งระบบ
+  //   - SEC_API_SUBSCRIPTION_KEY: Ocp-Apim-Subscription-Key (Product Owner ขอจาก Portal)
+  //   - SEC_FUND_MASTER_LIST_PATH: ⚠️ Path ของ Endpoint 2 (Fund Master List) ยัง
+  //     "UNVERIFIED" — ต้อง Copy Path เต็มจริงจาก SEC Portal มาใส่ก่อนใช้งาน Production
+  //     (Endpoint 1 NAV Path ยืนยันแล้ว Hardcode ใน priceFeed.service ได้; เฉพาะ
+  //     Endpoint 2 ที่ยังไม่ยืนยันจึงทำเป็น Env Override เต็ม)
+  sec: {
+    subscriptionKey: process.env.SEC_API_SUBSCRIPTION_KEY || null,
+    fundMasterListPath: process.env.SEC_FUND_MASTER_LIST_PATH || null,
+  },
   // Payment (Phase 2 Step 3 — Premium ผ่าน PromptPay QR + ต่ออายุเอง)
   // ⚠️ ไม่บังคับใน REQUIRED_ENV_VARS (ตามบทเรียน Audit — บังคับเฉพาะ 4 ตัวที่ boot
   // ต้องใช้จริง) ตัวเหล่านี้ค่อย Validate ตอนเรียกใช้จริงในรอบ 2 (สร้าง QR/อนุมัติ)
