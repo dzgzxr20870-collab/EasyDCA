@@ -33,6 +33,9 @@ function toCommitParams(pending) {
     feeThb: pending.feeThb !== null && pending.feeThb !== undefined ? Number(pending.feeThb) : 0,
     date: pending.txnDate,
     portfolioId: pending.portfolioId ?? null,
+    // Multi-Currency (Round 10) — พก currency ที่ Snapshot ไว้ตอน Preview ไปบันทึกจริง
+    // ให้ processBuy/SellCommand เก็บ USD ตามจริง (Default 'THB' สำหรับ Path เดิม)
+    ...(pending.currency === 'USD' ? { currency: 'USD' } : {}),
     // กองทุนรวม (Round 7) — ส่งต่อ Class ที่เลือกไว้ให้ processBuyCommand สร้าง Asset
     // พร้อม proj_id/fund_class_name (undefined สำหรับสินทรัพย์อื่น)
     projId: pending.projId ?? undefined,
@@ -79,6 +82,8 @@ async function createPending(userId, parsed, options = {}) {
     quantity: amounts.quantity,
     pricePerUnit: amounts.pricePerUnit,
     amountThb: amounts.amountThb,
+    // Multi-Currency (Round 10) — สกุลของ amount/price (Default 'THB' สำหรับ Path เดิม)
+    currency: amounts.currency ?? 'THB',
     feeThb: params.feeThb ?? 0,
     txnDate: params.date ?? transactionService.todayInBangkok(),
     // กองทุนรวม (Round 7) — พก Class ผ่าน Flow Preview→Confirm (null สำหรับสินทรัพย์อื่น)
@@ -221,6 +226,8 @@ async function createBatch(userId, validatedItems) {
       quantity: amounts.quantity,
       pricePerUnit: amounts.pricePerUnit,
       amountThb: amounts.amountThb,
+      // Multi-Currency (Round 10) — พก currency ต่อรายการ (Default 'THB')
+      currency: amounts.currency ?? 'THB',
       feeThb: params.feeThb ?? 0,
       txnDate: params.date ?? transactionService.todayInBangkok(),
       batchId,
