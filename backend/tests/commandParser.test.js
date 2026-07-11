@@ -301,30 +301,104 @@ describe('commandParser.service', () => {
     });
   });
 
-  describe('ราคาเป็น USD — ซื้อ/ขาย [SYMBOL] [QTY] หุ้น ราคา [PRICE] USD', () => {
-    test('"ซื้อ MSFT 2 หุ้น ราคา 300 USD" → priceCurrency:USD', () => {
+  describe('สกุลเงิน USD (Round 10) — รูปแบบจำนวนหุ้น+ราคา', () => {
+    test('"ซื้อ MSFT 2 หุ้น ราคา 300 USD" → currency:USD', () => {
       expect(parseCommand('ซื้อ MSFT 2 หุ้น ราคา 300 USD')).toEqual({
         command: COMMANDS.BUY,
-        params: { symbol: 'MSFT', quantity: 2, pricePerUnit: 300, priceCurrency: 'USD' },
+        params: { symbol: 'MSFT', quantity: 2, pricePerUnit: 300, currency: 'USD' },
       });
     });
 
     test('ใช้กับคำสั่งขายได้: "ขาย NVDA 1 หุ้น ราคา 900 USD"', () => {
       expect(parseCommand('ขาย NVDA 1 หุ้น ราคา 900 USD')).toEqual({
         command: COMMANDS.SELL,
-        params: { symbol: 'NVDA', quantity: 1, pricePerUnit: 900, priceCurrency: 'USD' },
+        params: { symbol: 'NVDA', quantity: 1, pricePerUnit: 900, currency: 'USD' },
       });
     });
 
-    test('ไม่ระบุหน่วย → ไม่มี Key priceCurrency (Default THB, Shape เดิม)', () => {
+    test('Case-insensitive: "usd" ตัวเล็กก็ได้', () => {
+      expect(parseCommand('ซื้อ MSFT 2 หุ้น ราคา 300 usd')).toEqual({
+        command: COMMANDS.BUY,
+        params: { symbol: 'MSFT', quantity: 2, pricePerUnit: 300, currency: 'USD' },
+      });
+    });
+
+    test('ไม่ระบุหน่วย → ไม่มี Key currency (Default THB, Shape เดิม)', () => {
       expect(parseCommand('ซื้อ PTT 50 หุ้น ราคา 34')).toEqual({
         command: COMMANDS.BUY,
         params: { symbol: 'PTT', quantity: 50, pricePerUnit: 34 },
       });
     });
 
-    test('ระบุ "บาท" ท้ายราคา → ยังคง Default THB (ไม่ใส่ priceCurrency)', () => {
+    test('ระบุ "บาท" ท้ายราคา → ยังคง Default THB (ไม่ใส่ currency)', () => {
       expect(parseCommand('ซื้อ PTT 50 หุ้น ราคา 34 บาท')).toEqual({
+        command: COMMANDS.BUY,
+        params: { symbol: 'PTT', quantity: 50, pricePerUnit: 34 },
+      });
+    });
+  });
+
+  describe('สกุลเงิน USD (Round 10) — รูปแบบจำนวนเงินรวม', () => {
+    test('"ซื้อ MSFT 500 USD" → amountThb=500 (เป็น USD) + currency:USD', () => {
+      expect(parseCommand('ซื้อ MSFT 500 USD')).toEqual({
+        command: COMMANDS.BUY,
+        params: { symbol: 'MSFT', amountThb: 500, currency: 'USD' },
+      });
+    });
+
+    test('คำสั่งขายจำนวนเงินรวม USD: "ขาย NVDA 900 usd"', () => {
+      expect(parseCommand('ขาย NVDA 900 usd')).toEqual({
+        command: COMMANDS.SELL,
+        params: { symbol: 'NVDA', amountThb: 900, currency: 'USD' },
+      });
+    });
+
+    test('ไม่ระบุหน่วย → Default THB (Shape เดิม ไม่มี currency)', () => {
+      expect(parseCommand('ซื้อ BTC 1000')).toEqual({
+        command: COMMANDS.BUY,
+        params: { symbol: 'BTC', amountThb: 1000 },
+      });
+    });
+
+    test('"ซื้อ BTC 1000 บาท" → Default THB (ไม่ใส่ currency)', () => {
+      expect(parseCommand('ซื้อ BTC 1000 บาท')).toEqual({
+        command: COMMANDS.BUY,
+        params: { symbol: 'BTC', amountThb: 1000 },
+      });
+    });
+  });
+
+  describe('Manual Quantity Fallback (Round 10-B) — "จำนวนหุ้น + ยอดรวม" (คำว่า "รวม")', () => {
+    test('"ซื้อ EOSE 10 หุ้น รวม 1000 usd" → quantity+amountThb (ไม่มี pricePerUnit) + USD', () => {
+      expect(parseCommand('ซื้อ EOSE 10 หุ้น รวม 1000 usd')).toEqual({
+        command: COMMANDS.BUY,
+        params: { symbol: 'EOSE', quantity: 10, amountThb: 1000, currency: 'USD' },
+      });
+    });
+
+    test('THB (ไม่ใส่หน่วย): "ซื้อ PTT 50 หุ้น รวม 1700" → ไม่มี currency', () => {
+      expect(parseCommand('ซื้อ PTT 50 หุ้น รวม 1700')).toEqual({
+        command: COMMANDS.BUY,
+        params: { symbol: 'PTT', quantity: 50, amountThb: 1700 },
+      });
+    });
+
+    test('ขาย: "ขาย EOSE 5 หุ้น รวม 600 usd" → SELL + quantity+amountThb', () => {
+      expect(parseCommand('ขาย EOSE 5 หุ้น รวม 600 usd')).toEqual({
+        command: COMMANDS.SELL,
+        params: { symbol: 'EOSE', quantity: 5, amountThb: 600, currency: 'USD' },
+      });
+    });
+
+    test('ทศนิยม + Comma: "ซื้อ EOSE 2.5 หุ้น รวม 1,250.50"', () => {
+      expect(parseCommand('ซื้อ EOSE 2.5 หุ้น รวม 1,250.50')).toEqual({
+        command: COMMANDS.BUY,
+        params: { symbol: 'EOSE', quantity: 2.5, amountThb: 1250.5 },
+      });
+    });
+
+    test('ไม่ชนกับรูปแบบ "ราคา" เดิม: "ซื้อ PTT 50 หุ้น ราคา 34" ยังเป็น qty+price', () => {
+      expect(parseCommand('ซื้อ PTT 50 หุ้น ราคา 34')).toEqual({
         command: COMMANDS.BUY,
         params: { symbol: 'PTT', quantity: 50, pricePerUnit: 34 },
       });
@@ -365,7 +439,7 @@ describe('parseBulkImportLines — Batch นำเข้าพอร์ตหล
     expect(result.items).toEqual([
       { line: 1, symbol: 'BTC', quantity: 0.5, pricePerUnit: 1500000 },
       { line: 2, symbol: 'ETH', quantity: 2, pricePerUnit: 80000, date: '2026-03-01' },
-      { line: 3, symbol: 'MSFT', quantity: 3, pricePerUnit: 300, priceCurrency: 'USD' },
+      { line: 3, symbol: 'MSFT', quantity: 3, pricePerUnit: 300, currency: 'USD' },
     ]);
   });
 

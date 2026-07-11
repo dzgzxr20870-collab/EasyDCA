@@ -1,10 +1,12 @@
 jest.mock('../src/repositories/asset.repository');
 jest.mock('../src/repositories/transaction.repository');
 jest.mock('../src/services/priceFeed.service');
+jest.mock('../src/services/fxRate.service');
 
 const assetRepository = require('../src/repositories/asset.repository');
 const transactionRepository = require('../src/repositories/transaction.repository');
 const priceFeedService = require('../src/services/priceFeed.service');
+const fxRateService = require('../src/services/fxRate.service');
 const { getAssetProfit, ProfitServiceError } = require('../src/services/profit.service');
 
 const USER_ID = 'user-uuid-1';
@@ -12,6 +14,8 @@ const ASSET_BTC = { id: 'asset-btc', userId: USER_ID, symbol: 'BTC', type: 'cryp
 
 beforeEach(() => {
   jest.clearAllMocks();
+  // Default FX เรตพร้อมใช้ (สำหรับสินทรัพย์ USD) — เคส THB ไม่เรียกใช้
+  fxRateService.getUsdThbRate.mockResolvedValue({ rate: 35, asOf: '2026-07-11', stale: false });
 });
 
 describe('getAssetProfit — Error cases', () => {
@@ -71,6 +75,9 @@ describe('getAssetProfit — คำนวณกำไร/ขาดทุน', ()
     expect(priceFeedService.getCurrentPrice).toHaveBeenCalledWith('BTC');
     expect(result).toEqual({
       symbol: 'BTC',
+      // Multi-Currency (Round 10) — สินทรัพย์ THB: currency='THB', fxThb=null
+      currency: 'THB',
+      fxThb: null,
       heldQuantity: 0.01,
       averageCost: 3000000,
       totalInvested: 30000,
@@ -84,6 +91,57 @@ describe('getAssetProfit — คำนวณกำไร/ขาดทุน', ()
       // fund fields = null สำหรับสินทรัพย์ที่ไม่ใช่กองทุน (Round 7)
       fundClassName: null,
       navDate: null,
+    });
+    // THB ล้วน → ไม่เรียก USD Price Feed / FX
+    expect(priceFeedService.getCurrentPriceUsd).not.toHaveBeenCalled();
+    expect(fxRateService.getUsdThbRate).not.toHaveBeenCalled();
+  });
+
+  // ── Multi-Currency (Round 10): สินทรัพย์ USD คิดกำไรในสกุล USD ไม่ปนบาท ─────────
+  test('สินทรัพย์ USD → ต้นทุน/กำไรคิดเป็น USD ล้วน (ใช้ getCurrentPriceUsd) + แนบยอดเทียบบาท', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue({
+      id: 'asset-msft',
+      userId: USER_ID,
+      symbol: 'MSFT',
+      type: 'stock_us',
+    });
+    // ถือ 2 หุ้น ต้นทุนรวม 600 USD (avg 300 USD) — ธุรกรรมเป็น USD
+    transactionRepository.findAllByAsset.mockResolvedValue([
+      { type: 'buy', quantity: 2, amountThb: 600, currency: 'USD' },
+    ]);
+    // ราคา USD ปัจจุบัน 400 → มูลค่า 800 USD → กำไร +200 USD (+33.33%)
+    priceFeedService.getCurrentPriceUsd.mockResolvedValue(400);
+
+    const result = await getAssetProfit(USER_ID, 'MSFT');
+
+    // ต้องใช้ราคา USD ไม่ใช่ THB (ไม่ปนสกุล)
+    expect(priceFeedService.getCurrentPriceUsd).toHaveBeenCalledWith('MSFT');
+    expect(priceFeedService.getCurrentPrice).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      symbol: 'MSFT',
+      currency: 'USD',
+      averageCost: 300, // USD
+      totalInvested: 600, // USD
+      currentPrice: 400, // USD
+      currentValue: 800, // USD
+      profitLoss: 200, // USD
+      profitLossPercent: 33.33,
+      // ยอดเทียบบาท (600 USD invested × 35 = 21000 ; 800 × 35 = 28000 ; PL 200 × 35 = 7000)
+      fxThb: { rate: 35, asOf: '2026-07-11', stale: false, totalInvestedThb: 21000, currentValueThb: 28000, profitLossThb: 7000 },
+    });
+  });
+
+  test('สินทรัพย์ USD แต่ไม่มี USD Price Feed → PRICE_FEED_NOT_IMPLEMENTED', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue({
+      id: 'asset-nvda', userId: USER_ID, symbol: 'NVDA', type: 'stock_us',
+    });
+    transactionRepository.findAllByAsset.mockResolvedValue([
+      { type: 'buy', quantity: 1, amountThb: 900, currency: 'USD' },
+    ]);
+    priceFeedService.getCurrentPriceUsd.mockResolvedValue(null);
+
+    await expect(getAssetProfit(USER_ID, 'NVDA')).rejects.toMatchObject({
+      code: 'PRICE_FEED_NOT_IMPLEMENTED',
     });
   });
 

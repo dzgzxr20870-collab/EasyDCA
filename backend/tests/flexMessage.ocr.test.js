@@ -70,6 +70,54 @@ describe('buildOcrPreviewMessage', () => {
   });
 });
 
+describe('buildOcrPreviewMessage — Manual Quantity Fallback (Round 10-B)', () => {
+  const AMOUNT_ONLY = {
+    ...CONFIRMABLE,
+    symbol: 'EOSE',
+    quantity: null,
+    pricePerUnit: null,
+    amountThb: 1000,
+    currency: 'USD',
+  };
+
+  test('Amount-only + ไม่ใช่ Crypto (stock_us) → ปุ่ม "กรอกจำนวนหุ้น" + ข้อความชี้ทาง', () => {
+    const msg = flex.buildOcrPreviewMessage({ ...AMOUNT_ONLY, assetType: 'stock_us' });
+    const labels = msg.contents.footer.contents.map((b) => b.action.label);
+    expect(labels).toContain('✏️ กรอกจำนวนหุ้น');
+    // ปุ่มยืนยันเดิมยังอยู่ (ยังทำงานได้ถ้ามี Price Feed)
+    expect(footerDatas(msg).some((d) => d.startsWith('action=ocr_confirm'))).toBe(true);
+    expect(JSON.stringify(msg)).toContain('กรอกจำนวนหุ้น');
+  });
+
+  test('Amount-only + assetType ไม่รู้จัก (undefined) → เสนอ "กรอกจำนวนหุ้น" ไว้ก่อน', () => {
+    const msg = flex.buildOcrPreviewMessage({ ...AMOUNT_ONLY, assetType: undefined });
+    const labels = msg.contents.footer.contents.map((b) => b.action.label);
+    expect(labels).toContain('✏️ กรอกจำนวนหุ้น');
+  });
+
+  test('Amount-only + เป็น Crypto → ไม่เสนอ "กรอกจำนวนหุ้น" (มี Price Feed อยู่แล้ว)', () => {
+    const msg = flex.buildOcrPreviewMessage({ ...AMOUNT_ONLY, symbol: 'BTC', assetType: 'crypto' });
+    const labels = msg.contents.footer.contents.map((b) => b.action.label);
+    expect(labels).not.toContain('✏️ กรอกจำนวนหุ้น');
+    expect(labels).toContain('✏️ แก้ไข');
+  });
+
+  test('มี qty+price (ไม่ใช่ Amount-only) → ไม่เสนอ "กรอกจำนวนหุ้น"', () => {
+    const msg = flex.buildOcrPreviewMessage({ ...CONFIRMABLE, assetType: 'crypto' });
+    const labels = msg.contents.footer.contents.map((b) => b.action.label);
+    expect(labels).not.toContain('✏️ กรอกจำนวนหุ้น');
+  });
+});
+
+describe('buildOcrManualQuantityMessage', () => {
+  test('แสดง Prefill "จำนวน + ยอดรวม" ให้ Copy + อธิบายการคำนวณราคาต่อหน่วย', () => {
+    const msg = flex.buildOcrManualQuantityMessage('ซื้อ EOSE <จำนวนหุ้น> หุ้น รวม 1000 USD');
+    const text = JSON.stringify(msg);
+    expect(text).toContain('ซื้อ EOSE <จำนวนหุ้น> หุ้น รวม 1000 USD');
+    expect(text).toContain('ยอดรวม ÷ จำนวนหุ้น');
+  });
+});
+
 describe('buildOcrPremiumRequiredMessage', () => {
   test('มีปุ่มอัพเกรด request_payment รายเดือน/รายปี', () => {
     const msg = flex.buildOcrPremiumRequiredMessage();

@@ -3,12 +3,14 @@
 // exceljs เพื่อยืนยันว่า Buffer ที่ Generate ออกมาถูกต้องจริง (อ่าน Excel กลับมาเช็ค Cell)
 jest.mock('../src/services/portfolio.service');
 jest.mock('../src/services/priceFeed.service');
+jest.mock('../src/services/fxRate.service');
 jest.mock('../src/repositories/transaction.repository');
 jest.mock('../src/repositories/user.repository');
 
 const ExcelJS = require('exceljs');
 const portfolioService = require('../src/services/portfolio.service');
 const priceFeedService = require('../src/services/priceFeed.service');
+const fxRateService = require('../src/services/fxRate.service');
 const transactionRepository = require('../src/repositories/transaction.repository');
 const userRepository = require('../src/repositories/user.repository');
 const reportExport = require('../src/services/reportExport.service');
@@ -147,6 +149,45 @@ describe('buildReportData', () => {
     await expect(reportExport.buildReportData(USER_ID, range, NOW)).rejects.toThrow(
       expect.objectContaining({ code: 'EXPORT_USER_NOT_FOUND' })
     );
+  });
+
+  // ── Multi-Currency (Round 10): พอร์ตปน THB+USD แยกยอดตามสกุล + ยอดรวมเทียบบาท ──
+  test('พอร์ต THB+USD → byCurrency แยกสกุล ไม่ปน + ยอดรวมเทียบบาท (แปลง USD ด้วยเรต)', async () => {
+    portfolioService.getPortfolioSummary.mockResolvedValue({
+      isEmpty: false,
+      totalInvested: 30000, // = ยอด THB (backward compat)
+      investedByCurrency: { THB: 30000, USD: 600 },
+      holdings: [
+        { symbol: 'BTC', name: 'Bitcoin', type: 'crypto', currency: 'THB', heldQuantity: 0.01, totalInvested: 30000, averageCost: 3000000 },
+        { symbol: 'MSFT', name: 'Microsoft', type: 'stock_us', currency: 'USD', heldQuantity: 2, totalInvested: 600, averageCost: 300 },
+      ],
+    });
+    // BTC ราคา THB, MSFT ราคา USD (ต้องใช้ getCurrentPriceUsd ไม่ใช่ getCurrentPrice)
+    priceFeedService.getCurrentPrice.mockResolvedValue(4000000); // BTC → มูลค่า 40,000 บาท
+    priceFeedService.getCurrentPriceUsd.mockResolvedValue(400); // MSFT → มูลค่า 800 USD
+    fxRateService.getUsdThbRate.mockResolvedValue({ rate: 35, asOf: '2026-07-11', stale: false });
+    transactionRepository.findByUserAndDateRange.mockResolvedValue([]);
+
+    const range = reportExport.resolveRange({ range: 'month' }, NOW);
+    const data = await reportExport.buildReportData(USER_ID, range, NOW);
+
+    // MSFT ตีมูลค่าด้วยราคา USD (ไม่ปนสกุล): 2 × 400 = 800 USD, กำไร +200 USD
+    const msft = data.holdings.find((h) => h.symbol === 'MSFT');
+    expect(msft.currency).toBe('USD');
+    expect(msft.currentValue).toBe(800);
+    expect(msft.profitLoss).toBe(200);
+    expect(priceFeedService.getCurrentPriceUsd).toHaveBeenCalledWith('MSFT');
+
+    // byCurrency แยกกันชัด ไม่ถัวข้ามสกุล
+    expect(data.totals.byCurrency).toEqual({
+      THB: { invested: 30000, currentValue: 40000 },
+      USD: { invested: 600, currentValue: 800 },
+    });
+    // ยอดรวมเทียบบาท: THB 40,000 + USD 800×35 = 28,000 → 68,000 บาท
+    expect(data.totals.totalCurrentValue).toBe(68000);
+    // เงินลงทุนเทียบบาท: THB 30,000 + USD 600×35 = 21,000 → 51,000
+    expect(data.totals.totalInvested).toBe(51000);
+    expect(data.totals.fxRate).toBe(35);
   });
 });
 
