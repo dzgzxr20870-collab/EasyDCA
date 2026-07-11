@@ -149,6 +149,50 @@ describe('processBuyCommand', () => {
     expect(assetRepository.create).not.toHaveBeenCalled();
   });
 
+  // ── Manual Quantity Fallback (Round 10-B) ────────────────────────────────
+  test('Manual Quantity (quantity + amountThb, ไม่มี pricePerUnit) THB → price = amount/quantity, ไม่เรียก Price Feed', async () => {
+    const ASSET_EOSE = { id: 'asset-eose', userId: USER_ID, symbol: 'EOSE', type: 'stock_us' };
+    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_EOSE);
+
+    const result = await processBuyCommand(USER_ID, { symbol: 'EOSE', quantity: 10, amountThb: 1000 });
+
+    // ไม่พึ่ง Price Feed เลย (Bypass PRICE_FEED_NOT_IMPLEMENTED / SEC_NOT_CONFIGURED)
+    expect(priceFeedService.getCurrentPrice).not.toHaveBeenCalled();
+    expect(priceFeedService.getCurrentPriceUsd).not.toHaveBeenCalled();
+    expect(transactionRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ quantity: 10, pricePerUnit: 100, amountThb: 1000 })
+    );
+    expect(result).toMatchObject({ quantity: 10, pricePerUnit: 100, amountThb: 1000, priceSource: 'user' });
+  });
+
+  test('Manual Quantity USD → currency=USD, price = amount/quantity, ไม่พึ่ง USD Price Feed', async () => {
+    const ASSET_EOSE = { id: 'asset-eose', userId: USER_ID, symbol: 'EOSE', type: 'stock_us' };
+    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_EOSE);
+    // Price Feed คืน null เสมอ (Default) — ต้องไม่ถูกเรียกเลย
+    const result = await processBuyCommand(USER_ID, {
+      symbol: 'EOSE',
+      quantity: 8,
+      amountThb: 200,
+      currency: 'USD',
+    });
+
+    expect(priceFeedService.getCurrentPriceUsd).not.toHaveBeenCalled();
+    expect(transactionRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ quantity: 8, pricePerUnit: 25, amountThb: 200, currency: 'USD' })
+    );
+    expect(result).toMatchObject({ quantity: 8, pricePerUnit: 25, currency: 'USD', priceSource: 'user' });
+  });
+
+  test('Manual Quantity ที่ quantity ≤ 0 → VALIDATION_ERROR (ไม่เขียน DB)', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET);
+
+    await expect(
+      processBuyCommand(USER_ID, { symbol: 'EOSE', quantity: 0, amountThb: 1000 })
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
+
   test('รูปแบบจำนวนเงินล้วน (amountThb) + Price Feed สำเร็จ → คำนวณ quantity จากราคาจริง', async () => {
     const ASSET_BTC = { id: 'asset-uuid-btc', userId: USER_ID, symbol: 'BTC', type: 'crypto' };
     assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_BTC);

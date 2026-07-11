@@ -303,33 +303,43 @@ describe('Reminder Setup Quick Reply — ทุกข้อความต้อ
   });
 });
 
-// ── Round 2: Preview คำสั่งราคา USD ต้องโชว์ทั้งยอด USD และ THB ที่แปลงแล้ว ──────
-describe('buildPreviewMessage — ราคาเป็น USD', () => {
+// ── Round 10: Preview สกุล USD เก็บ "ตามจริง" — โชว์ USD เป็นหลัก + ยอดเทียบบาท ────
+describe('buildPreviewMessage — สกุลเงิน USD (Native)', () => {
   const baseUsdPending = {
     id: 'pending-usd-1',
     commandType: 'buy',
     assetSymbol: 'MSFT',
     quantity: 2,
-    pricePerUnit: 10500, // THB (แปลงแล้ว)
-    amountThb: 21000, // THB (ที่จะบันทึกจริง)
+    pricePerUnit: 300, // USD ตามจริง (ไม่แปลง)
+    amountThb: 600, // ยอดรวมเป็น USD (ชื่อ Key คงเดิม)
+    currency: 'USD',
     priceSource: 'user',
-    fx: { currency: 'USD', rate: 35, pricePerUnitOriginal: 300, amountOriginal: 600 },
+    // fx = ยอดเทียบบาทเพื่อแสดงผลเท่านั้น (600 USD × 35 = 21000)
+    fx: { rate: 35, asOf: '2026-07-11', stale: false, amountThb: 21000, pricePerUnitThb: 10500 },
   };
 
-  test('มี fx (USD) → แสดงราคา USD ที่พิมพ์ + เรต + ยอด THB ที่แปลงแล้ว', () => {
+  test('สกุล USD → แสดงราคา/ยอดเป็น USD ตามจริง + ยอดเทียบบาท + เรต/วันที่', () => {
     const text = JSON.stringify(buildPreviewMessage(baseUsdPending));
 
-    // ยอด USD ที่ผู้ใช้พิมพ์ตรงๆ
+    // ราคา/ยอดเป็น USD ตามจริง (ไม่แปลงตอนบันทึก)
     expect(text).toContain('300 USD');
     expect(text).toContain('600 USD');
-    // FX Rate ที่ใช้ตอนนั้น
+    // ยอดเทียบบาท + เรต + วันที่อ้างอิง
+    expect(text).toContain('≈ 21,000 บาท');
     expect(text).toContain('1 USD = 35 บาท');
-    // ยอด THB ที่แปลงแล้ว (ที่จะบันทึกจริง)
-    expect(text).toContain('21,000 บาท');
-    expect(text).toContain('แปลงแล้ว');
+    expect(text).toContain('2026-07-11');
+    // ต้องไม่มีคำว่า "แปลงแล้ว" อีก (ไม่แปลงตอนบันทึกแล้ว)
+    expect(text).not.toContain('แปลงแล้ว');
   });
 
-  test('ไม่มี fx (คำสั่ง THB ปกติ) → ไม่โชว์บรรทัด USD/เรต', () => {
+  test('สกุล USD แต่ดึงเรตไม่ได้ (fx=null) → ยังโชว์ USD ได้ + หมายเหตุว่าตีบาทไม่ได้', () => {
+    const text = JSON.stringify(buildPreviewMessage({ ...baseUsdPending, fx: null }));
+
+    expect(text).toContain('600 USD');
+    expect(text).toContain('ยังตีเป็นบาทไม่ได้');
+  });
+
+  test('THB ปกติ (ไม่มี currency) → ไม่โชว์บรรทัด USD/เรต (Path เดิมไม่กระทบ)', () => {
     const thbPending = {
       id: 'pending-thb-1',
       commandType: 'sell',
@@ -344,7 +354,6 @@ describe('buildPreviewMessage — ราคาเป็น USD', () => {
 
     expect(text).not.toContain('USD');
     expect(text).not.toContain('อัตราแลกเปลี่ยน');
-    expect(text).not.toContain('แปลงแล้ว');
     expect(text).toContain('1,700 บาท');
   });
 });
@@ -443,7 +452,6 @@ describe('Bulk Import Flex Builders (Phase 3 Round 6)', () => {
   test('buildBulkImportPreviewMessage → ตารางรายการ + ยอดรวม + ปุ่ม Postback พก batchId', () => {
     const msg = buildBulkImportPreviewMessage({
       batchId: 'batch-1',
-      totalAmountThb: 1000000,
       items: [
         { assetSymbol: 'BTC', quantity: 0.5, pricePerUnit: 1500000, amountThb: 750000, txnDate: '2026-07-10' },
         { assetSymbol: 'ETH', quantity: 2, pricePerUnit: 80000, amountThb: 160000, txnDate: '2026-03-01' },
@@ -453,7 +461,9 @@ describe('Bulk Import Flex Builders (Phase 3 Round 6)', () => {
 
     expect(text).toContain('BTC');
     expect(text).toContain('ETH');
-    expect(text).toContain('1,000,000');
+    // ยอดรวม (บาท) คำนวณจากรายการจริง = 750,000 + 160,000 = 910,000 (ไม่พึ่ง field
+    // totalAmountThb ที่ส่งมา เพื่อรองรับการแยกยอดตามสกุลเงิน Round 10)
+    expect(text).toContain('รวม (บาท): 910,000 บาท');
     expect(text).toContain('action=confirm_bulk_import&batchId=batch-1');
     expect(text).toContain('action=cancel_bulk_import&batchId=batch-1');
     // Regression Guard: ไม่มี Item ไหนมี fx (Batch เป็น THB ล้วน) → ต้องไม่มี
@@ -463,56 +473,64 @@ describe('Bulk Import Flex Builders (Phase 3 Round 6)', () => {
     expect(text).not.toContain('ราคาที่พิมพ์');
   });
 
-  test('buildBulkImportPreviewMessage → Item ที่มี fx (USD) โชว์ราคาที่พิมพ์ USD/หน่วย + เรตที่ใช้', () => {
+  test('buildBulkImportPreviewMessage → Item สกุล USD (Native) โชว์ยอด USD ตามจริง + ยอดเทียบบาท', () => {
     const msg = buildBulkImportPreviewMessage({
       batchId: 'batch-2',
-      totalAmountThb: 10500,
       items: [
         {
           assetSymbol: 'MSFT',
           quantity: 3,
-          pricePerUnit: 3500,
-          amountThb: 10500,
+          pricePerUnit: 300, // USD ตามจริง
+          amountThb: 900, // USD ตามจริง
+          currency: 'USD',
           txnDate: '2026-07-10',
-          fx: { currency: 'USD', rate: 35, pricePerUnitOriginal: 300, amountOriginal: 900 },
+          fx: { rate: 35, asOf: '2026-07-11', stale: false, amountThb: 31500, pricePerUnitThb: 10500 },
         },
       ],
     });
     const text = JSON.stringify(msg);
 
-    expect(text).toContain('ราคาที่พิมพ์: 300 USD/หน่วย');
-    expect(text).toContain('อัตราแลกเปลี่ยน: 1 USD = 35 บาท');
+    // แสดง USD ตามจริง (@ 300 USD, มูลค่า 900 USD) + ยอดรวมสกุล USD
+    expect(text).toContain('300 USD');
+    expect(text).toContain('900 USD');
+    expect(text).toContain('รวม (USD): 900 USD');
+    // ยอดเทียบบาท (จาก fx) + เรต
+    expect(text).toContain('≈ 31,500 บาท');
+    expect(text).toContain('1 USD = 35 บาท');
   });
 
-  test('buildBulkImportPreviewMessage → Batch ปนกัน (USD + THB) แสดงบรรทัด USD เฉพาะ Item ที่มี fx เท่านั้น', () => {
+  test('buildBulkImportPreviewMessage → Batch ปนกัน (USD + THB) แยกยอดรวมตามสกุล ไม่ถัวข้ามสกุล', () => {
     const msg = buildBulkImportPreviewMessage({
       batchId: 'batch-3',
-      totalAmountThb: 760500,
       items: [
-        { assetSymbol: 'BTC', quantity: 0.5, pricePerUnit: 1500000, amountThb: 750000, txnDate: '2026-07-10' },
+        { assetSymbol: 'BTC', quantity: 0.5, pricePerUnit: 1500000, amountThb: 750000, currency: 'THB', txnDate: '2026-07-10' },
         {
           assetSymbol: 'MSFT',
           quantity: 3,
-          pricePerUnit: 3500,
-          amountThb: 10500,
+          pricePerUnit: 300,
+          amountThb: 900,
+          currency: 'USD',
           txnDate: '2026-07-10',
-          fx: { currency: 'USD', rate: 35, pricePerUnitOriginal: 300, amountOriginal: 900 },
+          fx: { rate: 35, asOf: '2026-07-11', stale: false, amountThb: 31500, pricePerUnitThb: 10500 },
         },
       ],
     });
     const text = JSON.stringify(msg);
 
-    // BTC (ไม่มี fx) ต้องไม่มีบรรทัด USD ติดมาด้วย
+    // BTC (THB) ต้องไม่มีบรรทัด USD ติดมาด้วย
     const btcIndex = text.indexOf('BTC');
     const msftIndex = text.indexOf('MSFT');
     const btcSection = text.slice(btcIndex, msftIndex);
     expect(btcSection).not.toContain('USD');
-    expect(btcSection).not.toContain('อัตราแลกเปลี่ยน');
 
-    // MSFT (มี fx) ต้องมีบรรทัด USD + เรต
+    // MSFT (USD) ต้องมียอด USD ตามจริง + เรต
     const msftSection = text.slice(msftIndex);
-    expect(msftSection).toContain('300 USD/หน่วย');
+    expect(msftSection).toContain('300 USD');
     expect(msftSection).toContain('1 USD = 35 บาท');
+
+    // ยอดรวมแยกสกุล: 750,000 บาท และ 900 USD (ไม่รวมเป็นก้อนเดียว)
+    expect(text).toContain('รวม (บาท): 750,000 บาท');
+    expect(text).toContain('รวม (USD): 900 USD');
   });
 
   test('buildBulkImportConfirmedMessage → ทุกรายการสำเร็จ (ไม่มี failed)', () => {

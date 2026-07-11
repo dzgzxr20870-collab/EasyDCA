@@ -54,6 +54,14 @@ const DETAILED_BUY = new RegExp(`^(?:ซื้อ|buy)\\s+${SYMBOL}\\s+${NUMBER}
 const SIMPLE_BUY = new RegExp(`^(?:ซื้อ|buy)\\s+${SYMBOL}\\s+${NUMBER}${CURRENCY_UNIT}$`);
 const DETAILED_SELL = new RegExp(`^(?:ขาย|sell)\\s+${SYMBOL}\\s+${NUMBER}\\s*หุ้น\\s*ราคา\\s*${NUMBER}${CURRENCY_UNIT}$`);
 const SIMPLE_SELL = new RegExp(`^(?:ขาย|sell)\\s+${SYMBOL}\\s+${NUMBER}${CURRENCY_UNIT}$`);
+// ── Manual Quantity Fallback (Round 10-B) — "ซื้อ/ขาย SYMBOL QTY หุ้น รวม AMOUNT [usd]" ──
+// รูปแบบ "จำนวนหน่วย + ยอดเงินรวม" (ไม่พิมพ์ราคาต่อหน่วย) — ใช้ตอนสลิป Amount-only ของ
+// สินทรัพย์ที่ไม่มี Price Feed อัตโนมัติ (เช่นหุ้น Small-cap อย่าง EOSE) ผู้ใช้กรอกแค่
+// จำนวนหุ้น ระบบคำนวณราคาต่อหน่วย = AMOUNT/QTY เอง (ดู transaction.service — Bypass ทั้ง
+// SEC_NOT_CONFIGURED/PRICE_FEED_NOT_IMPLEMENTED) แยกจาก DETAILED (คำว่า "ราคา") ด้วยคำว่า
+// "รวม" — ตรวจก่อน SIMPLE/DETAILED เสมอ (match[1]=symbol, [2]=qty, [3]=amount, [4]=currency)
+const AMOUNT_QTY_BUY = new RegExp(`^(?:ซื้อ|buy)\\s+${SYMBOL}\\s+${NUMBER}\\s*หุ้น\\s*รวม\\s*${NUMBER}${CURRENCY_UNIT}$`);
+const AMOUNT_QTY_SELL = new RegExp(`^(?:ขาย|sell)\\s+${SYMBOL}\\s+${NUMBER}\\s*หุ้น\\s*รวม\\s*${NUMBER}${CURRENCY_UNIT}$`);
 // "ขาย NVDA ทั้งหมด" — ขายยอดคงเหลือทั้งหมดตามราคาตลาดปัจจุบัน (transaction.service
 // เติมจำนวน=ยอดคงเหลือ + ราคา=ราคาตลาด) ไม่ชนกับ SIMPLE_SELL เพราะ "ทั้งหมด"
 // ไม่ใช่ตัวเลข จึงไม่ Match รูปแบบจำนวนเงิน
@@ -195,9 +203,38 @@ function parseCommand(rawText) {
   const text = normalizeText(rawText);
   if (!text) return unknown();
 
+  // Manual Quantity Fallback (Round 10-B) — "จำนวนหน่วย + ยอดเงินรวม" (ไม่มีราคา)
+  // ตรวจก่อน DETAILED/SIMPLE เสมอ (คำว่า "รวม" เจาะจง ไม่ชนกับรูปแบบอื่นที่ใช้ "ราคา")
+  let match = text.match(AMOUNT_QTY_BUY);
+  if (match && isValidSymbol(match[1])) {
+    return {
+      command: COMMANDS.BUY,
+      params: {
+        symbol: match[1].toUpperCase(),
+        quantity: parseNumber(match[2]),
+        // amountThb = ยอดเงินรวม (สกุลตาม currency) — transaction.service หารราคาต่อหน่วยเอง
+        amountThb: parseNumber(match[3]),
+        ...(match[4] === 'usd' ? { currency: 'USD' } : {}),
+      },
+    };
+  }
+
+  match = text.match(AMOUNT_QTY_SELL);
+  if (match && isValidSymbol(match[1])) {
+    return {
+      command: COMMANDS.SELL,
+      params: {
+        symbol: match[1].toUpperCase(),
+        quantity: parseNumber(match[2]),
+        amountThb: parseNumber(match[3]),
+        ...(match[4] === 'usd' ? { currency: 'USD' } : {}),
+      },
+    };
+  }
+
   // ตรวจรูปแบบ "ระบุจำนวนหน่วย + ราคา" ก่อนรูปแบบ "จำนวนเงิน" เสมอ
   // เพราะรูปแบบเงินเป็น Subset ที่ Match กว้างกว่า
-  let match = text.match(DETAILED_BUY);
+  match = text.match(DETAILED_BUY);
   if (match && isValidSymbol(match[1])) {
     return {
       command: COMMANDS.BUY,

@@ -584,7 +584,28 @@ async function routePostback(user, data) {
       const dateIso = params.get('date');
       if (dateIso) commandParams.date = dateIso; // ISO 'YYYY-MM-DD' (createPending ใช้ตรงๆ)
 
-      return routeCommand(user, { command, params: commandParams });
+      // Manual Quantity Fallback (Round 10-B) — สลิป Amount-only ของสินทรัพย์ที่ไม่ใช่
+      // Crypto: ถ้ายืนยันตรงๆ แล้วระบบหาราคาตลาดไม่ได้ (ไม่มี Price Feed / SEC ไม่ config /
+      // ราคาตลาดล่ม) ไม่โยน Error ทั่วไป (ที่บอกให้พิมพ์คำสั่งใหม่ทั้งหมด) แต่ชี้ทางให้ผู้ใช้
+      // "กรอกจำนวนหุ้นเอง" แทน — ระบบจะคำนวณราคาต่อหน่วยจากยอดรวมให้ (Bypass Price Feed)
+      const amountOnlyManual =
+        amt !== null && symbolRegistry.lookupType(commandParams.symbol) !== 'crypto';
+      try {
+        return await routeCommand(user, { command, params: commandParams });
+      } catch (err) {
+        const MANUAL_FALLBACK_CODES = [
+          'PRICE_FEED_NOT_IMPLEMENTED',
+          'SEC_NOT_CONFIGURED',
+          'MARKET_PRICE_UNAVAILABLE',
+          'MUTUAL_FUND_NAV_UNAVAILABLE',
+        ];
+        if (amountOnlyManual && MANUAL_FALLBACK_CODES.includes(err.code)) {
+          const curSuffix = commandParams.currency === 'USD' ? ' USD' : '';
+          const prefill = `${side === 'sell' ? 'ขาย' : 'ซื้อ'} ${commandParams.symbol} <จำนวนหุ้น> หุ้น รวม ${amt}${curSuffix}`;
+          return flexMessage.buildOcrManualQuantityMessage(prefill);
+        }
+        throw err;
+      }
     }
 
     // ── AI Slip OCR (Round 9): ผู้ใช้กด "แก้ไข" → ตอบข้อความ Prefill ให้ Copy ไปแก้ ───
@@ -600,6 +621,13 @@ async function routePostback(user, data) {
 
       let prefill;
       if (amt !== null) {
+        // Manual Quantity Fallback (Round 10-B) — Amount-only ของสินทรัพย์ที่ไม่ใช่ Crypto
+        // (หุ้น ฯลฯ) มักไม่มี Price Feed อัตโนมัติ → Prefill รูปแบบ "จำนวน + ยอดรวม" ให้ผู้ใช้
+        // เติมแค่จำนวนหุ้น ระบบคำนวณราคาต่อหน่วยเองจากยอดรวม (ตอบด้วยการ์ดแนะนำเฉพาะทาง)
+        if (symbolRegistry.lookupType(sym) !== 'crypto') {
+          prefill = `${sideLabel} ${sym} <จำนวนหุ้น> หุ้น รวม ${amt}${curSuffix}`;
+          return flexMessage.buildOcrManualQuantityMessage(prefill);
+        }
         prefill = `${sideLabel} ${sym} ${amt}${curSuffix}`;
       } else {
         const qty = params.get('qty') ?? '<จำนวน>';
@@ -735,6 +763,9 @@ async function handleAssetSlipImage(event, user) {
   try {
     const { buffer, contentType } = await lineService.getMessageContent(event.message.id);
     const ocr = await slipOcrService.extractSlip(user.id, buffer, contentType);
+    // Manual Quantity Fallback (Round 10-B) — เติมชนิดสินทรัพย์ให้ Preview ตัดสินใจว่าจะ
+    // เสนอปุ่ม "กรอกจำนวนหุ้น" ไหม (Amount-only + ไม่ใช่ Crypto = ไม่มี Price Feed อัตโนมัติ)
+    ocr.assetType = symbolRegistry.lookupType(ocr.symbol);
     await lineService.replyMessage(event.replyToken, flexMessage.buildOcrPreviewMessage(ocr));
   } catch (err) {
     // getMessageContent (ไม่มี code) → OCR_FAILED | SlipOcrError → code เฉพาะ

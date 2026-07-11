@@ -1783,3 +1783,65 @@ describe('handleEvent — AI Slip OCR Postback (Round 9)', () => {
     expect(reply).toContain('<ราคา>');
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════
+// Manual Quantity Fallback (Round 10-B) — สลิป Amount-only ของหุ้นที่ไม่มี Price Feed
+// ═══════════════════════════════════════════════════════════════════════
+describe('handleEvent — Manual Quantity Fallback (Round 10-B)', () => {
+  test('(c) ocr_confirm Amount-only + ไม่ใช่ Crypto + Price Feed หาไม่ได้ → ชี้ทางกรอกจำนวนหุ้นเอง (ไม่ Error ทั่วไป)', async () => {
+    entitlement.isPremiumActive.mockReturnValue(true);
+    // EOSE ไม่อยู่ใน Registry → createPending โยน PRICE_FEED_NOT_IMPLEMENTED
+    pendingService.createPending.mockRejectedValue(
+      Object.assign(new Error('no feed'), { code: 'PRICE_FEED_NOT_IMPLEMENTED' })
+    );
+
+    await handleEvent(postbackEvent('action=ocr_confirm&sym=EOSE&side=buy&amt=1000&cur=USD'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('กรอกจำนวนหุ้น');
+    // Prefill รูปแบบ "จำนวน + ยอดรวม" ที่ผู้ใช้เติมแค่จำนวนหุ้น
+    expect(reply).toContain('ซื้อ EOSE <จำนวนหุ้น> หุ้น รวม 1000 USD');
+    // ไม่ใช่ข้อความ Error PRICE_FEED เดิมที่บอกให้พิมพ์คำสั่งใหม่ทั้งหมด
+    expect(reply).not.toContain('เช่น "ซื้อ PTT 50 หุ้น ราคา 34"');
+  });
+
+  test('(b) ocr_confirm Amount-only + Crypto (BTC) + Price Feed สำเร็จ → ทำงานเหมือนเดิม (Preview) ไม่ชี้ทางกรอกเอง', async () => {
+    entitlement.isPremiumActive.mockReturnValue(true);
+    pendingService.createPending.mockResolvedValue({
+      id: 'p-btc', commandType: 'buy', assetSymbol: 'BTC',
+      quantity: 0.0005, pricePerUnit: 2000000, amountThb: 1000, priceSource: 'coingecko',
+    });
+
+    await handleEvent(postbackEvent('action=ocr_confirm&sym=BTC&side=buy&amt=1000'));
+
+    const reply = lastReplyText();
+    expect(reply).not.toContain('กรอกจำนวนหุ้น');
+    expect(reply).toContain('BTC');
+  });
+
+  test('Crypto Amount-only ที่ Price Feed ล่ม → คง Error เดิม (ไม่ Hijack เป็น Manual Quantity)', async () => {
+    entitlement.isPremiumActive.mockReturnValue(true);
+    pendingService.createPending.mockRejectedValue(
+      Object.assign(new Error('no feed'), { code: 'PRICE_FEED_NOT_IMPLEMENTED' })
+    );
+
+    await handleEvent(postbackEvent('action=ocr_confirm&sym=BTC&side=buy&amt=1000'));
+
+    // BTC = crypto → ไม่เปลี่ยนเป็นการ์ดกรอกจำนวนหุ้น (Error ทั่วไปตามเดิม)
+    expect(lastReplyText()).not.toContain('กรอกจำนวนหุ้น');
+  });
+
+  test('ocr_edit Amount-only + ไม่ใช่ Crypto → Prefill "จำนวน + ยอดรวม" ให้เติมแค่จำนวนหุ้น', async () => {
+    await handleEvent(postbackEvent('action=ocr_edit&sym=EOSE&side=buy&amt=1000&cur=USD'));
+    const reply = lastReplyText();
+    expect(reply).toContain('ซื้อ EOSE <จำนวนหุ้น> หุ้น รวม 1000 USD');
+    expect(reply).toContain('ยอดรวม ÷ จำนวนหุ้น');
+  });
+
+  test('ocr_edit Amount-only + Crypto (BTC) → คง Prefill จำนวนเงินเดิม (มี Price Feed อยู่แล้ว)', async () => {
+    await handleEvent(postbackEvent('action=ocr_edit&sym=BTC&side=buy&amt=1000'));
+    const reply = lastReplyText();
+    expect(reply).toContain('ซื้อ BTC 1000');
+    expect(reply).not.toContain('รวม');
+  });
+});

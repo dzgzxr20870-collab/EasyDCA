@@ -2035,6 +2035,13 @@ function buildOcrPreviewMessage(ocr) {
     Boolean(ocr.symbol) &&
     ((ocr.quantity !== null && ocr.pricePerUnit !== null) || ocr.amountThb !== null);
 
+  // Manual Quantity Fallback (Round 10-B) — สลิป Amount-only (มียอดรวม แต่ไม่มีจำนวน)
+  // ของสินทรัพย์ที่ "ไม่ใช่ Crypto" (หุ้น/กองทุน ฯลฯ) มักไม่มี Price Feed อัตโนมัติ →
+  // เสนอปุ่ม "กรอกจำนวนหุ้น" ควบคู่ปุ่มยืนยัน (ocr.assetType เติมโดย Controller จาก
+  // symbolRegistry ; undefined/ไม่รู้จัก = ถือว่าไม่ใช่ Crypto → เสนอทางเลือกไว้ก่อน)
+  const amountOnly = ocr.amountThb !== null && ocr.quantity === null;
+  const showManualQty = amountOnly && ocr.assetType !== 'crypto';
+
   // Multi-Currency (Round 10) — แสดงหน่วยตามสกุลที่ AI อ่านได้ (Default THB)
   const unit = ocr.currency === 'USD' ? 'USD' : 'บาท';
 
@@ -2073,6 +2080,14 @@ function buildOcrPreviewMessage(ocr) {
       color: COLOR.textSecondary,
     })
   );
+  if (showManualQty) {
+    body.push(
+      textLine('* หากกด "ยืนยันบันทึก" แล้วระบบหาราคาตลาดไม่ได้ ให้กด "✏️ กรอกจำนวนหุ้น" เพื่อระบุจำนวนหน่วยเอง', {
+        size: 'xs',
+        color: COLOR.warning,
+      })
+    );
+  }
 
   const footerButtons = [];
   if (confirmable) {
@@ -2093,7 +2108,9 @@ function buildOcrPreviewMessage(ocr) {
     style: 'secondary',
     action: {
       type: 'postback',
-      label: confirmable ? '✏️ แก้ไข' : '✏️ กรอกเอง',
+      // Manual Quantity Fallback (Round 10-B) — Amount-only + ไม่ใช่ Crypto ใช้ Label
+      // ที่สื่อชัดว่าเป็นการกรอกจำนวนหุ้นเอง (ocr_edit จะ Prefill รูปแบบ "จำนวน + ยอดรวม")
+      label: showManualQty ? '✏️ กรอกจำนวนหุ้น' : confirmable ? '✏️ แก้ไข' : '✏️ กรอกเอง',
       data: ocrPostback('ocr_edit', ocr),
       displayText: 'แก้ไขรายการจากสลิป',
     },
@@ -2131,6 +2148,33 @@ function buildOcrEditPrefillMessage(prefillText) {
       }),
       textLine(prefillText, { size: 'md', weight: 'bold', color: COLOR.textPrimary }),
       textLine('* ส่วนที่เป็น <...> คือค่าที่ AI อ่านไม่ได้ กรุณากรอกแทนที่ก่อนส่ง', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
+}
+
+// ข้อความ [กรอกจำนวนหุ้นเอง] — Manual Quantity Fallback (Round 10-B) สำหรับสลิป
+// Amount-only ของสินทรัพย์ที่ไม่มี Price Feed อัตโนมัติ (หุ้น Small-cap เช่น EOSE)
+// Prefill รูปแบบ "จำนวน + ยอดรวม" ให้ผู้ใช้เติมแค่จำนวนหุ้น แล้วส่งกลับเข้า Command
+// Parser เดิม (ไม่เขียน Parser ใหม่) — ระบบคำนวณราคาต่อหน่วย = ยอดรวม / จำนวน เอง
+function buildOcrManualQuantityMessage(prefillText) {
+  return bubble({
+    headerText: '✏️ กรอกจำนวนหุ้นเอง',
+    headerColor: COLOR.info,
+    headerBg: COLOR.profitBg,
+    bodyContents: [
+      textLine('สินทรัพย์นี้ยังไม่มีราคาตลาดอัตโนมัติ จึงคำนวณจำนวนหุ้นจากยอดเงินให้ไม่ได้', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      textLine('คัดลอกข้อความด้านล่าง แทนที่ <จำนวนหุ้น> ด้วยจำนวนจริง แล้วส่งกลับมาเพื่อบันทึก', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      textLine(prefillText, { size: 'md', weight: 'bold', color: COLOR.textPrimary }),
+      textLine('* ระบบจะคำนวณราคาต่อหน่วยให้อัตโนมัติจาก ยอดรวม ÷ จำนวนหุ้น', {
         size: 'xs',
         color: COLOR.textSecondary,
       }),
@@ -2237,6 +2281,7 @@ module.exports = {
   ERROR_MESSAGES,
   buildOcrPreviewMessage,
   buildOcrEditPrefillMessage,
+  buildOcrManualQuantityMessage,
   buildOcrPremiumRequiredMessage,
   buildOcrErrorMessage,
   buildExportFormatQuickReply,

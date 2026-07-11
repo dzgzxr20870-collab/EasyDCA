@@ -142,6 +142,47 @@ async function resolveQuantityAndPrice(params, side = 'buy') {
     return resolved;
   }
 
+  // ── Manual Quantity Fallback (Round 10-B) — "จำนวนหน่วย + ยอดเงินรวม" (ไม่มีราคา) ──
+  // ผู้ใช้ระบุจำนวนหน่วยเอง (เช่นสลิป Amount-only ของหุ้นที่ไม่มี Price Feed อย่าง EOSE)
+  // → คำนวณราคาต่อหน่วย = ยอดรวม / จำนวน โดย "ไม่พึ่ง Symbol Registry/Price Feed เลย"
+  // (Bypass ทั้ง SEC_NOT_CONFIGURED และ PRICE_FEED_NOT_IMPLEMENTED ในตัว) — ดักก่อน
+  // Branch amountThb ด้านล่างที่ต้องมีราคาตลาดเสมอ priceSource='user' (ผู้ใช้ระบุเอง)
+  if (isPresent(params.quantity) && !isPresent(params.pricePerUnit) && isPresent(params.amountThb)) {
+    const quantity = Number(params.quantity);
+    const amount = Number(params.amountThb);
+    if (!(quantity > 0) || !(amount > 0)) {
+      throw new TransactionServiceError(
+        'VALIDATION_ERROR',
+        'Manual quantity entry requires a positive quantity and amount',
+        { quantity: params.quantity, amount: params.amountThb }
+      );
+    }
+    const pricePerUnit = amount / quantity;
+
+    if (isUsd) {
+      return {
+        quantity,
+        pricePerUnit,
+        amountThb: roundToTwo(amount),
+        currency: 'USD',
+        priceSource: 'user',
+        fx: await buildUsdFxDisplay(roundToTwo(amount), pricePerUnit),
+      };
+    }
+
+    const resolved = {
+      quantity,
+      pricePerUnit,
+      amountThb: roundToTwo(amount),
+      priceSource: 'user',
+    };
+    // ทอง: Enrich ราคาอ้างอิง USD ให้ Preview (เช่นเดียวกับ Branch quantity+price ด้านบน)
+    if (getGoldType(params.symbol)) {
+      resolved.goldUsd = await buildGoldUsdRef(pricePerUnit);
+    }
+    return resolved;
+  }
+
   if (isPresent(params.amountThb)) {
     // ── จำนวนเงินรวมเป็น USD (Round 10) — หาร quantity จากราคา "USD" ตามจริง ──────
     // ต้องมี USD Price Feed (หุ้นสหรัฐ/Crypto) มิฉะนั้นโยน PRICE_FEED_NOT_IMPLEMENTED
