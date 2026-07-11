@@ -171,6 +171,23 @@ async function routeCommand(user, parsed) {
         if (fundReply) return fundReply;
       }
 
+      // Round 10-B.1: Manual Quantity Fallback — ผู้ใช้ระบุจำนวนหุ้นเอง (quantity + ยอดรวม
+      // โดยไม่มีราคาต่อหน่วย = ไม่ต้องพึ่ง Price Feed) แต่ Symbol ไม่อยู่ใน Registry (เช่นหุ้น
+      // Small-cap อย่าง EOSE/OKLO) → สร้าง Asset ได้เลยโดยเดา type จากสกุลเงิน เพื่อไม่ให้
+      // validateBuy โยน VALIDATION_ERROR (ไม่มี type ตอนสร้าง Asset ใหม่). Dynamic Symbol
+      // Resolution (Round 10-C) จะมาแทนการ "เดา" นี้ด้วยการ Verify Symbol + ดึงราคาจริง
+      // เงื่อนไขเจาะจง "มี amountThb และไม่มี pricePerUnit" เท่านั้น — คง Guard เดิมของรูปแบบ
+      // "ราคา" (DETAILED: quantity + pricePerUnit) ที่ Symbol ไม่รู้จักต้องยังโยน VALIDATION_ERROR
+      if (
+        parsed.command === COMMANDS.BUY &&
+        !parsed.params.type &&
+        parsed.params.quantity !== undefined && parsed.params.quantity !== null &&
+        parsed.params.amountThb !== undefined && parsed.params.amountThb !== null &&
+        (parsed.params.pricePerUnit === undefined || parsed.params.pricePerUnit === null)
+      ) {
+        parsed.params.type = parsed.params.currency === 'USD' ? 'stock_us' : 'stock_th';
+      }
+
       // Flow ใหม่ (SRS.md § 2.3 [4-5]): ไม่บันทึกทันที — Validate แล้วสร้าง
       // Pending รอ Confirm ส่ง Preview พร้อมปุ่มยืนยัน/แก้ไข/ยกเลิกกลับไป
       // ถ้า Validate ไม่ผ่าน (Limit/type/ยอดไม่พอ) createPending จะ throw

@@ -1844,4 +1844,69 @@ describe('handleEvent — Manual Quantity Fallback (Round 10-B)', () => {
     expect(reply).toContain('ซื้อ BTC 1000');
     expect(reply).not.toContain('รวม');
   });
+
+  // ── Round 10-B.1: เดา type จากสกุลเงินเมื่อ Registry ไม่รู้จัก Symbol ─────────
+  test('(หลัก) Manual Quantity + Symbol ไม่รู้จัก + USD → createPending ได้รับ type:stock_us (ไม่ VALIDATION_ERROR)', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.BUY,
+      params: { symbol: 'EOSE', quantity: 8, amountThb: 30.43, currency: 'USD' },
+    });
+    pendingService.createPending.mockResolvedValue({
+      id: 'p-eose', commandType: 'buy', assetSymbol: 'EOSE',
+      quantity: 8, pricePerUnit: 3.80375, amountThb: 30.43, currency: 'USD', priceSource: 'user',
+    });
+
+    await handleEvent(textEvent('ซื้อ EOSE 8 หุ้น รวม 30.43 USD'));
+
+    expect(pendingService.createPending).toHaveBeenCalledWith(
+      FREE_USER.id,
+      {
+        command: COMMANDS.BUY,
+        params: { symbol: 'EOSE', quantity: 8, amountThb: 30.43, currency: 'USD', type: 'stock_us' },
+      },
+      { plan: 'free' }
+    );
+    const reply = lastReplyText();
+    expect(reply).not.toContain('ไม่รู้จักสินทรัพย์');
+    expect(reply).toContain('EOSE');
+  });
+
+  test('Manual Quantity + Symbol ไม่รู้จัก + THB (ไม่มี currency) → type:stock_th', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.BUY,
+      params: { symbol: 'OKLO', quantity: 5, amountThb: 250 },
+    });
+    pendingService.createPending.mockResolvedValue({
+      id: 'p-oklo', commandType: 'buy', assetSymbol: 'OKLO',
+      quantity: 5, pricePerUnit: 50, amountThb: 250, priceSource: 'user',
+    });
+
+    await handleEvent(textEvent('ซื้อ OKLO 5 หุ้น รวม 250'));
+
+    expect(pendingService.createPending).toHaveBeenCalledWith(
+      FREE_USER.id,
+      { command: COMMANDS.BUY, params: { symbol: 'OKLO', quantity: 5, amountThb: 250, type: 'stock_th' } },
+      { plan: 'free' }
+    );
+  });
+
+  test('Regression: รูปแบบ "ราคา" (มี pricePerUnit) + Symbol ไม่รู้จัก → ไม่เดา type (คง Guard เดิม)', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.BUY,
+      params: { symbol: 'EOSE', quantity: 8, pricePerUnit: 3.8, currency: 'USD' },
+    });
+    const err = new Error('Creating a new asset requires an asset type');
+    err.code = 'VALIDATION_ERROR';
+    pendingService.createPending.mockRejectedValue(err);
+
+    await handleEvent(textEvent('ซื้อ EOSE 8 หุ้น ราคา 3.8 usd'));
+
+    // ไม่มี amountThb → ไม่เข้าเงื่อนไข Round 10-B.1 → ส่ง params เดิมโดยไม่มี type
+    expect(pendingService.createPending).toHaveBeenCalledWith(
+      FREE_USER.id,
+      { command: COMMANDS.BUY, params: { symbol: 'EOSE', quantity: 8, pricePerUnit: 3.8, currency: 'USD' } },
+      { plan: 'free' }
+    );
+    expect(lastReplyText()).toContain('ไม่รู้จักสินทรัพย์');
+  });
 });
