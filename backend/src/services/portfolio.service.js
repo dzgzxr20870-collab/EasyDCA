@@ -33,7 +33,8 @@ async function getPortfolioSummary(userId) {
   const assets = await assetRepository.findActiveByUser(userId);
 
   const holdings = [];
-  let portfolioTotalInvested = 0;
+  // Multi-Currency (Round 10): แยกเงินลงทุนตามสกุล ไม่ถัวข้ามสกุล (THB/USD)
+  const investedByCurrency = { THB: 0, USD: 0 };
 
   for (const asset of assets) {
     const transactions = await transactionRepository.findAllByAsset(asset.id);
@@ -47,6 +48,8 @@ async function getPortfolioSummary(userId) {
     // averageCost = null เมื่อ heldQuantity = 0 (แต่ถูกกรองไปแล้วด้านบน)
     // ป้องกันหารด้วยศูนย์ที่ให้ Infinity/NaN
     const averageCost = heldQuantity > 0 ? roundToEight(totalInvested / heldQuantity) : null;
+    // สกุลเงินของสินทรัพย์ อนุมานจากประวัติธุรกรรม (Default 'THB')
+    const currency = transactions.some((tx) => tx.currency === 'USD') ? 'USD' : 'THB';
 
     holdings.push({
       symbol: asset.symbol,
@@ -56,17 +59,26 @@ async function getPortfolioSummary(userId) {
       // ตรง Class (null สำหรับสินทรัพย์อื่น) ไม่กระทบ Consumer เดิมที่ไม่ได้อ่าน Field นี้
       projId: asset.projId ?? null,
       fundClassName: asset.fundClassName ?? null,
+      // Multi-Currency (Round 10) — สกุลของ totalInvested/averageCost (Default THB)
+      currency,
       heldQuantity,
       totalInvested,
       averageCost,
     });
 
-    portfolioTotalInvested += totalInvested;
+    investedByCurrency[currency] += totalInvested;
   }
 
   return {
     holdings,
-    totalInvested: roundToTwo(portfolioTotalInvested),
+    // Multi-Currency (Round 10): แยกยอดตามสกุล — investedByCurrency คือแหล่งจริง
+    // totalInvested คงไว้ = ยอด THB เท่านั้น เพื่อ Backward Compat (พอร์ต THB ล้วน
+    // ได้ค่าเท่าเดิมทุกประการ; Consumer ที่รองรับหลายสกุลให้อ่าน investedByCurrency)
+    investedByCurrency: {
+      THB: roundToTwo(investedByCurrency.THB),
+      USD: roundToTwo(investedByCurrency.USD),
+    },
+    totalInvested: roundToTwo(investedByCurrency.THB),
     isEmpty: holdings.length === 0,
   };
 }

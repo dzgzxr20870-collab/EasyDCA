@@ -1,6 +1,7 @@
 const assetRepository = require('../repositories/asset.repository');
 const transactionRepository = require('../repositories/transaction.repository');
 const priceFeedService = require('./priceFeed.service');
+const fxRateService = require('./fxRate.service');
 const symbolRegistry = require('./symbolRegistry.service');
 const entitlement = require('./entitlement.service');
 
@@ -32,6 +33,23 @@ async function buildGoldUsdRef(pricePerUnitThb) {
   return {
     usdThbRate: rate,
     pricePerUnitUsd: roundToTwo(pricePerUnitThb / rate),
+  };
+}
+
+// Multi-Currency (Round 10): สำหรับธุรกรรมที่บันทึกเป็น USD ตามจริง — สร้างข้อมูล
+// "ยอดเทียบเป็นบาท" ไว้ "แสดงผลเท่านั้น" (Preview/Confirm) ไม่ Persist ลง DB
+// ใช้ fxRate.service (Frankfurter ฟรี ไม่ต้อง Key) — คืน null ถ้าดึงเรตไม่ได้เลย
+// (การดึงเรตล้มเหลว "ไม่ Block" การบันทึก เพราะเก็บ USD ตามจริงอยู่แล้ว ต่างจาก
+// พฤติกรรมเดิม Round 2 ที่แปลงเป็นบาทตอนบันทึกจึงต้องมีเรตเสมอ)
+async function buildUsdFxDisplay(amountUsd, pricePerUnitUsd) {
+  const fx = await fxRateService.getUsdThbRate();
+  if (fx === null) return null;
+  return {
+    rate: fx.rate,
+    asOf: fx.asOf,
+    stale: fx.stale,
+    amountThb: roundToTwo(amountUsd * fx.rate),
+    pricePerUnitThb: roundToTwo(pricePerUnitUsd * fx.rate),
   };
 }
 
@@ -83,38 +101,26 @@ function isPresent(value) {
 // Crypto/หุ้นใช้ราคาตลาดค่าเดียวไม่แยกฝั่ง จึงไม่กระทบ (Default 'buy' เพื่อ Backward
 // Compat กับ Caller เดิมที่ไม่ส่ง side มา)
 async function resolveQuantityAndPrice(params, side = 'buy') {
+  // Multi-Currency (Round 10): สกุลเงินของธุรกรรม — 'USD' เมื่อผู้ใช้ระบุ usd,
+  // มิฉะนั้น Default 'THB' (พฤติกรรมเดิม 100%). เก็บ "ตามจริง" ไม่แปลงเป็นบาทตอนบันทึก
+  const isUsd = params.currency === 'USD';
+
   if (isPresent(params.quantity) && isPresent(params.pricePerUnit)) {
     const quantity = Number(params.quantity);
     const pricePerUnitInput = Number(params.pricePerUnit);
 
-    // ผู้ใช้พิมพ์ราคาต่อหน่วยเป็น USD → แปลงเป็น THB ด้วย FX Rate เดิมจาก
-    // priceFeed.service (Reuse getUsdThbFxRate — ไม่เขียน FX Conversion ใหม่)
-    // amountThb ที่บันทึกลง DB เป็น THB เสมอ ไม่มีคอลัมน์เก็บ USD คู่ขนาน — เก็บ fx
-    // ไว้ให้ Preview แสดงทั้งยอด USD ที่พิมพ์และยอด THB ที่แปลงแล้ว + เรตที่ใช้
-    if (params.priceCurrency === 'USD') {
-      const rate = await priceFeedService.getUsdThbFxRate();
-      if (rate === null) {
-        // ดึง FX ไม่ได้ (Key ไม่ได้ตั้ง / Twelve Data ล่ม) — ไม่ Fallback เรตเดา
-        throw new TransactionServiceError(
-          'FX_RATE_UNAVAILABLE',
-          'Cannot convert USD price to THB: FX rate unavailable',
-          { symbol: params.symbol }
-        );
-      }
-
-      const pricePerUnit = roundToEight(pricePerUnitInput * rate);
+    // ── ราคาต่อหน่วยเป็น USD (Round 10) — เก็บเป็น USD ตามจริง ไม่แปลงตอนบันทึก ──
+    // amountThb/pricePerUnit ที่คืน = ค่าในหน่วย USD (ชื่อ Field คงเดิมเพื่อ Backward
+    // Compat — ดู migration 012 Semantics) fx = ยอดเทียบบาทไว้ "แสดงผลเท่านั้น"
+    // (null ได้ถ้าดึงเรตไม่ได้ — ไม่ Block การบันทึก)
+    if (isUsd) {
       return {
         quantity,
-        pricePerUnit,
-        amountThb: roundToTwo(quantity * pricePerUnit),
+        pricePerUnit: pricePerUnitInput,
+        amountThb: roundToTwo(quantity * pricePerUnitInput),
+        currency: 'USD',
         priceSource: 'user',
-        // Enrich สำหรับ Preview เท่านั้น (ไม่ Persist ลง DB — ไม่มีคอลัมน์รองรับ)
-        fx: {
-          currency: 'USD',
-          rate,
-          pricePerUnitOriginal: pricePerUnitInput,
-          amountOriginal: roundToTwo(quantity * pricePerUnitInput),
-        },
+        fx: await buildUsdFxDisplay(roundToTwo(quantity * pricePerUnitInput), pricePerUnitInput),
       };
     }
 
@@ -137,6 +143,29 @@ async function resolveQuantityAndPrice(params, side = 'buy') {
   }
 
   if (isPresent(params.amountThb)) {
+    // ── จำนวนเงินรวมเป็น USD (Round 10) — หาร quantity จากราคา "USD" ตามจริง ──────
+    // ต้องมี USD Price Feed (หุ้นสหรัฐ/Crypto) มิฉะนั้นโยน PRICE_FEED_NOT_IMPLEMENTED
+    // (ไม่แปลงผ่าน THB เพราะบันทึกเป็น USD ตามจริง) — ดักก่อน Logic THB ทั้งหมดด้านล่าง
+    if (isUsd) {
+      const amountUsd = Number(params.amountThb);
+      const priceUsd = await priceFeedService.getCurrentPriceUsd(params.symbol);
+      if (priceUsd === null) {
+        throw new TransactionServiceError(
+          'PRICE_FEED_NOT_IMPLEMENTED',
+          `Cannot derive USD quantity for ${params.symbol} without a USD price feed`,
+          { symbol: params.symbol }
+        );
+      }
+      const quantity = roundToEight(amountUsd / priceUsd);
+      return {
+        quantity,
+        pricePerUnit: priceUsd,
+        amountThb: roundToTwo(amountUsd),
+        currency: 'USD',
+        priceSource: resolvePriceSource(params.symbol),
+        fx: await buildUsdFxDisplay(roundToTwo(amountUsd), priceUsd),
+      };
+    }
     // ── กองทุนรวมไทย: ซื้อด้วยจำนวนเงิน (ไม่พิมพ์ราคา) → ใช้ NAV ล่าสุด (Round 7) ──
     // กองทุนมี NAV เดียว (last_val) ใช้ทั้งราคาต้นทุน Default และ Mark-to-market ต่าง
     // จากทอง (Buy/Sell แยก) — ต้องมี projId + fundClassName (Webhook เติมให้ก่อนแล้ว
@@ -253,6 +282,14 @@ function calculateHeldQuantity(transactions) {
   return roundToEight(held);
 }
 
+// Multi-Currency (Round 10): สกุลเงินของสินทรัพย์ อนุมานจากประวัติธุรกรรม —
+// ถ้ามีธุรกรรม USD อยู่ถือว่าเป็นสินทรัพย์สกุล USD (ปกติสินทรัพย์หนึ่งตัวใช้สกุลเดียว
+// สม่ำเสมอ เช่นหุ้น Dime! = USD, หุ้นไทย = THB) ใช้ตอน "ขายทั้งหมด" เพื่อเลือกราคาตลาด
+// ให้ตรงสกุล ไม่ปนข้ามสกุล — Default 'THB' (ไม่มีธุรกรรม/ไม่มี currency)
+function deriveAssetCurrency(transactions) {
+  return transactions.some((tx) => tx.currency === 'USD') ? 'USD' : 'THB';
+}
+
 // ตรวจว่าคำสั่ง BUY ทำได้ไหม + จำแนกว่าเป็น Asset เดิมหรือต้องสร้างใหม่
 // โดย "ไม่เขียน DB ใดๆ" (No Side Effect) — ใช้ร่วมกันได้ทั้งตอน Commit จริง
 // (processBuyCommand) และตอนสร้าง Preview รอ Confirm (pendingTransaction.service)
@@ -315,6 +352,7 @@ async function processBuyCommand(userId, params, options = {}) {
     options
   );
   const { quantity, pricePerUnit, amountThb, priceSource } = amounts;
+  const currency = amounts.currency ?? 'THB';
 
   let asset = existingAsset;
   if (newAsset) {
@@ -337,6 +375,7 @@ async function processBuyCommand(userId, params, options = {}) {
     amountThb,
     pricePerUnit,
     quantity,
+    currency,
     feeThb: params.feeThb ?? 0,
     date: params.date ?? todayInBangkok(),
     note: params.note ?? null,
@@ -349,6 +388,7 @@ async function processBuyCommand(userId, params, options = {}) {
     quantity,
     pricePerUnit,
     amountThb,
+    currency,
     newAssetCreated: newAsset,
     priceSource,
   };
@@ -386,7 +426,12 @@ async function validateSell(userId, params) {
       );
     }
 
-    const marketPrice = await priceFeedService.getCurrentPrice(params.symbol);
+    // สกุลเงินตามสินทรัพย์ (ไม่ปนข้ามสกุล) — USD ใช้ราคาตลาด USD ตามจริง มิฉะนั้น THB
+    const assetCurrency = deriveAssetCurrency(historyForAll);
+    const marketPrice =
+      assetCurrency === 'USD'
+        ? await priceFeedService.getCurrentPriceUsd(params.symbol)
+        : await priceFeedService.getCurrentPrice(params.symbol);
     if (marketPrice === null) {
       // ไม่มี Price Feed (หุ้นไทย) / API ล่มชั่วคราว — ไม่ Fallback ราคาเดา/0
       throw new TransactionServiceError(
@@ -401,6 +446,8 @@ async function validateSell(userId, params) {
         ...params,
         quantity: heldForAll,
         pricePerUnit: marketPrice,
+        // ส่งต่อสกุลเงินของสินทรัพย์ให้ resolveQuantityAndPrice เก็บ USD ตามจริง
+        ...(assetCurrency === 'USD' ? { currency: 'USD' } : {}),
       },
       'sell'
     );
@@ -447,6 +494,7 @@ async function validateSell(userId, params) {
 async function processSellCommand(userId, params) {
   const { asset, amounts, heldQuantity } = await validateSell(userId, params);
   const { quantity, pricePerUnit, amountThb, priceSource } = amounts;
+  const currency = amounts.currency ?? 'THB';
 
   const transaction = await transactionRepository.create({
     userId,
@@ -455,6 +503,7 @@ async function processSellCommand(userId, params) {
     amountThb,
     pricePerUnit,
     quantity,
+    currency,
     feeThb: params.feeThb ?? 0,
     date: params.date ?? todayInBangkok(),
     note: params.note ?? null,
@@ -467,6 +516,7 @@ async function processSellCommand(userId, params) {
     quantity,
     pricePerUnit,
     amountThb,
+    currency,
     remainingQuantity: roundToEight(heldQuantity - quantity),
     priceSource,
   };

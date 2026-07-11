@@ -208,7 +208,7 @@ describe('previewBatch — สำเร็จทั้ง Batch', () => {
       items: [
         { line: 1, symbol: 'BTC', quantity: 0.5, pricePerUnit: 1500000 },
         { line: 2, symbol: 'ETH', quantity: 2, pricePerUnit: 80000, date: '2026-03-01' },
-        { line: 3, symbol: 'MSFT', quantity: 3, pricePerUnit: 300, priceCurrency: 'USD' },
+        { line: 3, symbol: 'MSFT', quantity: 3, pricePerUnit: 300, currency: 'USD' },
       ],
     });
     transactionService.validateBuy.mockImplementation(async (userId, params) => ({
@@ -235,11 +235,11 @@ describe('previewBatch — สำเร็จทั้ง Batch', () => {
         expect.objectContaining({ line: 3, symbol: 'MSFT' }),
       ])
     );
-    // ตรวจว่า params ที่ส่งต่อให้ validateBuy มี priceCurrency/date เฉพาะรายการที่ระบุ
+    // ตรวจว่า params ที่ส่งต่อให้ validateBuy มี currency/date เฉพาะรายการที่ระบุ
     expect(transactionService.validateBuy.mock.calls[1][1]).toMatchObject({ date: '2026-03-01' });
-    expect(transactionService.validateBuy.mock.calls[2][1]).toMatchObject({ priceCurrency: 'USD' });
+    expect(transactionService.validateBuy.mock.calls[2][1]).toMatchObject({ currency: 'USD' });
     expect(transactionService.validateBuy.mock.calls[0][1]).not.toHaveProperty('date');
-    expect(transactionService.validateBuy.mock.calls[0][1]).not.toHaveProperty('priceCurrency');
+    expect(transactionService.validateBuy.mock.calls[0][1]).not.toHaveProperty('currency');
 
     expect(result).toEqual({
       ok: true,

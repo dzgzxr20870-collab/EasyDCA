@@ -3,6 +3,7 @@ const transactionRepository = require('../repositories/transaction.repository');
 const { calculateHeldQuantity } = require('./transaction.service');
 const { calculateTotalInvested } = require('./portfolio.service');
 const priceFeedService = require('./priceFeed.service');
+const fxRateService = require('./fxRate.service');
 const symbolRegistry = require('./symbolRegistry.service');
 
 // แหล่งราคาจริงตาม Asset Type (Pattern เดียวกับที่ priceFeed.service.js ใช้
@@ -79,6 +80,13 @@ async function getAssetProfit(userId, symbol, portfolioId = null) {
   // NAV ตรง Class ได้ ('fund' แบบ Manual ที่ไม่มี projId → ถือว่าไม่รองรับ Price Feed)
   const isFund = asset.type === 'fund' && asset.projId && asset.fundClassName;
 
+  // Multi-Currency (Round 10) — สกุลเงินของสินทรัพย์ (อนุมานจากประวัติธุรกรรม)
+  // ต้นทุนเฉลี่ย/กำไรขาดทุนคำนวณ "ในสกุลเดียวกัน" ไม่ถัวข้ามสกุล (ทอง/กองทุน = THB เสมอ)
+  const currency = !isGold && !isFund && transactions.some((tx) => tx.currency === 'USD')
+    ? 'USD'
+    : 'THB';
+  const isUsd = currency === 'USD';
+
   let currentPrice;
   let fundNavDate = null;
   if (isGold) {
@@ -105,6 +113,17 @@ async function getAssetProfit(userId, symbol, portfolioId = null) {
     }
     currentPrice = nav.lastVal;
     fundNavDate = nav.navDate;
+  } else if (isUsd) {
+    // สินทรัพย์สกุล USD — ตีมูลค่าด้วยราคา "USD ตามจริง" (ไม่ผ่าน THB) เพื่อให้
+    // ต้นทุน (USD) กับมูลค่าปัจจุบัน (USD) อยู่สกุลเดียวกัน คำนวณกำไรได้ถูกต้อง
+    currentPrice = await priceFeedService.getCurrentPriceUsd(symbol);
+    if (currentPrice === null) {
+      throw new ProfitServiceError(
+        'PRICE_FEED_NOT_IMPLEMENTED',
+        `No live USD price feed available for ${symbol}`,
+        { symbol }
+      );
+    }
   } else {
     currentPrice = await priceFeedService.getCurrentPrice(symbol);
     if (currentPrice === null) {
@@ -140,8 +159,30 @@ async function getAssetProfit(userId, symbol, portfolioId = null) {
     }
   }
 
+  // Multi-Currency (Round 10) — สินทรัพย์สกุล USD: แนบ "ยอดเทียบเป็นบาท" ไว้แสดงผล
+  // (ตัวเลขหลักยังเป็น USD ตามจริง) ผ่าน fxRate.service (Frankfurter) — null ถ้าดึงเรต
+  // ไม่ได้ (ไม่ Block การแสดงผล USD) กำกับเรต/วันที่เพื่อความโปร่งใส
+  let fxThb = null;
+  if (isUsd) {
+    const fx = await fxRateService.getUsdThbRate();
+    if (fx !== null) {
+      fxThb = {
+        rate: fx.rate,
+        asOf: fx.asOf,
+        stale: fx.stale,
+        totalInvestedThb: roundToTwo(totalInvested * fx.rate),
+        currentValueThb: roundToTwo(currentValue * fx.rate),
+        profitLossThb: roundToTwo(profitLoss * fx.rate),
+      };
+    }
+  }
+
   return {
     symbol: asset.symbol,
+    // Multi-Currency (Round 10) — สกุลของ averageCost/totalInvested/currentPrice/
+    // currentValue/profitLoss (Default 'THB' — Path เดิมไม่กระทบ)
+    currency,
+    fxThb,
     heldQuantity,
     averageCost,
     totalInvested,

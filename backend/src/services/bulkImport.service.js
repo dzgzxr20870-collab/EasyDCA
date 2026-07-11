@@ -69,7 +69,8 @@ async function validateItems(userId, items, options) {
       symbol: item.symbol,
       quantity: item.quantity,
       pricePerUnit: item.pricePerUnit,
-      ...(item.priceCurrency ? { priceCurrency: item.priceCurrency } : {}),
+      // Multi-Currency (Round 10) — พก currency ต่อบรรทัด (USD เก็บตามจริง ไม่แปลงบาท)
+      ...(item.currency ? { currency: item.currency } : {}),
       ...(item.date ? { date: item.date } : {}),
     };
 

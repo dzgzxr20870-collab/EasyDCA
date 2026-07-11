@@ -579,6 +579,8 @@ async function routePostback(user, data) {
         commandParams.quantity = Number(params.get('qty'));
         commandParams.pricePerUnit = Number(params.get('price'));
       }
+      // Multi-Currency (Round 10) — สลิปสกุล USD: เก็บเป็น USD ตามจริง (Default THB)
+      if (params.get('cur') === 'USD') commandParams.currency = 'USD';
       const dateIso = params.get('date');
       if (dateIso) commandParams.date = dateIso; // ISO 'YYYY-MM-DD' (createPending ใช้ตรงๆ)
 
@@ -592,14 +594,17 @@ async function routePostback(user, data) {
       const sideLabel = params.get('side') === 'sell' ? 'ขาย' : 'ซื้อ';
       const sym = String(params.get('sym') ?? '').toUpperCase();
       const amt = params.get('amt');
+      // Multi-Currency (Round 10) — ต่อท้ายหน่วย USD ให้ Command Parser อ่านสกุลถูก
+      // (THB ไม่ต้องต่อหน่วย — เป็น Default) เพื่อให้ Copy กลับมาส่งได้ตรงสกุลเดิม
+      const curSuffix = params.get('cur') === 'USD' ? ' USD' : '';
 
       let prefill;
       if (amt !== null) {
-        prefill = `${sideLabel} ${sym} ${amt}`;
+        prefill = `${sideLabel} ${sym} ${amt}${curSuffix}`;
       } else {
         const qty = params.get('qty') ?? '<จำนวน>';
         const price = params.get('price') ?? '<ราคา>';
-        prefill = `${sideLabel} ${sym} ${qty} หุ้น ราคา ${price}`;
+        prefill = `${sideLabel} ${sym} ${qty} หุ้น ราคา ${price}${curSuffix}`;
       }
 
       return flexMessage.buildOcrEditPrefillMessage(prefill);

@@ -74,6 +74,68 @@ describe('extractSlip — สำเร็จ', () => {
     expect(result.side).toBe('buy');
   });
 
+  // ── Multi-Currency (Round 10) ────────────────────────────────────────────
+  test('สลิปปกติไม่มี currency → Default เป็น THB (Backward Compat)', async () => {
+    const result = await slipOcr.extractSlip(USER_ID, BUFFER, 'image/jpeg', NOW);
+    expect(result.currency).toBe('THB');
+    expect(result.amountThb).toBe(750000);
+  });
+
+  test('สลิป USD (currency=USD, field ใหม่ "amount") → คืน currency USD + amountThb=ยอด USD', async () => {
+    global.fetch.mockResolvedValue(
+      claudeOk({
+        is_slip: true,
+        multiple_items: false,
+        symbol: 'aapl',
+        side: 'buy',
+        quantity: 2,
+        price_per_unit: 190,
+        amount: 380,
+        currency: 'USD',
+        date: '05/07/2026',
+        confidence: 'high',
+      })
+    );
+
+    const result = await slipOcr.extractSlip(USER_ID, BUFFER, 'image/jpeg', NOW);
+    expect(result.symbol).toBe('AAPL');
+    expect(result.currency).toBe('USD');
+    expect(result.quantity).toBe(2);
+    expect(result.pricePerUnit).toBe(190);
+    expect(result.amountThb).toBe(380); // ค่าเป็น USD ตาม currency (ชื่อ Key คงเดิม)
+  });
+
+  test('สลิปแบบมีแค่ยอดรวม (Dime! USD) → amount ถูกอ่านเป็น "จำนวนเงิน" ไม่ใช่ราคาต่อหน่วย', async () => {
+    global.fetch.mockResolvedValue(
+      claudeOk({
+        is_slip: true,
+        multiple_items: false,
+        symbol: 'nvda',
+        side: 'buy',
+        quantity: null,
+        price_per_unit: null,
+        amount: 1000,
+        currency: 'USD',
+        date: null,
+        confidence: 'medium',
+      })
+    );
+
+    const result = await slipOcr.extractSlip(USER_ID, BUFFER, 'image/jpeg', NOW);
+    expect(result.symbol).toBe('NVDA');
+    expect(result.currency).toBe('USD');
+    expect(result.quantity).toBeNull();
+    expect(result.pricePerUnit).toBeNull();
+    expect(result.amountThb).toBe(1000); // ยอดรวมเข้า amount ไม่ใช่ price_per_unit
+  });
+
+  test('SYSTEM_PROMPT + JSON schema มี field currency และ amount (คุมพฤติกรรม Model)', async () => {
+    await slipOcr.extractSlip(USER_ID, BUFFER, 'image/jpeg', NOW);
+    const body = JSON.parse(global.fetch.mock.calls[0][1].body);
+    expect(body.system).toContain('currency');
+    expect(body.system).toContain('"amount"');
+  });
+
   test('Field บางตัวอ่านไม่ได้ (price null) → คืน null ไม่เดา, ยังนับโควตา (อ่านสำเร็จ)', async () => {
     global.fetch.mockResolvedValue(claudeOk({ ...VALID_SLIP, price_per_unit: null }));
     const result = await slipOcr.extractSlip(USER_ID, BUFFER, 'image/jpeg', NOW);

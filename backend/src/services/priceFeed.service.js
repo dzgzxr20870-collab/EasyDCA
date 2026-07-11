@@ -67,6 +67,11 @@ const FX_RATE_CACHE_TTL_MS = 10 * 60 * 1000;
 const stockPriceCache = new Map();
 const fxRateCache = new Map();
 
+// ราคา "เป็น USD ตามจริง" (Native) TTL 60 วินาที — ใช้เฉพาะ Multi-Currency Round 10
+// ตอนผู้ใช้ซื้อ/ขายด้วย "จำนวนเงินรวมเป็น USD" (ต้องหาร quantity จากราคา USD ไม่ใช่ THB
+// เพราะบันทึกธุรกรรมเป็น USD ตามจริง) — แยก Cache จาก stockPriceCache (ที่เก็บ THB)
+const usdPriceCache = new Map();
+
 // ── ทองคำไทย (Phase 3 Round 7) ─────────────────────────────────────────────
 // Community API ที่ Scrape ราคาจากสมาคมค้าทองคำแห่งประเทศไทย (ไม่มี API ทางการ /
 // ไม่ต้อง Auth) — ยิงครั้งเดียวได้ราคาทั้งทองคำแท่งและทองรูปพรรณพร้อมกัน
@@ -145,6 +150,41 @@ async function fetchPriceFromCoinGecko(coingeckoId) {
     return price;
   } catch (err) {
     console.error(`[priceFeed] CoinGecko request error: ${err.message}`);
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// ยิง CoinGecko คืน "ราคาเป็น USD" (Number) — Pattern เดียวกับ fetchPriceFromCoinGecko
+// แต่ vs_currencies=usd (ใช้สำหรับ Multi-Currency Round 10) คืน null ถ้าล้มเหลว ไม่ throw
+async function fetchCryptoPriceUsd(coingeckoId) {
+  const url =
+    `${COINGECKO_SIMPLE_PRICE_URL}?ids=${encodeURIComponent(coingeckoId)}&vs_currencies=usd`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, { method: 'GET', signal: controller.signal });
+
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      console.error(`[priceFeed] CoinGecko USD price failed: ${response.status} ${detail}`);
+      return null;
+    }
+
+    const data = await response.json();
+    const price = data?.[coingeckoId]?.usd;
+
+    if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0) {
+      console.error(`[priceFeed] CoinGecko returned no valid USD price for ${coingeckoId}`);
+      return null;
+    }
+
+    return price;
+  } catch (err) {
+    console.error(`[priceFeed] CoinGecko USD request error: ${err.message}`);
     return null;
   } finally {
     clearTimeout(timeout);
@@ -646,8 +686,48 @@ async function getCurrentPrice(symbol) {
   return price;
 }
 
+// คืนราคาปัจจุบันของ Symbol "เป็น USD ตามจริง" (Native, Number) หรือ null ถ้าหาไม่ได้
+// — ใช้เฉพาะ Multi-Currency Round 10 ตอนซื้อ/ขายด้วย "จำนวนเงินรวมเป็น USD" เพื่อหาร
+// quantity ให้ตรงสกุลที่บันทึก (ไม่แปลงผ่าน THB) รองรับ:
+//   - หุ้นสหรัฐ (stock_us) → Twelve Data /quote (ราคา USD ดิบ ไม่คูณ FX)
+//   - Crypto              → CoinGecko vs_currencies=usd
+//   - อื่นๆ (หุ้นไทย/ทอง/กองทุน) → null (ไม่รองรับซื้อด้วยจำนวนเงิน USD)
+// ไม่ throw (คืน null) เพื่อให้ transaction.service ตัดสิน PRICE_FEED_NOT_IMPLEMENTED เอง
+async function getCurrentPriceUsd(symbol) {
+  if (typeof symbol !== 'string') return null;
+  const normalized = symbol.trim().toUpperCase();
+
+  const cached = usdPriceCache.get(normalized);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.price;
+  }
+
+  const type = symbolRegistry.lookupType(normalized);
+  let price = null;
+
+  if (type === 'stock_us') {
+    const apiKey = process.env.TWELVE_DATA_API_KEY;
+    if (!apiKey) {
+      console.error('[priceFeed] Twelve Data API key (TWELVE_DATA_API_KEY) is not configured');
+      return null;
+    }
+    price = await fetchUsStockPriceUsd(normalized, apiKey);
+  } else if (COINGECKO_IDS[normalized]) {
+    price = await fetchCryptoPriceUsd(COINGECKO_IDS[normalized]);
+  } else {
+    return null;
+  }
+
+  // ห้าม Cache null (Retry ทันที เหมือน Pattern อื่น)
+  if (price === null) return null;
+
+  usdPriceCache.set(normalized, { price, expiresAt: Date.now() + CACHE_TTL_MS });
+  return price;
+}
+
 module.exports = {
   getCurrentPrice,
+  getCurrentPriceUsd,
   getUsdThbFxRate,
   getGoldPriceThb,
   getMutualFundNav,

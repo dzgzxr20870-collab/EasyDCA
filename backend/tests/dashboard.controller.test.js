@@ -1,10 +1,12 @@
 jest.mock('../src/services/portfolio.service');
 jest.mock('../src/services/profit.service');
+jest.mock('../src/services/fxRate.service');
 jest.mock('../src/repositories/transaction.repository');
 jest.mock('../src/repositories/user.repository');
 
 const portfolioService = require('../src/services/portfolio.service');
 const profitService = require('../src/services/profit.service');
+const fxRateService = require('../src/services/fxRate.service');
 const transactionRepository = require('../src/repositories/transaction.repository');
 const userRepository = require('../src/repositories/user.repository');
 const { getPortfolio, getHistory, getProfit, getMe } = require('../src/controllers/dashboard.controller');
@@ -45,9 +47,10 @@ beforeEach(() => {
 });
 
 describe('getPortfolio', () => {
-  test('สำเร็จ → 200 พร้อมผลลัพธ์จาก portfolioService.getPortfolioSummary ตรงๆ', async () => {
+  test('พอร์ต THB ล้วน → 200 + ไม่ยิง FX + fxRate=null, investedThbEquivalent=THB (Backward Compat)', async () => {
     const summary = {
-      holdings: [{ symbol: 'BTC', heldQuantity: 1, totalInvested: 1000, averageCost: 1000 }],
+      holdings: [{ symbol: 'BTC', heldQuantity: 1, totalInvested: 1000, averageCost: 1000, currency: 'THB' }],
+      investedByCurrency: { THB: 1000, USD: 0 },
       totalInvested: 1000,
       isEmpty: false,
     };
@@ -58,8 +61,70 @@ describe('getPortfolio', () => {
     await getPortfolio(req, res);
 
     expect(portfolioService.getPortfolioSummary).toHaveBeenCalledWith(USER_ID);
+    // ไม่มี USD → ไม่ยิง FX
+    expect(fxRateService.getUsdThbRate).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith(summary);
+    expect(res.json).toHaveBeenCalledWith({
+      ...summary,
+      fxRate: null,
+      fxAsOf: null,
+      fxStale: false,
+      fxUnavailableForUsd: false,
+      investedThbEquivalent: 1000,
+    });
+  });
+
+  test('พอร์ตมี USD ปน → ยิง FX + แนบ fxRate/fxAsOf + investedThbEquivalent เทียบบาท', async () => {
+    const summary = {
+      holdings: [
+        { symbol: 'BTC', heldQuantity: 0.01, totalInvested: 30000, averageCost: 3000000, currency: 'THB' },
+        { symbol: 'MSFT', heldQuantity: 2, totalInvested: 600, averageCost: 300, currency: 'USD' },
+      ],
+      investedByCurrency: { THB: 30000, USD: 600 },
+      totalInvested: 30000,
+      isEmpty: false,
+    };
+    portfolioService.getPortfolioSummary.mockResolvedValue(summary);
+    fxRateService.getUsdThbRate.mockResolvedValue({ rate: 35, asOf: '2026-07-11', stale: false });
+
+    const req = mockReq();
+    const res = mockRes();
+    await getPortfolio(req, res);
+
+    expect(fxRateService.getUsdThbRate).toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith({
+      ...summary,
+      fxRate: 35,
+      fxAsOf: '2026-07-11',
+      fxStale: false,
+      fxUnavailableForUsd: false,
+      // 30000 + 600×35 = 51000
+      investedThbEquivalent: 51000,
+    });
+  });
+
+  test('มี USD แต่ดึงเรตไม่ได้ → fxUnavailableForUsd=true + investedThbEquivalent = THB เท่านั้น', async () => {
+    const summary = {
+      holdings: [{ symbol: 'MSFT', heldQuantity: 2, totalInvested: 600, averageCost: 300, currency: 'USD' }],
+      investedByCurrency: { THB: 0, USD: 600 },
+      totalInvested: 0,
+      isEmpty: false,
+    };
+    portfolioService.getPortfolioSummary.mockResolvedValue(summary);
+    fxRateService.getUsdThbRate.mockResolvedValue(null);
+
+    const req = mockReq();
+    const res = mockRes();
+    await getPortfolio(req, res);
+
+    expect(res.json).toHaveBeenCalledWith({
+      ...summary,
+      fxRate: null,
+      fxAsOf: null,
+      fxStale: false,
+      fxUnavailableForUsd: true,
+      investedThbEquivalent: 0,
+    });
   });
 
   test('Error ไม่คาดคิด → 500 INTERNAL_ERROR ไม่หลุด Stack Trace', async () => {

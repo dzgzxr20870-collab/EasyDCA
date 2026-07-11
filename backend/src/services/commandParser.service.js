@@ -43,16 +43,17 @@ function isValidSymbol(symbol) {
 
 const NUMBER = '([\\d,]+(?:\\.\\d+)?)';
 const SYMBOL = '(\\S+)';
-// หน่วยสกุลเงินท้ายราคาต่อหน่วย (ไม่บังคับ) — รองรับ "usd" (ให้ transaction.service
-// แปลงเป็นบาทด้วย FX Rate) และ "บาท" (Default เดิม) หลัง normalizeText ทำ
-// toLowerCase ให้แล้ว "USD"→"usd" เป็นกลุ่มจับ (Capturing) เพิ่มเป็น match ตำแหน่งที่
-// 4 ของ DETAILED_BUY/SELL — match[1..3] เดิม (symbol/qty/price) จึงไม่ขยับ
-const PRICE_UNIT = '(?:\\s*(usd|บาท))?';
+// หน่วยสกุลเงินท้ายราคา/จำนวนเงิน (ไม่บังคับ) — รองรับ "usd" (Round 10: transaction
+// เก็บเป็น USD ตามจริง ไม่แปลงเป็นบาทตอนบันทึก) และ "บาท" (Default เดิม) หลัง
+// normalizeText ทำ toLowerCase ให้แล้ว "USD"→"usd" (Case-insensitive ตาม Design)
+// เป็นกลุ่มจับ (Capturing) — สำหรับ DETAILED_BUY/SELL อยู่ match ตำแหน่งที่ 4
+// (match[1..3] เดิม symbol/qty/price ไม่ขยับ) ; สำหรับ SIMPLE_BUY/SELL อยู่ match[3]
+const CURRENCY_UNIT = '(?:\\s*(usd|บาท))?';
 
-const DETAILED_BUY = new RegExp(`^(?:ซื้อ|buy)\\s+${SYMBOL}\\s+${NUMBER}\\s*หุ้น\\s*ราคา\\s*${NUMBER}${PRICE_UNIT}$`);
-const SIMPLE_BUY = new RegExp(`^(?:ซื้อ|buy)\\s+${SYMBOL}\\s+${NUMBER}\\s*(?:บาท)?$`);
-const DETAILED_SELL = new RegExp(`^(?:ขาย|sell)\\s+${SYMBOL}\\s+${NUMBER}\\s*หุ้น\\s*ราคา\\s*${NUMBER}${PRICE_UNIT}$`);
-const SIMPLE_SELL = new RegExp(`^(?:ขาย|sell)\\s+${SYMBOL}\\s+${NUMBER}\\s*(?:บาท)?$`);
+const DETAILED_BUY = new RegExp(`^(?:ซื้อ|buy)\\s+${SYMBOL}\\s+${NUMBER}\\s*หุ้น\\s*ราคา\\s*${NUMBER}${CURRENCY_UNIT}$`);
+const SIMPLE_BUY = new RegExp(`^(?:ซื้อ|buy)\\s+${SYMBOL}\\s+${NUMBER}${CURRENCY_UNIT}$`);
+const DETAILED_SELL = new RegExp(`^(?:ขาย|sell)\\s+${SYMBOL}\\s+${NUMBER}\\s*หุ้น\\s*ราคา\\s*${NUMBER}${CURRENCY_UNIT}$`);
+const SIMPLE_SELL = new RegExp(`^(?:ขาย|sell)\\s+${SYMBOL}\\s+${NUMBER}${CURRENCY_UNIT}$`);
 // "ขาย NVDA ทั้งหมด" — ขายยอดคงเหลือทั้งหมดตามราคาตลาดปัจจุบัน (transaction.service
 // เติมจำนวน=ยอดคงเหลือ + ราคา=ราคาตลาด) ไม่ชนกับ SIMPLE_SELL เพราะ "ทั้งหมด"
 // ไม่ใช่ตัวเลข จึงไม่ Match รูปแบบจำนวนเงิน
@@ -95,10 +96,10 @@ const EXPORT_DATE_RANGE = /^(\d{1,2}\/\d{1,2}\/\d{4})\s*-\s*(\d{1,2}\/\d{1,2}\/\
 // รูปแบบ 1 บรรทัดของ Batch: "SYMBOL QTY ต้นทุน PRICE[หน่วยเงิน] [วันที่ DD/MM/YYYY]"
 // ทั้ง "หน่วยเงิน" และ "วันที่" ไม่บังคับ — ไม่มีคำสั่ง "ซื้อ"/"หุ้น"/"ราคา" นำหน้า
 // เหมือนคำสั่งซื้อเดี่ยว เพราะ Batch เป็นรูปแบบคล้าย Spreadsheet ไม่ใช่ประโยคคำสั่ง
-// Reuse Group เดิม: SYMBOL/NUMBER/PRICE_UNIT (เหมือน DETAILED_BUY ทุกประการ)
+// Reuse Group เดิม: SYMBOL/NUMBER/CURRENCY_UNIT (เหมือน DETAILED_BUY ทุกประการ)
 const BULK_IMPORT_DATE = '(?:\\s*วันที่\\s*(\\d{1,2}\\/\\d{1,2}\\/\\d{4}))?';
 const BULK_IMPORT_LINE = new RegExp(
-  `^${SYMBOL}\\s+${NUMBER}\\s*ต้นทุน\\s*${NUMBER}${PRICE_UNIT}${BULK_IMPORT_DATE}$`
+  `^${SYMBOL}\\s+${NUMBER}\\s*ต้นทุน\\s*${NUMBER}${CURRENCY_UNIT}${BULK_IMPORT_DATE}$`
 );
 
 // Parse 1 บรรทัดของ Batch (หลัง Trim แล้ว ไม่ใช่บรรทัดว่าง) — คืน
@@ -136,7 +137,7 @@ function parseBulkImportLine(trimmedRawLine) {
       symbol: match[1].toUpperCase(),
       quantity,
       pricePerUnit,
-      ...(match[4] === 'usd' ? { priceCurrency: 'USD' } : {}),
+      ...(match[4] === 'usd' ? { currency: 'USD' } : {}),
       ...(date ? { date } : {}),
     },
   };
@@ -204,9 +205,9 @@ function parseCommand(rawText) {
         symbol: match[1].toUpperCase(),
         quantity: parseNumber(match[2]),
         pricePerUnit: parseNumber(match[3]),
-        // ใส่ priceCurrency เฉพาะเมื่อพิมพ์ "usd" — ไม่ใส่ Key ตอน Default (บาท)
+        // ใส่ currency เฉพาะเมื่อพิมพ์ "usd" — ไม่ใส่ Key ตอน Default (บาท)
         // เพื่อคง Shape params เดิม (เทสต์เดิมใช้ toEqual เทียบ Object ตรงๆ)
-        ...(match[4] === 'usd' ? { priceCurrency: 'USD' } : {}),
+        ...(match[4] === 'usd' ? { currency: 'USD' } : {}),
       },
     };
   }
@@ -216,8 +217,11 @@ function parseCommand(rawText) {
     return {
       command: COMMANDS.BUY,
       params: {
+        // amountThb เก็บ "จำนวนเงินในสกุลของ currency" (USD ถ้าพิมพ์ usd, มิฉะนั้น THB)
+        // — ชื่อ Key คงเดิมเพื่อไม่ให้ Path THB เดิมพัง (ดู migration 012 Semantics)
         symbol: match[1].toUpperCase(),
         amountThb: parseNumber(match[2]),
+        ...(match[3] === 'usd' ? { currency: 'USD' } : {}),
       },
     };
   }
@@ -230,8 +234,8 @@ function parseCommand(rawText) {
         symbol: match[1].toUpperCase(),
         quantity: parseNumber(match[2]),
         pricePerUnit: parseNumber(match[3]),
-        // ใส่ priceCurrency เฉพาะเมื่อพิมพ์ "usd" (เช่นเดียวกับ DETAILED_BUY)
-        ...(match[4] === 'usd' ? { priceCurrency: 'USD' } : {}),
+        // ใส่ currency เฉพาะเมื่อพิมพ์ "usd" (เช่นเดียวกับ DETAILED_BUY)
+        ...(match[4] === 'usd' ? { currency: 'USD' } : {}),
       },
     };
   }
@@ -243,6 +247,7 @@ function parseCommand(rawText) {
       params: {
         symbol: match[1].toUpperCase(),
         amountThb: parseNumber(match[2]),
+        ...(match[3] === 'usd' ? { currency: 'USD' } : {}),
       },
     };
   }

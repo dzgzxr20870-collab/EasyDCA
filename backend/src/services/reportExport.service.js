@@ -21,6 +21,7 @@ const ExcelJS = require('exceljs');
 
 const portfolioService = require('./portfolio.service');
 const priceFeedService = require('./priceFeed.service');
+const fxRateService = require('./fxRate.service');
 const transactionRepository = require('../repositories/transaction.repository');
 const userRepository = require('../repositories/user.repository');
 const {
@@ -58,6 +59,13 @@ function formatMoney(value) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(num);
+}
+
+// Multi-Currency (Round 10): จำนวนเงินพร้อมหน่วยตามสกุล — THB ไม่ต่อหน่วย (คงรูปเดิม),
+// USD ต่อ " USD" ท้ายตัวเลข เพื่อไม่ให้ Path THB เดิมเปลี่ยน (เทสต์ THB ล้วนคงผลเดิม)
+function formatMoneyCur(value, currency) {
+  const base = formatMoney(value);
+  return currency === 'USD' ? `${base} USD` : base;
 }
 
 // จำนวนหน่วยถือครอง: รองรับทศนิยมสูงสุด 8 ตำแหน่ง (Crypto) ตัดศูนย์ท้ายทิ้ง
@@ -128,6 +136,11 @@ async function fetchHoldingPrice(holding) {
       const nav = await priceFeedService.getMutualFundNav(holding.projId, holding.fundClassName);
       return nav.lastVal;
     }
+    // Multi-Currency (Round 10) — สินทรัพย์สกุล USD ตีมูลค่าด้วยราคา USD ตามจริง
+    // (ไม่ผ่าน THB) เพื่อให้ต้นทุน (USD) กับมูลค่า (USD) อยู่สกุลเดียวกัน
+    if (holding.currency === 'USD') {
+      return await priceFeedService.getCurrentPriceUsd(holding.symbol);
+    }
     return await priceFeedService.getCurrentPrice(holding.symbol);
   } catch (err) {
     return null;
@@ -147,11 +160,14 @@ async function buildReportData(userId, resolvedRange, now = new Date()) {
   const summary = await portfolioService.getPortfolioSummary(userId);
 
   const holdings = [];
-  let totalCurrentValue = 0;
-  let investedWithPrice = 0;
+  // Multi-Currency (Round 10): สะสมมูลค่า/เงินลงทุน "แยกสกุล" ไม่ถัวข้ามสกุล แล้วค่อย
+  // แปลง USD → THB ด้วยเรตเดียวตอนท้ายเพื่อทำ "ยอดรวมเทียบบาท" (Grand Total)
+  const currentValueByCur = { THB: 0, USD: 0 };
+  const investedWithPriceByCur = { THB: 0, USD: 0 };
   let excludedCount = 0;
 
   for (const h of summary.holdings) {
+    const currency = h.currency === 'USD' ? 'USD' : 'THB';
     const price = await fetchHoldingPrice(h);
 
     if (price === null || price === undefined) {
@@ -160,6 +176,7 @@ async function buildReportData(userId, resolvedRange, now = new Date()) {
         symbol: h.symbol,
         name: h.name,
         type: h.type,
+        currency,
         heldQuantity: h.heldQuantity,
         averageCost: h.averageCost,
         totalInvested: h.totalInvested,
@@ -176,13 +193,14 @@ async function buildReportData(userId, resolvedRange, now = new Date()) {
     const profitLossPercent =
       h.totalInvested > 0 ? roundToTwo((profitLoss / h.totalInvested) * 100) : null;
 
-    totalCurrentValue += currentValue;
-    investedWithPrice += h.totalInvested;
+    currentValueByCur[currency] += currentValue;
+    investedWithPriceByCur[currency] += h.totalInvested;
 
     holdings.push({
       symbol: h.symbol,
       name: h.name,
       type: h.type,
+      currency,
       heldQuantity: h.heldQuantity,
       averageCost: h.averageCost,
       totalInvested: h.totalInvested,
@@ -193,8 +211,18 @@ async function buildReportData(userId, resolvedRange, now = new Date()) {
     });
   }
 
-  totalCurrentValue = roundToTwo(totalCurrentValue);
-  investedWithPrice = roundToTwo(investedWithPrice);
+  // เรต USD→THB (ดึงครั้งเดียว) — เฉพาะเมื่อมีสินทรัพย์ USD (พอร์ต THB ล้วนไม่เรียก FX)
+  const invByCur = summary.investedByCurrency ?? { THB: summary.totalInvested, USD: 0 };
+  const hasUsd =
+    currentValueByCur.USD > 0 || investedWithPriceByCur.USD > 0 || (invByCur.USD ?? 0) > 0;
+  const fx = hasUsd ? await fxRateService.getUsdThbRate() : null;
+  const usdRate = fx ? fx.rate : null;
+  const toThb = (thb, usd) => roundToTwo(thb + (usdRate !== null ? usd * usdRate : 0));
+
+  // ยอดรวม "เทียบบาท": THB ตรงๆ + USD ที่แปลงแล้ว (พอร์ต THB ล้วน = ค่าเดิมทุกประการ)
+  const totalInvested = toThb(invByCur.THB ?? summary.totalInvested, invByCur.USD ?? 0);
+  const totalCurrentValue = toThb(currentValueByCur.THB, currentValueByCur.USD);
+  const investedWithPrice = toThb(investedWithPriceByCur.THB, investedWithPriceByCur.USD);
   const totalProfitLoss = roundToTwo(totalCurrentValue - investedWithPrice);
   const totalProfitLossPercent =
     investedWithPrice > 0 ? roundToTwo((totalProfitLoss / investedWithPrice) * 100) : null;
@@ -211,11 +239,26 @@ async function buildReportData(userId, resolvedRange, now = new Date()) {
     range: resolvedRange,
     holdings,
     totals: {
-      totalInvested: summary.totalInvested,
+      totalInvested,
       totalCurrentValue,
       totalProfitLoss,
       totalProfitLossPercent,
       excludedCount,
+      // Multi-Currency (Round 10) — ยอดแยกสกุล + เรตที่ใช้แปลง (ยอดหลักด้านบน = เทียบบาท)
+      byCurrency: {
+        THB: {
+          invested: roundToTwo(invByCur.THB ?? summary.totalInvested),
+          currentValue: roundToTwo(currentValueByCur.THB),
+        },
+        USD: {
+          invested: roundToTwo(invByCur.USD ?? 0),
+          currentValue: roundToTwo(currentValueByCur.USD),
+        },
+      },
+      fxRate: usdRate,
+      fxAsOf: fx ? fx.asOf : null,
+      fxStale: fx ? fx.stale : false,
+      fxUnavailableForUsd: hasUsd && usdRate === null,
     },
     transactions,
   };
@@ -371,11 +414,11 @@ function buildPdfReport(data) {
               [
                 { text: h.symbol, bold: true },
                 { text: formatQty(h.heldQuantity), align: 'right' },
-                { text: h.averageCost === null ? '-' : formatMoney(h.averageCost), align: 'right' },
-                { text: formatMoney(h.totalInvested), align: 'right' },
-                { text: formatMoney(h.currentValue), align: 'right' },
+                { text: h.averageCost === null ? '-' : formatMoneyCur(h.averageCost, h.currency), align: 'right' },
+                { text: formatMoneyCur(h.totalInvested, h.currency), align: 'right' },
+                { text: formatMoneyCur(h.currentValue, h.currency), align: 'right' },
                 {
-                  text: `${signed(h.profitLoss, formatMoney)} (${signed(h.profitLossPercent, (v) => formatMoney(v))}%)`,
+                  text: `${signed(h.profitLoss, (v) => formatMoneyCur(v, h.currency))} (${signed(h.profitLossPercent, (v) => formatMoney(v))}%)`,
                   align: 'right',
                   color: plColorPdf(h.profitLoss),
                 },
@@ -390,8 +433,8 @@ function buildPdfReport(data) {
               [
                 { text: h.symbol, bold: true },
                 { text: formatQty(h.heldQuantity), align: 'right' },
-                { text: h.averageCost === null ? '-' : formatMoney(h.averageCost), align: 'right' },
-                { text: formatMoney(h.totalInvested), align: 'right' },
+                { text: h.averageCost === null ? '-' : formatMoneyCur(h.averageCost, h.currency), align: 'right' },
+                { text: formatMoneyCur(h.totalInvested, h.currency), align: 'right' },
                 { text: 'ราคาไม่พร้อมใช้งาน', align: 'right', color: PDF_COLOR.muted, span: 2 },
               ],
               y,
@@ -400,12 +443,14 @@ function buildPdfReport(data) {
           }
         }
 
-        // แถวสรุปรวม
+        // แถวสรุปรวม — ยอดเป็น "เทียบบาท" (แปลง USD ด้วยเรตล่าสุด) ถ้าพอร์ตมี USD
+        const hasUsdHoldings = (data.totals.byCurrency?.USD?.invested ?? 0) > 0 ||
+          (data.totals.byCurrency?.USD?.currentValue ?? 0) > 0;
         y = drawTableRow(
           doc,
           holdingCols,
           [
-            { text: 'รวมทั้งพอร์ต', bold: true },
+            { text: hasUsdHoldings ? 'รวมทั้งพอร์ต (เทียบบาท)' : 'รวมทั้งพอร์ต', bold: true },
             { text: '', align: 'right' },
             { text: '', align: 'right' },
             { text: formatMoney(data.totals.totalInvested), align: 'right', bold: true },
@@ -430,6 +475,26 @@ function buildPdfReport(data) {
           y + 6,
           { width: CONTENT_WIDTH }
         );
+        y = doc.y;
+      }
+
+      // Multi-Currency (Round 10) — ยอดแยกตามสกุล + เรตที่ใช้แปลงเป็นบาท (เฉพาะพอร์ตที่มี USD)
+      const bc = data.totals.byCurrency;
+      const portfolioHasUsd = bc && ((bc.USD.invested ?? 0) > 0 || (bc.USD.currentValue ?? 0) > 0);
+      if (portfolioHasUsd) {
+        doc.font('TH').fontSize(8).fillColor(PDF_COLOR.muted);
+        doc.text(
+          `ยอดแยกสกุล — THB: ลงทุน ${formatMoney(bc.THB.invested)} / มูลค่า ${formatMoney(bc.THB.currentValue)} บาท • ` +
+            `USD: ลงทุน ${formatMoney(bc.USD.invested)} / มูลค่า ${formatMoney(bc.USD.currentValue)} USD`,
+          PAGE_MARGIN,
+          y + 6,
+          { width: CONTENT_WIDTH }
+        );
+        const fxNote = data.totals.fxRate !== null
+          ? `ยอดรวมด้านบนแปลง USD เป็นบาทที่อัตรา 1 USD = ${formatMoney(data.totals.fxRate)} บาท` +
+            `${data.totals.fxAsOf ? ` (ณ ${data.totals.fxAsOf})` : ''}${data.totals.fxStale ? ' [เรตล่าสุดที่มี]' : ''}`
+          : '* ดึงอัตราแลกเปลี่ยนไม่สำเร็จ — ยอดรวมเทียบบาทยังไม่รวมส่วนที่เป็น USD';
+        doc.text(fxNote, PAGE_MARGIN, doc.y + 2, { width: CONTENT_WIDTH });
         y = doc.y;
       }
 
@@ -468,8 +533,8 @@ function buildPdfReport(data) {
               { text: tx.symbol ?? '-' },
               { text: isBuy ? 'ซื้อ' : 'ขาย', color: isBuy ? PDF_COLOR.profit : PDF_COLOR.loss },
               { text: formatQty(tx.quantity), align: 'right' },
-              { text: formatMoney(tx.pricePerUnit), align: 'right' },
-              { text: formatMoney(tx.amountThb), align: 'right' },
+              { text: formatMoneyCur(tx.pricePerUnit, tx.currency), align: 'right' },
+              { text: formatMoneyCur(tx.amountThb, tx.currency), align: 'right' },
             ],
             y,
             redrawTxHeader
@@ -539,7 +604,9 @@ async function buildExcelReport(data) {
   for (const h of data.holdings) {
     const row = s1.addRow([
       h.symbol,
-      h.type,
+      // Multi-Currency (Round 10) — กำกับสกุล USD ที่คอลัมน์ประเภท (THB คงเดิม) เพื่อไม่
+      // เปลี่ยนคอลัมน์ตัวเลข (คงความเป็น Number ที่ Filter/คำนวณต่อได้) และไม่ขยับ Index
+      h.currency === 'USD' ? `${h.type} · USD` : h.type,
       h.heldQuantity,
       h.averageCost,
       h.totalInvested,
@@ -580,6 +647,19 @@ async function buildExcelReport(data) {
     ]);
   }
 
+  // Multi-Currency (Round 10) — แถวสรุปยอดแยกสกุล + เรตที่ใช้แปลง (เฉพาะพอร์ตที่มี USD)
+  const bcx = data.totals.byCurrency;
+  if (bcx && ((bcx.USD.invested ?? 0) > 0 || (bcx.USD.currentValue ?? 0) > 0)) {
+    s1.addRow([]);
+    s1.addRow([`ยอดแยกสกุล (THB): ลงทุน ${formatMoney(bcx.THB.invested)} / มูลค่า ${formatMoney(bcx.THB.currentValue)} บาท`]);
+    s1.addRow([`ยอดแยกสกุล (USD): ลงทุน ${formatMoney(bcx.USD.invested)} / มูลค่า ${formatMoney(bcx.USD.currentValue)} USD`]);
+    s1.addRow([
+      data.totals.fxRate !== null
+        ? `ยอดรวม "รวมทั้งพอร์ต" ด้านบนแปลง USD เป็นบาทที่ 1 USD = ${formatMoney(data.totals.fxRate)} บาท${data.totals.fxAsOf ? ` (ณ ${data.totals.fxAsOf})` : ''}${data.totals.fxStale ? ' [เรตล่าสุดที่มี]' : ''}`
+        : '* ดึงอัตราแลกเปลี่ยนไม่สำเร็จ — ยอดรวมเทียบบาทยังไม่รวมส่วนที่เป็น USD',
+    ]);
+  }
+
   s1.columns = [
     { width: 16 },
     { width: 12 },
@@ -611,7 +691,10 @@ async function buildExcelReport(data) {
       const row = s2.addRow([
         tx.date,
         tx.symbol ?? '-',
-        tx.type === 'buy' ? 'ซื้อ' : 'ขาย',
+        // Multi-Currency (Round 10) — กำกับสกุล USD ที่คอลัมน์ประเภท (THB คงเดิม)
+        tx.currency === 'USD'
+          ? `${tx.type === 'buy' ? 'ซื้อ' : 'ขาย'} · USD`
+          : tx.type === 'buy' ? 'ซื้อ' : 'ขาย',
         tx.quantity,
         tx.pricePerUnit,
         tx.amountThb,

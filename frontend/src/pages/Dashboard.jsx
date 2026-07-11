@@ -13,6 +13,13 @@ import {
   Legend,
 } from 'chart.js';
 import { apiGet, apiDownload } from '../lib/api.js';
+import {
+  aggregatePortfolioValueThb,
+  donutInvestedThb,
+  monthBuyTotalThb,
+  monthlyBuyTotalsThb,
+  cumulativePrincipalThb,
+} from '../lib/portfolioMath.js';
 import './Dashboard.css';
 
 ChartJS.register(
@@ -82,6 +89,16 @@ function formatThaiDate(value) {
 function formatCardMoney(value) {
   if (value === null) return 'ไม่มีข้อมูล';
   return `${formatNumber(value)} บาท`;
+}
+
+// Multi-Currency (Round 10): หน่วยเงินตามสกุลของรายการ (Default THB → "บาท")
+function currencyUnit(currency) {
+  return currency === 'USD' ? 'USD' : 'บาท';
+}
+
+// จำนวนเงินพร้อมหน่วยตามสกุล (decimals เท่ากับ formatNumber เดิม)
+function formatMoneyCur(value, currency, decimals) {
+  return `${formatNumber(value, decimals)} ${currencyUnit(currency)}`;
 }
 
 // Label แกน X กราฟการเติบโต: "YYYY-MM-DD" (จาก tx.date จริง) → "4 ก.ค." (Presentation ล้วน)
@@ -177,50 +194,32 @@ function Dashboard() {
     return transactions.filter((tx) => tx.symbol === symbolFilter);
   }, [transactions, symbolFilter]);
 
-  // มูลค่าพอตรวม + กำไร/ขาดทุนรวม — รวมเฉพาะ Holding ที่มีข้อมูล Profit จริง
-  // (Pattern เดียวกับ excludedCount) null ทั้งคู่ถ้าไม่มี Holding ไหนมีข้อมูลเลย
+  // Multi-Currency (Round 10) — เรตเดียวจาก Backend (/dashboard/portfolio → fxRate)
+  // ใช้แปลงยอด USD ทุกจุดก่อน "รวมข้ามสกุล" (null = ไม่มี USD หรือดึงเรตไม่ได้)
+  const usdRate = portfolio?.fxRate ?? null;
+  // Backend แจ้งว่ามี USD ปนแต่ดึงเรตไม่ได้ → หน้าจอต้องเตือน ไม่แสดงยอดรวมที่ผิด
+  const fxUnavailableForUsd = portfolio?.fxUnavailableForUsd ?? false;
+
+  // มูลค่าพอตรวม + กำไร/ขาดทุนรวม "เทียบบาท" — แปลง USD→THB ด้วย usdRate ก่อนรวม
+  // (Reuse ตรรกะบริสุทธิ์ที่ Test แยกได้ — portfolioMath) รวมเฉพาะ Holding ที่มี Profit
   const aggregatedProfit = useMemo(() => {
-    if (!portfolio || portfolio.isEmpty) return { currentValue: null, profitLoss: null };
+    if (!portfolio || portfolio.isEmpty) return { currentValue: null, profitLoss: null, fxUnavailable: false };
+    return aggregatePortfolioValueThb(portfolio.holdings, profitBySymbol, usdRate);
+  }, [portfolio, profitBySymbol, usdRate]);
 
-    let currentValue = 0;
-    let profitLoss = 0;
-    let hasAny = false;
-
-    portfolio.holdings.forEach((h) => {
-      const profit = profitBySymbol[h.symbol];
-      if (profit) {
-        currentValue += profit.currentValue;
-        profitLoss += profit.profitLoss;
-        hasAny = true;
-      }
-    });
-
-    return hasAny ? { currentValue, profitLoss } : { currentValue: null, profitLoss: null };
-  }, [portfolio, profitBySymbol]);
-
-  // ออมเดือนนี้ = ผลรวม amountThb ของธุรกรรม buy ที่ date อยู่ในเดือนปฏิทิน
-  // ปัจจุบันจริงของ Browser (เทียบ String ตรงๆ ตาม Requirement)
+  // ออมเดือนนี้ (เทียบบาท) = ยอดซื้อของเดือนปฏิทินปัจจุบัน แปลง USD ก่อนรวม
   const currentMonthSavings = useMemo(() => {
     const now = new Date();
     const monthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    return transactions
-      .filter((tx) => tx.type === 'buy' && tx.date.startsWith(monthPrefix))
-      .reduce((sum, tx) => sum + tx.amountThb, 0);
-  }, [transactions]);
+    return monthBuyTotalThb(transactions, usdRate, monthPrefix).sum;
+  }, [transactions, usdRate]);
 
-  // กราฟการเติบโต — เส้นเดียว "เงินต้นสะสม" คำนวณ Cumulative Sum จากธุรกรรมจริง
-  // ทั้งหมดก่อน (บวก buy / ลบ sell) แล้วค่อย Filter ช่วงที่แสดง เพื่อให้จุดเริ่มต้น
-  // กราฟถูกต้อง ไม่เริ่มจาก 0 ถ้ามีประวัติเก่ากว่าช่วงที่เลือก
+  // กราฟการเติบโต — "เงินต้นสะสม (เทียบบาท)" Cumulative จากธุรกรรมทั้งหมด (แปลง USD
+  // ก่อนบวก/ลบ) แล้วค่อย Filter ช่วงที่แสดง เพื่อให้จุดเริ่มต้นถูก ไม่เริ่มจาก 0
   const growthChartData = useMemo(() => {
     if (!transactions || transactions.length === 0) return null;
 
-    const sorted = [...transactions].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-
-    let running = 0;
-    const cumulativePoints = sorted.map((tx) => {
-      running += tx.type === 'buy' ? tx.amountThb : -tx.amountThb;
-      return { date: tx.date, cumulative: running };
-    });
+    const { points } = cumulativePrincipalThb(transactions, usdRate);
 
     const cutoff = new Date();
     cutoff.setMonth(cutoff.getMonth() - growthRangeMonths);
@@ -228,7 +227,7 @@ function Dashboard() {
       cutoff.getDate()
     ).padStart(2, '0')}`;
 
-    const pointsInRange = cumulativePoints.filter((p) => p.date >= cutoffStr);
+    const pointsInRange = points.filter((p) => p.date >= cutoffStr);
     if (pointsInRange.length === 0) return null;
 
     return {
@@ -245,27 +244,27 @@ function Dashboard() {
         },
       ],
     };
-  }, [transactions, growthRangeMonths]);
+  }, [transactions, growthRangeMonths, usdRate]);
 
-  // Donut สัดส่วนสินทรัพย์ — ข้อมูล = totalInvested ตรงๆ ตาม Requirement (ไม่ใช่
-  // currentValue เพราะไม่ต้องพึ่งข้อมูล Profit ที่อาจไม่มีสำหรับบาง Holding)
+  // Donut สัดส่วนเงินลงทุน "เทียบบาทเดียวกันทั้งวง" — ไม่เทียบสัดส่วนข้ามสกุลดิบๆ
   const donutChartData = useMemo(() => {
     if (!portfolio || portfolio.isEmpty) return null;
+    const { labels, data } = donutInvestedThb(portfolio.holdings, usdRate);
+    if (labels.length === 0) return null;
     return {
-      labels: portfolio.holdings.map((h) => h.symbol),
+      labels,
       datasets: [
         {
-          data: portfolio.holdings.map((h) => h.totalInvested),
-          backgroundColor: portfolio.holdings.map((_, i) => CHART_PALETTE[i % CHART_PALETTE.length]),
+          data,
+          backgroundColor: labels.map((_, i) => CHART_PALETTE[i % CHART_PALETTE.length]),
           borderWidth: 0,
           hoverOffset: 6,
         },
       ],
     };
-  }, [portfolio]);
+  }, [portfolio, usdRate]);
 
-  // Bar เงินออมรายเดือน — 6 เดือนปฏิทินล่าสุด (รวมเดือนปัจจุบัน) เดือนที่ไม่มี
-  // ธุรกรรมเป็น 0 (ไม่ข้าม เพื่อให้กราฟต่อเนื่อง)
+  // Bar เงินออมรายเดือน (เทียบบาท) — 6 เดือนปฏิทินล่าสุด (รวมเดือนปัจจุบัน)
   const monthlySavingsChartData = useMemo(() => {
     const now = new Date();
     const months = [];
@@ -274,25 +273,20 @@ function Dashboard() {
       months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
     }
 
-    const sumsByMonth = Object.fromEntries(months.map((m) => [m, 0]));
-    transactions.forEach((tx) => {
-      if (tx.type !== 'buy') return;
-      const key = tx.date.slice(0, 7);
-      if (key in sumsByMonth) sumsByMonth[key] += tx.amountThb;
-    });
+    const { sums } = monthlyBuyTotalsThb(transactions, usdRate, months);
 
     return {
       labels: months.map(monthLabelShort),
       datasets: [
         {
           label: 'เงินออม (บาท)',
-          data: months.map((m) => sumsByMonth[m]),
+          data: months.map((m) => sums[m]),
           backgroundColor: '#06c755',
           borderRadius: 6,
         },
       ],
     };
-  }, [transactions]);
+  }, [transactions, usdRate]);
 
   function handleLogout() {
     localStorage.removeItem(TOKEN_KEY);
@@ -439,9 +433,13 @@ function Dashboard() {
               <div className="dashboard-card">
                 <div className="dashboard-card-label">เงินต้นรวม</div>
                 <div className="dashboard-card-value">
-                  {portfolio.isEmpty ? '–' : formatCardMoney(portfolio.totalInvested)}
+                  {portfolio.isEmpty
+                    ? '–'
+                    : formatCardMoney(portfolio.investedThbEquivalent ?? portfolio.totalInvested)}
                 </div>
-                <div className="dashboard-card-sub">ลงทุนสะสมทั้งพอร์ต</div>
+                <div className="dashboard-card-sub">
+                  {usdRate !== null ? 'ลงทุนสะสมทั้งพอร์ต (เทียบบาท)' : 'ลงทุนสะสมทั้งพอร์ต'}
+                </div>
               </div>
               <div className="dashboard-card">
                 <div className="dashboard-card-label">กำไร / ขาดทุน</div>
@@ -458,6 +456,23 @@ function Dashboard() {
                 <div className="dashboard-card-sub">ยอดซื้อสะสมเดือนปัจจุบัน</div>
               </div>
             </div>
+
+            {/* Multi-Currency (Round 10) — กำกับ/เตือนเรื่องการแปลง USD→บาท ในยอดรวม */}
+            {fxUnavailableForUsd ? (
+              <p className="dashboard-warning">
+                * มีสินทรัพย์สกุล USD ในพอร์ต แต่ดึงอัตราแลกเปลี่ยนไม่สำเร็จ —
+                ยอด "เทียบบาท" ด้านบน/กราฟ ยังไม่รวมส่วนที่เป็น USD กรุณาลองใหม่ภายหลัง
+              </p>
+            ) : (
+              usdRate !== null && (
+                <p className="dashboard-note">
+                  * ยอดรวมทั้งพอร์ต/กราฟแปลงสกุล USD เป็นบาทที่อัตรา 1 USD ={' '}
+                  {formatNumber(usdRate)} บาท
+                  {portfolio.fxAsOf ? ` (ณ ${portfolio.fxAsOf})` : ''}
+                  {portfolio.fxStale ? ' [เรตล่าสุดที่มี]' : ''}
+                </p>
+              )
+            )}
 
             <section className="dashboard-box">
               <div className="dashboard-box-header">
@@ -556,13 +571,13 @@ function Dashboard() {
 
                           return (
                             <tr key={h.symbol}>
-                              <td>{h.symbol}</td>
+                              <td>{h.symbol}{h.currency === 'USD' ? ' (USD)' : ''}</td>
                               <td>{formatNumber(h.heldQuantity, 8)}</td>
-                              <td>{h.averageCost === null ? '-' : `${formatNumber(h.averageCost, 8)} บาท`}</td>
-                              <td>{profit ? `${formatNumber(profit.currentValue)} บาท` : 'ไม่มีราคาตลาด'}</td>
+                              <td>{h.averageCost === null ? '-' : formatMoneyCur(h.averageCost, h.currency, 8)}</td>
+                              <td>{profit ? formatMoneyCur(profit.currentValue, h.currency) : 'ไม่มีราคาตลาด'}</td>
                               <td className={profit ? (isProfit ? 'profit-positive' : 'profit-negative') : ''}>
                                 {profit
-                                  ? `${isProfit ? '+' : ''}${formatNumber(profit.profitLoss)} บาท (${
+                                  ? `${isProfit ? '+' : ''}${formatMoneyCur(profit.profitLoss, h.currency)} (${
                                       isProfit ? '+' : ''
                                     }${formatNumber(profit.profitLossPercent)}%)`
                                   : '-'}
@@ -581,9 +596,17 @@ function Dashboard() {
                     </p>
                   )}
 
+                  {/* Multi-Currency (Round 10) — แยกยอดตามสกุล ไม่ถัวข้ามสกุล
+                      investedByCurrency มาจาก backend (portfolio.service) */}
                   <p className="dashboard-total">
-                    รวมเงินลงทุนทั้งพอร์ต: {formatNumber(portfolio.totalInvested)} บาท
+                    รวมเงินลงทุนทั้งพอร์ต (บาท):{' '}
+                    {formatNumber(portfolio.investedByCurrency?.THB ?? portfolio.totalInvested)} บาท
                   </p>
+                  {(portfolio.investedByCurrency?.USD ?? 0) > 0 && (
+                    <p className="dashboard-total">
+                      รวมเงินลงทุนทั้งพอร์ต (USD): {formatNumber(portfolio.investedByCurrency.USD)} USD
+                    </p>
+                  )}
                 </>
               )}
             </section>
@@ -634,8 +657,8 @@ function Dashboard() {
                           <td className={tx.type === 'buy' ? 'profit-positive' : 'profit-negative'}>
                             {tx.type === 'buy' ? 'ซื้อ' : 'ขาย'}
                           </td>
-                          <td>{formatNumber(tx.amountThb)} บาท</td>
-                          <td>{formatNumber(tx.pricePerUnit, 8)} บาท</td>
+                          <td>{formatMoneyCur(tx.amountThb, tx.currency)}</td>
+                          <td>{formatMoneyCur(tx.pricePerUnit, tx.currency, 8)}</td>
                           <td>{formatNumber(tx.quantity, 8)}</td>
                           <td>{tx.date}</td>
                         </tr>

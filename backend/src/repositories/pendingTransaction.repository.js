@@ -17,6 +17,9 @@ function toPending(row) {
     quantity: row.quantity,
     pricePerUnit: row.price_per_unit,
     amountThb: row.amount_thb,
+    // Multi-Currency (Round 10 — migration 012) — สกุลของ amount_thb/price_per_unit
+    // (แถวเดิม/ไม่มีค่า = 'THB' ตาม DEFAULT) พกผ่าน Flow Preview→Confirm
+    currency: row.currency ?? 'THB',
     feeThb: row.fee_thb,
     txnDate: row.txn_date,
     batchId: row.batch_id,
@@ -47,6 +50,8 @@ async function create(data) {
       quantity: data.quantity,
       price_per_unit: data.pricePerUnit,
       amount_thb: data.amountThb,
+      // Multi-Currency (Round 10) — Default 'THB' เมื่อ Caller ไม่ส่ง (Path เดิม)
+      currency: data.currency ?? 'THB',
       fee_thb: data.feeThb ?? 0,
       txn_date: data.txnDate,
       // batch_id (migration 008) — nullable, ผูก N แถวที่มาจาก Bulk Import Batch

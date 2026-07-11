@@ -189,6 +189,40 @@ function goldUsdLines({ usdThbRate, pricePerUnitUsd, currentPriceUsd, currentVal
   return lines;
 }
 
+// Multi-Currency (Round 10): บรรทัด "ยอดเทียบเป็นบาท" สำหรับธุรกรรมสกุล USD —
+// fx = { rate, asOf, stale, amountThb } (ยอดเทียบบาทเพื่อแสดงผลเท่านั้น ไม่ได้บันทึก)
+// หรือ null ถ้าดึงเรตไม่ได้ → แสดงหมายเหตุว่ายังตีเป็นบาทไม่ได้ (แต่ธุรกรรมยังบันทึกเป็น
+// USD ตามจริงไปแล้ว) กำกับเรต + วันที่อ้างอิงเสมอเพื่อความโปร่งใส
+function usdFxLines(fx) {
+  if (!fx || fx.rate === null || fx.rate === undefined) {
+    return [
+      textLine('(ยังตีเป็นบาทไม่ได้ — ดึงอัตราแลกเปลี่ยนไม่สำเร็จ)', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+    ];
+  }
+
+  const staleTag = fx.stale ? ' (เรตล่าสุดที่มี)' : '';
+  const asOfTag = fx.asOf ? ` ณ ${fx.asOf}` : '';
+  const lines = [];
+  if (fx.amountThb !== undefined && fx.amountThb !== null) {
+    lines.push(
+      textLine(`≈ ${formatNumber(fx.amountThb)} บาท`, {
+        size: 'sm',
+        color: COLOR.textSecondary,
+      })
+    );
+  }
+  lines.push(
+    textLine(`อัตราแลกเปลี่ยน 1 USD = ${formatNumber(fx.rate)} บาท${asOfTag}${staleTag}`, {
+      size: 'xs',
+      color: COLOR.textSecondary,
+    })
+  );
+  return lines;
+}
+
 function bubble({ headerText, headerColor, headerBg, bodyContents }) {
   return {
     type: 'flex',
@@ -213,17 +247,19 @@ function bubble({ headerText, headerColor, headerBg, bodyContents }) {
 }
 
 function buildBuyConfirmMessage(result) {
+  // Multi-Currency (Round 10) — แสดงหน่วยตามสกุลจริงของธุรกรรม (Default THB)
+  const unit = result.currency === 'USD' ? 'USD' : 'บาท';
   const body = [
     textLine(result.symbol, { size: 'lg', weight: 'bold', color: COLOR.textPrimary }),
     textLine(`จำนวน: ${formatNumber(result.quantity)} ${result.symbol}`, {
       size: 'sm',
       color: COLOR.textSecondary,
     }),
-    textLine(`ราคาต่อหน่วย: ${formatNumber(result.pricePerUnit)} บาท`, {
+    textLine(`ราคาต่อหน่วย: ${formatNumber(result.pricePerUnit)} ${unit}`, {
       size: 'sm',
       color: COLOR.textSecondary,
     }),
-    textLine(`มูลค่ารวม: ${formatNumber(result.amountThb)} บาท`, {
+    textLine(`มูลค่ารวม: ${formatNumber(result.amountThb)} ${unit}`, {
       size: 'md',
       weight: 'bold',
       color: COLOR.textPrimary,
@@ -246,17 +282,19 @@ function buildBuyConfirmMessage(result) {
 }
 
 function buildSellConfirmMessage(result) {
+  // Multi-Currency (Round 10) — แสดงหน่วยตามสกุลจริงของธุรกรรม (Default THB)
+  const unit = result.currency === 'USD' ? 'USD' : 'บาท';
   const body = [
     textLine(result.symbol, { size: 'lg', weight: 'bold', color: COLOR.textPrimary }),
     textLine(`จำนวน: ${formatNumber(result.quantity)} ${result.symbol}`, {
       size: 'sm',
       color: COLOR.textSecondary,
     }),
-    textLine(`ราคาต่อหน่วย: ${formatNumber(result.pricePerUnit)} บาท`, {
+    textLine(`ราคาต่อหน่วย: ${formatNumber(result.pricePerUnit)} ${unit}`, {
       size: 'sm',
       color: COLOR.textSecondary,
     }),
-    textLine(`มูลค่ารวม: ${formatNumber(result.amountThb)} บาท`, {
+    textLine(`มูลค่ารวม: ${formatNumber(result.amountThb)} ${unit}`, {
       size: 'md',
       weight: 'bold',
       color: COLOR.textPrimary,
@@ -286,6 +324,8 @@ function buildProfitMessage(profit) {
   const sign = isProfit ? '+' : '-';
   const plAbs = Math.abs(profit.profitLoss);
   const percentAbs = Math.abs(profit.profitLossPercent);
+  // Multi-Currency (Round 10) — หน่วยตามสกุลของสินทรัพย์ (Default THB)
+  const unit = profit.currency === 'USD' ? 'USD' : 'บาท';
 
   const body = [
     textLine(profit.symbol, { size: 'lg', weight: 'bold', color: COLOR.textPrimary }),
@@ -297,25 +337,25 @@ function buildProfitMessage(profit) {
       size: 'sm',
       color: COLOR.textSecondary,
     }),
-    textLine(`ต้นทุนเฉลี่ย: ${formatNumber(profit.averageCost)} บาท/หน่วย`, {
+    textLine(`ต้นทุนเฉลี่ย: ${formatNumber(profit.averageCost)} ${unit}/หน่วย`, {
       size: 'sm',
       color: COLOR.textSecondary,
     }),
-    textLine(`เงินลงทุน: ${formatNumber(profit.totalInvested)} บาท`, {
+    textLine(`เงินลงทุน: ${formatNumber(profit.totalInvested)} ${unit}`, {
       size: 'sm',
       color: COLOR.textSecondary,
     }),
-    textLine(`ราคาปัจจุบัน: ${formatNumber(profit.currentPrice)} บาท/หน่วย`, {
+    textLine(`ราคาปัจจุบัน: ${formatNumber(profit.currentPrice)} ${unit}/หน่วย`, {
       size: 'sm',
       color: COLOR.textSecondary,
     }),
-    textLine(`มูลค่าปัจจุบัน: ${formatNumber(profit.currentValue)} บาท`, {
+    textLine(`มูลค่าปัจจุบัน: ${formatNumber(profit.currentValue)} ${unit}`, {
       size: 'md',
       weight: 'bold',
       color: COLOR.textPrimary,
     }),
     textLine(
-      `กำไร/ขาดทุน: ${sign}${formatNumber(plAbs)} บาท (${sign}${formatNumber(percentAbs)}%)`,
+      `กำไร/ขาดทุน: ${sign}${formatNumber(plAbs)} ${unit} (${sign}${formatNumber(percentAbs)}%)`,
       { size: 'md', weight: 'bold', color: plColor }
     ),
   ];
@@ -324,6 +364,37 @@ function buildProfitMessage(profit) {
   // จาก profit.service — null ถ้าไม่ใช่ทองหรือดึงเรต FX ไม่ได้ → ไม่แสดงบรรทัด USD)
   if (profit.usd) {
     body.push(...goldUsdLines(profit.usd));
+  }
+
+  // Multi-Currency (Round 10): สินทรัพย์สกุล USD — แสดง "ยอดเทียบเป็นบาท" (มูลค่า +
+  // กำไร/ขาดทุน) จาก profit.fxThb (null ถ้าดึงเรตไม่ได้ → แสดงเฉพาะ USD) + กำกับเรต/วันที่
+  if (profit.currency === 'USD') {
+    if (profit.fxThb) {
+      const plThbAbs = Math.abs(profit.fxThb.profitLossThb);
+      body.push(
+        textLine(`≈ มูลค่า ${formatNumber(profit.fxThb.currentValueThb)} บาท`, {
+          size: 'sm',
+          color: COLOR.textSecondary,
+        }),
+        textLine(`≈ กำไร/ขาดทุน ${sign}${formatNumber(plThbAbs)} บาท`, {
+          size: 'sm',
+          color: COLOR.textSecondary,
+        }),
+        textLine(
+          `อัตราแลกเปลี่ยน 1 USD = ${formatNumber(profit.fxThb.rate)} บาท` +
+            `${profit.fxThb.asOf ? ` ณ ${profit.fxThb.asOf}` : ''}` +
+            `${profit.fxThb.stale ? ' (เรตล่าสุดที่มี)' : ''}`,
+          { size: 'xs', color: COLOR.textSecondary }
+        )
+      );
+    } else {
+      body.push(
+        textLine('(ยังตีเป็นบาทไม่ได้ — ดึงอัตราแลกเปลี่ยนไม่สำเร็จ)', {
+          size: 'xs',
+          color: COLOR.textSecondary,
+        })
+      );
+    }
   }
 
   const note = priceSourceNote(profit.priceSource);
@@ -446,18 +517,20 @@ function buildHistoryMessage(transactions) {
     const isBuy = tx.type === 'buy';
     const label = isBuy ? '🟢 ซื้อ' : '🔴 ขาย';
     const color = isBuy ? COLOR.profit : COLOR.loss;
+    // Multi-Currency (Round 10) — หน่วยตามสกุลของธุรกรรม (Default THB)
+    const unit = tx.currency === 'USD' ? 'USD' : 'บาท';
 
     body.push(
       textLine(`${label} ${tx.symbol}`, { size: 'md', weight: 'bold', color })
     );
     body.push(
       textLine(
-        `จำนวน: ${formatNumber(tx.quantity)} ${tx.symbol} @ ${formatNumber(tx.pricePerUnit)} บาท`,
+        `จำนวน: ${formatNumber(tx.quantity)} ${tx.symbol} @ ${formatNumber(tx.pricePerUnit)} ${unit}`,
         { size: 'sm', color: COLOR.textSecondary }
       )
     );
     body.push(
-      textLine(`มูลค่ารวม: ${formatNumber(tx.amountThb)} บาท • ${tx.date}`, {
+      textLine(`มูลค่ารวม: ${formatNumber(tx.amountThb)} ${unit} • ${tx.date}`, {
         size: 'sm',
         color: COLOR.textSecondary,
       })
@@ -481,10 +554,10 @@ function buildPreviewMessage(pending) {
   const headerColor = isBuy ? COLOR.profit : COLOR.loss;
   const headerBg = isBuy ? COLOR.profitBg : COLOR.lossBg;
 
-  // คำสั่งที่พิมพ์ราคาเป็น USD — โชว์ทั้งยอด USD ที่พิมพ์และเรตที่ใช้ เพื่อไม่ให้
-  // ผู้ใช้งงว่าทำไมยอดในพอร์ต (บาท) ไม่ตรงกับตัวเลขที่พิมพ์ (pending.fx จาก
-  // resolveQuantityAndPrice — ไม่ได้ Persist ใน DB)
-  const isUsd = Boolean(pending.fx && pending.fx.currency === 'USD');
+  // Multi-Currency (Round 10): ธุรกรรมสกุล USD เก็บ "ตามจริง" (ไม่แปลงตอนบันทึก)
+  // — แสดงยอดเป็น USD ตามจริง + บรรทัด "≈ บาท" (จาก pending.fx = ยอดเทียบบาทเพื่อ
+  // แสดงผลเท่านั้น, null ถ้าดึงเรตไม่ได้ → ไม่แสดงบรรทัดเทียบบาท แต่ยังบันทึกได้)
+  const unit = pending.currency === 'USD' ? 'USD' : 'บาท';
 
   const body = [
     textLine(pending.assetSymbol, { size: 'lg', weight: 'bold', color: COLOR.textPrimary }),
@@ -501,28 +574,8 @@ function buildPreviewMessage(pending) {
     textLine(`จำนวน: ${formatNumber(pending.quantity)} ${pending.assetSymbol}`, {
       size: 'sm',
       color: COLOR.textSecondary,
-    })
-  );
-
-  if (isUsd) {
-    body.push(
-      textLine(`ราคาที่พิมพ์: ${formatNumber(pending.fx.pricePerUnitOriginal)} USD/หน่วย`, {
-        size: 'sm',
-        color: COLOR.textSecondary,
-      }),
-      textLine(`ยอดรวมที่พิมพ์: ${formatNumber(pending.fx.amountOriginal)} USD`, {
-        size: 'sm',
-        color: COLOR.textSecondary,
-      }),
-      textLine(`อัตราแลกเปลี่ยน: 1 USD = ${formatNumber(pending.fx.rate)} บาท`, {
-        size: 'xs',
-        color: COLOR.textSecondary,
-      })
-    );
-  }
-
-  body.push(
-    textLine(`ราคาต่อหน่วย: ${formatNumber(pending.pricePerUnit)} บาท${isUsd ? ' (แปลงแล้ว)' : ''}`, {
+    }),
+    textLine(`ราคาต่อหน่วย: ${formatNumber(pending.pricePerUnit)} ${unit}`, {
       size: 'sm',
       color: COLOR.textSecondary,
     })
@@ -535,11 +588,19 @@ function buildPreviewMessage(pending) {
   }
 
   body.push(
-    textLine(`มูลค่ารวม: ${formatNumber(pending.amountThb)} บาท${isUsd ? ' (แปลงแล้ว)' : ''}`, {
+    textLine(`มูลค่ารวม: ${formatNumber(pending.amountThb)} ${unit}`, {
       size: 'md',
       weight: 'bold',
       color: COLOR.textPrimary,
-    }),
+    })
+  );
+
+  // ยอดเทียบเป็นบาท (เฉพาะสกุล USD ที่ดึงเรตได้) — กำกับเรต + วันที่อ้างอิง
+  if (pending.currency === 'USD') {
+    body.push(...usdFxLines(pending.fx));
+  }
+
+  body.push(
     textLine('ตรวจสอบแล้วกด "ยืนยัน" เพื่อบันทึก (รายการหมดอายุใน 5 นาที)', {
       size: 'xs',
       color: COLOR.textSecondary,
@@ -1625,50 +1686,71 @@ function buildBulkImportPreviewMessage(batch) {
     separator(),
   ];
 
+  // Multi-Currency (Round 10): แยกยอดรวมตามสกุลเงิน ไม่ถัวข้ามสกุล (item.currency
+  // จาก pending record) — USD แสดงยอด USD ตามจริง + ยอดเทียบบาทรวม (จาก item.fx)
+  const totalByCurrency = { THB: 0, USD: 0 };
+  let usdConvertedThbTotal = 0;
+  let usdRateAvailable = false;
+
   batch.items.forEach((item) => {
-    // รายการที่พิมพ์ราคาเป็น USD — โชว์ยอด USD ต้นฉบับ + เรตที่ใช้ เหมือน
-    // buildPreviewMessage (Parity กับคำสั่งซื้อเดี่ยว) ไม่ให้ผู้ใช้งงว่าทำไม
-    // ยอดบาทไม่ตรงกับตัวเลขที่พิมพ์ — item.fx มาจาก pendingTransaction.service.
-    // createBatch (Enrich ต่อจาก resolveQuantityAndPrice เดิม ไม่ได้ Persist ใน DB)
-    const isUsd = Boolean(item.fx && item.fx.currency === 'USD');
+    const isUsd = item.currency === 'USD';
+    const unit = isUsd ? 'USD' : 'บาท';
+    totalByCurrency[isUsd ? 'USD' : 'THB'] += Number(item.amountThb);
+    if (isUsd && item.fx && item.fx.amountThb !== undefined && item.fx.amountThb !== null) {
+      usdConvertedThbTotal += Number(item.fx.amountThb);
+      usdRateAvailable = true;
+    }
 
     body.push(
       textLine(item.assetSymbol, { weight: 'bold', color: COLOR.textPrimary }),
       textLine(
-        `จำนวน: ${formatNumber(item.quantity)} ${item.assetSymbol} @ ${formatNumber(item.pricePerUnit)} บาท`,
+        `จำนวน: ${formatNumber(item.quantity)} ${item.assetSymbol} @ ${formatNumber(item.pricePerUnit)} ${unit}`,
         { size: 'sm', color: COLOR.textSecondary }
-      )
+      ),
+      textLine(`มูลค่า: ${formatNumber(item.amountThb)} ${unit} • ${item.txnDate}`, {
+        size: 'sm',
+        color: COLOR.textSecondary,
+      })
     );
 
-    if (isUsd) {
+    // ยอดเทียบบาทต่อรายการ (เฉพาะ USD ที่ดึงเรตได้)
+    if (isUsd && item.fx) {
+      body.push(...usdFxLines(item.fx));
+    }
+
+    body.push(separator());
+  });
+
+  // ── ยอดรวมแยกตามสกุล ─────────────────────────────────────────────────────
+  if (totalByCurrency.THB > 0) {
+    body.push(
+      textLine(`รวม (บาท): ${formatNumber(totalByCurrency.THB)} บาท`, {
+        size: 'md',
+        weight: 'bold',
+        color: COLOR.textPrimary,
+      })
+    );
+  }
+  if (totalByCurrency.USD > 0) {
+    body.push(
+      textLine(`รวม (USD): ${formatNumber(totalByCurrency.USD)} USD`, {
+        size: 'md',
+        weight: 'bold',
+        color: COLOR.textPrimary,
+      })
+    );
+    if (usdRateAvailable) {
       body.push(
-        textLine(`ราคาที่พิมพ์: ${formatNumber(item.fx.pricePerUnitOriginal)} USD/หน่วย`, {
-          size: 'sm',
-          color: COLOR.textSecondary,
-        }),
-        textLine(`อัตราแลกเปลี่ยน: 1 USD = ${formatNumber(item.fx.rate)} บาท`, {
+        textLine(`≈ ${formatNumber(usdConvertedThbTotal)} บาท (ตามอัตราแลกเปลี่ยนล่าสุด)`, {
           size: 'xs',
           color: COLOR.textSecondary,
         })
       );
     }
-
-    body.push(
-      textLine(`มูลค่า: ${formatNumber(item.amountThb)} บาท • ${item.txnDate}`, {
-        size: 'sm',
-        color: COLOR.textSecondary,
-      }),
-      separator()
-    );
-  });
+  }
 
   body.push(
-    textLine(`รวมทั้งหมด: ${formatNumber(batch.totalAmountThb)} บาท (${batch.items.length} รายการ)`, {
-      size: 'md',
-      weight: 'bold',
-      color: COLOR.textPrimary,
-    }),
-    textLine('ตรวจสอบแล้วกด "ยืนยัน" เพื่อบันทึกทุกรายการ (หมดอายุใน 5 นาที)', {
+    textLine(`รวม ${batch.items.length} รายการ • ตรวจสอบแล้วกด "ยืนยัน" (หมดอายุใน 5 นาที)`, {
       size: 'xs',
       color: COLOR.textSecondary,
     })
@@ -1698,9 +1780,14 @@ function buildBulkImportPreviewMessage(batch) {
     },
   ];
 
+  // altText แยกยอดตามสกุล (ไม่รวมข้ามสกุล) — Fallback '0 บาท' ถ้าไม่มียอดเลย
+  const altParts = [];
+  if (totalByCurrency.THB > 0) altParts.push(`${formatNumber(totalByCurrency.THB)} บาท`);
+  if (totalByCurrency.USD > 0) altParts.push(`${formatNumber(totalByCurrency.USD)} USD`);
+
   return {
     type: 'flex',
-    altText: `นำเข้าพอร์ต ${batch.items.length} รายการ รวม ${formatNumber(batch.totalAmountThb)} บาท`,
+    altText: `นำเข้าพอร์ต ${batch.items.length} รายการ รวม ${altParts.join(' + ') || '0 บาท'}`,
     contents: {
       type: 'bubble',
       header: {
@@ -1927,6 +2014,9 @@ function ocrPostback(action, ocr) {
   } else if (ocr.amountThb !== null) {
     p.set('amt', String(ocr.amountThb));
   }
+  // Multi-Currency (Round 10) — พกสกุลเงินที่ AI อ่านได้ (เฉพาะ USD; THB เป็น Default
+  // ที่ Handler เติมเองถ้าไม่มี) เพื่อให้ ocr_confirm/ocr_edit ประกอบคำสั่งสกุลถูกต้อง
+  if (ocr.currency === 'USD') p.set('cur', 'USD');
   // วันที่ส่งเฉพาะปุ่มยืนยัน (Path Postback ไม่ผ่าน Command Parser ที่ไม่รองรับวันที่)
   if (action === 'ocr_confirm' && ocr.dateIso) p.set('date', ocr.dateIso);
   return p.toString();
@@ -1945,6 +2035,9 @@ function buildOcrPreviewMessage(ocr) {
     Boolean(ocr.symbol) &&
     ((ocr.quantity !== null && ocr.pricePerUnit !== null) || ocr.amountThb !== null);
 
+  // Multi-Currency (Round 10) — แสดงหน่วยตามสกุลที่ AI อ่านได้ (Default THB)
+  const unit = ocr.currency === 'USD' ? 'USD' : 'บาท';
+
   const body = [
     textLine(`${isBuy ? '🟢' : '🔴'} ${sideLabel} ${ocr.symbol}`, {
       size: 'lg',
@@ -1956,13 +2049,13 @@ function buildOcrPreviewMessage(ocr) {
       { size: 'sm', color: ocr.quantity !== null ? COLOR.textSecondary : COLOR.warning }
     ),
     textLine(
-      `ราคาต่อหน่วย: ${ocr.pricePerUnit !== null ? `${formatNumber(ocr.pricePerUnit)} บาท` : naText}`,
+      `ราคาต่อหน่วย: ${ocr.pricePerUnit !== null ? `${formatNumber(ocr.pricePerUnit)} ${unit}` : naText}`,
       { size: 'sm', color: ocr.pricePerUnit !== null ? COLOR.textSecondary : COLOR.warning }
     ),
   ];
   if (ocr.amountThb !== null) {
     body.push(
-      textLine(`ยอดรวม: ${formatNumber(ocr.amountThb)} บาท`, { size: 'sm', color: COLOR.textSecondary })
+      textLine(`ยอดรวม: ${formatNumber(ocr.amountThb)} ${unit}`, { size: 'sm', color: COLOR.textSecondary })
     );
   }
   body.push(

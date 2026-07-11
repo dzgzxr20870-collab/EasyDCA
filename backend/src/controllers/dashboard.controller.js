@@ -1,8 +1,13 @@
 const portfolioService = require('../services/portfolio.service');
 const profitService = require('../services/profit.service');
+const fxRateService = require('../services/fxRate.service');
 const transactionRepository = require('../repositories/transaction.repository');
 const userRepository = require('../repositories/user.repository');
 const entitlementService = require('../services/entitlement.service');
+
+function roundToTwo(value) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
 
 // Default เท่ากับที่ Requirement กำหนด (ต่างจาก historyService.getRecentHistory
 // ที่ใช้ 5 สำหรับคำสั่ง LINE "ประวัติ" — Dashboard ต้องการเห็นได้มากกว่านั้น)
@@ -13,7 +18,32 @@ const DEFAULT_HISTORY_LIMIT = 50;
 async function getPortfolio(req, res) {
   try {
     const summary = await portfolioService.getPortfolioSummary(req.user.id);
-    return res.status(200).json(summary);
+
+    // Multi-Currency (Round 10) — แนบ "อัตราแลกเปลี่ยน USD→THB เดียว" ให้ Frontend
+    // ใช้แปลงยอด USD เป็นบาทก่อน "รวมข้ามสกุล" (การ์ดมูลค่ารวม/Donut/กราฟเงินออม)
+    // ดึงเรตเฉพาะเมื่อพอร์ตมี USD จริง (พอร์ต THB ล้วนไม่ยิง FX — คง Behavior เดิม)
+    // ไม่แตะ portfolio.service (Reuse โดย LINE "พอต") — Enrich เฉพาะ Path Web ที่นี่
+    const investedThb = summary.investedByCurrency?.THB ?? summary.totalInvested ?? 0;
+    const investedUsd = summary.investedByCurrency?.USD ?? 0;
+
+    let fx = null;
+    if (investedUsd > 0) {
+      fx = await fxRateService.getUsdThbRate(); // { rate, asOf, stale } | null
+    }
+    const usdRate = fx ? fx.rate : null;
+
+    return res.status(200).json({
+      ...summary,
+      // เรตเดียวสำหรับแปลงทุกยอด USD ในหน้านี้ (null = ไม่มี USD หรือดึงเรตไม่ได้)
+      fxRate: usdRate,
+      fxAsOf: fx ? fx.asOf : null,
+      fxStale: fx ? fx.stale : false,
+      // true = มี USD แต่ดึงเรตไม่ได้ → Frontend ต้องเตือน ไม่แสดงยอดรวมที่ผิด
+      fxUnavailableForUsd: investedUsd > 0 && usdRate === null,
+      // เงินลงทุนรวม "เทียบบาท" (THB + USD×เรต) — พอร์ต THB ล้วน = ค่าเดิมทุกประการ
+      investedThbEquivalent:
+        usdRate !== null ? roundToTwo(investedThb + investedUsd * usdRate) : roundToTwo(investedThb),
+    });
   } catch (err) {
     console.error(`[dashboard] getPortfolio failed: ${err.message}`);
     return res.status(500).json({ error: 'INTERNAL_ERROR' });

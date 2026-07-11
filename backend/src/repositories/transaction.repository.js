@@ -11,6 +11,9 @@ function toTransaction(row) {
     amountThb: row.amount_thb,
     pricePerUnit: row.price_per_unit,
     quantity: row.quantity,
+    // Multi-Currency (Round 10) — สกุลของ amount_thb/price_per_unit ในแถวนี้
+    // (แถวเดิมทั้งหมด/ไม่มีค่า = 'THB' ตาม DEFAULT ของ migration 012)
+    currency: row.currency ?? 'THB',
     feeThb: row.fee_thb,
     date: row.date,
     note: row.note,
@@ -29,6 +32,8 @@ async function create(data) {
       amount_thb: data.amountThb,
       price_per_unit: data.pricePerUnit,
       quantity: data.quantity,
+      // Multi-Currency (Round 10) — Default 'THB' เมื่อ Caller ไม่ส่ง (Path เดิม)
+      currency: data.currency ?? 'THB',
       fee_thb: data.feeThb,
       date: data.date,
       note: data.note,

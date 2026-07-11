@@ -73,10 +73,16 @@ const SYSTEM_PROMPT = [
   '- symbol ให้เป็นชื่อย่อสินทรัพย์เป็นตัวพิมพ์ใหญ่ (เช่น BTC, PTT, AAPL) ถ้าอ่านไม่ได้ให้ null',
   '- side = "buy" (ซื้อ) หรือ "sell" (ขาย) ถ้าไม่ชัดเจนให้ null',
   '- date รูปแบบ DD/MM/YYYY (ปี ค.ศ. หรือ พ.ศ. ตามที่เห็นในสลิป) ถ้าไม่มีให้ null',
-  '- quantity = จำนวนหน่วย, price_per_unit = ราคาต่อหน่วย, amount_thb = ยอดรวมเป็นบาท (ตัวเลขล้วน ไม่มี comma)',
+  '- quantity = จำนวนหน่วย (เช่น จำนวนหุ้น/เหรียญ), price_per_unit = ราคาต่อหน่วย,',
+  '  amount = ยอดเงินรวมของรายการ (ตัวเลขล้วน ไม่มี comma)',
+  '- ⚠️ สำคัญ: ถ้าสลิปแสดง "เฉพาะมูลค่า/ยอดเงินรวม" โดยไม่มีจำนวนหน่วยและไม่มีราคาต่อหน่วย',
+  '  (เช่น แอปหุ้นต่างประเทศอย่าง Dime! ที่ซื้อเป็นจำนวนเงิน) ให้ใส่ตัวเลขนั้นใน amount เท่านั้น',
+  '  และให้ quantity = null, price_per_unit = null (ห้ามเอายอดรวมไปใส่เป็น price_per_unit)',
+  '- currency = สกุลเงินของตัวเลขในสลิป: "USD" ถ้าเห็นสัญลักษณ์ $ หรือ USD ชัดเจน,',
+  '  มิฉะนั้น (รวมถึงกรณีไม่ชัดเจน) ให้เป็น "THB"',
   '',
   'ตอบกลับเป็น JSON object เดียวเท่านั้น ห้ามมีข้อความอื่น ห้ามใส่ markdown code fence รูปแบบ:',
-  '{"is_slip":boolean,"multiple_items":boolean,"symbol":string|null,"side":"buy"|"sell"|null,"quantity":number|null,"price_per_unit":number|null,"amount_thb":number|null,"date":string|null,"confidence":"high"|"medium"|"low"}',
+  '{"is_slip":boolean,"multiple_items":boolean,"symbol":string|null,"side":"buy"|"sell"|null,"quantity":number|null,"price_per_unit":number|null,"amount":number|null,"currency":"THB"|"USD","date":string|null,"confidence":"high"|"medium"|"low"}',
 ].join('\n');
 
 // แปลง Text ที่ Claude ตอบ → Object (เผื่อเผลอห่อ ```json ... ``` ก็ถอดออกก่อน Parse)
@@ -227,7 +233,12 @@ async function extractSlip(userId, buffer, contentType, now = new Date()) {
     side: raw.side === 'sell' ? 'sell' : 'buy', // Default "buy" (Use Case หลัก = บันทึกการซื้อ DCA)
     quantity: positiveNumberOrNull(raw.quantity),
     pricePerUnit: positiveNumberOrNull(raw.price_per_unit),
-    amountThb: positiveNumberOrNull(raw.amount_thb),
+    // ยอดเงินรวม: อ่าน field ใหม่ 'amount' ก่อน (รองรับ 'amount_thb' เดิมเผื่อ Model
+    // ยังตอบชื่อเก่า) — ชื่อ Key ผลลัพธ์คง amountThb เพื่อไม่ให้ Controller เดิมพัง
+    // (ค่าเป็นสกุลตาม currency ด้านล่าง — ไม่จำเป็นต้องเป็นบาทเสมอไปแล้ว)
+    amountThb: positiveNumberOrNull(raw.amount ?? raw.amount_thb),
+    // Multi-Currency (Round 10) — สกุลเงินที่อ่านจากสลิป (Default 'THB' ถ้าไม่ใช่ USD ชัดเจน)
+    currency: raw.currency === 'USD' ? 'USD' : 'THB',
     date: dateIso ? dateRaw : null, // แสดง DD/MM/YYYY เฉพาะเมื่อ Parse เป็นวันที่จริงได้
     dateIso, // ISO 'YYYY-MM-DD' สำหรับส่งเข้า createPending (null = ใช้วันนี้)
     confidence: ['high', 'medium', 'low'].includes(raw.confidence) ? raw.confidence : 'low',
