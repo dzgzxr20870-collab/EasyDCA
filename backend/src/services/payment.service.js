@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const config = require('../config/env');
 const entitlement = require('./entitlement.service');
 const promptpayQrService = require('./promptpayQr.service');
@@ -157,8 +158,35 @@ async function findPendingByUserId(userId) {
 // ผูก URL รูปสลิปเข้ากับคำขอ (Wrapper บาง ๆ ให้ Controller เรียกผ่าน Service Layer
 // แทนแตะ Repository ตรง — Layering เดียวกับ findPendingByUserId) ไม่ยิง LINE/Storage
 // API ที่ชั้นนี้ (Controller เป็นผู้ดึง Content + อัปโหลดแล้วส่ง URL ที่ได้เข้ามา)
-async function attachSlipImage(paymentId, slipImageUrl) {
-  return paymentRepository.updateSlipImageUrl(paymentId, slipImageUrl);
+// slipHash (Payment Beta — migration 015) เป็น Optional: Controller คำนวณผ่าน
+// hashSlipImage แล้วส่งเข้ามาพร้อมกัน เพื่อบันทึกไว้ตรวจจับการส่งสลิปซ้ำในอนาคต
+async function attachSlipImage(paymentId, slipImageUrl, slipHash) {
+  return paymentRepository.updateSlipImageUrl(paymentId, slipImageUrl, slipHash);
+}
+
+// คำนวณ SHA-256 Hash (Hex) ของรูปสลิป — ใช้ Node built-in crypto (ไม่เพิ่ม Dependency)
+// Controller เรียกก่อนอัปโหลดขึ้น Storage เสมอ (ดู webhook.controller.handlePaymentSlipImage)
+function hashSlipImage(buffer) {
+  return crypto.createHash('sha256').update(buffer).digest('hex');
+}
+
+// ตรวจว่าสลิปนี้ (slip_hash) เคยถูกใช้กับคำขอที่ "อนุมัติแล้ว" (status='confirmed') มา
+// ก่อนหรือไม่ — ป้องกัน Fraud Vector: ส่งสลิปโอนเงินจริงใบเดียวมาขอ Premium สองรอบ
+// throw SLIP_ALREADY_USED ถ้าพบ ให้ Controller ดักจับแล้วตอบผู้ใช้เป็นข้อความไทย
+//
+// ⚠️ ตั้งใจ "ไม่" กันการส่งสลิปเดิมซ้ำกับคำขอที่ rejected/expired/pending — คำขอเหล่านี้
+// ยังไม่เคยอนุมัติจริง ผู้ใช้ที่ถูก Admin Reject (เช่นยอด/รูปไม่ชัด) ต้องส่งสลิปใบเดิมซ้ำ
+// ได้ตามปกติเมื่อกด "Premium" ขอคำขอใหม่ (requestPayment สร้าง Payment Row ใหม่ทุกครั้ง
+// ไม่มี Flow "เปิดคำขอเดิมซ้ำ" — ดู payment.repository.findConfirmedBySlipHash)
+async function assertSlipNotReused(slipHash) {
+  const existing = await paymentRepository.findConfirmedBySlipHash(slipHash);
+  if (existing) {
+    throw new PaymentServiceError(
+      'SLIP_ALREADY_USED',
+      'This slip image has already been used for an approved payment',
+      { slipHash, existingPaymentId: existing.id }
+    );
+  }
 }
 
 // ดึงคำขอเพื่อ "สร้างรูป QR ซ้ำ" ให้ Endpoint qr.png — ต้องยัง pending เท่านั้น
@@ -266,6 +294,8 @@ module.exports = {
   requestPayment,
   findPendingByUserId,
   attachSlipImage,
+  hashSlipImage,
+  assertSlipNotReused,
   getPendingPaymentForQr,
   notifyPaymentSubmitted,
   approvePayment,

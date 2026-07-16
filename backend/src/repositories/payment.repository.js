@@ -15,6 +15,8 @@ function toPayment(row) {
     amountThb: row.amount_thb,
     status: row.status,
     slipImageUrl: row.slip_image_url,
+    // migration 015 (Payment Beta) — Hash ของรูปสลิปสำหรับตรวจจับการส่งซ้ำ
+    slipHash: row.slip_hash ?? null,
     confirmedBy: row.confirmed_by,
     confirmedAt: row.confirmed_at,
     expiresAt: row.expires_at,
@@ -173,20 +175,48 @@ async function claimForRejection(id, adminLineUserId) {
   return toPayment(data);
 }
 
-// ผูก URL รูปสลิปเข้ากับคำขอ — อัปเดตเฉพาะ slip_image_url ไม่แตะ status/ฟิลด์อื่น
-// ไม่มี Guard status='pending' (ต่างจาก claimForApproval/claimForRejection) เพราะนี่
-// ไม่ใช่การเปลี่ยนสถานะสุดท้ายของ Payment แค่แนบไฟล์เพิ่ม — คืน payment ที่อัปเดตแล้ว
-// (หรือ null ถ้าไม่พบ id นั้น)
-async function updateSlipImageUrl(id, slipImageUrl) {
+// ผูก URL รูปสลิปเข้ากับคำขอ — อัปเดต slip_image_url (+ slip_hash ถ้าส่งมา — migration
+// 015 Payment Beta) ไม่แตะ status/ฟิลด์อื่น ไม่มี Guard status='pending' (ต่างจาก
+// claimForApproval/claimForRejection) เพราะนี่ไม่ใช่การเปลี่ยนสถานะสุดท้ายของ Payment
+// แค่แนบไฟล์เพิ่ม — คืน payment ที่อัปเดตแล้ว (หรือ null ถ้าไม่พบ id นั้น)
+//
+// slipHash เป็น Parameter Optional (undefined = ไม่ส่งมา) เพื่อไม่ Break Caller เดิมที่
+// ยังไม่รู้จัก slip_hash — ใส่ Key เข้า Update เฉพาะตอนที่ Caller ส่งค่ามาจริงเท่านั้น
+async function updateSlipImageUrl(id, slipImageUrl, slipHash) {
+  const update = { slip_image_url: slipImageUrl };
+  if (slipHash !== undefined) {
+    update.slip_hash = slipHash;
+  }
+
   const { data, error } = await supabaseAdmin
     .from('payments')
-    .update({ slip_image_url: slipImageUrl })
+    .update(update)
     .eq('id', id)
     .select('*')
     .maybeSingle();
 
   if (error) {
     throw new Error(`Failed to update slip image url for payment ${id}: ${error.message}`);
+  }
+
+  return toPayment(data);
+}
+
+// หา Payment ที่ slip_hash ตรงกันและ status='confirmed' (อนุมัติแล้วจริง) — ใช้ตรวจจับ
+// Fraud: ส่งสลิปโอนเงินจริงใบเดียวมาขอ Premium ซ้ำสองรอบ (ดู payment.service.
+// assertSlipNotReused) คืน Payment แถวแรกที่ตรง หรือ null ถ้าไม่มี — Payment ที่
+// rejected/expired/pending มี slip_hash เดียวกันไม่ถือว่าเป็นปัญหา (ไม่ Query กรอง)
+async function findConfirmedBySlipHash(slipHash) {
+  const { data, error } = await supabaseAdmin
+    .from('payments')
+    .select('*')
+    .eq('slip_hash', slipHash)
+    .eq('status', 'confirmed')
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Failed to find confirmed payment by slip hash: ${error.message}`);
   }
 
   return toPayment(data);
@@ -236,6 +266,7 @@ module.exports = {
   claimForApproval,
   claimForRejection,
   updateSlipImageUrl,
+  findConfirmedBySlipHash,
   findExpiredPending,
   markExpired,
 };

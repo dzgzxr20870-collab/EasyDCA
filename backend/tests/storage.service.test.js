@@ -44,9 +44,54 @@ describe('uploadPaymentSlip', () => {
     expect(__storageBucket.upload.mock.calls[0][0]).toMatch(/^pay-1-\d+\.png$/);
   });
 
-  test('Content-Type ไม่รู้จัก/ว่าง → Fallback นามสกุล .jpg', async () => {
-    await storageService.uploadPaymentSlip(PAYMENT_ID, BUFFER, undefined);
-    expect(__storageBucket.upload.mock.calls[0][0]).toMatch(/^pay-1-\d+\.jpg$/);
+  test('Content-Type ไม่รู้จัก/ว่าง (undefined) → Reject ก่อนอัปโหลด (ไม่ Fallback เงียบๆ อีกต่อไป — Payment Beta Hardening)', async () => {
+    await expect(
+      storageService.uploadPaymentSlip(PAYMENT_ID, BUFFER, undefined)
+    ).rejects.toMatchObject({ code: 'INVALID_SLIP_CONTENT_TYPE' });
+    expect(__storageBucket.upload).not.toHaveBeenCalled();
+  });
+
+  // ── Payment Beta Hardening — MIME Type + ขนาดไฟล์ ────────────────────────
+  test('Content-Type ไม่อยู่ใน Allowlist (application/pdf) → Reject ก่อนอัปโหลด', async () => {
+    await expect(
+      storageService.uploadPaymentSlip(PAYMENT_ID, BUFFER, 'application/pdf')
+    ).rejects.toMatchObject({ code: 'INVALID_SLIP_CONTENT_TYPE' });
+    expect(__storageBucket.upload).not.toHaveBeenCalled();
+  });
+
+  test('Content-Type ไม่อยู่ใน Allowlist (text/html) → Reject ก่อนอัปโหลด', async () => {
+    await expect(
+      storageService.uploadPaymentSlip(PAYMENT_ID, BUFFER, 'text/html')
+    ).rejects.toMatchObject({ code: 'INVALID_SLIP_CONTENT_TYPE' });
+    expect(__storageBucket.upload).not.toHaveBeenCalled();
+  });
+
+  test('image/webp และ image/gif (อยู่ใน Allowlist) → อัปโหลดสำเร็จตามปกติ', async () => {
+    await expect(
+      storageService.uploadPaymentSlip(PAYMENT_ID, BUFFER, 'image/webp')
+    ).resolves.toBe('https://cdn.supabase.test/payment-slips/pay-1-123.jpg');
+    await expect(
+      storageService.uploadPaymentSlip(PAYMENT_ID, BUFFER, 'image/gif')
+    ).resolves.toBe('https://cdn.supabase.test/payment-slips/pay-1-123.jpg');
+    expect(__storageBucket.upload).toHaveBeenCalledTimes(2);
+  });
+
+  test('Buffer เกินขนาดสูงสุด (MAX_SLIP_SIZE_BYTES) → Reject ก่อนอัปโหลด', async () => {
+    const oversizedBuffer = Buffer.alloc(storageService.MAX_SLIP_SIZE_BYTES + 1);
+
+    await expect(
+      storageService.uploadPaymentSlip(PAYMENT_ID, oversizedBuffer, 'image/jpeg')
+    ).rejects.toMatchObject({ code: 'SLIP_TOO_LARGE' });
+    expect(__storageBucket.upload).not.toHaveBeenCalled();
+  });
+
+  test('Buffer พอดีขนาดสูงสุด (MAX_SLIP_SIZE_BYTES เป๊ะ) → ยังอัปโหลดได้ (Boundary ไม่ Reject)', async () => {
+    const boundaryBuffer = Buffer.alloc(storageService.MAX_SLIP_SIZE_BYTES);
+
+    await expect(
+      storageService.uploadPaymentSlip(PAYMENT_ID, boundaryBuffer, 'image/jpeg')
+    ).resolves.toBe('https://cdn.supabase.test/payment-slips/pay-1-123.jpg');
+    expect(__storageBucket.upload).toHaveBeenCalledTimes(1);
   });
 
   test('Storage upload ล้มเหลว (error) → throw (ให้ Caller ห่อ try/catch เอง)', async () => {

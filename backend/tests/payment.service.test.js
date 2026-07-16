@@ -314,18 +314,74 @@ describe('expireOverduePayments', () => {
 });
 
 describe('attachSlipImage', () => {
-  test('Wrapper บาง ๆ → ส่งต่อ paymentId/url ให้ repository.updateSlipImageUrl แล้วคืนผล', async () => {
+  test('Wrapper บาง ๆ → ส่งต่อ paymentId/url/slipHash ให้ repository.updateSlipImageUrl แล้วคืนผล', async () => {
     paymentRepository.updateSlipImageUrl.mockResolvedValue({
       id: 'pay-1',
       slipImageUrl: 'https://cdn.test/slip.jpg',
+      slipHash: 'hash-abc',
     });
 
-    const result = await paymentService.attachSlipImage('pay-1', 'https://cdn.test/slip.jpg');
+    const result = await paymentService.attachSlipImage(
+      'pay-1',
+      'https://cdn.test/slip.jpg',
+      'hash-abc'
+    );
 
     expect(paymentRepository.updateSlipImageUrl).toHaveBeenCalledWith(
       'pay-1',
-      'https://cdn.test/slip.jpg'
+      'https://cdn.test/slip.jpg',
+      'hash-abc'
     );
     expect(result).toMatchObject({ id: 'pay-1', slipImageUrl: 'https://cdn.test/slip.jpg' });
+  });
+});
+
+// Payment Beta — Duplicate Slip Detection (migration 015)
+describe('hashSlipImage', () => {
+  test('คำนวณ SHA-256 Hex ของ Buffer แบบ Deterministic (Input เดียวกัน → Hash เดียวกันเสมอ)', () => {
+    const buffer = Buffer.from('slip-image-bytes');
+
+    const hash1 = paymentService.hashSlipImage(buffer);
+    const hash2 = paymentService.hashSlipImage(buffer);
+
+    expect(hash1).toBe(hash2);
+    // SHA-256 Hex ยาว 64 ตัวอักษรเสมอ
+    expect(hash1).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  test('Buffer ต่างกัน → Hash ต่างกัน', () => {
+    const hashA = paymentService.hashSlipImage(Buffer.from('slip-A'));
+    const hashB = paymentService.hashSlipImage(Buffer.from('slip-B'));
+
+    expect(hashA).not.toBe(hashB);
+  });
+});
+
+describe('assertSlipNotReused', () => {
+  test('slip_hash เคยถูกใช้กับคำขอที่ confirmed แล้ว → throw SLIP_ALREADY_USED', async () => {
+    paymentRepository.findConfirmedBySlipHash.mockResolvedValue({
+      id: 'pay-old',
+      status: 'confirmed',
+    });
+
+    await expect(paymentService.assertSlipNotReused('hash-reused')).rejects.toMatchObject({
+      code: 'SLIP_ALREADY_USED',
+    });
+    expect(paymentRepository.findConfirmedBySlipHash).toHaveBeenCalledWith('hash-reused');
+  });
+
+  test('slip_hash ไม่เคยมี Payment ที่ confirmed ตรงกันเลย → ผ่านปกติ (ไม่ throw)', async () => {
+    paymentRepository.findConfirmedBySlipHash.mockResolvedValue(null);
+
+    await expect(paymentService.assertSlipNotReused('hash-new')).resolves.toBeUndefined();
+  });
+
+  test('slip_hash ซ้ำแต่ Payment เดิมคือ rejected/expired (ไม่ใช่ confirmed) → ผ่านปกติ (Retry ได้)', async () => {
+    // findConfirmedBySlipHash กรอง status='confirmed' ในชั้น Repository อยู่แล้ว —
+    // ถ้าของเดิมเป็น rejected/expired จะไม่ถูกคืนมาจาก Repository เลย (null)
+    // จำลอง Behavior นี้ตรงๆ เพื่อยืนยันว่า Service ไม่ Reject กรณีนี้
+    paymentRepository.findConfirmedBySlipHash.mockResolvedValue(null);
+
+    await expect(paymentService.assertSlipNotReused('hash-retried-after-reject')).resolves.toBeUndefined();
   });
 });

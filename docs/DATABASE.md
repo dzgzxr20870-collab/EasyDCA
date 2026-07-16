@@ -231,6 +231,19 @@ CREATE INDEX idx_transactions_user_date ON transactions(user_id, date DESC);
 
 เก็บประวัติการชำระเงินและสถานะการตรวจสอบสลิป
 
+> ⚠️ **Doc Drift ที่พบระหว่าง Payment Beta (S5 Group C):** Block `CREATE TABLE` ด้านล่าง
+> นี้เป็น Schema แบบเก่า/ตั้งใจไว้ (Aspirational) ที่ **ไม่ตรงกับ Schema จริงใน Production**
+> — Schema จริงคือ `migrations/004_create_payments.sql` (+ ส่วนขยายใน `010`, `015`) ซึ่งใช้
+> คนละชื่อคอลัมน์/ค่า status กันเยอะพอสมควร เช่น `slip_url` → `slip_image_url` จริง,
+> ไม่มีคอลัมน์ `amount`/`plan`/`duration`/`reject_reason`/`approved_by`/`reviewed_at`/
+> `approved_at` เลย (ใช้ `billing_period`/`base_amount_thb`/`satang_tag`/`amount_thb`/
+> `confirmed_by`/`confirmed_at` แทน) และค่า `status` จริงคือ `pending`/`confirmed`/
+> `rejected`/`expired` (ไม่มี `reviewing`/`approved`) — ตรวจสอบตรงกับ
+> `backend/src/repositories/payment.repository.js` แล้วก่อนแก้ Task นี้ ยังไม่ได้ Rewrite
+> Section นี้ทั้งหมด (Scope ของ Task นี้แคบกว่านั้น) แนะนำเป็นงาน Cleanup แยกต่างหาก —
+> ด้านล่างนี้แก้เฉพาะส่วน `slip_hash` ที่ Task นี้เพิ่มเข้าไปจริงใน Production
+> (`migrations/015_add_slip_hash_to_payments.sql`) ให้ตรงกับของจริงเท่านั้น
+
 ```sql
 CREATE TABLE payments (
   id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -239,6 +252,9 @@ CREATE TABLE payments (
   plan         TEXT        NOT NULL CHECK (plan IN ('premium', 'premium_plus')),
   duration     TEXT        NOT NULL CHECK (duration IN ('monthly', 'yearly')),
   slip_url     TEXT        NOT NULL,
+  -- slip_hash (migration 015 — Payment Beta): NULLABLE จริง ไม่ใช่ UNIQUE ที่ระดับ Column
+  -- (ตรวจสลิปซ้ำเป็น App-level Check ผ่าน payment.service.assertSlipNotReused — Reject
+  -- เฉพาะตอนซ้ำกับคำขอที่ confirmed แล้วเท่านั้น อนุญาต Retry ได้ถ้าคำขอเดิม rejected/expired)
   slip_hash    TEXT,
   status       TEXT        NOT NULL DEFAULT 'pending'
                CHECK (status IN ('pending', 'reviewing', 'approved', 'rejected', 'expired')),
@@ -259,7 +275,7 @@ CREATE TABLE payments (
 | plan | TEXT | แพ็กเกจที่ต้องการ: `premium` / `premium_plus` |
 | duration | TEXT | ระยะเวลา: `monthly` / `yearly` |
 | slip_url | TEXT | URL รูปสลิปที่เก็บใน Supabase Storage |
-| slip_hash | TEXT | Hash ของสลิป สำหรับตรวจสลิปซ้ำ (AI Fraud Detection) |
+| slip_hash | TEXT | SHA-256 Hex ของรูปสลิป (nullable) — ตรวจจับส่งสลิปซ้ำ ดู migration 015 + payment.service.assertSlipNotReused |
 | status | TEXT | สถานะ: `pending` → `reviewing` → `approved` / `rejected` / `expired` |
 | reject_reason | TEXT | เหตุผลที่ Reject (nullable) |
 | approved_by | UUID | FK → users.id ของ Admin ที่ Approve (nullable) |
@@ -272,6 +288,7 @@ CREATE TABLE payments (
 ```sql
 CREATE INDEX idx_payments_user_id ON payments(user_id);
 CREATE INDEX idx_payments_status ON payments(status);
+-- slip_hash: Partial Index (เฉพาะแถวที่มีค่า) — migration 015
 CREATE INDEX idx_payments_slip_hash ON payments(slip_hash) WHERE slip_hash IS NOT NULL;
 CREATE INDEX idx_payments_created_at ON payments(created_at DESC);
 ```

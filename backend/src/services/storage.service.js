@@ -1,5 +1,26 @@
 const { supabaseAdmin } = require('../config/supabase');
 
+// Error ที่มี code (Pattern เดียวกับ TransactionServiceError/PaymentServiceError) เพื่อให้
+// Controller Map เป็นข้อความไทยได้ ไม่ปล่อย Error ดิบถึงผู้ใช้
+class StorageServiceError extends Error {
+  constructor(code, message, details = {}) {
+    super(message);
+    this.name = 'StorageServiceError';
+    this.code = code;
+    this.details = details;
+  }
+}
+
+// MIME Type ที่อนุญาตสำหรับรูปสลิป (Payment Beta Hardening) — ตรงกับชุดที่
+// extensionFromContentType ด้านล่างรู้จักอยู่แล้ว (jpeg/png/webp/gif) ปฏิเสธ Content-Type
+// อื่นทั้งหมด (เช่น application/pdf, text/html) แทนการเดานามสกุลเป็น .jpg แบบเงียบๆ
+// เหมือนพฤติกรรมเดิม — กันไฟล์ที่ไม่ใช่รูปถูกอัปโหลดขึ้น Storage จริง
+const ALLOWED_SLIP_CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+
+// ขนาดไฟล์สูงสุดของรูปสลิป — 10MB เพียงพอสำหรับรูปถ่ายสลิปโอนเงินจากมือถือ (ไม่มี
+// ค่าคงที่เดิมในโปรเจกต์ให้ Reuse เรื่องขนาดไฟล์ จึงกำหนดใหม่ที่นี่)
+const MAX_SLIP_SIZE_BYTES = 10 * 1024 * 1024;
+
 // Bucket สาธารณะสำหรับเก็บรูปสลิปการชำระเงิน — ต้องสร้างเองผ่าน Supabase Dashboard
 // เป็น "Public Bucket" ก่อนใช้งานจริง (สร้างผ่าน Migration SQL ไม่ได้ตามปกติ ดูรายงาน
 // Round 5) เลือก Public เพื่อให้แนบ URL ในFlexMessage หา Admin ได้ทันทีโดยไม่ต้อง Sign
@@ -40,7 +61,28 @@ function extensionFromContentType(contentType) {
 // payments.slip_image_url จะถูกอัปเดตให้ชี้ไปรูป "ล่าสุด" เสมอ (ดู updateSlipImageUrl)
 // ส่วนรูปเก่ายังคงอยู่ใน Storage โดยไม่กระทบการทำงาน (เลือกเก็บทุกรูปแทนการทับ เพื่อกัน
 // Race และเผื่อ Admin ย้อนดูสลิปก่อนหน้าได้ถ้าจำเป็น)
+//
+// ⚠️ Payment Beta Hardening — ตรวจ MIME Type + ขนาดไฟล์ "ก่อน" ยิง Supabase Storage
+// เสมอ (ไม่ใช่แค่เดานามสกุลไฟล์เงียบๆ แบบเดิม) Reject ด้วย StorageServiceError ถ้า
+// Content-Type ไม่อยู่ใน Allowlist หรือไฟล์ใหญ่เกิน MAX_SLIP_SIZE_BYTES — ไม่ตรวจเนื้อหา
+// ภาพ (เช่นอ่านสลิปได้จริงไหม) นั่นเป็น Scope ของ slipOcr.service คนละเรื่องกัน
 async function uploadPaymentSlip(paymentId, buffer, contentType) {
+  if (!ALLOWED_SLIP_CONTENT_TYPES.includes(contentType)) {
+    throw new StorageServiceError(
+      'INVALID_SLIP_CONTENT_TYPE',
+      `Unsupported content type for payment slip ${paymentId}: ${contentType}`,
+      { paymentId, contentType }
+    );
+  }
+
+  if (buffer.length > MAX_SLIP_SIZE_BYTES) {
+    throw new StorageServiceError(
+      'SLIP_TOO_LARGE',
+      `Payment slip for ${paymentId} exceeds max size (${buffer.length} > ${MAX_SLIP_SIZE_BYTES} bytes)`,
+      { paymentId, size: buffer.length, maxSize: MAX_SLIP_SIZE_BYTES }
+    );
+  }
+
   const ext = extensionFromContentType(contentType);
   const path = `${paymentId}-${Date.now()}.${ext}`;
 
@@ -97,9 +139,11 @@ async function uploadReport(userId, buffer, format) {
 }
 
 module.exports = {
+  StorageServiceError,
   SLIP_BUCKET,
   REPORT_BUCKET,
   REPORT_SIGNED_URL_TTL_SECONDS,
+  MAX_SLIP_SIZE_BYTES,
   uploadPaymentSlip,
   uploadReport,
 };

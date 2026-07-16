@@ -756,10 +756,28 @@ async function handleImage(event) {
 // ⚠️ ตอบยืนยันเฉพาะเมื่อ "บันทึกสำเร็จ" เท่านั้น ถ้าขั้นใดล้มเหลว (LINE Content API/
 // Storage ล่ม) จะ throw ขึ้นไปให้ handleEvent จับ Log ไว้เฉย ๆ โดยไม่แจ้งผู้ใช้ว่าพลาด
 // (Admin แค่จะไม่เห็นรูปตอนอนุมัติ ซึ่งไม่ Block การอนุมัติได้ตามปกติ)
+//
+// ⚠️ Payment Beta — Duplicate Slip Detection (migration 015): คำนวณ slip_hash ก่อน
+// อัปโหลดขึ้น Storage เสมอ แล้วเช็คว่าเคยถูกใช้กับคำขอที่อนุมัติแล้ว (confirmed) มาก่อน
+// ไหม — ต่างจากความล้มเหลวทางเทคนิคด้านบน กรณีนี้ "ต้องตอบผู้ใช้" เพราะเป็นการกระทำที่
+// ผู้ใช้ตั้งใจทำ (ส่งสลิปเดิมซ้ำ) ไม่ใช่ความผิดพลาดของระบบ — ถ้าซ้ำ ให้จบ Flow ทันที
+// ไม่อัปโหลด/ไม่บันทึกอะไรเพิ่ม
 async function handlePaymentSlipImage(event, pending) {
   const { buffer, contentType } = await lineService.getMessageContent(event.message.id);
+  const slipHash = paymentService.hashSlipImage(buffer);
+
+  try {
+    await paymentService.assertSlipNotReused(slipHash);
+  } catch (err) {
+    if (err.code === 'SLIP_ALREADY_USED') {
+      await lineService.replyMessage(event.replyToken, flexMessage.buildErrorMessage(err.code));
+      return;
+    }
+    throw err;
+  }
+
   const slipImageUrl = await storageService.uploadPaymentSlip(pending.id, buffer, contentType);
-  await paymentService.attachSlipImage(pending.id, slipImageUrl);
+  await paymentService.attachSlipImage(pending.id, slipImageUrl, slipHash);
 
   await lineService.replyMessage(event.replyToken, flexMessage.buildSlipReceivedMessage());
 }
