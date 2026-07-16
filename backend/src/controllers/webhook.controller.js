@@ -13,6 +13,7 @@ const entitlement = require('../services/entitlement.service');
 const symbolRegistry = require('../services/symbolRegistry.service');
 const mutualFundService = require('../services/mutualFund.service');
 const assetRepository = require('../repositories/asset.repository');
+const lineWebhookEventRepository = require('../repositories/lineWebhookEvent.repository');
 const lineService = require('../services/line.service');
 const storageService = require('../services/storage.service');
 const bulkImportSession = require('../services/bulkImportSession.service');
@@ -794,6 +795,22 @@ async function handleAssetSlipImage(event, user) {
 // ประมวลผล 1 Event จาก LINE — ต้องไม่ throw ออกไป เพื่อไม่ให้ Event อื่น
 // หรือ Webhook Handler ทั้งตัวพังตาม (SRS.md § 6.4)
 async function handleEvent(event) {
+  // ── กันประมวลผลซ้ำ (migration 013) ──────────────────────────────────────
+  // LINE Retry ส่ง Event เดิมซ้ำถ้า Server ตอบ 200 ไม่ทัน (ดู webhook.routes.js)
+  // Claim event_id แบบ Atomic ก่อน Logic ใดๆ ทั้งหมด — Claim ไม่ได้ (เคยประมวลผล
+  // แล้ว) ให้ข้ามทันที ไม่ทำอะไรต่อ (ไม่ reply ซ้ำ ไม่สร้าง Transaction ซ้ำ)
+  //
+  // Guard ด้วย if แทนสมมติว่ามีเสมอ — Event ทดสอบจากปุ่ม "Verify" ใน LINE
+  // Developers Console อาจไม่มี webhookEventId หรือใช้ค่า Synthetic จึงต้องไม่ให้
+  // Field ที่หายไปทำให้ Handler พัง (Error Isolation เดียวกับส่วนอื่นของฟังก์ชันนี้)
+  if (event.webhookEventId) {
+    const claimed = await lineWebhookEventRepository.claimEvent(event.webhookEventId);
+    if (!claimed) {
+      console.log(`[webhook] duplicate event ${event.webhookEventId} — skipped`);
+      return;
+    }
+  }
+
   // รองรับ Text Message, Postback (ปุ่ม) และ Image Message (สลิปโอนเงิน)
   // Event อื่น (follow/unfollow/sticker ฯลฯ) ข้ามไปก่อน
   const isText = event.type === 'message' && event.message?.type === 'text';

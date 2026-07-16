@@ -29,6 +29,7 @@ jest.mock('../src/services/reportExport.service');
 jest.mock('../src/services/slipOcr.service');
 jest.mock('../src/services/mutualFund.service');
 jest.mock('../src/repositories/asset.repository');
+jest.mock('../src/repositories/lineWebhookEvent.repository');
 // Override เฉพาะค่าที่ Postback Premium/Dashboard ใช้ (adminIds/liff.id/publicBaseUrl)
 // ให้ Deterministic — คงค่าอื่นจาก config จริง (.env) ไว้
 jest.mock('../src/config/env', () => {
@@ -69,6 +70,7 @@ const reportExportService = require('../src/services/reportExport.service');
 const slipOcrService = require('../src/services/slipOcr.service');
 const mutualFundService = require('../src/services/mutualFund.service');
 const assetRepository = require('../src/repositories/asset.repository');
+const lineWebhookEventRepository = require('../src/repositories/lineWebhookEvent.repository');
 const entitlement = require('../src/services/entitlement.service');
 const commandParser = require('../src/services/commandParser.service');
 const { handleEvent } = require('../src/controllers/webhook.controller');
@@ -94,6 +96,11 @@ function postbackEvent(data) {
   };
 }
 
+// Event พร้อม webhookEventId (LINE แนบมากับทุก Event จริง) — ใช้ทดสอบ Dedup Guard
+function textEventWithId(text, webhookEventId) {
+  return { ...textEvent(text), webhookEventId };
+}
+
 // ดึง payload ที่ถูกส่งเข้า replyMessage มาเป็น String เพื่อตรวจเนื้อหา
 function lastReplyText() {
   const call = lineService.replyMessage.mock.calls.at(-1);
@@ -115,6 +122,10 @@ beforeEach(() => {
   // — Test ของ Flow กองทุนจะ Override เอง
   assetRepository.findByUserAndSymbol.mockResolvedValue(null);
   mutualFundService.resolveFundForBuy.mockResolvedValue({ status: 'not_found' });
+  // Default: Claim สำเร็จเสมอ (Event ใหม่) — Test ของ Dedup จะ Override เอง
+  // (ไม่กระทบ Test เดิมทั้งหมดที่ไม่ได้ใส่ webhookEventId มาด้วย เพราะ Guard เป็น
+  // if (event.webhookEventId) — claimEvent จะไม่ถูกเรียกเลยถ้าไม่มี Field นี้)
+  lineWebhookEventRepository.claimEvent.mockResolvedValue(true);
 });
 
 describe('handleEvent — BUY/SELL สร้าง Preview รอ Confirm', () => {
@@ -386,6 +397,54 @@ describe('handleEvent — PORTFOLIO', () => {
     const reply = lastReplyText();
     expect(reply).toContain('ยังว่างอยู่');
     expect(reply).not.toContain('กำลังพัฒนา');
+  });
+});
+
+describe('handleEvent — Webhook Event Idempotency (migration 013)', () => {
+  test('Event ซ้ำ (webhookEventId เดิม) → ไม่ประมวลผลซ้ำ ไม่ reply ครั้งที่สอง', async () => {
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.PORTFOLIO, params: {} });
+    portfolioService.getPortfolioSummary.mockResolvedValue({
+      isEmpty: true,
+      holdings: [],
+      totalInvested: 0,
+    });
+
+    const event = textEventWithId('พอต', 'evt-dup-1');
+
+    // ครั้งแรก: Claim สำเร็จ (Event ใหม่) → ประมวลผลตามปกติ
+    lineWebhookEventRepository.claimEvent.mockResolvedValueOnce(true);
+    await handleEvent(event);
+
+    expect(portfolioService.getPortfolioSummary).toHaveBeenCalledTimes(1);
+    expect(lineService.replyMessage).toHaveBeenCalledTimes(1);
+
+    // ครั้งที่สอง: LINE Retry ส่ง Event เดิม (webhookEventId เดิม) → Claim ไม่ได้
+    // (มีอยู่แล้ว) → ต้องไม่ไปถึง Logic Routing เดิมอีก (parseCommand/getPortfolioSummary/
+    // replyMessage ต้องยังค้างที่ 1 ครั้ง ไม่ใช่ 2)
+    lineWebhookEventRepository.claimEvent.mockResolvedValueOnce(false);
+    await handleEvent(event);
+
+    expect(lineWebhookEventRepository.claimEvent).toHaveBeenCalledTimes(2);
+    expect(lineWebhookEventRepository.claimEvent).toHaveBeenNthCalledWith(1, 'evt-dup-1');
+    expect(lineWebhookEventRepository.claimEvent).toHaveBeenNthCalledWith(2, 'evt-dup-1');
+    expect(commandParser.parseCommand).toHaveBeenCalledTimes(1);
+    expect(portfolioService.getPortfolioSummary).toHaveBeenCalledTimes(1);
+    expect(lineService.replyMessage).toHaveBeenCalledTimes(1);
+  });
+
+  test('ไม่มี webhookEventId (เช่น Event ทดสอบจากปุ่ม Verify) → ไม่เรียก claimEvent แต่ยังประมวลผลปกติ', async () => {
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.PORTFOLIO, params: {} });
+    portfolioService.getPortfolioSummary.mockResolvedValue({
+      isEmpty: true,
+      holdings: [],
+      totalInvested: 0,
+    });
+
+    await handleEvent(textEvent('พอต'));
+
+    expect(lineWebhookEventRepository.claimEvent).not.toHaveBeenCalled();
+    expect(portfolioService.getPortfolioSummary).toHaveBeenCalledTimes(1);
+    expect(lineService.replyMessage).toHaveBeenCalledTimes(1);
   });
 });
 

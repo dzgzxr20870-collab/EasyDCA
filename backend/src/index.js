@@ -23,6 +23,7 @@ const {
   scheduleMonthlySummaryPush,
 } = require('./jobs/portfolioSummary.job');
 const { schedulePortfolioSnapshot } = require('./jobs/portfolioSnapshot.job');
+const { schedulePurgeStaleWebhookEvents } = require('./jobs/webhookEventCleanup.job');
 
 const app = express();
 
@@ -99,6 +100,9 @@ app.listen(config.app.port, () => {
   schedulePlanDowngrade();
   // เก็บ Snapshot มูลค่าพอตของทุก User ทุกวันเที่ยงคืน Asia/Bangkok (portfolioSnapshot.job.js)
   schedulePortfolioSnapshot();
+  // Purge LINE Webhook Event ที่เก่ากว่า 7 วันค้าง (Idempotency Guard — migration 013) ตี 3
+  // (webhookEventCleanup.job.js)
+  schedulePurgeStaleWebhookEvents();
 });
 
 module.exports = app;
