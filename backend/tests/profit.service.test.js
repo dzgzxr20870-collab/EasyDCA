@@ -81,6 +81,8 @@ describe('getAssetProfit — คำนวณกำไร/ขาดทุน', ()
       heldQuantity: 0.01,
       averageCost: 3000000,
       totalInvested: 30000,
+      // ซื้ออย่างเดียว ไม่มีขาย → ไม่มีกำไร/ขาดทุนที่รับรู้แล้ว
+      realizedPnL: 0,
       currentPrice: 4000000,
       currentValue: 40000,
       profitLoss: 10000,
@@ -164,25 +166,29 @@ describe('getAssetProfit — คำนวณกำไร/ขาดทุน', ()
     });
   });
 
-  test('รวมหลายธุรกรรม (buy + partial sell) → คำนวณ held/invested/avg ถูกต้อง', async () => {
+  test('รวมหลายธุรกรรม (buy + partial sell) → คำนวณ held/invested/avg ถูกต้องตาม Moving Average', async () => {
     assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_BTC);
-    // buy 0.02 @ 60,000 รวม, sell 0.01 คืนทุน 40,000 → held 0.01, invested 20,000
+    // buy 0.02 @ 60,000 รวม (avg 3,000,000/หน่วย) → sell 0.01 ได้เงิน 40,000
+    // Moving Average: ต้นทุนส่วนที่ขาย = 3,000,000*0.01 = 30,000 (ไม่ใช่ Net Cash Flow
+    // 60,000-40,000=20,000 แบบเดิม) → เหลือทุน 60,000-30,000=30,000, avg คงที่ 3,000,000
+    // realizedPnL = 40,000-30,000 = 10,000 (กำไรรับรู้แล้วจากการขาย)
     transactionRepository.findAllByAsset.mockResolvedValue([
       { type: 'buy', quantity: 0.02, amountThb: 60000 },
       { type: 'sell', quantity: 0.01, amountThb: 40000 },
     ]);
-    // ราคาปัจจุบัน 3,000,000 → มูลค่า 30,000 → กำไร +10,000 (+50%)
+    // ราคาปัจจุบัน 3,000,000 → มูลค่า Holding ที่เหลือ (0.01) = 30,000 → Unrealized P&L = 0
     priceFeedService.getCurrentPrice.mockResolvedValue(3000000);
 
     const result = await getAssetProfit(USER_ID, 'BTC');
 
     expect(result).toMatchObject({
       heldQuantity: 0.01,
-      totalInvested: 20000,
-      averageCost: 2000000,
+      totalInvested: 30000,
+      averageCost: 3000000,
+      realizedPnL: 10000,
       currentValue: 30000,
-      profitLoss: 10000,
-      profitLossPercent: 50,
+      profitLoss: 0,
+      profitLossPercent: 0,
     });
   });
 });

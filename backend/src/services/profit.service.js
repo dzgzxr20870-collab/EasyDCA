@@ -68,7 +68,7 @@ async function getAssetProfit(userId, symbol, portfolioId = null) {
     );
   }
 
-  const totalInvested = calculateTotalInvested(transactions);
+  const { totalInvested, realizedPnL } = calculateTotalInvested(transactions);
 
   // ── ทอง (Phase 3 Round 7): Mark-to-market ใช้ราคา "รับซื้อคืน" (buy) ─────────
   // เรียก getGoldPriceThb ตรง (ไม่ผ่าน getCurrentPrice) เพื่อ (1) โยน Error เฉพาะ
@@ -186,6 +186,9 @@ async function getAssetProfit(userId, symbol, portfolioId = null) {
     heldQuantity,
     averageCost,
     totalInvested,
+    // กำไร/ขาดทุนที่ "รับรู้แล้ว" จากการขายบางส่วน (Moving Average — portfolio.service)
+    // แยกจาก profitLoss ด้านล่างที่เป็น Unrealized เทียบกับ Holding ที่เหลือ ณ ปัจจุบัน
+    realizedPnL,
     currentPrice,
     currentValue,
     profitLoss,

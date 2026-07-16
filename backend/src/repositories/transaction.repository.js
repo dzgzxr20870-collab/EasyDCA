@@ -142,11 +142,16 @@ async function findByUserAndDateRange(userId, from, to) {
   }));
 }
 
+// เรียง date ASC, created_at ASC (Pattern เดียวกับ findByUserAndDateRange) — จำเป็น
+// สำหรับ Moving Average Cost Basis (portfolio.service.calculateTotalInvested) ที่ต้อง
+// Replay ธุรกรรมตามลำดับเวลาจริง ไม่พึ่ง Row Order ตามธรรมชาติของ Postgres ซึ่งไม่การันตี
 async function findAllByAsset(assetId) {
   const { data, error } = await supabaseAdmin
     .from('transactions')
     .select('*')
-    .eq('asset_id', assetId);
+    .eq('asset_id', assetId)
+    .order('date', { ascending: true })
+    .order('created_at', { ascending: true });
 
   if (error) {
     throw new Error(`Failed to find transactions for asset ${assetId}: ${error.message}`);
