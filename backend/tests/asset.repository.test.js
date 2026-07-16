@@ -5,6 +5,8 @@ jest.mock('../src/config/supabase', () => {
   const query = {};
   query.select = jest.fn(() => query);
   query.eq = jest.fn();
+  query.insert = jest.fn(() => query);
+  query.single = jest.fn();
   const supabaseAdmin = { from: jest.fn(() => query) };
   return { supabaseAdmin, __query: query };
 });
@@ -14,6 +16,51 @@ const assetRepository = require('../src/repositories/asset.repository');
 
 beforeEach(() => {
   jest.clearAllMocks();
+});
+
+// migration 014 — assets UNIQUE (user_id, symbol, portfolio_id) เปลี่ยนเป็น
+// NULLS NOT DISTINCT แล้ว: Insert Asset ซ้ำ (user_id+symbol เดิม, portfolio_id
+// เป็น NULL ทั้งคู่) ต้องโดน Reject ด้วย Unique Violation จาก DB ตรงๆ (ก่อนแก้
+// Migration นี้ Insert ซ้ำแบบนี้จะผ่านเงียบๆ เพราะ Postgres ถือ NULL <> NULL)
+describe('create — Unique Violation (migration 014, portfolio_id = NULL)', () => {
+  test('Insert user_id+symbol ซ้ำ (portfolio_id = NULL ทั้งคู่) → throw พร้อมข้อความ Unique Violation จาก DB', async () => {
+    // จำลอง Error ที่ Supabase/Postgres คืนจริงเมื่อชน Unique Constraint (Pattern
+    // เดียวกับ payment.service.test.js — code 23505 + ข้อความ duplicate key)
+    __query.single.mockResolvedValue({
+      data: null,
+      error: {
+        message:
+          'duplicate key value violates unique constraint "assets_user_id_symbol_portfolio_id_key"',
+        code: '23505',
+      },
+    });
+
+    await expect(
+      assetRepository.create('user-1', null, 'BTC', 'Bitcoin', 'crypto')
+    ).rejects.toThrow(/duplicate key value violates unique constraint/);
+  });
+
+  test('Insert Asset ใหม่ไม่ซ้ำ → สำเร็จตามปกติ (ไม่ Regression)', async () => {
+    __query.single.mockResolvedValue({
+      data: {
+        id: 'asset-1',
+        user_id: 'user-1',
+        portfolio_id: null,
+        symbol: 'BTC',
+        name: 'Bitcoin',
+        type: 'crypto',
+        is_active: true,
+      },
+      error: null,
+    });
+
+    const result = await assetRepository.create('user-1', null, 'BTC', 'Bitcoin', 'crypto');
+
+    expect(result.symbol).toBe('BTC');
+    expect(__query.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ user_id: 'user-1', portfolio_id: null, symbol: 'BTC' })
+    );
+  });
 });
 
 describe('findUserIdsWithActiveAssets', () => {
