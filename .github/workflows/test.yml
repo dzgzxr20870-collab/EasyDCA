@@ -1,0 +1,74 @@
+name: Test
+
+# ทดสอบเท่านั้น — "ไม่ใช่" Deploy Pipeline (Railway มี GitHub Integration ของตัวเอง
+# ที่ Deploy อัตโนมัติเมื่อ Push เข้า main อยู่แล้ว ดู docs/DEPLOYMENT.md § 5) CI เขียว
+# ไม่ได้แปลว่า "ปลอดภัยที่จะ Deploy Migration" — นั่นยังเป็นขั้นตอน Manual ที่ต้องตั้งใจทำ
+# แยกต่างหากเสมอ ตามกฎ "Migration ต้อง Apply ก่อน Code ที่พึ่งพามันเสมอ"
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-test:
+    name: Backend (Jest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      # npm ci (ไม่ใช่ npm install) — ใช้ package-lock.json ที่ Commit ไว้ตรงๆ ไม่แก้
+      # Lockfile เงียบๆ ระหว่าง CI (backend/package-lock.json ถูก Commit ไว้ปกติ)
+      - run: npm ci
+
+      - run: npm test
+
+  frontend-test:
+    name: Frontend (Vitest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # frontend/package-lock.json ไม่ได้ถูก Commit เข้า Repo "โดยตั้งใจ" (ไม่ใช่ปัญหาค้าง
+      # ที่รอแก้) — Commit 6ebd4ba ลบออกไปแล้วเลือกใช้ npm install แทนอย่างถาวร เพราะเคย
+      # Regenerate Lockfile บน Windows แล้วขาด Optional Dependency ของแพลตฟอร์ม Linux
+      # (@esbuild/@rollup Binaries) ทำให้ Railway Build Fail — Railway Service ฝั่ง
+      # Frontend จริงก็ตั้งค่า Build Command เป็น npm install (ไม่ใช่ npm ci) มาตั้งแต่ตอนนั้น
+      # และทำงานได้ปกติมาตลอด CI ที่นี่จึงจำลองพฤติกรรมเดียวกับที่ Deploy จริงใช้ ไม่ใช่บังคับ
+      # npm ci ที่ขัดกับการตัดสินใจที่ทำไปแล้ว — ไม่มี Lockfile ให้ Cache อ้างอิงจึงไม่ตั้ง
+      # cache: npm ให้ Step setup-node ด้านบน (Job นี้แค่ไม่มี npm Cache ช้ากว่าเล็กน้อย
+      # แต่ถูกต้องกว่าพยายาม Cache ไฟล์ที่ไม่มีอยู่จริง)
+      - run: npm install
+
+      - run: npm test
+
+  migration-numbering-check:
+    name: Migration filename numbering
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # ตรวจแค่ "ชื่อไฟล์ไม่ชนกัน" (เลขนำหน้าไม่ซ้ำ + Zero-padding เท่ากัน) ไม่ได้ตรวจ
+      # เนื้อหา SQL ว่ารันได้จริงไหม — เหตุผลที่ตรวจแค่นี้ ดู
+      # .github/scripts/check-migration-numbering.js และ docs/DEPLOYMENT.md § 5.1
+      - run: node .github/scripts/check-migration-numbering.js
