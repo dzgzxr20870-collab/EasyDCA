@@ -20,11 +20,17 @@ class PaymentServiceError extends Error {
 // คำขอหมดอายุใน 24 ชั่วโมง (PROJECT_BRIEF § 10 / รอบ 1 Schema payments.expires_at)
 const PAYMENT_TTL_MS = 24 * 60 * 60 * 1000;
 
+// Auto-release Safety Valve (migration 016 Lock-Until-Resolved): ถ้าคำขอค้าง
+// unresolved (amount_released_at IS NULL) เกิน 7 วันนับจาก created_at โดยไม่มี Admin
+// Resolve เลย ปล่อยยอดคืนอัตโนมัติ กันยอดล็อกค้างตลอดไปถ้าผู้ใช้ทิ้ง Flow กลางคัน
+const AMOUNT_LOCK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
 // พยายามจัดสรรเลขสตางค์ซ้ำสูงสุดกี่ครั้งเมื่อชนกัน (Partial Unique Index Reject)
 const ALLOCATE_MAX_ATTEMPTS = 3;
 
-// ตรวจว่า Error จากการ insert เป็น Unique Violation หรือไม่ (Partial Unique
-// Index amount_thb WHERE status='pending' ชนกัน) — เช็คทั้ง code Postgres 23505
+// ตรวจว่า Error จากการ insert เป็น Unique Violation หรือไม่ (Partial Unique Index
+// amount_thb WHERE amount_released_at IS NULL ชนกัน — migration 016 Lock-Until-
+// Resolved, เดิม Scope ตาม status='pending') — เช็คทั้ง code Postgres 23505
 // และข้อความ Fallback (เผื่อ Client บาง Path ไม่ส่ง code มา)
 function isUniqueViolation(err) {
   if (!err) return false;
@@ -32,7 +38,9 @@ function isUniqueViolation(err) {
   return /duplicate key|unique constraint|already exists/i.test(err.message || '');
 }
 
-// เลือกเลขสตางค์ 1-99 ที่ยังไม่ถูกจอง (ไม่มีคำขอ pending ยอดเดียวกันถืออยู่)
+// เลือกเลขสตางค์ 1-99 ที่ยังไม่ถูกจอง (ไม่มีคำขอที่ยัง unresolved ยอดเดียวกันถืออยู่ —
+// migration 016: unresolved = amount_released_at IS NULL ไม่ว่า status จะเป็น
+// pending หรือ expired-แต่-ยังไม่ Resolve ก็ตาม เดิมเช็คแค่ status='pending')
 // throw SATANG_POOL_EXHAUSTED ถ้าเต็มหมดทั้ง 99 ตัว (แทบไม่เกิดใน MVP แต่กันไว้)
 async function allocateSatangTag(baseAmountThb) {
   const reserved = new Set(
@@ -146,6 +154,18 @@ async function notifyPaymentSubmitted(paymentId, userId) {
     );
   }
 
+  // ต้องมีสลิปแนบมาก่อนถึงจะแจ้ง Admin ได้ — ปิดช่องที่ User กด "แจ้งชำระแล้ว" ได้โดย
+  // ไม่เคยส่งรูปสลิปมาเลย (เดิมเช็คแค่ status ทำให้ Admin ได้การ์ดที่ไม่มีสลิปให้ตรวจ)
+  // อยู่ที่ Service Layer เพื่อให้ครอบคลุมทั้ง 2 ทางเข้า (HTTP notifyPayment กับ LINE
+  // Postback notify_payment) ด้วยการแก้จุดเดียว
+  if (!payment.slipImageUrl) {
+    throw new PaymentServiceError(
+      'SLIP_NOT_ATTACHED',
+      `Payment ${paymentId} has no slip attached yet`,
+      { paymentId }
+    );
+  }
+
   return payment;
 }
 
@@ -220,10 +240,14 @@ function assertAdmin(adminLineUserId) {
 // Admin อนุมัติคำขอ → ต่ออายุ Premium ให้ผู้ใช้ (Stacking ผ่าน entitlement)
 // เขียนวันหมดอายุลง users.plan_expires_at เดิม (ผ่าน updatePlan) — ที่เดียวกับที่
 // entitlement.isPremiumActive อ่าน (ไม่มีคอลัมน์ผีแยกต่างหาก)
+// migration 016 (Lock-Until-Resolved): claimForApproval รับทั้ง status เดิม 'pending'
+// และ 'expired' (Admin ยัง Resolve คำขอที่ Cron หมดอายุไปแล้วได้ตามปกติ) และปล่อยยอด
+// amount_thb คืน (amount_released_at) ให้คำขอใหม่ใช้เศษสตางค์เดิมซ้ำได้ทันทีในตัว
 async function approvePayment(paymentId, adminLineUserId) {
   assertAdmin(adminLineUserId);
 
-  // Atomic Claim — ถ้า null แปลว่ามีคน (หรือ Cron หมดอายุ) จัดการไปก่อนแล้ว
+  // Atomic Claim — ถ้า null แปลว่ามีคน Resolve ไปก่อนแล้ว (Cron หมดอายุไม่นับ — ยัง
+  // Claim ได้ตามปกติ ดู payment.repository.claimForApproval)
   const payment = await paymentRepository.claimForApproval(paymentId, adminLineUserId);
   if (!payment) {
     throw new PaymentServiceError(
@@ -259,7 +283,8 @@ async function approvePayment(paymentId, adminLineUserId) {
 }
 
 // Admin ปฏิเสธคำขอ — เหมือน approve แต่ไม่แตะ plan/วันหมดอายุของผู้ใช้
-// (ยังคืน user เพื่อให้ Controller Push แจ้งผู้ใช้ว่าถูกปฏิเสธได้)
+// (ยังคืน user เพื่อให้ Controller Push แจ้งผู้ใช้ว่าถูกปฏิเสธได้) — claimForRejection
+// ปล่อยยอดคืน (amount_released_at) เหมือน claimForApproval ทุกประการ
 async function rejectPayment(paymentId, adminLineUserId) {
   assertAdmin(adminLineUserId);
 
@@ -302,9 +327,42 @@ async function expireOverduePayments(now = new Date()) {
   return expired;
 }
 
+// Cron: Auto-release Safety Valve (migration 016) — ปล่อยยอดคืนของคำขอที่ยัง
+// unresolved (amount_released_at IS NULL ไม่ว่า status จะเป็น pending หรือ expired)
+// แต่ created_at เก่ากว่า 7 วัน ไม่แตะ status เลย (Reporting ยังโชว์ค่าจริงต่อไป) —
+// คำขอที่ Resolve แล้ว (confirmed/rejected) ถูกปล่อยไปแล้วตอน Admin กดปุ่ม จึงไม่ถูก
+// Query จับซ้ำ (amount_released_at ไม่ใช่ NULL แล้ว) ไม่มี Error/ไม่มีอะไรให้ทำเพิ่ม
+// คืนจำนวนที่ปล่อยยอดคืนสำเร็จ
+async function autoReleaseStaleAmounts(now = new Date()) {
+  const cutoff = new Date(now.getTime() - AMOUNT_LOCK_MAX_AGE_MS);
+  const released = await paymentRepository.releaseStaleAmounts(cutoff.toISOString());
+
+  logger.info('autoReleaseStaleAmounts completed', {
+    releasedCount: released.length,
+    cutoff: cutoff.toISOString(),
+  });
+
+  return released.length;
+}
+
+// ประกอบ URL รูป QR ที่ LINE จะ Fetch มาแสดงใน Flex Message (Public Endpoint)
+// ใช้ PUBLIC_BASE_URL (config.app.publicBaseUrl) เป็นฐาน — ต้องตั้งค่าบน Railway ให้
+// เป็น URL ของ Backend ตัวนี้ก่อนใช้งานจริง (มิฉะนั้นรูปจะโหลดไม่ขึ้น) ย้ายมาจาก
+// webhook.controller.js เดิม (เคยมี Copy ซ้ำเฉพาะที่นั่น) เพื่อให้ payment.controller.js
+// เรียกใช้ตัวเดียวกันได้ตอนประกอบการ์ด Admin ที่ต้องแนบรูป QR คู่กับสลิป
+function buildQrImageUrl(paymentId) {
+  const base = config.app.publicBaseUrl;
+  if (!base) {
+    // Log ให้เห็นชัดเจนตอน Dev/Deploy ที่ลืมตั้งค่า — ยังคืน Path สัมพัทธ์ไว้กัน Crash
+    logger.error('PUBLIC_BASE_URL is not configured; QR image will not load in LINE', { paymentId });
+  }
+  return `${base ?? ''}/api/v1/payment/${paymentId}/qr.png`;
+}
+
 module.exports = {
   PaymentServiceError,
   PAYMENT_TTL_MS,
+  AMOUNT_LOCK_MAX_AGE_MS,
   allocateSatangTag,
   requestPayment,
   findPendingByUserId,
@@ -316,4 +374,6 @@ module.exports = {
   approvePayment,
   rejectPayment,
   expireOverduePayments,
+  autoReleaseStaleAmounts,
+  buildQrImageUrl,
 };

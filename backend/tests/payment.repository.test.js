@@ -6,6 +6,9 @@ jest.mock('../src/config/supabase', () => {
   query.select = jest.fn(() => query);
   query.update = jest.fn(() => query);
   query.eq = jest.fn(() => query);
+  query.in = jest.fn(() => query);
+  query.is = jest.fn(() => query);
+  query.lt = jest.fn(() => query);
   query.order = jest.fn(() => query);
   query.limit = jest.fn(() => query);
   query.maybeSingle = jest.fn();
@@ -182,6 +185,155 @@ describe('updateSlipImageUrl', () => {
       slip_hash: 'hash-abc',
     });
     expect(result).toMatchObject({ id: 'pay-1', slipHash: 'hash-abc' });
+  });
+});
+
+describe('findPendingSatangTagsByBaseAmount', () => {
+  // Regression test สำหรับบั๊กที่รายงานมา (PromptPay QR Reuse): โค้ดเดิม Query
+  // ด้วย .eq('status', 'pending') ซึ่งจะ "ไม่เห็น" คำขอที่ Cron เพิ่งตีเป็น 'expired'
+  // ไปแล้ว ทำให้เศษสตางค์ของคำขอนั้นถูกปล่อยคืนให้คำขอใหม่ใช้ซ้ำได้ทันที ทั้งที่ QR เดิม
+  // (Static Tag 29 ไม่มี Expiry ระดับธนาคาร) ยังใช้โอนเงินได้จริง — Assert นี้ต้อง Fail
+  // ถ้า Revert กลับไปใช้ .eq('status', 'pending') (จะไม่มีการเรียก .is เลย) และต้อง Pass
+  // หลัง migration 016 เพราะ Scope เปลี่ยนไปตาม amount_released_at แทน (ครอบคลุมทั้ง
+  // pending และ expired-แต่-ยังไม่ Resolve)
+  test('คืนเลขสตางค์ของคำขอที่ยัง unresolved (amount_released_at IS NULL)', async () => {
+    __query.is.mockResolvedValueOnce({
+      data: [{ satang_tag: 17 }, { satang_tag: 42 }],
+      error: null,
+    });
+
+    const result = await paymentRepository.findPendingSatangTagsByBaseAmount(59);
+
+    expect(supabaseAdmin.from).toHaveBeenCalledWith('payments');
+    expect(__query.select).toHaveBeenCalledWith('satang_tag');
+    expect(__query.eq).toHaveBeenCalledWith('base_amount_thb', 59);
+    // migration 016: Scope ตาม amount_released_at IS NULL แทน status='pending' เดิม
+    expect(__query.is).toHaveBeenCalledWith('amount_released_at', null);
+    expect(result).toEqual([17, 42]);
+  });
+
+  test('ไม่มีคำขอ unresolved เลย → []', async () => {
+    __query.is.mockResolvedValueOnce({ data: [], error: null });
+    expect(await paymentRepository.findPendingSatangTagsByBaseAmount(59)).toEqual([]);
+  });
+
+  test('DB error → throw', async () => {
+    __query.is.mockResolvedValueOnce({ data: null, error: { message: 'boom' } });
+    await expect(paymentRepository.findPendingSatangTagsByBaseAmount(59)).rejects.toThrow('boom');
+  });
+});
+
+describe('claimForApproval', () => {
+  test('Claim สำเร็จ → status=confirmed + amount_released_at ถูกตั้งค่า + guard status IN (pending, expired)', async () => {
+    __query.maybeSingle.mockResolvedValue({
+      data: {
+        id: 'pay-1',
+        user_id: 'user-1',
+        amount_thb: 59.17,
+        status: 'confirmed',
+        confirmed_by: 'Uadmin1',
+        confirmed_at: '2026-07-17T00:00:00.000Z',
+        amount_released_at: '2026-07-17T00:00:00.000Z',
+      },
+      error: null,
+    });
+
+    const result = await paymentRepository.claimForApproval('pay-1', 'Uadmin1');
+
+    expect(__query.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'confirmed',
+        confirmed_by: 'Uadmin1',
+        confirmed_at: expect.any(String),
+        amount_released_at: expect.any(String),
+      })
+    );
+    expect(__query.eq).toHaveBeenCalledWith('id', 'pay-1');
+    // migration 016: Guard กว้างกว่าเดิม — รับทั้ง 'pending' และ 'expired' (Admin ยัง
+    // Resolve คำขอที่ Cron หมดอายุไปแล้วได้ตามปกติ)
+    expect(__query.in).toHaveBeenCalledWith('status', ['pending', 'expired']);
+    expect(result).toMatchObject({ id: 'pay-1', status: 'confirmed', amountReleasedAt: '2026-07-17T00:00:00.000Z' });
+  });
+
+  test('Resolve ไปแล้ว (confirmed/rejected) → maybeSingle คืน null → claimForApproval คืน null', async () => {
+    __query.maybeSingle.mockResolvedValue({ data: null, error: null });
+    expect(await paymentRepository.claimForApproval('pay-1', 'Uadmin1')).toBeNull();
+  });
+
+  test('DB error → throw', async () => {
+    __query.maybeSingle.mockResolvedValue({ data: null, error: { message: 'boom' } });
+    await expect(paymentRepository.claimForApproval('pay-1', 'Uadmin1')).rejects.toThrow('boom');
+  });
+});
+
+describe('claimForRejection', () => {
+  test('Claim สำเร็จ → status=rejected + amount_released_at ถูกตั้งค่า + guard status IN (pending, expired)', async () => {
+    __query.maybeSingle.mockResolvedValue({
+      data: {
+        id: 'pay-1',
+        user_id: 'user-1',
+        amount_thb: 59.17,
+        status: 'rejected',
+        confirmed_by: 'Uadmin1',
+        confirmed_at: '2026-07-17T00:00:00.000Z',
+        amount_released_at: '2026-07-17T00:00:00.000Z',
+      },
+      error: null,
+    });
+
+    const result = await paymentRepository.claimForRejection('pay-1', 'Uadmin1');
+
+    expect(__query.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'rejected',
+        confirmed_by: 'Uadmin1',
+        confirmed_at: expect.any(String),
+        amount_released_at: expect.any(String),
+      })
+    );
+    expect(__query.in).toHaveBeenCalledWith('status', ['pending', 'expired']);
+    expect(result).toMatchObject({ id: 'pay-1', status: 'rejected' });
+  });
+
+  test('Resolve ไปแล้ว → คืน null', async () => {
+    __query.maybeSingle.mockResolvedValue({ data: null, error: null });
+    expect(await paymentRepository.claimForRejection('pay-1', 'Uadmin1')).toBeNull();
+  });
+
+  test('DB error → throw', async () => {
+    __query.maybeSingle.mockResolvedValue({ data: null, error: { message: 'boom' } });
+    await expect(paymentRepository.claimForRejection('pay-1', 'Uadmin1')).rejects.toThrow('boom');
+  });
+});
+
+describe('releaseStaleAmounts', () => {
+  test('ปล่อยยอดคืนของแถวที่ unresolved เกิน cutoff → คืน payment ที่อัปเดตแล้วทั้งหมด', async () => {
+    __query.select.mockResolvedValueOnce({
+      data: [
+        { id: 'pay-1', user_id: 'user-1', amount_thb: 59.17, status: 'expired', amount_released_at: '2026-07-17T00:00:00.000Z' },
+        { id: 'pay-2', user_id: 'user-2', amount_thb: 590.42, status: 'pending', amount_released_at: '2026-07-17T00:00:00.000Z' },
+      ],
+      error: null,
+    });
+
+    const result = await paymentRepository.releaseStaleAmounts('2026-07-10T00:00:00.000Z');
+
+    expect(supabaseAdmin.from).toHaveBeenCalledWith('payments');
+    expect(__query.update).toHaveBeenCalledWith({ amount_released_at: expect.any(String) });
+    expect(__query.is).toHaveBeenCalledWith('amount_released_at', null);
+    expect(__query.lt).toHaveBeenCalledWith('created_at', '2026-07-10T00:00:00.000Z');
+    expect(result).toHaveLength(2);
+    expect(result[0]).toMatchObject({ id: 'pay-1' });
+  });
+
+  test('ไม่มีแถวที่ต้องปล่อย → คืน []', async () => {
+    __query.select.mockResolvedValueOnce({ data: [], error: null });
+    expect(await paymentRepository.releaseStaleAmounts('2026-07-10T00:00:00.000Z')).toEqual([]);
+  });
+
+  test('DB error → throw', async () => {
+    __query.select.mockResolvedValueOnce({ data: null, error: { message: 'boom' } });
+    await expect(paymentRepository.releaseStaleAmounts('2026-07-10T00:00:00.000Z')).rejects.toThrow('boom');
   });
 });
 

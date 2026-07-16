@@ -370,10 +370,11 @@ describe('buildSlipReceivedMessage + Admin message แนบสลิป (Round 
     expect(text).toContain('รอ Admin');
   });
 
-  test('Admin message: มี slipImageUrl → แนบรูปเป็น hero พร้อม action เปิด URL เต็ม', () => {
+  test('Admin message: มี slipImageUrl → แนบรูปเป็น hero พร้อม action เปิด URL เต็ม + มีรูป QR ใน body', () => {
     const msg = buildAdminPaymentRequestMessage(
       { id: 'pay-1', amountThb: 59.17, billingPeriod: 'monthly', slipImageUrl: 'https://cdn.test/slip.jpg' },
-      'สมชาย'
+      'สมชาย',
+      'https://api.test/api/v1/payment/pay-1/qr.png'
     );
 
     expect(msg.contents.hero).toBeDefined();
@@ -383,16 +384,22 @@ describe('buildSlipReceivedMessage + Admin message แนบสลิป (Round 
     const text = JSON.stringify(msg);
     expect(text).toContain('action=approve_payment&paymentId=pay-1');
     expect(text).toContain('action=reject_payment&paymentId=pay-1');
+    // migration 016 — รูป QR (Deterministic จาก paymentId) แนบอยู่ใน body คู่กับสลิป
+    expect(text).toContain('https://api.test/api/v1/payment/pay-1/qr.png');
   });
 
-  test('Admin message: ไม่มี slipImageUrl → ไม่มี hero (Flow เดิมไม่พัง)', () => {
+  test('Admin message: ไม่มี slipImageUrl → ไม่มี hero (Flow เดิมไม่พัง) แต่ยังมีรูป QR เสมอ', () => {
     const msg = buildAdminPaymentRequestMessage(
       { id: 'pay-1', amountThb: 59.17, billingPeriod: 'monthly' },
-      'สมชาย'
+      'สมชาย',
+      'https://api.test/api/v1/payment/pay-1/qr.png'
     );
 
     expect(msg.contents.hero).toBeUndefined();
-    expect(JSON.stringify(msg)).toContain('action=approve_payment&paymentId=pay-1');
+    const text = JSON.stringify(msg);
+    expect(text).toContain('action=approve_payment&paymentId=pay-1');
+    // QR ไม่ผูกกับสลิป — คำขอ pending ทุกอันมี QR ที่ Render ได้แน่นอน
+    expect(text).toContain('https://api.test/api/v1/payment/pay-1/qr.png');
   });
 });
 

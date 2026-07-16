@@ -106,6 +106,22 @@ describe('requestPayment', () => {
     expect(paymentRepository.create).toHaveBeenCalledTimes(3);
   });
 
+  // Lock-Until-Resolved (migration 016) — P1 ถูก Cron ตีเป็น 'expired' ไปแล้วแต่ยัง
+  // unresolved (amount_released_at IS NULL) repository (หลังแก้) จึงยังรายงานเลขสตางค์
+  // ของ P1 ว่าถูกจองอยู่ (แม้ status จะไม่ใช่ 'pending' แล้วก็ตาม) — P2 ที่มาขอยอดฐาน
+  // เดียวกันต้องได้เลขสตางค์อื่นเสมอ ไม่ชนกับของ P1 (ยืนยัน Root Cause ของบั๊กที่รายงานมา:
+  // การจับคู่ยอดกำกวมระหว่างคำขอเก่าที่ยังไม่ Resolve กับคำขอใหม่)
+  test('เลขสตางค์ที่ถูกจองโดยคำขอ unresolved (แม้ expired ไปแล้ว) ต้องไม่ถูกจัดสรรซ้ำให้คำขอใหม่', async () => {
+    // จำลอง P1: expired แล้วแต่ amount_released_at ยัง NULL → repository (Scope ใหม่
+    // ตาม amount_released_at) ยังคืนเลขสตางค์ 17 ว่า "ถูกจองอยู่"
+    paymentRepository.findPendingSatangTagsByBaseAmount.mockResolvedValue([17]);
+
+    const result = await paymentService.requestPayment(USER_ID, 'monthly');
+
+    const allocatedSatang = Math.round((result.amountThb - 59) * 100);
+    expect(allocatedSatang).not.toBe(17);
+  });
+
   test('เลขสตางค์เต็มหมด 99 ตัว → SATANG_POOL_EXHAUSTED', async () => {
     paymentRepository.findPendingSatangTagsByBaseAmount.mockResolvedValue(
       Array.from({ length: 99 }, (_, i) => i + 1)
@@ -172,12 +188,32 @@ describe('getPendingPaymentForQr', () => {
 });
 
 describe('notifyPaymentSubmitted', () => {
-  test('คำขอมีจริง เป็นของ user เอง และ pending → คืน payment', async () => {
-    const payment = { id: 'pay-1', userId: USER_ID, status: 'pending' };
+  test('คำขอมีจริง เป็นของ user เอง, pending และมีสลิปแนบแล้ว → คืน payment', async () => {
+    const payment = {
+      id: 'pay-1',
+      userId: USER_ID,
+      status: 'pending',
+      slipImageUrl: 'https://cdn.test/slip.jpg',
+    };
     paymentRepository.findById.mockResolvedValue(payment);
 
     const result = await paymentService.notifyPaymentSubmitted('pay-1', USER_ID);
     expect(result).toBe(payment);
+  });
+
+  // Lock-Until-Resolved (migration 016) — ปิดช่องที่ User กด "แจ้งชำระแล้ว" ได้โดยไม่
+  // เคยส่งรูปสลิปมาเลย (เดิมเช็คแค่ status='pending' ทำให้ Admin ได้การ์ดที่ไม่มีสลิป)
+  test('pending แต่ยังไม่มีสลิปแนบ (slipImageUrl ว่าง) → SLIP_NOT_ATTACHED', async () => {
+    paymentRepository.findById.mockResolvedValue({
+      id: 'pay-1',
+      userId: USER_ID,
+      status: 'pending',
+      slipImageUrl: null,
+    });
+
+    await expect(paymentService.notifyPaymentSubmitted('pay-1', USER_ID)).rejects.toMatchObject({
+      code: 'SLIP_NOT_ATTACHED',
+    });
   });
 
   test('ไม่พบคำขอ → PAYMENT_NOT_FOUND', async () => {
@@ -310,6 +346,53 @@ describe('expireOverduePayments', () => {
 
     const count = await paymentService.expireOverduePayments();
     expect(count).toBe(1);
+  });
+});
+
+describe('autoReleaseStaleAmounts', () => {
+  test('คำนวณ cutoff = now - 7 วัน แล้วส่งต่อให้ repository.releaseStaleAmounts', async () => {
+    const now = new Date('2026-07-17T00:00:00.000Z');
+    paymentRepository.releaseStaleAmounts.mockResolvedValue([
+      { id: 'p1' },
+      { id: 'p2' },
+    ]);
+
+    const count = await paymentService.autoReleaseStaleAmounts(now);
+
+    expect(paymentRepository.releaseStaleAmounts).toHaveBeenCalledWith('2026-07-10T00:00:00.000Z');
+    expect(count).toBe(2);
+  });
+
+  test('ไม่มีคำขอที่ต้องปล่อย (ยังไม่ครบ 7 วัน หรือ Resolve ไปแล้วหมด) → คืน 0 ไม่ error', async () => {
+    paymentRepository.releaseStaleAmounts.mockResolvedValue([]);
+
+    const count = await paymentService.autoReleaseStaleAmounts(new Date('2026-07-17T00:00:00.000Z'));
+
+    expect(count).toBe(0);
+  });
+});
+
+describe('buildQrImageUrl', () => {
+  test('ประกอบ URL จาก PUBLIC_BASE_URL (config.app.publicBaseUrl) + paymentId', () => {
+    const original = config.app.publicBaseUrl;
+    config.app.publicBaseUrl = 'https://api.example.com';
+    try {
+      expect(paymentService.buildQrImageUrl('pay-1')).toBe(
+        'https://api.example.com/api/v1/payment/pay-1/qr.png'
+      );
+    } finally {
+      config.app.publicBaseUrl = original;
+    }
+  });
+
+  test('ไม่ได้ตั้งค่า PUBLIC_BASE_URL → คืน Path สัมพัทธ์ (ไม่ Crash)', () => {
+    const original = config.app.publicBaseUrl;
+    config.app.publicBaseUrl = null;
+    try {
+      expect(paymentService.buildQrImageUrl('pay-1')).toBe('/api/v1/payment/pay-1/qr.png');
+    } finally {
+      config.app.publicBaseUrl = original;
+    }
   });
 });
 

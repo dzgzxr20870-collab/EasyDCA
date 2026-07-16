@@ -126,6 +126,12 @@ beforeEach(() => {
   // (ไม่กระทบ Test เดิมทั้งหมดที่ไม่ได้ใส่ webhookEventId มาด้วย เพราะ Guard เป็น
   // if (event.webhookEventId) — claimEvent จะไม่ถูกเรียกเลยถ้าไม่มี Field นี้)
   lineWebhookEventRepository.claimEvent.mockResolvedValue(true);
+  // Default: buildQrImageUrl ย้ายมาอยู่ payment.service.js แล้ว (เดิมเป็นฟังก์ชัน Local
+  // ในไฟล์นี้) — จำลองพฤติกรรมเดิมเป๊ะ (ประกอบจาก config.app.publicBaseUrl ด้านบน)
+  // ให้ Test เดิมที่ Assert เต็ม URL ยังผ่านโดยไม่ต้อง Override ทีละ Test
+  paymentService.buildQrImageUrl.mockImplementation(
+    (paymentId) => `https://api.easydca.test/api/v1/payment/${paymentId}/qr.png`
+  );
 });
 
 describe('handleEvent — BUY/SELL สร้าง Preview รอ Confirm', () => {
@@ -918,6 +924,9 @@ describe('handleEvent — Payment Postback (request/notify)', () => {
     const adminMsg = JSON.stringify(lineService.pushMessage.mock.calls[0][1]);
     expect(adminMsg).toContain('action=approve_payment&paymentId=pay-1');
     expect(adminMsg).toContain('action=reject_payment&paymentId=pay-1');
+    // การ์ด Admin ต้องมีรูป QR (Deterministic จาก paymentId) แนบมาด้วย (migration 016 —
+    // Admin เทียบ QR + สลิปคู่กันได้โดยไม่ต้องให้ User ส่ง Screenshot กลับมาเอง)
+    expect(adminMsg).toContain('https://api.easydca.test/api/v1/payment/pay-1/qr.png');
     // ผู้ใช้ได้รับข้อความยืนยันรอตรวจสอบ
     expect(lastReplyText()).toContain('รอ Admin ตรวจสอบ');
   });
@@ -948,6 +957,20 @@ describe('handleEvent — Payment Postback (request/notify)', () => {
     const reply = lastReplyText();
     expect(reply).toContain('ถูกดำเนินการไปแล้ว');
     expect(reply).not.toContain('PAYMENT_NOT_PENDING');
+    expect(lineService.pushMessage).not.toHaveBeenCalled();
+  });
+
+  // Lock-Until-Resolved (migration 016) — กด "แจ้งชำระแล้ว" ก่อนส่งรูปสลิปมาเลย
+  test('notify_payment: ยังไม่มีสลิปแนบ → SLIP_NOT_ATTACHED แปลไทย, ไม่ Push Admin', async () => {
+    const err = new Error('no slip attached yet');
+    err.code = 'SLIP_NOT_ATTACHED';
+    paymentService.notifyPaymentSubmitted.mockRejectedValue(err);
+
+    await handleEvent(postbackEvent('action=notify_payment&paymentId=pay-1'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('ส่งรูปสลิปโอนเงิน');
+    expect(reply).not.toContain('SLIP_NOT_ATTACHED');
     expect(lineService.pushMessage).not.toHaveBeenCalled();
   });
 });

@@ -243,6 +243,13 @@ CREATE INDEX idx_transactions_user_date ON transactions(user_id, date DESC);
 > Section นี้ทั้งหมด (Scope ของ Task นี้แคบกว่านั้น) แนะนำเป็นงาน Cleanup แยกต่างหาก —
 > ด้านล่างนี้แก้เฉพาะส่วน `slip_hash` ที่ Task นี้เพิ่มเข้าไปจริงใน Production
 > (`migrations/015_add_slip_hash_to_payments.sql`) ให้ตรงกับของจริงเท่านั้น
+>
+> **อัปเดตเพิ่ม (Lock-Until-Resolved, migration 016):** เพิ่มคอลัมน์
+> `amount_released_at` จริงใน Production ด้วย (`migrations/016_add_amount_released_at_to_payments.sql`)
+> — แก้บั๊ก PromptPay QR Reuse: เดิม `idx_payments_pending_amount_unique` (Scope
+> ตาม `status='pending'`) ปล่อยยอด `amount_thb` คืนทันทีที่ Cron เปลี่ยน status เป็น
+> `'expired'` ทั้งที่ QR ยังสแกนโอนเข้าได้จริง (Static Tag 29 ไม่มี Expiry ระดับธนาคาร)
+> ตอนนี้แยก "ยอดว่างให้ใช้ซ้ำหรือยัง" ออกจาก `status` ทั้งหมดผ่านคอลัมน์ใหม่นี้แทน
 
 ```sql
 CREATE TABLE payments (
@@ -276,6 +283,7 @@ CREATE TABLE payments (
 | duration | TEXT | ระยะเวลา: `monthly` / `yearly` |
 | slip_url | TEXT | URL รูปสลิปที่เก็บใน Supabase Storage |
 | slip_hash | TEXT | SHA-256 Hex ของรูปสลิป (nullable) — ตรวจจับส่งสลิปซ้ำ ดู migration 015 + payment.service.assertSlipNotReused |
+| amount_released_at | TIMESTAMPTZ | (nullable) NULL = ยอด `amount_thb` ยังถูกล็อกอยู่ (ห้ามคำขอใหม่ใช้ยอดนี้ซ้ำ); ไม่ใช่ NULL = ปล่อยแล้ว นำยอดกลับมาใช้ได้ ตั้งค่าตอน Admin Approve/Reject หรือ Auto-release Cron 7 วัน ดู migration 016 |
 | status | TEXT | สถานะ: `pending` → `reviewing` → `approved` / `rejected` / `expired` |
 | reject_reason | TEXT | เหตุผลที่ Reject (nullable) |
 | approved_by | UUID | FK → users.id ของ Admin ที่ Approve (nullable) |
@@ -291,6 +299,13 @@ CREATE INDEX idx_payments_status ON payments(status);
 -- slip_hash: Partial Index (เฉพาะแถวที่มีค่า) — migration 015
 CREATE INDEX idx_payments_slip_hash ON payments(slip_hash) WHERE slip_hash IS NOT NULL;
 CREATE INDEX idx_payments_created_at ON payments(created_at DESC);
+-- Lock-Until-Resolved (migration 016) — แทนที่ idx_payments_pending_amount_unique เดิม
+-- (Scope ตาม status='pending') ด้วย Scope ตาม amount_released_at IS NULL แทน
+CREATE UNIQUE INDEX idx_payments_amount_unresolved_unique
+  ON payments(amount_thb) WHERE amount_released_at IS NULL;
+-- รองรับ Auto-release Cron สแกนหาแถว unresolved เกิน 7 วัน
+CREATE INDEX idx_payments_unresolved_created_at
+  ON payments(created_at) WHERE amount_released_at IS NULL;
 ```
 
 ---

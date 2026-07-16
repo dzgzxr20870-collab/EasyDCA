@@ -15,6 +15,7 @@ const STATUS_BY_CODE = {
   ALLOCATION_CONFLICT: 409,
   PAYMENT_NOT_FOUND: 404,
   PAYMENT_NOT_PENDING: 409,
+  SLIP_NOT_ATTACHED: 409,
   NOT_AUTHORIZED: 403,
 };
 
@@ -69,7 +70,11 @@ async function notifyPayment(req, res) {
     return res.status(200).json({ status: 'notified' });
   }
 
-  const adminMessage = flexMessage.buildAdminPaymentRequestMessage(payment, displayName);
+  const adminMessage = flexMessage.buildAdminPaymentRequestMessage(
+    payment,
+    displayName,
+    paymentService.buildQrImageUrl(payment.id)
+  );
   // Push ราย Admin แบบ Best-effort — 1 คนล้มเหลว (บล็อกบอท ฯลฯ) ไม่กระทบคนอื่น
   // และไม่ทำให้ Endpoint ตอบ Error (คำขอถูกบันทึกแล้ว)
   await Promise.all(

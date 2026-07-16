@@ -84,6 +84,8 @@ const ERROR_MESSAGES = {
   // Payment User Postback (Premium Menu / request_payment / notify_payment)
   PAYMENT_NOT_FOUND: 'ไม่พบคำขอชำระเงินนี้ อาจหมดอายุหรือถูกดำเนินการไปแล้ว กรุณากดเมนู "Premium" เพื่อเริ่มใหม่',
   PAYMENT_NOT_PENDING: 'คำขอชำระเงินนี้ถูกดำเนินการไปแล้ว ไม่ต้องแจ้งซ้ำ หากยังไม่ได้รับสิทธิ์ Premium กรุณาติดต่อทีมงาน',
+  // Lock-Until-Resolved (migration 016) — ผู้ใช้กด "แจ้งชำระแล้ว" ก่อนส่งรูปสลิปมา
+  SLIP_NOT_ATTACHED: 'ยังไม่พบรูปสลิปสำหรับคำขอนี้ กรุณาส่งรูปสลิปโอนเงินก่อนกดปุ่ม "แจ้งชำระแล้ว"',
   PAYMENT_NOT_CONFIGURED: 'ระบบชำระเงินยังไม่พร้อมใช้งานในขณะนี้ กรุณาลองใหม่ภายหลังหรือติดต่อทีมงาน',
   SATANG_POOL_EXHAUSTED: 'ขณะนี้มีผู้ทำรายการพร้อมกันจำนวนมาก กรุณาลองกดอีกครั้งในอีกสักครู่',
   ALLOCATION_CONFLICT: 'ขณะนี้มีผู้ทำรายการพร้อมกันจำนวนมาก กรุณาลองกดอีกครั้งในอีกสักครู่',
@@ -1103,8 +1105,23 @@ function formatDateBangkok(value) {
 // ── Push หา Admin: มีคำขอชำระเงินใหม่ พร้อมปุ่มอนุมัติ/ปฏิเสธ ────────────────
 // ปุ่ม Postback encode paymentId (คนละ Key กับ pendingId ของ Flow ซื้อ/ขาย)
 // Controller (routePostback) ถอดด้วย URLSearchParams action=approve_payment/reject_payment
-function buildAdminPaymentRequestMessage(payment, userDisplayName) {
+//
+// qrImageUrl (Lock-Until-Resolved, migration 016): URL รูป QR ที่ Render สดจาก
+// GET /api/v1/payment/:id/qr.png (payment.service.buildQrImageUrl) — ตัวเดียวกับที่
+// การ์ด QR ของผู้ใช้ใช้ (Deterministic จาก payment.amountThb ใน DB) แทนที่จะให้ผู้ใช้
+// ต้อง Forward รูป QR กลับมาเอง (Screenshot ไม่มีทางยืนยันได้ว่าตรงจริง) — Admin จึง
+// เทียบ QR + สลิปคู่กันได้ในการ์ดเดียว ไม่ต้องเพิ่ม Flow ฝั่งผู้ใช้เลย แสดงเสมอ (ทุกคำขอ
+// pending มี QR ที่ Render ได้แน่นอน) ต่างจากสลิป (Hero ด้านล่าง) ที่ยังอาจไม่มีก็ได้
+function buildAdminPaymentRequestMessage(payment, userDisplayName, qrImageUrl) {
   const body = [
+    {
+      type: 'image',
+      url: qrImageUrl,
+      size: 'full',
+      aspectMode: 'fit',
+      aspectRatio: '1:1',
+      action: { type: 'uri', label: 'ดู QR', uri: qrImageUrl },
+    },
     textLine(`ผู้ใช้: ${userDisplayName ?? '-'}`, {
       size: 'sm',
       color: COLOR.textSecondary,

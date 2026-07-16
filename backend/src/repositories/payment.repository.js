@@ -17,6 +17,9 @@ function toPayment(row) {
     slipImageUrl: row.slip_image_url,
     // migration 015 (Payment Beta) — Hash ของรูปสลิปสำหรับตรวจจับการส่งซ้ำ
     slipHash: row.slip_hash ?? null,
+    // migration 016 (Lock-Until-Resolved) — NULL = ยอดยังถูกล็อกอยู่, ไม่ใช่ NULL =
+    // ปล่อยแล้ว (Admin Resolve หรือ Auto-release Cron 7 วัน) ดู allocateSatangTag
+    amountReleasedAt: row.amount_released_at ?? null,
     confirmedBy: row.confirmed_by,
     confirmedAt: row.confirmed_at,
     expiresAt: row.expires_at,
@@ -118,14 +121,17 @@ async function findPendingByUserId(userId) {
 }
 
 // ดึงเลขสตางค์ (satang_tag) ที่ "ถูกจองอยู่" ณ ขณะนี้สำหรับยอดฐานหนึ่งๆ
-// (payment ที่ยัง status='pending') — payment.service ใช้เลือกเลขว่างที่เหลือ
+// (payment ที่ยัง unresolved — amount_released_at IS NULL — ไม่ว่า status จะเป็น
+// pending หรือ expired-แต่-ยังไม่ Resolve ก็ตาม, migration 016 Lock-Until-Resolved)
+// payment.service ใช้เลือกเลขว่างที่เหลือ — Scope เดียวกับ idx_payments_amount_
+// unresolved_unique ทุกประการ (App-level Pre-check ต้องตรงกับ DB-level Index เสมอ)
 // คืน array ของ integer
 async function findPendingSatangTagsByBaseAmount(baseAmountThb) {
   const { data, error } = await supabaseAdmin
     .from('payments')
     .select('satang_tag')
     .eq('base_amount_thb', baseAmountThb)
-    .eq('status', 'pending');
+    .is('amount_released_at', null);
 
   if (error) {
     throw new Error(`Failed to load pending satang tags for base ${baseAmountThb}: ${error.message}`);
@@ -135,17 +141,29 @@ async function findPendingSatangTagsByBaseAmount(baseAmountThb) {
 }
 
 // อนุมัติแบบ Atomic (กัน Admin กดซ้ำ/สองคนกดพร้อมกัน/ชนกับ Cron หมดอายุ)
-// เงื่อนไข WHERE status='pending' — มีเพียง Request เดียวที่ Match แถวและได้ row
-// กลับ อีก Request/Cron ได้ null (แถวถูกเปลี่ยนสถานะไปแล้ว) → ไม่อนุมัติซ้ำ
+// เงื่อนไข WHERE status IN ('pending','expired') — กว้างกว่าเดิม (เดิมเช็คแค่
+// status='pending') เพราะ migration 016 (Lock-Until-Resolved) แยก "Resolve แล้ว"
+// ออกจาก "หมดอายุ (expired) แล้ว": คำขอที่ Cron หมดอายุตีเป็น 'expired' ไปแล้วก่อน
+// Admin ตรวจ (เช่น ผู้ใช้โอนตอนใกล้ครบ 24 ชม. หรือ Admin ตรวจช้า) ยังต้อง Resolve ผ่านปุ่ม
+// ปกติได้ ไม่งั้นจะติดล็อกยอดไว้เต็ม 7 วันทั้งที่ไม่มีใครตัดสินใจอะไรเลย — Match แถวได้
+// แถวเดียว (Atomic ผ่าน WHERE เดิม) อีก Request/Cron ได้ null (confirmed/rejected ไปแล้ว)
+// → ไม่อนุมัติซ้ำ ตั้ง amount_released_at ในจังหวะเดียวกับ status เพื่อปล่อยยอดคืนทันที
+// ให้คำขอใหม่ใช้เศษสตางค์เดิมซ้ำได้ (นี่คือทางเดียวที่ปล่อยยอดคืนได้ก่อนครบ 7 วัน
+// นอกจาก Auto-release Cron — ดู payment.service.autoReleaseStaleAmounts)
 // คืน payment ที่อัปเดตสำเร็จ หรือ null ถ้า Claim ไม่ได้ (resolve ไปแล้ว)
 async function claimForApproval(id, adminLineUserId) {
   const nowIso = new Date().toISOString();
 
   const { data, error } = await supabaseAdmin
     .from('payments')
-    .update({ status: 'confirmed', confirmed_by: adminLineUserId, confirmed_at: nowIso })
+    .update({
+      status: 'confirmed',
+      confirmed_by: adminLineUserId,
+      confirmed_at: nowIso,
+      amount_released_at: nowIso,
+    })
     .eq('id', id)
-    .eq('status', 'pending')
+    .in('status', ['pending', 'expired'])
     .select('*')
     .maybeSingle();
 
@@ -156,15 +174,21 @@ async function claimForApproval(id, adminLineUserId) {
   return toPayment(data);
 }
 
-// ปฏิเสธแบบ Atomic — เหมือน claimForApproval แต่ SET status='rejected'
+// ปฏิเสธแบบ Atomic — เหมือน claimForApproval แต่ SET status='rejected' (เหตุผลเรื่อง
+// WHERE status IN ('pending','expired') + amount_released_at เดียวกันทุกประการ)
 async function claimForRejection(id, adminLineUserId) {
   const nowIso = new Date().toISOString();
 
   const { data, error } = await supabaseAdmin
     .from('payments')
-    .update({ status: 'rejected', confirmed_by: adminLineUserId, confirmed_at: nowIso })
+    .update({
+      status: 'rejected',
+      confirmed_by: adminLineUserId,
+      confirmed_at: nowIso,
+      amount_released_at: nowIso,
+    })
     .eq('id', id)
-    .eq('status', 'pending')
+    .in('status', ['pending', 'expired'])
     .select('*')
     .maybeSingle();
 
@@ -241,6 +265,9 @@ async function findExpiredPending(now = new Date()) {
 
 // ทำเครื่องหมายหมดอายุแถวเดียวแบบ Atomic (status='pending' guard) — กันชนกับ
 // Admin ที่กดอนุมัติ/ปฏิเสธพร้อมกันตอน Cron รัน คืน payment หรือ null ถ้า resolve แล้ว
+// ⚠️ migration 016 (Lock-Until-Resolved): ไม่แตะ amount_released_at เลย — การหมดอายุ
+// "ไม่ได้" ปล่อยยอดคืนอีกต่อไป (นี่คือหัวใจของ Fix) ยอดจะถูกปล่อยคืนก็ต่อเมื่อ Admin
+// Resolve (claimForApproval/claimForRejection) หรือ Auto-release Cron 7 วันเท่านั้น
 async function markExpired(id) {
   const { data, error } = await supabaseAdmin
     .from('payments')
@@ -257,6 +284,28 @@ async function markExpired(id) {
   return toPayment(data);
 }
 
+// Auto-release Safety Valve (migration 016) — ปล่อยยอดคืนแบบ Bulk Atomic สำหรับ
+// คำขอที่ยัง unresolved (amount_released_at IS NULL) ทั้งหมด แต่ created_at เก่ากว่า
+// cutoffIso (payment.service.autoReleaseStaleAmounts คำนวณ cutoff = now - 7 วัน)
+// ไม่แตะ status เลย (Reporting ยังโชว์ค่าจริงต่อไป เช่น 'expired' หรือแม้แต่ 'pending'
+// ที่ Cron หมดอายุยังไม่ทันมาร์ค) เป็น Bulk UPDATE เดียว ไม่ต้อง Loop ทีละแถวแบบ
+// markExpired เพราะไม่มี Per-row Failure Mode ที่ต้อง Isolate (แค่ Set Timestamp)
+// คืน array ของ payment ที่ถูกปล่อยยอดคืนสำเร็จ
+async function releaseStaleAmounts(cutoffIso) {
+  const { data, error } = await supabaseAdmin
+    .from('payments')
+    .update({ amount_released_at: new Date().toISOString() })
+    .is('amount_released_at', null)
+    .lt('created_at', cutoffIso)
+    .select('*');
+
+  if (error) {
+    throw new Error(`Failed to release stale payment amounts: ${error.message}`);
+  }
+
+  return (data ?? []).map(toPayment);
+}
+
 module.exports = {
   create,
   findAll,
@@ -269,4 +318,5 @@ module.exports = {
   findConfirmedBySlipHash,
   findExpiredPending,
   markExpired,
+  releaseStaleAmounts,
 };

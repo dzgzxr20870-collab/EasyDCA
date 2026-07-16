@@ -275,17 +275,6 @@ async function routeCommand(user, parsed) {
   }
 }
 
-// ประกอบ URL รูป QR ที่ LINE จะ Fetch มาแสดงใน Flex Message (Public Endpoint)
-// ใช้ PUBLIC_BASE_URL (config.app.publicBaseUrl) เป็นฐาน — ต้องตั้งค่าบน Railway
-// ให้เป็น URL ของ Backend ตัวนี้ก่อนใช้งานจริง (มิฉะนั้นรูปจะโหลดไม่ขึ้น)
-function buildQrImageUrl(paymentId) {
-  const base = config.app.publicBaseUrl;
-  if (!base) {
-    // Log ให้เห็นชัดเจนตอน Dev/Deploy ที่ลืมตั้งค่า — ยังคืน Path สัมพัทธ์ไว้กัน Crash
-    console.error('[webhook] PUBLIC_BASE_URL is not configured; QR image will not load in LINE');
-  }
-  return `${base ?? ''}/api/v1/payment/${paymentId}/qr.png`;
-}
 
 // ประมวลผล Postback จากปุ่มในข้อความ Preview (ยืนยัน/แก้ไข/ยกเลิก)
 // data รูปแบบ "action=<confirm|edit|cancel>&pendingId=<uuid>" (flexMessage.util)
@@ -418,7 +407,7 @@ async function routePostback(user, data) {
       const pending = await paymentService.findPendingByUserId(user.id);
       if (pending) {
         // เคส 3: มีคำขอ pending ค้าง → ส่ง QR ของคำขอเดิมซ้ำ (ไม่สร้างใหม่ซ้อน)
-        return flexMessage.buildPaymentQrMessage(pending, buildQrImageUrl(pending.id));
+        return flexMessage.buildPaymentQrMessage(pending, paymentService.buildQrImageUrl(pending.id));
       }
       if (entitlement.isPremiumActive(user)) {
         // เคส 2: Premium Active → แสดงสถานะ + วันหมดอายุ (ไทย/พ.ศ.) + ปุ่มต่ออายุ
@@ -442,7 +431,7 @@ async function routePostback(user, data) {
         billingPeriod: period,
         expiresAt: result.expiresAt,
       };
-      return flexMessage.buildPaymentQrMessage(payment, buildQrImageUrl(result.paymentId));
+      return flexMessage.buildPaymentQrMessage(payment, paymentService.buildQrImageUrl(result.paymentId));
     }
 
     // ── ผู้ใช้กด "แจ้งชำระแล้ว" → Validate คำขอ แล้ว Push แจ้ง Admin ทุกคน ────────
@@ -459,7 +448,11 @@ async function routePostback(user, data) {
       if (adminIds.length === 0) {
         console.error('[webhook] notify_payment: no ADMIN_LINE_USER_IDS configured; nobody notified');
       } else {
-        const adminMessage = flexMessage.buildAdminPaymentRequestMessage(payment, user.displayName);
+        const adminMessage = flexMessage.buildAdminPaymentRequestMessage(
+          payment,
+          user.displayName,
+          paymentService.buildQrImageUrl(payment.id)
+        );
         await Promise.all(
           adminIds.map((adminId) =>
             lineService.pushMessage(adminId, adminMessage).catch((pushErr) => {

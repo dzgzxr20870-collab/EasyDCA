@@ -22,7 +22,7 @@ require('./config/env');
 const logger = require('./utils/logger.util');
 
 const { scheduleExpirePending, schedulePurgeOld } = require('./jobs/pendingCleanup.job');
-const { scheduleExpirePayments } = require('./jobs/paymentExpiry.job');
+const { scheduleExpirePayments, scheduleAutoReleaseStaleAmounts } = require('./jobs/paymentExpiry.job');
 const { schedulePlanDowngrade } = require('./jobs/planDowngrade.job');
 const { scheduleReminderPush } = require('./jobs/dcaReminder.job');
 const { schedulePurgeStaleSetupSessions } = require('./jobs/reminderSetupCleanup.job');
@@ -53,6 +53,9 @@ function scheduleAllJobs() {
   scheduleMonthlySummaryPush();
   // Mark คำขอชำระเงินที่หมดอายุ (24 ชม.) เป็น 'expired' ทุกชั่วโมง (paymentExpiry.job.js)
   scheduleExpirePayments();
+  // Auto-release Safety Valve (migration 016 Lock-Until-Resolved) — ปล่อยยอดคำขอที่
+  // unresolved เกิน 7 วันคืนทุกชั่วโมง (paymentExpiry.job.js)
+  scheduleAutoReleaseStaleAmounts();
   // Downgrade ผู้ใช้ Premium ที่หมดอายุกลับเป็น Free ทุกวันตี 1 (planDowngrade.job.js)
   schedulePlanDowngrade();
   // เก็บ Snapshot มูลค่าพอตของทุก User ทุกวันเที่ยงคืน Asia/Bangkok (portfolioSnapshot.job.js)
@@ -66,6 +69,6 @@ scheduleAllJobs();
 
 // node-cron ลงทะเบียน Timer ไว้แล้ว (Event Loop มี Task ค้างอยู่) Process จึงมีชีวิตอยู่
 // เองตามธรรมชาติ ไม่ต้องมี setInterval/Sleep Loop เทียมเพื่อ "กันไม่ให้ Process ตาย"
-logger.info('worker process started', { jobCount: 9 });
+logger.info('worker process started', { jobCount: 10 });
 
 module.exports = { scheduleAllJobs };

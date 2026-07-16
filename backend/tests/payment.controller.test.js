@@ -6,6 +6,7 @@ jest.mock('../src/services/payment.service', () => {
     requestPayment: jest.fn(),
     notifyPaymentSubmitted: jest.fn(),
     getPendingPaymentForQr: jest.fn(),
+    buildQrImageUrl: jest.fn(() => 'https://api.test/api/v1/payment/pay-1/qr.png'),
   };
 });
 // promptpayQr + qrImage ใช้ของจริง (Pure) — เพื่อทดสอบว่า Endpoint qr.png คืน PNG
@@ -153,6 +154,18 @@ describe('POST /payment/:id/notify', () => {
     const res = mockRes();
     await paymentController.notifyPayment({ user: { id: 'user-1' }, params: { id: 'pay-1' } }, res);
     expect(res.status).toHaveBeenCalledWith(409);
+  });
+
+  // Lock-Until-Resolved (migration 016) — ยังไม่มีสลิปแนบมาก่อนกด "แจ้งชำระแล้ว"
+  test('SLIP_NOT_ATTACHED → 409 (ไม่ Push หา Admin)', async () => {
+    paymentService.notifyPaymentSubmitted.mockRejectedValue(
+      new PaymentServiceError('SLIP_NOT_ATTACHED', 'no slip attached yet')
+    );
+    const res = mockRes();
+    await paymentController.notifyPayment({ user: { id: 'user-1' }, params: { id: 'pay-1' } }, res);
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith({ error: 'SLIP_NOT_ATTACHED' });
+    expect(lineService.pushMessage).not.toHaveBeenCalled();
   });
 });
 
