@@ -384,6 +384,21 @@ function Dashboard() {
           >
             {theme === 'dark' ? '☀️' : '🌙'}
           </button>
+          {/* เฉพาะ Admin (role มาจาก /api/v1/dashboard/me — เรียกอยู่แล้วตอน mount ไม่
+              เรียกซ้ำ) — ทางลัดไปหน้า /admin ผ่าน Client-side Navigation (useNavigate)
+              เท่านั้น ห้ามใช้ window.location.href เด็ดขาด: Full Page Reload จะทำให้ JWT
+              ที่เก็บใน Memory ล้วน (SECURITY.md § 1.1) หายไปทันที ต้องพึ่ง Route Guard
+              เดิมใน Admin.jsx เด้งไป Login แล้ว Auto-login กลับมาที่ /dashboard แทน
+              (ไม่ใช่ /admin) เหมือนตอนพิมพ์ URL ตรงๆ */}
+          {planInfo?.role === 'admin' && (
+            <button
+              type="button"
+              className="dashboard-logout-btn"
+              onClick={() => navigate('/admin')}
+            >
+              Admin
+            </button>
+          )}
           <button type="button" className="dashboard-logout-btn" onClick={handleLogout}>
             ออกจากระบบ
           </button>
