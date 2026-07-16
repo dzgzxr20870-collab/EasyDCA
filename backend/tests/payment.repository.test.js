@@ -156,4 +156,64 @@ describe('updateSlipImageUrl', () => {
     __query.maybeSingle.mockResolvedValue({ data: null, error: { message: 'boom' } });
     await expect(paymentRepository.updateSlipImageUrl('pay-1', 'url')).rejects.toThrow('boom');
   });
+
+  // Payment Beta (migration 015) — slipHash เป็น Parameter ที่ 3 (Optional)
+  test('ส่ง slipHash มาด้วย → update พร้อม slip_hash', async () => {
+    __query.maybeSingle.mockResolvedValue({
+      data: {
+        id: 'pay-1',
+        user_id: 'user-1',
+        amount_thb: 59.17,
+        status: 'pending',
+        slip_image_url: 'https://cdn.test/slip.jpg',
+        slip_hash: 'hash-abc',
+      },
+      error: null,
+    });
+
+    const result = await paymentRepository.updateSlipImageUrl(
+      'pay-1',
+      'https://cdn.test/slip.jpg',
+      'hash-abc'
+    );
+
+    expect(__query.update).toHaveBeenCalledWith({
+      slip_image_url: 'https://cdn.test/slip.jpg',
+      slip_hash: 'hash-abc',
+    });
+    expect(result).toMatchObject({ id: 'pay-1', slipHash: 'hash-abc' });
+  });
+});
+
+describe('findConfirmedBySlipHash', () => {
+  test('มี Payment ที่ status=confirmed ตรงกับ slip_hash → คืน Payment นั้น', async () => {
+    __query.maybeSingle.mockResolvedValue({
+      data: {
+        id: 'pay-old',
+        user_id: 'user-1',
+        amount_thb: 59.17,
+        status: 'confirmed',
+        slip_hash: 'hash-reused',
+      },
+      error: null,
+    });
+
+    const result = await paymentRepository.findConfirmedBySlipHash('hash-reused');
+
+    expect(supabaseAdmin.from).toHaveBeenCalledWith('payments');
+    expect(__query.eq).toHaveBeenCalledWith('slip_hash', 'hash-reused');
+    expect(__query.eq).toHaveBeenCalledWith('status', 'confirmed');
+    expect(__query.limit).toHaveBeenCalledWith(1);
+    expect(result).toMatchObject({ id: 'pay-old', status: 'confirmed', slipHash: 'hash-reused' });
+  });
+
+  test('ไม่มี Payment ที่ confirmed ตรงกับ slip_hash นี้ → null', async () => {
+    __query.maybeSingle.mockResolvedValue({ data: null, error: null });
+    expect(await paymentRepository.findConfirmedBySlipHash('hash-new')).toBeNull();
+  });
+
+  test('DB error → throw', async () => {
+    __query.maybeSingle.mockResolvedValue({ data: null, error: { message: 'boom' } });
+    await expect(paymentRepository.findConfirmedBySlipHash('hash-x')).rejects.toThrow('boom');
+  });
 });

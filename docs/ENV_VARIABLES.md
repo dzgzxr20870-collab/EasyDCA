@@ -44,7 +44,7 @@ cp .env.example .env
 | Variable | จำเป็น | คำอธิบาย |
 |---|---|---|
 | `JWT_SECRET` | ✅ | Secret Key สำหรับ Sign และ Verify JWT Token ต้องเป็น String ที่ยาวและสุ่มขึ้นมา ความยาวขั้นต่ำ 32 ตัวอักษร |
-| `JWT_EXPIRES_IN` | ❌ | อายุของ JWT Token เช่น `7d`, `24h` (Default: `7d`) |
+| `JWT_EXPIRES_IN` | ❌ | อายุของ JWT Token เช่น `7d`, `24h` (Default: `24h` — ย่นจาก `7d` เดิมก่อน Beta Launch เพื่อจำกัด Blast Radius ถ้า Token หลุด ดู [SECURITY.md § 1.2](./SECURITY.md)) |
 
 ---
 
@@ -91,7 +91,7 @@ DATABASE_URL=postgresql://postgres:password@db.xxxx.supabase.co:5432/postgres
 
 # ===== Authentication =====
 JWT_SECRET=your_super_secret_jwt_key_minimum_32_characters
-JWT_EXPIRES_IN=7d
+JWT_EXPIRES_IN=24h
 
 # ===== Application =====
 APP_URL=http://localhost:3000

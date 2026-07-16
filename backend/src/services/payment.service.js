@@ -4,6 +4,7 @@ const entitlement = require('./entitlement.service');
 const promptpayQrService = require('./promptpayQr.service');
 const paymentRepository = require('../repositories/payment.repository');
 const userRepository = require('../repositories/user.repository');
+const logger = require('../utils/logger.util');
 
 // Error ที่มี code ตาม Pattern เดิม (TransactionServiceError/ProfitServiceError)
 // เพื่อให้ Controller/Postback Map เป็น HTTP Status / ข้อความไทยได้
@@ -245,6 +246,15 @@ async function approvePayment(paymentId, adminLineUserId) {
   const newExpiry = entitlement.computeRenewalExpiry(user.planExpiresAt, payment.billingPeriod);
   const updatedUser = await userRepository.updatePlan(user.id, 'premium', newExpiry);
 
+  // ธุรกรรมการเงิน — Log ไว้เสมอเพื่อ Traceability (S6 Part B)
+  logger.info('payment approved', {
+    paymentId,
+    adminLineUserId,
+    userId: user.id,
+    billingPeriod: payment.billingPeriod,
+    newExpiry: newExpiry.toISOString(),
+  });
+
   return { payment, user: updatedUser, newExpiry };
 }
 
@@ -264,6 +274,9 @@ async function rejectPayment(paymentId, adminLineUserId) {
 
   const user = await userRepository.findById(payment.userId);
 
+  // ธุรกรรมการเงิน — Log ไว้เสมอเพื่อ Traceability (S6 Part B)
+  logger.info('payment rejected', { paymentId, adminLineUserId, userId: payment.userId });
+
   return { payment, user };
 }
 
@@ -280,9 +293,11 @@ async function expireOverduePayments(now = new Date()) {
       // marked === null แปลว่าถูก Admin จัดการไปก่อนแล้วระหว่าง Loop (ไม่นับ)
       if (marked) expired += 1;
     } catch (err) {
-      console.error(`[payment] failed to expire payment ${payment.id}: ${err.message}`);
+      logger.error('failed to expire payment', { paymentId: payment.id, error: err.message });
     }
   }
+
+  logger.info('expireOverduePayments completed', { expiredCount: expired, totalOverdue: overdue.length });
 
   return expired;
 }

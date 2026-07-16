@@ -6,6 +6,7 @@ const path = require('path');
 const express = require('express');
 const cors = require('cors');
 
+const requestId = require('./middleware/requestId.middleware');
 const webhookRoutes = require('./routes/webhook.routes');
 const authRoutes = require('./routes/auth.routes');
 const dashboardRoutes = require('./routes/dashboard.routes');
@@ -26,6 +27,10 @@ const { schedulePortfolioSnapshot } = require('./jobs/portfolioSnapshot.job');
 const { schedulePurgeStaleWebhookEvents } = require('./jobs/webhookEventCleanup.job');
 
 const app = express();
+
+// Request ID (S6 Part B) — ต้องมาก่อน Middleware/Route อื่นทั้งหมด เพื่อให้ req.id
+// พร้อมใช้ตั้งแต่ต้น Request (รวมถึง Route Webhook ที่ต้องอ่าน Raw Body ด้านล่าง)
+app.use(requestId);
 
 // Fallback '*' เป็นค่าชั่วคราวเท่านั้น (ยังไม่รู้ Frontend URL จนกว่าจะ Deploy
 // React App สำเร็จ) ต้องตั้ง FRONTEND_URL จริงบน Railway ก่อน Production ใช้งานจริง

@@ -21,6 +21,7 @@ const bulkImportService = require('../services/bulkImport.service');
 const reportExportService = require('../services/reportExport.service');
 const slipOcrService = require('../services/slipOcr.service');
 const flexMessage = require('../utils/flexMessage.util');
+const logger = require('../utils/logger.util');
 
 const { COMMANDS } = commandParser;
 const { STEPS } = reminderSetupFlow;
@@ -728,9 +729,13 @@ async function handleBulkImportBatchText(user, text) {
 // แปล Error เป็นข้อความไทยแล้วตอบกลับ (ใช้ร่วมกันทั้ง Text และ Postback)
 // Error ที่มี code (TransactionServiceError/PendingTransactionError) → ข้อความ
 // เฉพาะ; Error อื่นที่ไม่คาดคิด → INTERNAL_ERROR (ไม่โชว์รายละเอียดดิบให้ผู้ใช้)
-async function replyWithError(replyToken, err) {
+//
+// webhookEventId (Optional) — Correlation Key ของ Event ต้นตอ (S6 Part B) ใช้ตาม
+// event.webhookEventId แทน HTTP Request ID เพราะ LINE อาจ Batch หลาย Event มาในคำขอ
+// HTTP เดียว (ดู logger.util.js หัวไฟล์)
+async function replyWithError(replyToken, err, webhookEventId) {
   const code = err.code ?? 'INTERNAL_ERROR';
-  console.error(`[webhook] handleEvent failed (code=${code}): ${err.message}`);
+  logger.error('handleEvent failed', { webhookEventId, code, error: err.message });
   await lineService.replyMessage(replyToken, flexMessage.buildErrorMessage(code));
 }
 
@@ -742,6 +747,8 @@ async function replyWithError(replyToken, err) {
 // กำลังจ่ายเงินและส่งสลิปโอน ยังเข้าทางเดิมเสมอ) — เฉพาะกรณี "ไม่มีคำขอชำระเงินค้าง"
 // เท่านั้นที่ตีความรูปเป็นสลิปสินทรัพย์
 async function handleImage(event) {
+  logger.info('processing image message', { webhookEventId: event.webhookEventId });
+
   const user = await resolveUser(event.source?.userId);
 
   const pending = await paymentService.findPendingByUserId(user.id);
@@ -824,7 +831,7 @@ async function handleEvent(event) {
   if (event.webhookEventId) {
     const claimed = await lineWebhookEventRepository.claimEvent(event.webhookEventId);
     if (!claimed) {
-      console.log(`[webhook] duplicate event ${event.webhookEventId} — skipped`);
+      logger.info('duplicate event skipped', { webhookEventId: event.webhookEventId });
       return;
     }
   }
@@ -841,7 +848,10 @@ async function handleEvent(event) {
     try {
       await handleImage(event);
     } catch (err) {
-      console.error(`[webhook] handleImage failed: ${err.message}`);
+      logger.error('handleImage failed', {
+        webhookEventId: event.webhookEventId,
+        error: err.message,
+      });
     }
     return;
   }
@@ -859,7 +869,7 @@ async function handleEvent(event) {
       : await routePostback(user, event.postback?.data);
     await lineService.replyMessage(replyToken, message);
   } catch (err) {
-    await replyWithError(replyToken, err);
+    await replyWithError(replyToken, err, event.webhookEventId);
   }
 }
 

@@ -47,7 +47,13 @@ module.exports = {
   },
   auth: {
     jwtSecret: process.env.JWT_SECRET,
-    jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',
+    // Default ย่นจาก 7d → 24h (S6 Part A, ก่อน Beta Launch) — จำกัด Blast Radius ถ้า
+    // Token หลุด/ถูกขโมย โดยไม่กระทบ UX มาก เพราะ Re-auth ของ LIFF (liffAuth.service)
+    // เป็น Handshake อัตโนมัติเกือบทั้งหมด: Frontend (api.js) เจอ 401 แล้ว Redirect ไป
+    // '/' ทันที ซึ่ง Login.jsx เช็ค liff.isLoggedIn() แล้วขอ Token ใหม่ให้เองโดยไม่ต้อง
+    // ให้ User กดอะไรเพิ่ม ตราบใดที่ยัง Login LINE ค้างอยู่ (กรณีปกติเกือบทั้งหมดเมื่อเปิด
+    // ผ่าน LINE App) — ยังคง Override ผ่าน ENV ได้ตามเดิม ไม่ Hardcode
+    jwtExpiresIn: process.env.JWT_EXPIRES_IN || '24h',
   },
   // LIFF (Phase 2 — LIFF Login) — ยังไม่บังคับ (ไม่อยู่ใน REQUIRED_ENV_VARS)
   // เหมือน TWELVE_DATA_API_KEY เพราะยังเป็น Phase 2 ที่กำลังพัฒนา
