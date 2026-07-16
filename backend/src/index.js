@@ -13,18 +13,6 @@ const dashboardRoutes = require('./routes/dashboard.routes');
 const paymentRoutes = require('./routes/payment.routes');
 const adminRoutes = require('./routes/admin.routes');
 const reportsRoutes = require('./routes/reports.routes');
-const { scheduleExpirePending, schedulePurgeOld } = require('./jobs/pendingCleanup.job');
-const { scheduleExpirePayments } = require('./jobs/paymentExpiry.job');
-const { schedulePlanDowngrade } = require('./jobs/planDowngrade.job');
-const { scheduleReminderPush } = require('./jobs/dcaReminder.job');
-const { schedulePurgeStaleSetupSessions } = require('./jobs/reminderSetupCleanup.job');
-const { schedulePurgeStaleBulkImportSessions } = require('./jobs/bulkImportCleanup.job');
-const {
-  scheduleWeeklySummaryPush,
-  scheduleMonthlySummaryPush,
-} = require('./jobs/portfolioSummary.job');
-const { schedulePortfolioSnapshot } = require('./jobs/portfolioSnapshot.job');
-const { schedulePurgeStaleWebhookEvents } = require('./jobs/webhookEventCleanup.job');
 
 const app = express();
 
@@ -81,33 +69,13 @@ app.get('/health', (req, res) => {
   res.status(200).json({ success: true, data: { status: 'ok' } });
 });
 
+// ⚠️ Cron Job ทั้งหมดถูกย้ายไปรันที่ src/worker.js แยก Process ต่างหากแล้ว (S6 Group E
+// part 2) — Process นี้ (Web Server) "ไม่" Schedule Cron ใดๆ เองอีกต่อไป เพื่อไม่ให้
+// Deploy Backend Code ใหม่ไป Restart Cron ที่กำลังรันอยู่ด้วย และไม่ให้ Cron แย่ง CPU/RAM
+// กับ Traffic Webhook จริง — ต้องรัน `npm run worker` เป็น Railway Service ที่สองแยกต่างหาก
+// ด้วย มิฉะนั้น Cron จะไม่ทำงานเลย (ดู docs/DEPLOYMENT.md)
 app.listen(config.app.port, () => {
   console.log(`EasyDCA API Server listening on port ${config.app.port} (${config.app.nodeEnv})`);
-
-  // Schedule Cron Job หลัง Server เริ่มรับ Webhook ได้แล้ว — ไม่ต้องรอ Cron
-  // พร้อมก่อน Server จะ Listen (pendingCleanup.job.js)
-  scheduleExpirePending();
-  schedulePurgeOld();
-  // Push DCA Reminder ที่ครบกำหนดทุกวัน 09:00 Asia/Bangkok (dcaReminder.job.js)
-  scheduleReminderPush();
-  // Purge Reminder Setup Session ที่หมดอายุค้าง ตี 3 (reminderSetupCleanup.job.js)
-  schedulePurgeStaleSetupSessions();
-  // Purge Bulk Import Session ที่หมดอายุค้าง ตี 3 (bulkImportCleanup.job.js —
-  // Phase 3 Round 6) — Pending Batch เองถูก Cron pendingCleanup.job.js Cover ให้แล้ว
-  schedulePurgeStaleBulkImportSessions();
-  // Push สรุปพอร์ตรายสัปดาห์ (อาทิตย์ 08:00) และรายเดือน (วันที่ 1 08:00)
-  // Asia/Bangkok (portfolioSummary.job.js)
-  scheduleWeeklySummaryPush();
-  scheduleMonthlySummaryPush();
-  // Mark คำขอชำระเงินที่หมดอายุ (24 ชม.) เป็น 'expired' ทุกชั่วโมง (paymentExpiry.job.js)
-  scheduleExpirePayments();
-  // Downgrade ผู้ใช้ Premium ที่หมดอายุกลับเป็น Free ทุกวันตี 1 (planDowngrade.job.js)
-  schedulePlanDowngrade();
-  // เก็บ Snapshot มูลค่าพอตของทุก User ทุกวันเที่ยงคืน Asia/Bangkok (portfolioSnapshot.job.js)
-  schedulePortfolioSnapshot();
-  // Purge LINE Webhook Event ที่เก่ากว่า 7 วันค้าง (Idempotency Guard — migration 013) ตี 3
-  // (webhookEventCleanup.job.js)
-  schedulePurgeStaleWebhookEvents();
 });
 
 module.exports = app;

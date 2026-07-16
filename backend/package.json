@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
+    "worker": "node src/worker.js",
     "test": "jest",
     "lint": "eslint .",
     "setup-richmenu": "node src/jobs/setupRichMenu.js"
