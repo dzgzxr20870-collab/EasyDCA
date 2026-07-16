@@ -210,17 +210,20 @@ async function assertSlipNotReused(slipHash) {
   }
 }
 
-// ดึงคำขอเพื่อ "สร้างรูป QR ซ้ำ" ให้ Endpoint qr.png — ต้องยัง pending เท่านั้น
-// throw PAYMENT_NOT_FOUND ทั้งกรณีไม่พบและกรณีสถานะไม่ใช่ pending (Endpoint แปลง
+// ดึงคำขอเพื่อ "สร้างรูป QR ซ้ำ" ให้ Endpoint qr.png — ต้องยัง unresolved เท่านั้น
+// (migration 016 Lock-Until-Resolved: amount_released_at IS NULL — ไม่ใช่แค่
+// status='pending' เดิม เพื่อให้ Admin Dashboard เห็น QR ของคำขอที่ Cron หมดอายุตีเป็น
+// 'expired' ไปแล้วแต่ยังไม่ Resolve ได้ด้วย, ตรงกับกรณีที่ Fix นี้มีไว้แก้พอดี) throw
+// PAYMENT_NOT_FOUND ทั้งกรณีไม่พบและกรณี Resolve ไปแล้ว/Auto-release แล้ว (Endpoint แปลง
 // เป็น 404 เหมือนกัน) — ผู้เรียกต้องใช้ payment.amountThb จากที่นี่ (ค่าใน DB)
 // สร้าง QR เท่านั้น ห้ามเชื่อยอดจาก Query String ใด ๆ (กันปลอมยอดในรูป QR)
 async function getPendingPaymentForQr(paymentId) {
   const payment = await paymentRepository.findById(paymentId);
 
-  if (!payment || payment.status !== 'pending') {
+  if (!payment || payment.amountReleasedAt !== null) {
     throw new PaymentServiceError(
       'PAYMENT_NOT_FOUND',
-      `Payment ${paymentId} not found or not pending`,
+      `Payment ${paymentId} not found or already resolved`,
       { paymentId }
     );
   }

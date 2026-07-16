@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getToken, apiGet, apiPost } from '../lib/api.js';
+import { getToken, apiGet, apiPost, API_BASE_URL } from '../lib/api.js';
+import { getUrgencyLevel, isAutoReleased, isWithinDays } from '../lib/paymentUrgency.js';
 // Reuse Style Pattern เดียวกับ Dashboard ปกติ (การ์ด/ตาราง) — Admin เป็น Internal Tool
 // จึงไม่ทำ CSS ใหม่ ใช้คลาส dashboard-* เดิมผ่าน wrapper .dashboard-page
 import './Dashboard.css';
@@ -26,6 +27,21 @@ const PAYMENT_STATUS_OPTIONS = [
 ];
 
 const STATUS_LABEL = Object.fromEntries(PAYMENT_STATUS_OPTIONS.map((o) => [o.value, o.label]));
+
+// Lock-Until-Resolved (migration 016) — Label ไทยของแต่ละระดับความเร่งด่วนจาก
+// paymentUrgency.getUrgencyLevel (คำนวณจาก createdAt เทียบกับ Auto-release Cutoff 7 วัน)
+const URGENCY_LABEL = {
+  normal: 'ปกติ',
+  warning: 'ใกล้ครบกำหนด',
+  urgent: 'เร่งด่วน',
+};
+
+// URL รูป QR ที่ Render สดจาก Backend (Deterministic จาก payment.amountThb ใน DB — ตัว
+// เดียวกับที่การ์ด LINE ของ Admin ใช้) — Endpoint ไม่ต้อง Auth (LINE ต้อง Fetch ได้ไม่มี
+// Header พิเศษ) จึงต่อ URL ตรงๆ ใช้เป็น <img src> ได้เลย ไม่ต้องผ่าน apiGet
+function qrImageUrl(paymentId) {
+  return `${API_BASE_URL}/api/v1/payment/${paymentId}/qr.png`;
+}
 
 function formatBaht(value) {
   const num = Number(value);
@@ -78,6 +94,10 @@ function Admin() {
   const [users, setUsers] = useState([]);
   const [payments, setPayments] = useState([]);
   const [statusFilter, setStatusFilter] = useState('all');
+  // Lock-Until-Resolved (migration 016) — เมื่อเปิด ไม่สนใจ statusFilter (Auto-release
+  // ครอบคลุมได้ทั้ง pending ที่ Cron ยังไม่ทัน Mark และ expired ที่ยัง Unresolved ค้างอยู่
+  // ก่อนปล่อยยอดคืน) จึง Fetch ทุกสถานะเสมอแล้วกรองฝั่ง Client แทน (ดู loadPayments)
+  const [showAutoReleasedOnly, setShowAutoReleasedOnly] = useState(false);
   const [loadError, setLoadError] = useState(null);
 
   // ── Route Guard (เหมือน Round 4a ทุกประการ) ──────────────────────────────
@@ -135,7 +155,10 @@ function Admin() {
 
     async function loadPayments() {
       try {
-        const query = statusFilter === 'all' ? '' : `?status=${statusFilter}`;
+        // เปิด "แสดงเฉพาะ Auto-release" → Fetch ทุกสถานะเสมอ (ไม่สนใจ Dropdown สถานะ —
+        // Disabled คู่กันใน JSX ด้านล่างกันสับสน) แล้วกรองฝั่ง Client ด้วย isAutoReleased
+        const effectiveStatus = showAutoReleasedOnly ? 'all' : statusFilter;
+        const query = effectiveStatus === 'all' ? '' : `?status=${effectiveStatus}`;
         const data = await apiGet(`/api/v1/admin/payments${query}`);
         setPayments(data.payments);
       } catch (err) {
@@ -144,7 +167,14 @@ function Admin() {
     }
 
     loadPayments();
-  }, [ready, statusFilter]);
+  }, [ready, statusFilter, showAutoReleasedOnly]);
+
+  // Auto-release (migration 016): ปล่อยยอดคืนโดย Cron 7 วัน ไม่มี Admin คนไหนมา Resolve
+  // เอง (isAutoReleased) และเกิดขึ้นใน 30 วันล่าสุด — Client-side Filter ล้วน (ไม่มี Query
+  // Param ใหม่ฝั่ง Backend สำหรับกรณีนี้)
+  const visiblePayments = showAutoReleasedOnly
+    ? payments.filter((p) => isAutoReleased(p) && isWithinDays(p.amountReleasedAt, 30))
+    : payments;
 
   // ── Broadcast State (Round 4c) ───────────────────────────────────────────
   const [bcTarget, setBcTarget] = useState('all');
@@ -295,7 +325,7 @@ function Admin() {
 
         {/* ตาราง Payment + Dropdown กรอง Status */}
         <section className="dashboard-section">
-          <h2>การชำระเงิน ({payments.length})</h2>
+          <h2>การชำระเงิน ({visiblePayments.length})</h2>
 
           <div className="dashboard-filter">
             <label htmlFor="payment-status-filter">กรองตามสถานะ:</label>
@@ -303,6 +333,7 @@ function Admin() {
               id="payment-status-filter"
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
+              disabled={showAutoReleasedOnly}
             >
               {PAYMENT_STATUS_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
@@ -310,9 +341,22 @@ function Admin() {
                 </option>
               ))}
             </select>
+
+            {/* Lock-Until-Resolved (migration 016) — ดูย้อนหลังว่ามีคำขอไหนหลุดจาก
+                Safety Valve (Auto-release 7 วัน) ไปแล้วบ้างใน 30 วันล่าสุด เผื่อ User
+                แจ้งเข้ามาทีหลังว่าจ่ายเงินไปแล้วแต่ไม่มีคนมา Approve ทัน */}
+            <label htmlFor="payment-auto-released-only" style={{ marginLeft: '1rem' }}>
+              <input
+                type="checkbox"
+                id="payment-auto-released-only"
+                checked={showAutoReleasedOnly}
+                onChange={(e) => setShowAutoReleasedOnly(e.target.checked)}
+              />{' '}
+              แสดงเฉพาะรายการที่ Auto-release แล้ว (30 วันล่าสุด)
+            </label>
           </div>
 
-          {payments.length === 0 ? (
+          {visiblePayments.length === 0 ? (
             <p className="dashboard-message">ไม่มีรายการชำระเงินตามเงื่อนไขนี้</p>
           ) : (
             <div className="dashboard-table-wrap">
@@ -323,33 +367,81 @@ function Admin() {
                     <th>จำนวนเงิน</th>
                     <th>แพลน</th>
                     <th>สถานะ</th>
-                    <th>สลิป</th>
+                    <th>ความเร่งด่วน</th>
+                    <th>QR / สลิป</th>
                     <th>วันที่แจ้ง</th>
                     <th>วันที่อนุมัติ</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {payments.map((p) => (
-                    <tr key={p.id}>
-                      <td>{p.displayName ?? p.userId}</td>
-                      <td>{formatBaht(p.amountThb)}</td>
-                      <td>{p.billingPeriod === 'yearly' ? 'รายปี' : 'รายเดือน'}</td>
-                      <td>{STATUS_LABEL[p.status] ?? p.status}</td>
-                      {/* คลิกเปิดรูปสลิปเต็มใน Tab ใหม่ (rel=noreferrer กัน URL รั่วผ่าน Referer)
-                          ไม่มีสลิป (ผู้ใช้ยังไม่ส่งรูป) → แสดง '-' */}
-                      <td>
-                        {p.slipImageUrl ? (
-                          <a href={p.slipImageUrl} target="_blank" rel="noreferrer">
-                            ดูสลิป
-                          </a>
-                        ) : (
-                          '-'
-                        )}
-                      </td>
-                      <td>{formatDate(p.createdAt)}</td>
-                      <td>{formatDate(p.confirmedAt)}</td>
-                    </tr>
-                  ))}
+                  {visiblePayments.map((p) => {
+                    // ยัง Unresolved (amount_released_at ยัง null) = ยังต้องตัดสินใจ —
+                    // เท่านั้นที่ต้องเทียบ QR+สลิป และมี Badge ความเร่งด่วน (Resolved/
+                    // Auto-released แล้ว ไม่มีการตัดสินใจอะไรเหลือให้ทำต่อ)
+                    const unresolved = !p.amountReleasedAt;
+                    const urgency = unresolved ? getUrgencyLevel(p.createdAt) : null;
+
+                    return (
+                      <tr key={p.id}>
+                        <td>{p.displayName ?? p.userId}</td>
+                        <td>
+                          {formatBaht(p.amountThb)}
+                          {p.baseAmountThb != null && p.satangTag != null && (
+                            <div className="dashboard-card-sub" style={{ marginTop: 2 }}>
+                              ฐาน {formatBaht(p.baseAmountThb)} + {p.satangTag} สตางค์
+                            </div>
+                          )}
+                        </td>
+                        <td>{p.billingPeriod === 'yearly' ? 'รายปี' : 'รายเดือน'}</td>
+                        <td>{STATUS_LABEL[p.status] ?? p.status}</td>
+                        <td>
+                          {urgency ? (
+                            <span className={`dashboard-badge ${urgency}`}>
+                              {URGENCY_LABEL[urgency]}
+                            </span>
+                          ) : (
+                            '-'
+                          )}
+                        </td>
+                        {/* Unresolved: แสดงรูป QR (Render สดจาก Backend ตาม paymentId — Deterministic
+                            จาก amount_thb ใน DB) คู่กับรูปสลิป ให้ Admin เทียบด้วยตาได้ในหน้าจอเดียว
+                            ไม่ต้องเปิดดูทีละรูป | Resolved แล้ว: คงพฤติกรรมเดิม (แค่ลิงก์ดูสลิป) —
+                            คลิกเปิดรูปเต็มใน Tab ใหม่เสมอ (rel=noreferrer กัน URL รั่วผ่าน Referer) */}
+                        <td>
+                          {unresolved ? (
+                            <div className="dashboard-image-pair">
+                              <a href={qrImageUrl(p.id)} target="_blank" rel="noreferrer">
+                                <img
+                                  src={qrImageUrl(p.id)}
+                                  alt="QR PromptPay"
+                                  className="dashboard-image-thumb"
+                                />
+                              </a>
+                              {p.slipImageUrl ? (
+                                <a href={p.slipImageUrl} target="_blank" rel="noreferrer">
+                                  <img
+                                    src={p.slipImageUrl}
+                                    alt="สลิปโอนเงิน"
+                                    className="dashboard-image-thumb"
+                                  />
+                                </a>
+                              ) : (
+                                <span className="dashboard-card-sub">ยังไม่มีสลิป</span>
+                              )}
+                            </div>
+                          ) : p.slipImageUrl ? (
+                            <a href={p.slipImageUrl} target="_blank" rel="noreferrer">
+                              ดูสลิป
+                            </a>
+                          ) : (
+                            '-'
+                          )}
+                        </td>
+                        <td>{formatDate(p.createdAt)}</td>
+                        <td>{formatDate(p.confirmedAt)}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

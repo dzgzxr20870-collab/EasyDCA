@@ -95,4 +95,4 @@ async function apiDownload(path) {
   return { blob, filename };
 }
 
-export { getToken, setToken, clearToken, apiGet, apiPost, apiDownload };
+export { getToken, setToken, clearToken, apiGet, apiPost, apiDownload, API_BASE_URL };

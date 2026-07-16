@@ -98,6 +98,7 @@ describe('listPayments', () => {
         billingPeriod: 'monthly', status: 'pending',
         slipImageUrl: 'https://cdn.test/slip.jpg',
         createdAt: '2026-07-01', confirmedAt: null,
+        baseAmountThb: 59, satangTag: 17, amountReleasedAt: null, confirmedBy: null,
       },
     ]);
 
@@ -111,6 +112,33 @@ describe('listPayments', () => {
       billingPeriod: 'monthly', status: 'pending',
       slipImageUrl: 'https://cdn.test/slip.jpg',
       createdAt: '2026-07-01', confirmedAt: null,
+      // Lock-Until-Resolved (migration 016) — Passthrough ให้ Admin Dashboard
+      baseAmountThb: 59, satangTag: 17, amountReleasedAt: null, confirmedBy: null,
+    });
+  });
+
+  // Lock-Until-Resolved (migration 016) — Admin Dashboard ใช้ 4 Field นี้แสดง QR+สลิป
+  // คู่กัน/Badge ความเร่งด่วน/ประวัติ Auto-release
+  test('คำขอ Resolve แล้ว (confirmed) → amountReleasedAt/confirmedBy ส่งต่อค่าจริง ไม่ Null', async () => {
+    paymentRepository.findAll.mockResolvedValue([
+      {
+        id: 'p1', userId: 'u1', displayName: 'สมชาย', amountThb: 59.17,
+        billingPeriod: 'monthly', status: 'confirmed',
+        createdAt: '2026-07-01', confirmedAt: '2026-07-02',
+        baseAmountThb: 59, satangTag: 17,
+        amountReleasedAt: '2026-07-02T00:00:00.000Z',
+        confirmedBy: 'Uadmin1',
+      },
+    ]);
+
+    const res = mockRes();
+    await listPayments({ query: {} }, res);
+
+    expect(res.json.mock.calls[0][0].payments[0]).toMatchObject({
+      baseAmountThb: 59,
+      satangTag: 17,
+      amountReleasedAt: '2026-07-02T00:00:00.000Z',
+      confirmedBy: 'Uadmin1',
     });
   });
 

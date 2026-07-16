@@ -161,8 +161,18 @@ describe('findPendingByUserId', () => {
 });
 
 describe('getPendingPaymentForQr', () => {
-  test('พบและ pending → คืน payment', async () => {
-    const payment = { id: 'pay-1', status: 'pending', amountThb: 59.17 };
+  test('พบและยัง unresolved (amountReleasedAt เป็น null) → คืน payment', async () => {
+    const payment = { id: 'pay-1', status: 'pending', amountThb: 59.17, amountReleasedAt: null };
+    paymentRepository.findById.mockResolvedValue(payment);
+
+    expect(await paymentService.getPendingPaymentForQr('pay-1')).toBe(payment);
+  });
+
+  // Lock-Until-Resolved (migration 016) — Admin Dashboard ต้อง Render QR ของคำขอที่ Cron
+  // หมดอายุตีเป็น 'expired' ไปแล้วได้ ตราบใดที่ยังไม่ Resolve จริง (amountReleasedAt ยัง
+  // null) — เดิม (ก่อน migration 016) Endpoint นี้จะ 404 ทันทีที่ status ไม่ใช่ 'pending'
+  test('status เป็น expired แต่ยัง unresolved (amountReleasedAt เป็น null) → คืน payment (ไม่ 404)', async () => {
+    const payment = { id: 'pay-1', status: 'expired', amountThb: 59.17, amountReleasedAt: null };
     paymentRepository.findById.mockResolvedValue(payment);
 
     expect(await paymentService.getPendingPaymentForQr('pay-1')).toBe(payment);
@@ -175,11 +185,24 @@ describe('getPendingPaymentForQr', () => {
     });
   });
 
-  test('พบแต่ status ไม่ใช่ pending (confirmed) → PAYMENT_NOT_FOUND (Endpoint แปลงเป็น 404)', async () => {
+  test('Resolve ไปแล้ว (amountReleasedAt ไม่ใช่ null) → PAYMENT_NOT_FOUND (Endpoint แปลงเป็น 404)', async () => {
     paymentRepository.findById.mockResolvedValue({
       id: 'pay-1',
       status: 'confirmed',
       amountThb: 59.17,
+      amountReleasedAt: '2026-07-17T00:00:00.000Z',
+    });
+    await expect(paymentService.getPendingPaymentForQr('pay-1')).rejects.toMatchObject({
+      code: 'PAYMENT_NOT_FOUND',
+    });
+  });
+
+  test('Auto-release ไปแล้ว (amountReleasedAt ไม่ใช่ null แต่ status ยังเป็น expired) → PAYMENT_NOT_FOUND', async () => {
+    paymentRepository.findById.mockResolvedValue({
+      id: 'pay-1',
+      status: 'expired',
+      amountThb: 59.17,
+      amountReleasedAt: '2026-07-24T00:00:00.000Z',
     });
     await expect(paymentService.getPendingPaymentForQr('pay-1')).rejects.toMatchObject({
       code: 'PAYMENT_NOT_FOUND',

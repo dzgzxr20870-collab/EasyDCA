@@ -68,6 +68,13 @@ async function listPayments(req, res) {
       slipImageUrl: p.slipImageUrl ?? null,
       createdAt: p.createdAt,
       confirmedAt: p.confirmedAt ?? null,
+      // Lock-Until-Resolved (migration 016) — Admin Dashboard (Frontend) ใช้ 4 Field
+      // นี้แสดง QR+สลิปคู่กัน/Badge ความเร่งด่วน/ประวัติ Auto-release (ดู payment.
+      // repository.toPayment — Passthrough ตรงๆ ไม่มี Query/Logic เปลี่ยนแปลง)
+      baseAmountThb: p.baseAmountThb,
+      satangTag: p.satangTag,
+      amountReleasedAt: p.amountReleasedAt ?? null,
+      confirmedBy: p.confirmedBy ?? null,
     }));
 
     return res.status(200).json({ payments: result });
