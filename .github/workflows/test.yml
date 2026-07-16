@@ -17,6 +17,24 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    # backend/src/config/env.js's validateEnv() throw ทันทีตอน Import ถ้าตัวแปรที่จำเป็น
+    # (REQUIRED_ENV_VARS) หายไป — เครื่อง Local ของทุกคนมี backend/.env (Gitignore ไว้ ไม่
+    # Commit) อยู่แล้วมาตลอด แต่ GitHub Actions เป็นเครื่องสะอาดใหม่ไม่มี .env เลย ต้องตั้งค่า
+    # ตรงนี้แทน — เป็นค่า Dummy ที่ Format ผ่านเท่านั้น "ไม่ใช่" Secret จริงจาก Production/
+    # Staging ใดๆ ทั้งสิ้น (ปลอดภัยที่จะอยู่ใน Workflow File ซึ่งเป็น Public Repo History
+    # ตลอดไป) ยืนยันแล้วว่า Test Suite ทั้งหมด Mock External Call จริงหมด (Supabase Client
+    # ผ่าน jest.mock('../src/config/supabase'), LINE/Twelve Data/CoinGecko ผ่าน
+    # jest.spyOn(global, 'fetch')) ไม่มี Test ไหนยิง Network จริงออกไปด้วยค่าพวกนี้
+    env:
+      NODE_ENV: test
+      # 4 ตัวที่ validateEnv() บังคับจริง (REQUIRED_ENV_VARS)
+      LINE_CHANNEL_SECRET: dummy_secret_for_ci
+      LINE_CHANNEL_ACCESS_TOKEN: dummy_token_for_ci
+      SUPABASE_URL: https://dummy.supabase.co
+      SUPABASE_SERVICE_ROLE_KEY: dummy_service_role_key_for_ci
+      # ไม่ได้อยู่ใน REQUIRED_ENV_VARS (validateEnv ไม่บังคับ) แต่ใส่กันไว้เผื่อ Test ไหน
+      # อ่านค่านี้ตรงๆ โดยไม่ได้ Mock config/env (ต้นทุนต่ำ ไม่มีผลเสีย)
+      JWT_SECRET: dummy_jwt_secret_for_ci_testing_only
     steps:
       - uses: actions/checkout@v4
 
