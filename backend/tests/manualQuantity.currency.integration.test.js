@@ -24,6 +24,9 @@ jest.mock('../src/config/supabase', () => {
     plan: 'premium', // Premium → validateBuy ข้าม countActiveByUser (ไม่ต้อง Mock count)
     plan_expires_at: FUTURE,
     is_locked: false,
+    // PDPA Consent Gate (migration 017) — ผู้ใช้เดิมที่ Consent แล้ว (Backfill ตาม
+    // Grandfather Clause) จึงผ่าน Gate ใน handleEvent ไปถึง Flow ซื้อจริงที่ Test นี้วัด
+    pdpa_consented_at: '2026-07-01T00:00:00.000Z',
   };
 
   function resolveResult(state) {

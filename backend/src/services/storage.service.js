@@ -98,6 +98,52 @@ async function uploadPaymentSlip(paymentId, buffer, contentType) {
   return data.publicUrl;
 }
 
+// PDPA Erasure (userErasure.service) — ลบรูปสลิปทั้งหมดของ User คนหนึ่งออกจาก
+// Bucket payment-slips จริง (Hard Delete — ต่างจาก users/transactions/payments ที่
+// Anonymize เท่านั้น เพราะสลิปคือข้อมูลระบุตัวตนชัดเจนที่สุด และไม่มีประโยชน์ทาง
+// บัญชีอีกต่อไปเมื่อไม่มี User ระบุตัวตนผูกอยู่แล้ว — ไม่ขัดกับ Payment Retention
+// เพราะ payments Row ยังคงอยู่ครบ (Immutable) มีแค่ "รูปสลิปแนบ" เท่านั้นที่หายไป)
+//
+// รับ paymentIds ของ User คนนั้นทั้งหมด (ทุกสถานะ) — ต้อง List ไฟล์จริงในถัง Bucket
+// แล้ว Filter ด้วย Prefix "{paymentId}-" (ไม่ใช่ Parse จาก payments.slip_image_url
+// เฉยๆ) เพราะ uploadPaymentSlip ตั้งชื่อไฟล์ใหม่ทุกครั้งที่ผู้ใช้ส่งสลิปมา (upsert:
+// false) — slip_image_url เก็บแค่ URL ล่าสุด ไฟล์เก่าที่เคยส่งมาก่อนหน้ายังค้างอยู่ใน
+// Bucket โดยไม่มี Column ไหนอ้างอิงถึงแล้ว การ Parse จาก slip_image_url อย่างเดียว
+// จะพลาดไฟล์เก่าเหล่านี้ไป
+// คืนจำนวนไฟล์ที่ลบสำเร็จ — ไม่ throw ถ้าไม่มีไฟล์เลย (User ยังไม่เคยส่งสลิปมาก็ได้)
+async function deleteAllSlipsForUser(paymentIds) {
+  if (!paymentIds || paymentIds.length === 0) {
+    return 0;
+  }
+
+  const { data: files, error: listError } = await supabaseAdmin.storage
+    .from(SLIP_BUCKET)
+    .list();
+
+  if (listError) {
+    throw new Error(`Failed to list payment slips: ${listError.message}`);
+  }
+
+  const prefixes = paymentIds.map((id) => `${id}-`);
+  const matchedPaths = (files ?? [])
+    .filter((file) => prefixes.some((prefix) => file.name.startsWith(prefix)))
+    .map((file) => file.name);
+
+  if (matchedPaths.length === 0) {
+    return 0;
+  }
+
+  const { error: removeError } = await supabaseAdmin.storage
+    .from(SLIP_BUCKET)
+    .remove(matchedPaths);
+
+  if (removeError) {
+    throw new Error(`Failed to delete payment slips: ${removeError.message}`);
+  }
+
+  return matchedPaths.length;
+}
+
 // อัปโหลดไฟล์รายงานขึ้น Bucket reports (Private) แล้วสร้าง Signed URL อายุ 15 นาที
 // คืน { path, signedUrl, expiresInSeconds } — throw ถ้าอัปโหลด/Sign ล้มเหลว (Caller
 // ห่อ try/catch เพื่อกัน Webhook พัง)
@@ -145,5 +191,6 @@ module.exports = {
   REPORT_SIGNED_URL_TTL_SECONDS,
   MAX_SLIP_SIZE_BYTES,
   uploadPaymentSlip,
+  deleteAllSlipsForUser,
   uploadReport,
 };

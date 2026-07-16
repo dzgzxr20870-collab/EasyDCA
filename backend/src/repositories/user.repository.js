@@ -14,6 +14,10 @@ function toUser(row) {
     planExpiresAt: row.plan_expires_at,
     isLocked: row.is_locked,
     lockedAt: row.locked_at,
+    // PDPA Compliance (migration 017/018) — NULL = ยังไม่เคย Consent /
+    // บัญชียัง Active ปกติ ตามลำดับ ดู setPdpaConsent / anonymize ด้านล่าง
+    pdpaConsentedAt: row.pdpa_consented_at ?? null,
+    anonymizedAt: row.anonymized_at ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -125,6 +129,51 @@ async function updateDisplayName(userId, displayName, pictureUrl) {
   return toUser(data);
 }
 
+// Express Opt-in Consent (migration 017) — ตั้งค่า pdpa_consented_at = now()
+// ตอน User กดยืนยัน Privacy Policy ครั้งแรก (POST /api/v1/auth/pdpa-consent)
+async function setPdpaConsent(userId) {
+  const { data, error } = await supabaseAdmin
+    .from('users')
+    .update({ pdpa_consented_at: new Date().toISOString() })
+    .eq('id', userId)
+    .select('*')
+    .single();
+
+  if (error) {
+    throw new Error(`Failed to set PDPA consent for user ${userId}: ${error.message}`);
+  }
+
+  return toUser(data);
+}
+
+// PDPA Erasure (migration 018) — Anonymize แทน Hard Delete (Immutable Ledger
+// ยังต้องอ้างอิง users.id ต่อไปได้ผ่าน transactions/payments.user_id เดิม ไม่ Orphan
+// เพราะไม่ลบ Row นี้ทิ้ง แค่ล้างข้อมูลระบุตัวตน 3 คอลัมน์เดียวที่มีบนตาราง users
+// (line_user_id/display_name/picture_url — ยืนยันจาก Schema จริงแล้ว ไม่มี Field
+// ระบุตัวตนอื่นอีก) line_user_id คงค่า NOT NULL + UNIQUE ไว้ได้ด้วยค่าสังเคราะห์ที่
+// Unique แน่นอนจาก Primary Key ของตัวเอง (กันชนกับ User อื่นที่ก็ถูก Anonymize ไปแล้ว)
+async function anonymize(userId) {
+  const nowIso = new Date().toISOString();
+
+  const { data, error } = await supabaseAdmin
+    .from('users')
+    .update({
+      line_user_id: `anonymized-${userId}`,
+      display_name: 'ผู้ใช้ที่ถูกลบข้อมูล',
+      picture_url: null,
+      anonymized_at: nowIso,
+    })
+    .eq('id', userId)
+    .select('*')
+    .single();
+
+  if (error) {
+    throw new Error(`Failed to anonymize user ${userId}: ${error.message}`);
+  }
+
+  return toUser(data);
+}
+
 async function updatePlan(userId, plan, expiresAt) {
   const { data, error } = await supabaseAdmin
     .from('users')
@@ -151,4 +200,6 @@ module.exports = {
   findExpiredPremiumUsers,
   updatePlan,
   updateDisplayName,
+  setPdpaConsent,
+  anonymize,
 };

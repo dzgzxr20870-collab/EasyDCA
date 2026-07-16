@@ -1,0 +1,32 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- Migration 018 — users.anonymized_at (PDPA Self-Service Erasure)
+-- ═══════════════════════════════════════════════════════════════════════
+-- ผู้ใช้พิมพ์คำสั่ง "ลบข้อมูล" ใน LINE Chat แล้วยืนยัน 2 ชั้น (2-Step Confirm)
+-- เพื่อขอใช้สิทธิ์ Erasure ตาม PDPA — ระบบ Anonymize แทน Hard Delete (ตามกฎ
+-- Immutable Ledger เดิม: ห้ามลบ transactions/payments แถวจริง) โดยล้างข้อมูล
+-- ระบุตัวตน 3 คอลัมน์บน users (line_user_id/display_name/picture_url — ยืนยัน
+-- จาก Schema จริงแล้วว่าเป็น Field ระบุตัวตนทั้งหมดที่มี ดู userRepository.anonymize)
+--
+-- เพิ่มคอลัมน์ nullable นี้แยกต่างหาก "ไม่ใช้" is_locked/locked_at เดิมที่มีอยู่แล้ว
+-- (DATABASE.md § 8 Soft Delete Policy) เพราะเป็นคนละแนวคิดกัน: is_locked หมายถึง
+-- "ล็อคหลัง Grace Period หมด" (เช่น Premium หมดอายุ) ซึ่งเป็นสถานะที่ตั้งใจให้กลับมา
+-- ปลดล็อคได้ในอนาคตถ้า User สมัครใหม่ ส่วน anonymized_at หมายถึง "ถูกทำลายข้อมูล
+-- ระบุตัวตนถาวรตามคำขอ PDPA" ซึ่งย้อนกลับไม่ได้เด็ดขาด — ใช้คนละ Column กันความสับสน
+-- ระหว่าง 2 Lifecycle ที่ไม่เกี่ยวข้องกัน ตาม Pattern "หนึ่งคอลัมน์ หนึ่งความหมาย"
+-- ที่ใช้มาตั้งแต่ migration 016 (amount_released_at)
+--
+-- NULL = บัญชียัง Active ปกติ, ไม่ใช่ NULL = ถูก Anonymize แล้ว — requireAuth
+-- (auth.middleware.js) เช็คค่านี้ทุก Request เพื่อปฏิเสธ Token เดิมทันที (401
+-- ACCOUNT_ERASED) แทนที่จะรอ JWT หมดอายุตามปกติ (สูงสุด 24 ชม.)
+--
+-- ── Pre-check (รันก่อน Migration นี้ — ยืนยันว่ายังไม่มี User ไหนถูก Anonymize
+-- มาก่อน เพราะคอลัมน์เพิ่งถูกสร้าง) ──
+--   SELECT COUNT(*) FROM users WHERE anonymized_at IS NOT NULL;
+--   → ต้องคืน 0 เสมอ (คอลัมน์ใหม่ ยังไม่มีใครถูก Anonymize มาก่อนแน่นอน)
+--
+-- อ้างอิงหลักการ: DATABASE.md § 3 (RLS — เปิดอยู่แล้วที่ระดับตาราง)
+-- ═══════════════════════════════════════════════════════════════════════
+
+ALTER TABLE users ADD COLUMN anonymized_at TIMESTAMPTZ;
+
+-- ไม่ต้อง Backfill — คอลัมน์ใหม่ ทุกแถวเป็น NULL (Active) ถูกต้องอยู่แล้ว

@@ -57,6 +57,10 @@ admins (1) ─────────────────── (many) paym
 
 เก็บข้อมูลผู้ใช้ที่ล็อกอินผ่าน LINE
 
+> **อัปเดต (PDPA Compliance):** เพิ่ม `pdpa_consented_at` (migration 017) และ
+> `anonymized_at` (migration 018) จริงใน Production — `CREATE TABLE` ด้านล่าง
+> ยังไม่รวม 2 คอลัมน์นี้ (Doc Drift เดิม) ดูรายละเอียดในตาราง Field ด้านล่าง
+
 ```sql
 CREATE TABLE users (
   id                UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -76,13 +80,15 @@ CREATE TABLE users (
 | Field | Type | คำอธิบาย |
 |---|---|---|
 | id | UUID | Primary Key — ใช้ UUID แทน auto-increment |
-| line_user_id | TEXT | LINE User ID (ขึ้นต้นด้วย `U`) — Unique |
+| line_user_id | TEXT | LINE User ID (ขึ้นต้นด้วย `U`) — Unique (หลัง Anonymize จะถูกแทนที่ด้วยค่าสังเคราะห์ `anonymized-{id}` — ดู `anonymized_at`) |
 | display_name | TEXT | ชื่อที่แสดงใน LINE |
 | picture_url | TEXT | URL รูปโปรไฟล์ LINE (nullable) |
 | plan | TEXT | แพ็กเกจปัจจุบัน: `free` / `premium` / `premium_plus` |
 | plan_expires_at | TIMESTAMPTZ | วันหมดอายุของ Premium (null = ไม่หมดอายุ หรือ Free) |
-| is_locked | BOOLEAN | true = อยู่หลัง Grace Period — ล็อคข้อมูล ไม่ใช่ลบ |
+| is_locked | BOOLEAN | true = อยู่หลัง Grace Period — ล็อคข้อมูล ไม่ใช่ลบ (คนละแนวคิดกับ `anonymized_at` — ดูด้านล่าง) |
 | locked_at | TIMESTAMPTZ | วันที่ถูกล็อค (nullable) |
+| pdpa_consented_at | TIMESTAMPTZ | (nullable) วันที่ผู้ใช้กดยืนยัน Privacy Policy แบบ Express Opt-in — NULL = ยังไม่เคยกดยืนยัน (ต้องเจอหน้า Consent ก่อนใช้งาน) User เดิมก่อน Migration 017 ถูก Backfill ด้วย `created_at` ของตัวเอง (Grandfather Clause) ดู migration 017 |
+| anonymized_at | TIMESTAMPTZ | (nullable) วันที่บัญชีถูก Anonymize ตามคำขอ PDPA Erasure — NULL = บัญชียัง Active ปกติ ไม่ใช่ NULL = `line_user_id`/`display_name`/`picture_url` ถูกแทนที่ด้วยข้อมูลไม่ระบุตัวตนแล้ว และ `requireAuth` จะปฏิเสธ Token เดิมทันที (401 ACCOUNT_ERASED) ดู migration 018 |
 | created_at | TIMESTAMPTZ | วันที่สมัคร |
 | updated_at | TIMESTAMPTZ | วันที่อัพเดทล่าสุด |
 

@@ -9,6 +9,7 @@ const reminderService = require('../services/dcaReminder.service');
 const reminderSetupFlow = require('../services/reminderSetupFlow.service');
 const pendingService = require('../services/pendingTransaction.service');
 const paymentService = require('../services/payment.service');
+const userErasureService = require('../services/userErasure.service');
 const entitlement = require('../services/entitlement.service');
 const symbolRegistry = require('../services/symbolRegistry.service');
 const mutualFundService = require('../services/mutualFund.service');
@@ -71,6 +72,53 @@ async function resolveUser(lineUserId) {
   const pictureUrl = profile?.pictureUrl ?? null;
 
   return userRepository.create(lineUserId, displayName, pictureUrl);
+}
+
+// ── PDPA Express Opt-in Consent Gate (ฝั่ง LINE Chat) ───────────────────────
+// คู่กับ requireConsent Middleware ฝั่ง Web (dashboard/payment/admin/reports routes) —
+// ใช้ users.pdpa_consented_at Field เดียวกัน (migration 017) ยอมรับผ่านช่องทางไหนก็
+// นับทั้ง 2 ช่องทาง ไม่ถามซ้ำ | User เดิมที่ถูก Backfill (Grandfather Clause) มีค่าอยู่
+// แล้วจึงไม่เจอ Gate นี้เลย
+//
+// จำเป็นเพราะ LINE Chat คือช่องทางหลักที่ผู้ใช้ส่วนใหญ่ใช้จริง (Rich Menu) — Gate ฝั่ง
+// Web อย่างเดียวป้องกันได้แค่คนที่เปิด Dashboard ผู้ใช้ที่ใช้แค่ LINE Chat จะมีธุรกรรม
+// จริงถูกบันทึกโดยไม่เคยผ่าน Express Opt-in ตามที่ PDPA กำหนด
+const PDPA_ACCEPT_ACTION = 'pdpa_accept';
+const PDPA_DECLINE_ACTION = 'pdpa_decline';
+
+// ประกอบ URL นโยบายความเป็นส่วนตัว (หน้า Static ของ Frontend — frontend/public/privacy.html)
+// คืน null ถ้ายังไม่ได้ตั้ง FRONTEND_URL: flexMessage จะไม่ใส่ปุ่มลิงก์เลย (ดีกว่าใส่ uri
+// ว่างๆ ที่ทำให้ LINE ปฏิเสธทั้งข้อความ 400 จนผู้ใช้ไม่เห็นแม้แต่ปุ่มยอมรับ = Deadlock)
+function buildPrivacyPolicyUrl() {
+  const base = config.app.frontendUrl;
+  if (!base) {
+    logger.error('FRONTEND_URL is not configured; privacy policy link will be omitted');
+    return null;
+  }
+  return `${base}/privacy.html`;
+}
+
+// ถอด action ของ Postback แล้วคืนเฉพาะที่เป็น Action ของ Consent เอง (มิฉะนั้น null)
+// — 2 Action นี้ "ต้อง Bypass Gate ได้เสมอ" ไม่งั้นผู้ใช้กดยอมรับไม่ได้เพราะ Gate
+// บล็อกปุ่มยอมรับของตัวเอง (Deadlock)
+function getPdpaConsentAction(data) {
+  const action = new URLSearchParams(data ?? '').get('action');
+  return action === PDPA_ACCEPT_ACTION || action === PDPA_DECLINE_ACTION ? action : null;
+}
+
+// ประมวลผลปุ่มยอมรับ/ไม่ยอมรับ — Reuse userRepository.setPdpaConsent เดิม (ตัวเดียวกับ
+// ที่ auth.controller.pdpaConsent ฝั่ง Web ใช้อยู่แล้ว) Idempotent: ถ้า Consent ไปแล้ว
+// (กดปุ่มเก่าซ้ำจากประวัติแชท) ไม่เขียน DB ซ้ำ แต่ยังตอบยืนยันตามปกติ
+async function handlePdpaConsentAction(user, action) {
+  if (action === PDPA_DECLINE_ACTION) {
+    return flexMessage.buildPdpaConsentDeclinedMessage();
+  }
+
+  if (!user.pdpaConsentedAt) {
+    await userRepository.setPdpaConsent(user.id);
+    logger.info('pdpa consent accepted via LINE chat', { userId: user.id });
+  }
+  return flexMessage.buildPdpaConsentAcceptedMessage();
 }
 
 // ดึงพารามิเตอร์ซื้อจาก params (จำนวนเงิน หรือ จำนวน+ราคา) — ใช้พก/สร้าง Pending
@@ -267,6 +315,15 @@ async function routeCommand(user, parsed) {
       // Resolve เพื่อได้ label ไทยแสดงยืนยันช่วง + Validate (custom from<=to) อีกชั้น
       const resolved = reportExportService.resolveRange(parsed.params);
       return flexMessage.buildExportFormatQuickReply(parsed.params, resolved.label);
+    }
+
+    // ── PDPA Self-Service Erasure — ขั้นที่ 1: อธิบายผลกระทบ + ถามยืนยัน 2 ชั้น ──
+    // (2-Step Confirm บังคับ เพราะ Action ย้อนกลับไม่ได้ — Pattern เดียวกับ
+    // Broadcast/Bulk Import เดิม) เช็คว่ามี Payment ค้าง Resolve อยู่ไหมก่อน เพื่อ
+    // แนบคำเตือนพิเศษถ้ามี (Reuse findPendingByUserId เดิม ไม่ Query ใหม่)
+    case COMMANDS.ERASE_DATA_REQUEST: {
+      const pendingPayment = await paymentService.findPendingByUserId(user.id);
+      return flexMessage.buildErasureConfirmMessage(Boolean(pendingPayment));
     }
 
     case COMMANDS.UNKNOWN:
@@ -479,6 +536,23 @@ async function routePostback(user, data) {
 
     case 'cancel_bulk_import': {
       await bulkImportService.cancelBatch(params.get('batchId'));
+      return flexMessage.buildCancelledMessage();
+    }
+
+    // ── PDPA Self-Service Erasure — ขั้นที่ 2: ผู้ใช้ยืนยัน/ยกเลิกจริง ────────────
+    // confirm_erase_data: Anonymize ทันที ไม่มี Admin Gate (ตัดสินใจแล้ว — ดู
+    // docs/SECURITY.md § 8) — ตรวจซ้ำว่ามี Payment ค้างอยู่ไหม ณ ตอนกดจริง (อาจ
+    // เปลี่ยนไปจากตอนเห็นข้อความยืนยันครั้งแรกก็ได้) เพื่อบันทึกลง erasure_logs
+    // ให้ตรงความจริงที่สุด ไม่ใช้ค่าที่ค้างมาจาก Postback Data (ไม่ได้พกมาด้วยซ้ำ)
+    case 'confirm_erase_data': {
+      const pendingPayment = await paymentService.findPendingByUserId(user.id);
+      await userErasureService.eraseUserData(user.id, {
+        hadPendingPayment: Boolean(pendingPayment),
+      });
+      return flexMessage.buildDataErasedMessage();
+    }
+
+    case 'cancel_erase_data': {
       return flexMessage.buildCancelledMessage();
     }
 
@@ -744,6 +818,24 @@ async function handleImage(event) {
 
   const user = await resolveUser(event.source?.userId);
 
+  // ── PDPA Consent Gate (เหมือน Text/Postback ใน handleEvent) ─────────────────
+  // รูปสลิป (ทั้งสลิปโอนเงินและสลิปสินทรัพย์) เป็นข้อมูลจริงที่ถูกอัปโหลดขึ้น Storage +
+  // บันทึกลง DB เช่นกัน จึงต้อง Gate ด้วยเพื่อความสม่ำเสมอ — การตอบข้อความกลับตรงนี้
+  // ไม่ขัดกับ Error Isolation ของ handleImage (ที่ห้ามตอบ "Error") เพราะนี่ไม่ใช่ Error
+  // แต่เป็นการตอบที่ตั้งใจ (Pattern เดียวกับ handleAssetSlipImage ที่ตอบชวนอัพเกรด
+  // Premium อยู่แล้ว)
+  //
+  // ผู้ใช้ที่ยังไม่ Consent จะไม่มีทางมี Payment Pending ค้างอยู่จริง (ต้องผ่านคำสั่ง
+  // Premium/Endpoint ฝั่ง Web ซึ่งถูก Gate ทั้งคู่มาก่อนแล้ว) — แต่ต่อให้เกิดขึ้นได้ด้วย
+  // เหตุใดก็ตาม Gate นี้แค่ "ไม่ประมวลผลรูป" ไม่แตะ Payment ที่ค้างอยู่เลย ไม่ทำให้พัง
+  if (!user.pdpaConsentedAt) {
+    await lineService.replyMessage(
+      event.replyToken,
+      flexMessage.buildPdpaConsentRequiredMessage(buildPrivacyPolicyUrl())
+    );
+    return;
+  }
+
   const pending = await paymentService.findPendingByUserId(user.id);
   if (pending) {
     return handlePaymentSlipImage(event, pending);
@@ -857,6 +949,28 @@ async function handleEvent(event) {
 
   try {
     const user = await resolveUser(event.source?.userId);
+
+    // ── PDPA Consent Gate — ต้องอยู่ "ก่อน" routeText/routePostback เสมอ ─────────
+    // 1) ปุ่มยอมรับ/ไม่ยอมรับของ Consent เอง Bypass Gate ได้เสมอ (กัน Deadlock) และ
+    //    ต้องเช็คก่อน Gate ด้านล่างเสมอ ไม่ว่าจะ Consent แล้วหรือยัง (กดปุ่มเก่าซ้ำจาก
+    //    ประวัติแชทก็ยังได้คำตอบที่สมเหตุสมผล ไม่ตกไป "ไม่เข้าใจคำสั่ง")
+    const consentAction = isPostback ? getPdpaConsentAction(event.postback?.data) : null;
+    if (consentAction) {
+      const message = await handlePdpaConsentAction(user, consentAction);
+      await lineService.replyMessage(replyToken, message);
+      return;
+    }
+
+    // 2) ยังไม่เคย Consent → ไม่ประมวลผลคำสั่งใดๆ ทั้งสิ้น (ไม่บันทึกข้อมูลจริงลง DB)
+    //    ตอบการ์ดขอความยินยอมแทน ผู้ใช้พิมพ์คำสั่งเดิมซ้ำได้หลังกดยอมรับ
+    if (!user.pdpaConsentedAt) {
+      await lineService.replyMessage(
+        replyToken,
+        flexMessage.buildPdpaConsentRequiredMessage(buildPrivacyPolicyUrl())
+      );
+      return;
+    }
+
     const message = isText
       ? await routeText(user, event.message.text)
       : await routePostback(user, event.postback?.data);

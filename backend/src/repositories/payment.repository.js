@@ -100,6 +100,22 @@ async function findById(id) {
   return toPayment(data);
 }
 
+// Payment ทั้งหมดของ user คนนี้ ทุกสถานะ (PDPA Erasure — userErasure.service ใช้
+// หา paymentId ทั้งหมดเพื่อลบรูปสลิปออกจาก Storage ก่อน Anonymize) ไม่ Pagination
+// (ขนาด Beta ยังเล็ก — Pattern เดียวกับ findAll ของตารางอื่นในโปรเจกต์นี้)
+async function findAllByUserId(userId) {
+  const { data, error } = await supabaseAdmin
+    .from('payments')
+    .select('*')
+    .eq('user_id', userId);
+
+  if (error) {
+    throw new Error(`Failed to find all payments for user ${userId}: ${error.message}`);
+  }
+
+  return (data ?? []).map(toPayment);
+}
+
 // คำขอ pending ล่าสุดของ user คนนี้ (หรือ null ถ้าไม่มี) — ปุ่ม "Premium" ใช้
 // ตัดสินว่าจะเสนอแพ็กเกจใหม่ หรือส่ง QR ของคำขอเดิมซ้ำ (ไม่สร้างคำขอซ้อน)
 // เรียง created_at ใหม่→เก่า เอาตัวแรก (limit 1) — maybeSingle รับ 0/1 แถวได้
@@ -310,6 +326,7 @@ module.exports = {
   create,
   findAll,
   findById,
+  findAllByUserId,
   findPendingByUserId,
   findPendingSatangTagsByBaseAmount,
   claimForApproval,

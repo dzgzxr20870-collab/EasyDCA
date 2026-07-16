@@ -22,6 +22,7 @@ jest.mock('../src/services/reminderSetupFlow.service', () => {
 jest.mock('../src/services/line.service');
 jest.mock('../src/services/storage.service');
 jest.mock('../src/services/payment.service');
+jest.mock('../src/services/userErasure.service');
 jest.mock('../src/services/entitlement.service');
 jest.mock('../src/services/bulkImportSession.service');
 jest.mock('../src/services/bulkImport.service');
@@ -64,6 +65,7 @@ const reminderSetupFlow = require('../src/services/reminderSetupFlow.service');
 const lineService = require('../src/services/line.service');
 const storageService = require('../src/services/storage.service');
 const paymentService = require('../src/services/payment.service');
+const userErasureService = require('../src/services/userErasure.service');
 const bulkImportSession = require('../src/services/bulkImportSession.service');
 const bulkImportService = require('../src/services/bulkImport.service');
 const reportExportService = require('../src/services/reportExport.service');
@@ -76,7 +78,17 @@ const commandParser = require('../src/services/commandParser.service');
 const { handleEvent } = require('../src/controllers/webhook.controller');
 
 const { COMMANDS } = commandParser;
-const FREE_USER = { id: 'user-1', lineUserId: 'U123', plan: 'free' };
+// PDPA Consent Gate (migration 017) — FREE_USER แทน "ผู้ใช้เดิมที่ Consent แล้ว"
+// (ทั้งที่ถูก Backfill ตาม Grandfather Clause และที่กดยอมรับเอง) จึงไม่เจอ Gate เลย
+// Test ของ Gate เองใช้ NOT_CONSENTED_USER ด้านล่างแทน
+const FREE_USER = {
+  id: 'user-1',
+  lineUserId: 'U123',
+  plan: 'free',
+  pdpaConsentedAt: '2026-07-01T00:00:00.000Z',
+};
+// ผู้ใช้ใหม่ที่ยังไม่เคยกดยอมรับผ่านช่องทางไหนเลย (pdpa_consented_at IS NULL)
+const NOT_CONSENTED_USER = { ...FREE_USER, pdpaConsentedAt: null };
 
 function textEvent(text) {
   return {
@@ -972,6 +984,193 @@ describe('handleEvent — Payment Postback (request/notify)', () => {
     expect(reply).toContain('ส่งรูปสลิปโอนเงิน');
     expect(reply).not.toContain('SLIP_NOT_ATTACHED');
     expect(lineService.pushMessage).not.toHaveBeenCalled();
+  });
+});
+
+// PDPA Express Opt-in Consent Gate (ฝั่ง LINE Chat) — คู่กับ requireConsent ฝั่ง Web
+describe('handleEvent — PDPA Consent Gate (LINE Chat)', () => {
+  // ── ผู้ใช้ที่ยังไม่เคย Consent → ถูก Gate ดักทุกคำสั่ง ──────────────────────
+  test('User ใหม่ (pdpaConsentedAt = null) พิมพ์ "พอต" → เจอการ์ดขอความยินยอม ไม่ประมวลผลคำสั่ง', async () => {
+    userRepository.findByLineUserId.mockResolvedValue(NOT_CONSENTED_USER);
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.PORTFOLIO, params: {} });
+
+    await handleEvent(textEvent('พอต'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('action=pdpa_accept');
+    expect(reply).toContain('action=pdpa_decline');
+    // คำสั่งจริงต้องไม่ถูกประมวลผลเลย (ไม่มีข้อมูลใดถูกอ่าน/บันทึก)
+    expect(portfolioService.getPortfolioSummary).not.toHaveBeenCalled();
+  });
+
+  test('User ใหม่ พิมพ์คำสั่งซื้อ → ถูก Gate ดัก ไม่สร้าง Pending Transaction', async () => {
+    userRepository.findByLineUserId.mockResolvedValue(NOT_CONSENTED_USER);
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.BUY,
+      params: { symbol: 'BTC', amountThb: 1000 },
+    });
+
+    await handleEvent(textEvent('ซื้อ BTC 1000'));
+
+    expect(lastReplyText()).toContain('action=pdpa_accept');
+    expect(pendingService.createPending).not.toHaveBeenCalled();
+  });
+
+  test('User ใหม่ กด Postback อื่น (premium_menu) → ถูก Gate ดัก ไม่สร้างคำขอชำระเงิน', async () => {
+    userRepository.findByLineUserId.mockResolvedValue(NOT_CONSENTED_USER);
+
+    await handleEvent(postbackEvent('action=premium_menu'));
+
+    expect(lastReplyText()).toContain('action=pdpa_accept');
+    expect(paymentService.findPendingByUserId).not.toHaveBeenCalled();
+    expect(paymentService.requestPayment).not.toHaveBeenCalled();
+  });
+
+  // Edge Case ที่ตัดสินใจ: Admin ก็เป็น User ในระบบ ต้อง Consent เหมือนกัน (สม่ำเสมอกับ
+  // ฝั่ง Web ที่ admin.routes.js ก็ผ่าน requireConsent เช่นกัน) — ไม่ Deadlock เพราะ
+  // ปุ่ม Consent Bypass ได้ และปุ่มอนุมัติเดิมในแชทกดซ้ำได้หลัง Consent
+  test('Admin ที่ยังไม่ Consent กด approve_payment → ถูก Gate ดัก ไม่อนุมัติให้', async () => {
+    userRepository.findByLineUserId.mockResolvedValue(NOT_CONSENTED_USER);
+
+    await handleEvent(postbackEvent('action=approve_payment&paymentId=pay-1'));
+
+    expect(lastReplyText()).toContain('action=pdpa_accept');
+    expect(paymentService.approvePayment).not.toHaveBeenCalled();
+  });
+
+  test('User ใหม่ ส่งรูปสลิป → ถูก Gate ดัก ไม่ดึงรูป/ไม่อัปโหลด/ไม่เรียก OCR', async () => {
+    userRepository.findByLineUserId.mockResolvedValue(NOT_CONSENTED_USER);
+
+    await handleEvent({
+      type: 'message',
+      replyToken: 'reply-token-1',
+      source: { userId: 'U123' },
+      message: { type: 'image', id: 'img-gate-1' },
+    });
+
+    expect(lastReplyText()).toContain('action=pdpa_accept');
+    expect(lineService.getMessageContent).not.toHaveBeenCalled();
+    expect(storageService.uploadPaymentSlip).not.toHaveBeenCalled();
+    expect(slipOcrService.extractSlip).not.toHaveBeenCalled();
+    // ไม่แตะ Payment ที่อาจค้างอยู่เลย
+    expect(paymentService.findPendingByUserId).not.toHaveBeenCalled();
+  });
+
+  // ── ผู้ใช้เดิมที่ Consent แล้ว (รวม Backfill) → ไม่เจอ Gate เลย ──────────────
+  test('User เดิมที่ Consent แล้ว (Backfill) พิมพ์ "พอต" → ทำงานปกติ ไม่เจอ Gate', async () => {
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.PORTFOLIO, params: {} });
+    portfolioService.getPortfolioSummary.mockResolvedValue({ holdings: [], totalInvested: 0 });
+
+    await handleEvent(textEvent('พอต'));
+
+    expect(portfolioService.getPortfolioSummary).toHaveBeenCalledWith(FREE_USER.id);
+    expect(lastReplyText()).not.toContain('action=pdpa_accept');
+  });
+
+  // ── ปุ่ม Consent เอง ต้อง Bypass Gate ได้เสมอ (กัน Deadlock) ────────────────
+  test('pdpa_accept: User ที่ยังไม่ Consent กดยอมรับ → บันทึก Consent + ตอบยืนยัน (Bypass Gate ได้)', async () => {
+    userRepository.findByLineUserId.mockResolvedValue(NOT_CONSENTED_USER);
+    userRepository.setPdpaConsent.mockResolvedValue({
+      ...NOT_CONSENTED_USER,
+      pdpaConsentedAt: '2026-07-17T00:00:00.000Z',
+    });
+
+    await handleEvent(postbackEvent('action=pdpa_accept'));
+
+    expect(userRepository.setPdpaConsent).toHaveBeenCalledWith(NOT_CONSENTED_USER.id);
+    const reply = lastReplyText();
+    expect(reply).toContain('ยอมรับเรียบร้อยแล้ว');
+    // ไม่ตอบการ์ดขอ Consent ซ้ำ (ไม่ Deadlock)
+    expect(reply).not.toContain('action=pdpa_accept');
+  });
+
+  test('pdpa_accept: User ที่ Consent ไปแล้วกดปุ่มเก่าซ้ำ → Idempotent (ไม่เขียน DB ซ้ำ) ยังตอบยืนยันปกติ', async () => {
+    await handleEvent(postbackEvent('action=pdpa_accept'));
+
+    expect(userRepository.setPdpaConsent).not.toHaveBeenCalled();
+    expect(lastReplyText()).toContain('ยอมรับเรียบร้อยแล้ว');
+  });
+
+  test('pdpa_decline: กดไม่ยอมรับ → อธิบายว่าต้องยอมรับก่อน ไม่แตะ DB เลย', async () => {
+    userRepository.findByLineUserId.mockResolvedValue(NOT_CONSENTED_USER);
+
+    await handleEvent(postbackEvent('action=pdpa_decline'));
+
+    expect(userRepository.setPdpaConsent).not.toHaveBeenCalled();
+    expect(lastReplyText()).toContain('ต้องยอมรับนโยบายความเป็นส่วนตัวก่อน');
+  });
+
+  test('หลัง Consent แล้ว พิมพ์คำสั่งเดิมซ้ำ → ผ่าน Gate ใช้งานได้ทันทีในรอบถัดไป', async () => {
+    // รอบที่ 1: ยังไม่ Consent → ถูก Gate ดัก
+    userRepository.findByLineUserId.mockResolvedValue(NOT_CONSENTED_USER);
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.PORTFOLIO, params: {} });
+    await handleEvent(textEvent('พอต'));
+    expect(portfolioService.getPortfolioSummary).not.toHaveBeenCalled();
+
+    // รอบที่ 2: Consent แล้ว (DB คืนค่าใหม่) → พิมพ์ซ้ำแล้วผ่าน
+    userRepository.findByLineUserId.mockResolvedValue(FREE_USER);
+    portfolioService.getPortfolioSummary.mockResolvedValue({ holdings: [], totalInvested: 0 });
+    await handleEvent(textEvent('พอต'));
+
+    expect(portfolioService.getPortfolioSummary).toHaveBeenCalledWith(FREE_USER.id);
+  });
+});
+
+// PDPA Self-Service Erasure — คำสั่ง "ลบข้อมูล" ใน LINE Chat (2-Step Confirm)
+describe('handleEvent — ERASE_DATA_REQUEST (PDPA Self-Service Erasure)', () => {
+  test('พิมพ์ "ลบข้อมูล" + ไม่มี Payment ค้าง → ข้อความยืนยันไม่มีคำเตือนพิเศษ', async () => {
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.ERASE_DATA_REQUEST, params: {} });
+    paymentService.findPendingByUserId.mockResolvedValue(null);
+
+    await handleEvent(textEvent('ลบข้อมูล'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('action=confirm_erase_data');
+    expect(reply).toContain('action=cancel_erase_data');
+    expect(reply).not.toContain('คำขอชำระเงินที่ยังไม่ได้ตรวจสอบค้างอยู่');
+    expect(userErasureService.eraseUserData).not.toHaveBeenCalled();
+  });
+
+  test('พิมพ์ "ลบข้อมูล" + มี Payment ค้าง (pending) → ข้อความยืนยันมีคำเตือนพิเศษ', async () => {
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.ERASE_DATA_REQUEST, params: {} });
+    paymentService.findPendingByUserId.mockResolvedValue({ id: 'pay-1', status: 'pending' });
+
+    await handleEvent(textEvent('ลบข้อมูล'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('คำขอชำระเงินที่ยังไม่ได้ตรวจสอบค้างอยู่');
+  });
+
+  test('confirm_erase_data: ยืนยันจริง → เรียก eraseUserData แล้วตอบข้อความลบสำเร็จ', async () => {
+    paymentService.findPendingByUserId.mockResolvedValue(null);
+    userErasureService.eraseUserData.mockResolvedValue({ paymentCount: 0, deletedSlipCount: 0 });
+
+    await handleEvent(postbackEvent('action=confirm_erase_data'));
+
+    expect(userErasureService.eraseUserData).toHaveBeenCalledWith(FREE_USER.id, {
+      hadPendingPayment: false,
+    });
+    const reply = lastReplyText();
+    expect(reply).toContain('ลบข้อมูล');
+  });
+
+  test('confirm_erase_data: มี Payment ค้างตอนกดยืนยันจริง → hadPendingPayment: true ส่งเข้า Log', async () => {
+    paymentService.findPendingByUserId.mockResolvedValue({ id: 'pay-1', status: 'pending' });
+    userErasureService.eraseUserData.mockResolvedValue({ paymentCount: 1, deletedSlipCount: 1 });
+
+    await handleEvent(postbackEvent('action=confirm_erase_data'));
+
+    expect(userErasureService.eraseUserData).toHaveBeenCalledWith(FREE_USER.id, {
+      hadPendingPayment: true,
+    });
+  });
+
+  test('cancel_erase_data: ยกเลิก → ตอบข้อความยกเลิกปกติ ไม่เรียก eraseUserData เลย', async () => {
+    await handleEvent(postbackEvent('action=cancel_erase_data'));
+
+    expect(userErasureService.eraseUserData).not.toHaveBeenCalled();
+    const reply = lastReplyText();
+    expect(reply).toContain('ยกเลิก');
   });
 });
 

@@ -745,6 +745,225 @@ function buildUndoMessage(result) {
   });
 }
 
+// ── PDPA Express Opt-in Consent (LINE Chat Gate) ────────────────────────────
+// ผู้ใช้ที่ยังไม่เคยกดยอมรับ (users.pdpa_consented_at IS NULL — migration 017) จะเจอ
+// การ์ดนี้แทนผลลัพธ์ของคำสั่งที่พิมพ์มา จนกว่าจะกด "ยอมรับ" (Gate ฝั่ง LINE Chat คู่กับ
+// requireConsent Middleware ฝั่ง Web — ใช้ Field เดียวกัน ยอมรับช่องทางไหนก็นับทั้งคู่)
+//
+// privacyUrl อาจเป็น null ได้ถ้ายังไม่ได้ตั้ง FRONTEND_URL — กรณีนั้น "ไม่ใส่ปุ่มลิงก์"
+// เลย (แทนที่จะใส่ uri ว่างๆ ซึ่งทำให้ LINE ปฏิเสธทั้งข้อความด้วย 400 และผู้ใช้จะไม่เห็น
+// อะไรเลย รวมถึงปุ่มยอมรับ = Deadlock) — เนื้อหาสรุปในการ์ดยังอ่านได้ครบโดยไม่ต้องมีลิงก์
+function buildPdpaConsentRequiredMessage(privacyUrl) {
+  const body = [
+    textLine('ก่อนเริ่มใช้งาน EasyDCA เราขอความยินยอมในการเก็บและใช้ข้อมูลของคุณ', {
+      size: 'sm',
+      color: COLOR.textPrimary,
+    }),
+    textLine('• ข้อมูลโปรไฟล์ LINE (ชื่อ/รูป) เพื่อผูกบัญชีของคุณ', {
+      size: 'xs',
+      color: COLOR.textSecondary,
+    }),
+    textLine('• ข้อมูลการลงทุนที่คุณบันทึกเอง เพื่อคำนวณพอร์ต/กำไร-ขาดทุน', {
+      size: 'xs',
+      color: COLOR.textSecondary,
+    }),
+    textLine('• คุณขอลบข้อมูลได้ทุกเมื่อ โดยพิมพ์ "ลบข้อมูล"', {
+      size: 'xs',
+      color: COLOR.textSecondary,
+    }),
+  ];
+
+  const footerButtons = [
+    {
+      type: 'button',
+      style: 'primary',
+      color: COLOR.profit,
+      action: {
+        type: 'postback',
+        label: '✅ ยอมรับ',
+        data: 'action=pdpa_accept',
+        displayText: 'ยอมรับนโยบายความเป็นส่วนตัว',
+      },
+    },
+    {
+      type: 'button',
+      style: 'secondary',
+      action: {
+        type: 'postback',
+        label: '❌ ไม่ยอมรับ',
+        data: 'action=pdpa_decline',
+        displayText: 'ไม่ยอมรับนโยบายความเป็นส่วนตัว',
+      },
+    },
+  ];
+
+  // ปุ่มอ่านนโยบายฉบับเต็ม — ใส่เฉพาะเมื่อมี URL จริงเท่านั้น (เหตุผลด้านบน)
+  if (privacyUrl) {
+    footerButtons.unshift({
+      type: 'button',
+      style: 'link',
+      action: { type: 'uri', label: '📄 อ่านนโยบายความเป็นส่วนตัว', uri: privacyUrl },
+    });
+  }
+
+  return {
+    type: 'flex',
+    altText: 'กรุณายอมรับนโยบายความเป็นส่วนตัวก่อนเริ่มใช้งาน',
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: COLOR.profitBg,
+        paddingAll: '12px',
+        contents: [textLine('🔒 ขอความยินยอมก่อนใช้งาน', { weight: 'bold', color: COLOR.info })],
+      },
+      body: { type: 'box', layout: 'vertical', spacing: 'sm', contents: body },
+      footer: { type: 'box', layout: 'vertical', spacing: 'sm', contents: footerButtons },
+    },
+  };
+}
+
+// กด "ยอมรับ" สำเร็จ — บอกให้พิมพ์คำสั่งเดิมซ้ำ (คำสั่งต้นฉบับถูก Gate บล็อกไปแล้ว
+// ไม่มีการ Auto-retry ให้ — ตั้งใจให้ Flow ตรงไปตรงมา ไม่ต้องเก็บ State ของคำสั่งค้าง)
+function buildPdpaConsentAcceptedMessage() {
+  return bubble({
+    headerText: '✅ ยอมรับเรียบร้อยแล้ว',
+    headerColor: COLOR.profit,
+    headerBg: COLOR.profitBg,
+    bodyContents: [
+      textLine('ขอบคุณครับ เริ่มใช้งาน EasyDCA ได้เลย', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      textLine('กรุณาพิมพ์คำสั่งที่ต้องการอีกครั้ง (เช่น "พอต" ดูพอร์ตของคุณ)', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
+}
+
+// กด "ไม่ยอมรับ" — ไม่แตะ Database เลย (ยังคง pdpa_consented_at เป็น NULL ต่อไป)
+// ผู้ใช้กลับมากด "ยอมรับ" ทีหลังได้เสมอ (Gate จะแสดงการ์ดเดิมซ้ำเมื่อพิมพ์คำสั่งอื่น)
+function buildPdpaConsentDeclinedMessage() {
+  return bubble({
+    headerText: '⚠️ ยังใช้งานไม่ได้',
+    headerColor: COLOR.warning,
+    headerBg: COLOR.warningBg,
+    bodyContents: [
+      textLine('ต้องยอมรับนโยบายความเป็นส่วนตัวก่อน จึงจะใช้งาน EasyDCA ได้', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      textLine('หากเปลี่ยนใจ พิมพ์คำสั่งอะไรก็ได้เพื่อให้ระบบแสดงปุ่มยอมรับอีกครั้ง', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
+}
+
+// ── PDPA Self-Service Erasure — คำสั่ง "ลบข้อมูล" (2-Step Confirm) ─────────────
+// ขั้นที่ 1: อธิบายผลกระทบให้ชัดเจนก่อนถามยืนยันจริง (Action ย้อนกลับไม่ได้ —
+// Pattern 2-Step Confirm เดียวกับ Broadcast/Bulk Import เดิม) hasPendingPayment
+// (จาก paymentService.findPendingByUserId ที่ webhook.controller เช็คมาก่อนเรียก
+// ฟังก์ชันนี้) เพิ่มคำเตือนพิเศษว่า Admin จะตรวจสอบไม่ได้อีกว่า Payment ที่ค้างอยู่
+// เป็นของใคร ถ้ายืนยันลบไปตอนนี้
+function buildErasureConfirmMessage(hasPendingPayment) {
+  const body = [
+    textLine('การกระทำนี้ย้อนกลับไม่ได้', {
+      size: 'md',
+      weight: 'bold',
+      color: COLOR.loss,
+    }),
+    textLine('• ข้อมูลที่ระบุตัวตนได้ (ชื่อ รูปโปรไฟล์ การเชื่อมต่อ LINE) จะถูกลบถาวร', {
+      size: 'sm',
+      color: COLOR.textPrimary,
+    }),
+    textLine('• ประวัติธุรกรรม/การชำระเงินจะยังถูกเก็บไว้ แต่ไม่ระบุตัวตนอีกต่อไป', {
+      size: 'sm',
+      color: COLOR.textPrimary,
+    }),
+    textLine('• คุณจะไม่สามารถเข้าใช้บัญชีเดิมนี้ได้อีก', {
+      size: 'sm',
+      color: COLOR.textPrimary,
+    }),
+  ];
+
+  if (hasPendingPayment) {
+    body.push(
+      textLine(
+        '⚠️ คุณมีคำขอชำระเงินที่ยังไม่ได้ตรวจสอบค้างอยู่ — หากลบข้อมูลตอนนี้ ผู้ดูแล' +
+          'ระบบจะไม่สามารถตรวจสอบได้อีกว่ารายการนั้นเป็นของคุณ',
+        { size: 'xs', color: COLOR.warning }
+      )
+    );
+  }
+
+  const footerButtons = [
+    {
+      type: 'button',
+      style: 'primary',
+      color: COLOR.loss,
+      action: {
+        type: 'postback',
+        label: '✅ ยืนยันลบ',
+        data: 'action=confirm_erase_data',
+        displayText: 'ยืนยันลบข้อมูล',
+      },
+    },
+    {
+      type: 'button',
+      style: 'secondary',
+      action: {
+        type: 'postback',
+        label: '❌ ยกเลิก',
+        data: 'action=cancel_erase_data',
+        displayText: 'ยกเลิกการลบข้อมูล',
+      },
+    },
+  ];
+
+  return {
+    type: 'flex',
+    altText: 'ยืนยันการลบข้อมูล — การกระทำนี้ย้อนกลับไม่ได้',
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: COLOR.lossBg,
+        paddingAll: '12px',
+        contents: [textLine('🗑️ ยืนยันการลบข้อมูล', { weight: 'bold', color: COLOR.loss })],
+      },
+      body: { type: 'box', layout: 'vertical', spacing: 'sm', contents: body },
+      footer: { type: 'box', layout: 'vertical', spacing: 'sm', contents: footerButtons },
+    },
+  };
+}
+
+// ขั้นที่ 2: ตอบกลับหลัง Anonymize สำเร็จจริง (event.replyToken ยังใช้ได้ตามปกติ —
+// ผูกกับ Postback Event เดิม ไม่ใช่การค้นหาผู้ใช้ใหม่ผ่าน LINE User ID ที่เพิ่งถูก
+// ล้างไป)
+function buildDataErasedMessage() {
+  return bubble({
+    headerText: '✅ ลบข้อมูลเรียบร้อยแล้ว',
+    headerColor: COLOR.textSecondary,
+    headerBg: COLOR.warningBg,
+    bodyContents: [
+      textLine('ข้อมูลที่ระบุตัวตนของคุณถูกลบออกจากระบบเรียบร้อยแล้ว', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      textLine('หากต้องการใช้งานอีกครั้ง สามารถเริ่มต้นใหม่ได้ทุกเมื่อ', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
+}
+
 // อธิบายรอบเตือนเป็นข้อความไทย: weekly → "ทุกวันจันทร์", monthly → "ทุกวันที่ 5"
 function describeSchedule(reminder) {
   if (reminder.frequency === 'weekly') {
@@ -2318,6 +2537,11 @@ module.exports = {
   buildPortfolioMessage,
   buildHistoryMessage,
   buildUndoMessage,
+  buildPdpaConsentRequiredMessage,
+  buildPdpaConsentAcceptedMessage,
+  buildPdpaConsentDeclinedMessage,
+  buildErasureConfirmMessage,
+  buildDataErasedMessage,
   buildReminderSetMessage,
   buildReminderListMessage,
   buildReminderDeletedMessage,

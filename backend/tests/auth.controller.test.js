@@ -5,7 +5,7 @@ jest.mock('../src/services/authToken.service');
 const userRepository = require('../src/repositories/user.repository');
 const liffAuthService = require('../src/services/liffAuth.service');
 const authTokenService = require('../src/services/authToken.service');
-const { liffVerify } = require('../src/controllers/auth.controller');
+const { liffVerify, pdpaConsent } = require('../src/controllers/auth.controller');
 
 const LIFF_PROFILE = { userId: 'U123', displayName: 'สมชาย ใจดี', pictureUrl: 'https://profile.line-scdn.net/abc123' };
 
@@ -103,5 +103,75 @@ describe('liffVerify — User Auto-register / Fallback Name Sync', () => {
     expect(response.json).toHaveBeenCalledWith(
       expect.objectContaining({ user: expect.objectContaining({ displayName: 'สมหญิง' }) })
     );
+  });
+
+  // PDPA Compliance (migration 017) — Login.jsx ใช้ Field นี้ตัดสินว่าต้องแสดงหน้า
+  // Consent ก่อนเข้า Dashboard ไหม
+  test('User ยังไม่เคย Consent (pdpaConsentedAt เป็น null) → Response สะท้อนค่า null', async () => {
+    userRepository.findByLineUserId.mockResolvedValue({
+      id: 'user-1',
+      lineUserId: 'U123',
+      displayName: 'สมชาย ใจดี',
+      pictureUrl: null,
+      pdpaConsentedAt: null,
+    });
+
+    const response = res();
+    await liffVerify(req(), response);
+
+    expect(response.json).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ pdpaConsentedAt: null }) })
+    );
+  });
+
+  test('User เคย Consent แล้ว → Response สะท้อนค่า Timestamp จริง', async () => {
+    userRepository.findByLineUserId.mockResolvedValue({
+      id: 'user-1',
+      lineUserId: 'U123',
+      displayName: 'สมชาย ใจดี',
+      pictureUrl: null,
+      pdpaConsentedAt: '2026-07-01T00:00:00.000Z',
+    });
+
+    const response = res();
+    await liffVerify(req(), response);
+
+    expect(response.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        user: expect.objectContaining({ pdpaConsentedAt: '2026-07-01T00:00:00.000Z' }),
+      })
+    );
+  });
+});
+
+describe('pdpaConsent — POST /api/v1/auth/pdpa-consent', () => {
+  test('เรียก userRepository.setPdpaConsent ด้วย req.user.id แล้วคืน user ที่อัปเดตแล้ว', async () => {
+    userRepository.setPdpaConsent.mockResolvedValue({
+      id: 'user-1',
+      displayName: 'สมชาย ใจดี',
+      pictureUrl: null,
+      pdpaConsentedAt: '2026-07-17T00:00:00.000Z',
+    });
+
+    const response = res();
+    await pdpaConsent({ user: { id: 'user-1' } }, response);
+
+    expect(userRepository.setPdpaConsent).toHaveBeenCalledWith('user-1');
+    expect(response.status).toHaveBeenCalledWith(200);
+    expect(response.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        user: expect.objectContaining({ pdpaConsentedAt: '2026-07-17T00:00:00.000Z' }),
+      })
+    );
+  });
+
+  test('Repository throw → 500 INTERNAL_ERROR', async () => {
+    userRepository.setPdpaConsent.mockRejectedValue(new Error('db blip'));
+
+    const response = res();
+    await pdpaConsent({ user: { id: 'user-1' } }, response);
+
+    expect(response.status).toHaveBeenCalledWith(500);
+    expect(response.json).toHaveBeenCalledWith({ error: 'INTERNAL_ERROR' });
   });
 });

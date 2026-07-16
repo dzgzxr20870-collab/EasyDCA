@@ -72,3 +72,72 @@
     transform: rotate(360deg);
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   PDPA Consent (Express Opt-in) — หน้ายืนยัน Privacy Policy ก่อนเข้า Dashboard
+   ครั้งแรก
+   ═══════════════════════════════════════════════════════════════════════ */
+.login-consent {
+  margin-top: 16px;
+  text-align: left;
+}
+
+.login-consent-text {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: #444;
+  margin: 0 0 14px;
+}
+
+.login-consent-text a {
+  color: #06c755;
+  font-weight: 600;
+}
+
+.login-consent-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #222;
+  cursor: pointer;
+}
+
+.login-consent-check input {
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+
+.login-consent-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.login-consent-btn {
+  flex: 1;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.login-consent-btn.primary {
+  background: #06c755;
+  border: 1px solid #06c755;
+  color: #fff;
+}
+
+.login-consent-btn.primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.login-consent-btn.secondary {
+  background: #fff;
+  border: 1px solid #d0d5dd;
+  color: #555;
+}

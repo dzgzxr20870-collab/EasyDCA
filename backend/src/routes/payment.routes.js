@@ -1,5 +1,6 @@
 const express = require('express');
 const requireAuth = require('../middleware/auth.middleware');
+const { requireConsent } = require('../middleware/auth.middleware');
 const paymentController = require('../controllers/payment.controller');
 
 const router = express.Router();
@@ -12,6 +13,8 @@ router.get('/:id/qr.png', paymentController.getPaymentQr);
 
 // ทุก Route ด้านล่างนี้ต้อง Login ก่อน (Pattern เดียวกับ dashboard.routes)
 router.use(requireAuth);
+// PDPA Compliance (migration 017) — ต้องกดยืนยัน Privacy Policy ก่อนทำรายการชำระเงิน
+router.use(requireConsent);
 
 router.post('/request', paymentController.requestPayment);
 router.post('/:id/notify', paymentController.notifyPayment);

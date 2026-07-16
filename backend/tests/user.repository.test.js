@@ -125,3 +125,95 @@ describe('updateDisplayName', () => {
     await expect(userRepository.updateDisplayName('u1', 'x', null)).rejects.toThrow('db blip');
   });
 });
+
+// PDPA Compliance (migration 017) — Express Opt-in Consent
+describe('setPdpaConsent', () => {
+  test('อัปเดต pdpa_consented_at = now() ด้วย id ที่ระบุ แล้ว map เป็น user object', async () => {
+    __query.single.mockResolvedValue({
+      data: { id: 'u1', line_user_id: 'U1', pdpa_consented_at: '2026-07-17T00:00:00.000Z' },
+      error: null,
+    });
+
+    const result = await userRepository.setPdpaConsent('u1');
+
+    expect(supabaseAdmin.from).toHaveBeenCalledWith('users');
+    expect(__query.update).toHaveBeenCalledWith({ pdpa_consented_at: expect.any(String) });
+    expect(__query.eq).toHaveBeenCalledWith('id', 'u1');
+    expect(result).toMatchObject({ id: 'u1', pdpaConsentedAt: '2026-07-17T00:00:00.000Z' });
+  });
+
+  test('DB error → throw', async () => {
+    __query.single.mockResolvedValue({ data: null, error: { message: 'db blip' } });
+    await expect(userRepository.setPdpaConsent('u1')).rejects.toThrow('db blip');
+  });
+});
+
+// PDPA Self-Service Erasure (migration 018)
+describe('anonymize', () => {
+  test('ล้าง line_user_id/display_name/picture_url + ตั้ง anonymized_at แล้ว map เป็น user object', async () => {
+    __query.single.mockResolvedValue({
+      data: {
+        id: 'u1',
+        line_user_id: 'anonymized-u1',
+        display_name: 'ผู้ใช้ที่ถูกลบข้อมูล',
+        picture_url: null,
+        anonymized_at: '2026-07-17T00:00:00.000Z',
+      },
+      error: null,
+    });
+
+    const result = await userRepository.anonymize('u1');
+
+    expect(supabaseAdmin.from).toHaveBeenCalledWith('users');
+    expect(__query.update).toHaveBeenCalledWith({
+      line_user_id: 'anonymized-u1',
+      display_name: 'ผู้ใช้ที่ถูกลบข้อมูล',
+      picture_url: null,
+      anonymized_at: expect.any(String),
+    });
+    expect(__query.eq).toHaveBeenCalledWith('id', 'u1');
+    expect(result).toMatchObject({
+      id: 'u1',
+      lineUserId: 'anonymized-u1',
+      displayName: 'ผู้ใช้ที่ถูกลบข้อมูล',
+      pictureUrl: null,
+      anonymizedAt: '2026-07-17T00:00:00.000Z',
+    });
+  });
+
+  test('DB error → throw', async () => {
+    __query.single.mockResolvedValue({ data: null, error: { message: 'db blip' } });
+    await expect(userRepository.anonymize('u1')).rejects.toThrow('db blip');
+  });
+});
+
+// toUser mapping — Field ใหม่จาก PDPA Compliance ต้อง Default เป็น null ถ้า DB ไม่มีค่า
+describe('toUser mapping (ผ่าน findAll) — pdpaConsentedAt/anonymizedAt', () => {
+  test('DB ไม่มีค่า (undefined) → map เป็น null (ไม่ใช่ undefined)', async () => {
+    __query.order.mockResolvedValueOnce({
+      data: [{ id: 'u1', line_user_id: 'U1', display_name: 'A', plan: 'free', created_at: '2026-07-01' }],
+      error: null,
+    });
+
+    const result = await userRepository.findAll();
+
+    expect(result[0].pdpaConsentedAt).toBeNull();
+    expect(result[0].anonymizedAt).toBeNull();
+  });
+
+  test('DB มีค่าจริง → map ผ่านตรงๆ', async () => {
+    __query.order.mockResolvedValueOnce({
+      data: [{
+        id: 'u1', line_user_id: 'U1', display_name: 'A', plan: 'free', created_at: '2026-07-01',
+        pdpa_consented_at: '2026-07-01T00:00:00.000Z',
+        anonymized_at: '2026-07-10T00:00:00.000Z',
+      }],
+      error: null,
+    });
+
+    const result = await userRepository.findAll();
+
+    expect(result[0].pdpaConsentedAt).toBe('2026-07-01T00:00:00.000Z');
+    expect(result[0].anonymizedAt).toBe('2026-07-10T00:00:00.000Z');
+  });
+});

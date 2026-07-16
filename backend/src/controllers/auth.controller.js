@@ -54,6 +54,9 @@ async function liffVerify(req, res) {
         id: user.id,
         displayName: user.displayName,
         pictureUrl: user.pictureUrl,
+        // PDPA Compliance (migration 017) — Login.jsx ใช้ตัดสินว่าต้องแสดงหน้า
+        // Consent (Express Opt-in) ก่อนเข้า Dashboard ไหม (null = ยังไม่เคยกดยืนยัน)
+        pdpaConsentedAt: user.pdpaConsentedAt,
       },
     });
   } catch (err) {
@@ -69,4 +72,24 @@ async function liffVerify(req, res) {
   }
 }
 
-module.exports = { liffVerify };
+// POST /api/v1/auth/pdpa-consent — (requireAuth เท่านั้น ไม่ผ่าน requireConsent
+// เพราะหน้าที่ Endpoint นี้คือการ "ทำให้ผ่าน" Gate นั้นเอง) User กดยืนยัน Privacy
+// Policy ครั้งแรกจากหน้า Consent ใน Login.jsx
+async function pdpaConsent(req, res) {
+  try {
+    const user = await userRepository.setPdpaConsent(req.user.id);
+    return res.status(200).json({
+      user: {
+        id: user.id,
+        displayName: user.displayName,
+        pictureUrl: user.pictureUrl,
+        pdpaConsentedAt: user.pdpaConsentedAt,
+      },
+    });
+  } catch (err) {
+    console.error(`[auth] pdpaConsent failed: ${err.message}`);
+    return res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+}
+
+module.exports = { liffVerify, pdpaConsent };

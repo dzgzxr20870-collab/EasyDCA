@@ -88,6 +88,38 @@ describe('findAll', () => {
   });
 });
 
+// PDPA Self-Service Erasure (userErasure.service) — หา paymentId ทั้งหมดของ User
+// (ทุกสถานะ) เพื่อรู้ว่าต้องลบสลิปไฟล์ไหนออกจาก Storage บ้าง
+describe('findAllByUserId', () => {
+  test('คืน Payment ทั้งหมดของ user (ทุกสถานะ ไม่ Filter)', async () => {
+    __query.eq.mockResolvedValueOnce({
+      data: [
+        { id: 'pay-1', user_id: 'user-1', amount_thb: 59.17, status: 'confirmed' },
+        { id: 'pay-2', user_id: 'user-1', amount_thb: 590.05, status: 'pending' },
+      ],
+      error: null,
+    });
+
+    const result = await paymentRepository.findAllByUserId('user-1');
+
+    expect(supabaseAdmin.from).toHaveBeenCalledWith('payments');
+    expect(__query.select).toHaveBeenCalledWith('*');
+    expect(__query.eq).toHaveBeenCalledWith('user_id', 'user-1');
+    expect(result).toHaveLength(2);
+    expect(result[0]).toMatchObject({ id: 'pay-1', status: 'confirmed' });
+  });
+
+  test('ไม่มี Payment เลย → คืน []', async () => {
+    __query.eq.mockResolvedValueOnce({ data: [], error: null });
+    expect(await paymentRepository.findAllByUserId('user-1')).toEqual([]);
+  });
+
+  test('DB error → throw', async () => {
+    __query.eq.mockResolvedValueOnce({ data: null, error: { message: 'boom' } });
+    await expect(paymentRepository.findAllByUserId('user-1')).rejects.toThrow('boom');
+  });
+});
+
 describe('findPendingByUserId', () => {
   test('มีคำขอ pending → คืน payment ล่าสุด (order created_at DESC, limit 1)', async () => {
     __query.maybeSingle.mockResolvedValue({

@@ -127,6 +127,22 @@ describe('commandParser.service', () => {
     });
   });
 
+  // PDPA Self-Service Erasure — คำสั่งเดียว ไม่มี Alias (ตั้งใจ ป้องกัน Match กว้างเกินไป)
+  describe('ERASE_DATA_REQUEST — ลบข้อมูล', () => {
+    test('"ลบข้อมูล" → ERASE_DATA_REQUEST', () => {
+      expect(parseCommand('ลบข้อมูล')).toEqual({ command: COMMANDS.ERASE_DATA_REQUEST, params: {} });
+    });
+
+    test('ไม่ Match คำสั่งใกล้เคียงอื่นที่มีคำว่า "ลบ" (เช่น "ลบเตือน BTC")', () => {
+      expect(parseCommand('ลบเตือน BTC').command).toBe(COMMANDS.DELETE_REMINDER);
+    });
+
+    test('มีคำอื่นต่อท้าย/นำหน้า (ไม่ตรงคำเป๊ะ) → UNKNOWN ไม่ Match แบบหลวมๆ', () => {
+      expect(parseCommand('ลบข้อมูลที').command).toBe(COMMANDS.UNKNOWN);
+      expect(parseCommand('กรุณาลบข้อมูล').command).toBe(COMMANDS.UNKNOWN);
+    });
+  });
+
   describe('SET_REMINDER — รายสัปดาห์ "ตั้งเตือน [SYMBOL] ทุกวัน[ชื่อวัน] [เงิน]"', () => {
     test.each([
       ['อาทิตย์', 0],

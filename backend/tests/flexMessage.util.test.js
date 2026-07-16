@@ -762,3 +762,72 @@ describe('กองทุนรวมไทย (Round 7) — Class Picker + Fund
     expect(text).not.toContain('ชนิดหน่วยลงทุน');
   });
 });
+
+// PDPA Express Opt-in Consent — Flex Builders ของ Gate ฝั่ง LINE Chat
+describe('buildPdpaConsentRequiredMessage / Accepted / Declined (PDPA Consent Gate)', () => {
+  const {
+    buildPdpaConsentRequiredMessage,
+    buildPdpaConsentAcceptedMessage,
+    buildPdpaConsentDeclinedMessage,
+  } = require('../src/utils/flexMessage.util');
+
+  test('มี privacyUrl → มีปุ่มยอมรับ/ไม่ยอมรับ + ปุ่มลิงก์อ่านนโยบาย', () => {
+    const msg = buildPdpaConsentRequiredMessage('https://app.easydca.test/privacy.html');
+    const text = JSON.stringify(msg);
+
+    expect(text).toContain('action=pdpa_accept');
+    expect(text).toContain('action=pdpa_decline');
+    expect(text).toContain('https://app.easydca.test/privacy.html');
+  });
+
+  // ไม่ตั้ง FRONTEND_URL → ต้องไม่ใส่ปุ่ม uri ว่างๆ (LINE จะปฏิเสธทั้งข้อความด้วย 400
+  // ทำให้ผู้ใช้ไม่เห็นแม้แต่ปุ่มยอมรับ = Deadlock)
+  test('privacyUrl เป็น null → ไม่มีปุ่มลิงก์ แต่ปุ่มยอมรับ/ไม่ยอมรับยังอยู่ครบ (ไม่ Deadlock)', () => {
+    const msg = buildPdpaConsentRequiredMessage(null);
+    const text = JSON.stringify(msg);
+
+    expect(text).toContain('action=pdpa_accept');
+    expect(text).toContain('action=pdpa_decline');
+    expect(text).not.toContain('"type":"uri"');
+    // ไม่มีปุ่มไหนที่ uri ว่าง
+    expect(text).not.toContain('"uri":""');
+  });
+
+  test('buildPdpaConsentAcceptedMessage → ยืนยันสำเร็จ + บอกให้พิมพ์คำสั่งซ้ำ', () => {
+    const text = JSON.stringify(buildPdpaConsentAcceptedMessage());
+    expect(text).toContain('ยอมรับเรียบร้อยแล้ว');
+    expect(text).toContain('อีกครั้ง');
+  });
+
+  test('buildPdpaConsentDeclinedMessage → อธิบายว่าต้องยอมรับก่อนถึงใช้งานได้', () => {
+    const text = JSON.stringify(buildPdpaConsentDeclinedMessage());
+    expect(text).toContain('ต้องยอมรับนโยบายความเป็นส่วนตัวก่อน');
+  });
+});
+
+// PDPA Self-Service Erasure — 2-Step Confirm Flex Builders
+describe('buildErasureConfirmMessage / buildDataErasedMessage (PDPA Erasure)', () => {
+  const { buildErasureConfirmMessage, buildDataErasedMessage } = require('../src/utils/flexMessage.util');
+
+  test('ไม่มี Payment ค้าง (hasPendingPayment=false) → มีปุ่มยืนยัน/ยกเลิก ไม่มีคำเตือนพิเศษ', () => {
+    const msg = buildErasureConfirmMessage(false);
+    const text = JSON.stringify(msg);
+
+    expect(text).toContain('action=confirm_erase_data');
+    expect(text).toContain('action=cancel_erase_data');
+    expect(text).not.toContain('คำขอชำระเงินที่ยังไม่ได้ตรวจสอบค้างอยู่');
+  });
+
+  test('มี Payment ค้าง (hasPendingPayment=true) → มีคำเตือนพิเศษเพิ่ม', () => {
+    const msg = buildErasureConfirmMessage(true);
+    const text = JSON.stringify(msg);
+
+    expect(text).toContain('action=confirm_erase_data');
+    expect(text).toContain('คำขอชำระเงินที่ยังไม่ได้ตรวจสอบค้างอยู่');
+  });
+
+  test('buildDataErasedMessage → ยืนยันข้อความลบข้อมูลสำเร็จ', () => {
+    const text = JSON.stringify(buildDataErasedMessage());
+    expect(text).toContain('ลบข้อมูล');
+  });
+});

@@ -15,6 +15,8 @@ const COMMANDS = {
   IMPORT_PORTFOLIO: 'IMPORT_PORTFOLIO',
   // Phase 3 Round 8 — Export รายงาน PDF/Excel (Premium) ผ่านคำสั่ง LINE Chat
   EXPORT_REPORT: 'EXPORT_REPORT',
+  // PDPA Self-Service Erasure — ผู้ใช้ขอลบข้อมูล (Anonymize) ด้วยตัวเองผ่าน LINE Chat
+  ERASE_DATA_REQUEST: 'ERASE_DATA_REQUEST',
   UNKNOWN: 'UNKNOWN',
 };
 
@@ -73,6 +75,10 @@ const HISTORY = /^(?:ประวัติ|history)$/;
 // (ที่ยกเลิกได้เฉพาะตอนยังไม่ Confirm) — คำสั่งนี้ย้อนรายการที่ Commit แล้ว
 // Full-match anchored จึงไม่ชนกับ SELL ("ขาย...") / คำสั่งอื่น
 const UNDO_LAST = /^(?:ยกเลิกล่าสุด|ยกเลิกรายการล่าสุด|undo)$/;
+
+// PDPA Self-Service Erasure — คำสั่งเดียว ไม่มี Alias (ตั้งใจให้พิมพ์ตรงคำ ป้องกัน
+// การ Match กว้างเกินไปกับข้อความอื่น) ตรวจแล้วไม่ชนกับ Pattern ใดข้างต้นทั้งหมด
+const ERASE_DATA_REQUEST = /^ลบข้อมูล$/;
 
 // ── DCA Reminder (ฟีเจอร์ตั้งเตือนให้มาซื้อเอง — ไม่ซื้ออัตโนมัติ) ──────────
 // ชื่อวันไทยเรียงยาว→สั้น (พฤหัสบดี ก่อน พฤหัส) กัน Match ครึ่งคำ
@@ -320,6 +326,10 @@ function parseCommand(rawText) {
 
   if (UNDO_LAST.test(text)) {
     return { command: COMMANDS.UNDO_LAST, params: {} };
+  }
+
+  if (ERASE_DATA_REQUEST.test(text)) {
+    return { command: COMMANDS.ERASE_DATA_REQUEST, params: {} };
   }
 
   // รายเดือนก่อนรายสัปดาห์: ทั้งคู่ขึ้นต้น "ตั้งเตือน ... ทุกวัน" — รูปแบบ "ทุกวันที่ <เลข>"

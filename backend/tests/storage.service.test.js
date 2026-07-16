@@ -4,6 +4,8 @@ jest.mock('../src/config/supabase', () => {
   const storageBucket = {
     upload: jest.fn(),
     getPublicUrl: jest.fn(),
+    list: jest.fn(),
+    remove: jest.fn(),
   };
   const supabaseAdmin = {
     storage: { from: jest.fn(() => storageBucket) },
@@ -116,5 +118,71 @@ describe('uploadPaymentSlip', () => {
     // ทั้งคู่ upsert:false → ไม่ทับไฟล์เดิม
     expect(__storageBucket.upload.mock.calls[0][2].upsert).toBe(false);
     expect(__storageBucket.upload.mock.calls[1][2].upsert).toBe(false);
+  });
+});
+
+// PDPA Self-Service Erasure (userErasure.service) — ลบรูปสลิปทั้งหมดของ User จริง
+describe('deleteAllSlipsForUser', () => {
+  test('List Bucket แล้ว Filter เฉพาะไฟล์ที่ขึ้นต้นด้วย Prefix ของ paymentId ที่ส่งมา', async () => {
+    __storageBucket.list.mockResolvedValue({
+      data: [
+        { name: 'pay-1-1000.jpg' },
+        { name: 'pay-1-2000.png' },
+        { name: 'pay-2-3000.jpg' }, // paymentId อื่น ไม่เกี่ยว ไม่ควรถูกลบ
+        { name: 'pay-9-4000.jpg' }, // paymentId อื่น ไม่เกี่ยว ไม่ควรถูกลบ
+      ],
+      error: null,
+    });
+    __storageBucket.remove.mockResolvedValue({ data: [], error: null });
+
+    const count = await storageService.deleteAllSlipsForUser(['pay-1']);
+
+    expect(supabaseAdmin.storage.from).toHaveBeenCalledWith('payment-slips');
+    expect(__storageBucket.remove).toHaveBeenCalledWith(['pay-1-1000.jpg', 'pay-1-2000.png']);
+    expect(count).toBe(2);
+  });
+
+  test('User มีหลาย Payment → รวมไฟล์ทุก paymentId ที่ส่งมาในครั้งเดียว', async () => {
+    __storageBucket.list.mockResolvedValue({
+      data: [{ name: 'pay-1-1000.jpg' }, { name: 'pay-2-2000.jpg' }, { name: 'pay-3-3000.jpg' }],
+      error: null,
+    });
+    __storageBucket.remove.mockResolvedValue({ data: [], error: null });
+
+    const count = await storageService.deleteAllSlipsForUser(['pay-1', 'pay-2']);
+
+    expect(__storageBucket.remove).toHaveBeenCalledWith(['pay-1-1000.jpg', 'pay-2-2000.jpg']);
+    expect(count).toBe(2);
+  });
+
+  test('ไม่มี paymentIds เลย (Array ว่าง) → คืน 0 ไม่เรียก List/Remove เลย', async () => {
+    const count = await storageService.deleteAllSlipsForUser([]);
+
+    expect(count).toBe(0);
+    expect(__storageBucket.list).not.toHaveBeenCalled();
+    expect(__storageBucket.remove).not.toHaveBeenCalled();
+  });
+
+  test('มี paymentIds แต่ไม่มีไฟล์ตรง Prefix เลยใน Bucket → คืน 0 ไม่เรียก Remove', async () => {
+    __storageBucket.list.mockResolvedValue({
+      data: [{ name: 'pay-9-9999.jpg' }],
+      error: null,
+    });
+
+    const count = await storageService.deleteAllSlipsForUser(['pay-1']);
+
+    expect(count).toBe(0);
+    expect(__storageBucket.remove).not.toHaveBeenCalled();
+  });
+
+  test('List ล้มเหลว (error) → throw', async () => {
+    __storageBucket.list.mockResolvedValue({ data: null, error: { message: 'list failed' } });
+    await expect(storageService.deleteAllSlipsForUser(['pay-1'])).rejects.toThrow('list failed');
+  });
+
+  test('Remove ล้มเหลว (error) → throw', async () => {
+    __storageBucket.list.mockResolvedValue({ data: [{ name: 'pay-1-1000.jpg' }], error: null });
+    __storageBucket.remove.mockResolvedValue({ data: null, error: { message: 'remove failed' } });
+    await expect(storageService.deleteAllSlipsForUser(['pay-1'])).rejects.toThrow('remove failed');
   });
 });
