@@ -1,10 +1,23 @@
 // Helper กลางสำหรับเรียก Backend API — ทุก Component ต้องเรียกผ่านที่นี่
 // ห้ามเขียน fetch() กระจายเอง เพื่อให้ Logic แนบ Token / จัดการ 401 มีที่เดียว
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-const TOKEN_KEY = 'easydca_token';
+
+// เก็บ JWT ไว้ใน Memory เท่านั้น (ตัวแปรระดับ Module) — "ห้าม" เก็บใน localStorage
+// (docs/SECURITY.md § 1.1) เพราะ localStorage อ่านได้ตรงๆ ด้วย Script ที่แทรกผ่าน XSS
+// ส่วนตัวแปรใน Memory หายไปเองเมื่อ Refresh หน้า/ปิด Tab (Trade-off ที่ตั้งใจ — ไม่ใช่ Bug)
+// Login.jsx จัดการ Re-auth ให้อัตโนมัติผ่าน LIFF Session เดิมอยู่แล้วเมื่อ Token หายไป
+let currentToken = null;
 
 function getToken() {
-  return localStorage.getItem(TOKEN_KEY);
+  return currentToken;
+}
+
+function setToken(token) {
+  currentToken = token;
+}
+
+function clearToken() {
+  currentToken = null;
 }
 
 async function apiGet(path) {
@@ -14,7 +27,7 @@ async function apiGet(path) {
 
   // Token หมดอายุ/ไม่ถูกต้อง → เคลียร์แล้วบังคับ Login ใหม่ทันที
   if (response.status === 401) {
-    localStorage.removeItem(TOKEN_KEY);
+    clearToken();
     window.location.href = '/';
     throw new Error('UNAUTHORIZED');
   }
@@ -42,7 +55,7 @@ async function apiPost(path, body) {
 
   // Token หมดอายุ/ไม่ถูกต้อง → เคลียร์แล้วบังคับ Login ใหม่ทันที (เหมือน apiGet)
   if (response.status === 401) {
-    localStorage.removeItem(TOKEN_KEY);
+    clearToken();
     window.location.href = '/';
     throw new Error('UNAUTHORIZED');
   }
@@ -64,7 +77,7 @@ async function apiDownload(path) {
   });
 
   if (response.status === 401) {
-    localStorage.removeItem(TOKEN_KEY);
+    clearToken();
     window.location.href = '/';
     throw new Error('UNAUTHORIZED');
   }
@@ -82,4 +95,4 @@ async function apiDownload(path) {
   return { blob, filename };
 }
 
-export { getToken, apiGet, apiPost, apiDownload };
+export { getToken, setToken, clearToken, apiGet, apiPost, apiDownload };

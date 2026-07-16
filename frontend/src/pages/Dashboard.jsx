@@ -12,7 +12,7 @@ import {
   Tooltip,
   Legend,
 } from 'chart.js';
-import { apiGet, apiDownload } from '../lib/api.js';
+import { apiGet, apiDownload, clearToken } from '../lib/api.js';
 import {
   aggregatePortfolioValueThb,
   donutInvestedThb,
@@ -33,7 +33,6 @@ ChartJS.register(
   Legend
 );
 
-const TOKEN_KEY = 'easydca_token';
 const THEME_KEY = 'easydca_theme';
 
 // ชื่อเดือนไทยเต็ม — Pattern เดียวกับ backend/src/utils/thaiDate.util.js
@@ -289,7 +288,7 @@ function Dashboard() {
   }, [transactions, usdRate]);
 
   function handleLogout() {
-    localStorage.removeItem(TOKEN_KEY);
+    clearToken();
     navigate('/');
   }
 

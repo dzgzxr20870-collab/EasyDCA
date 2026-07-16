@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { setToken } from '../lib/api';
 import './Login.css';
 
 // LIFF ID เป็นค่า Public ฝัง Client-side ได้ปกติ (ไม่ใช่ Secret)
 const LIFF_ID = '2010586158-DO9yzmaP';
-const TOKEN_KEY = 'easydca_token';
 
 // ต้องอ่านจาก Environment Variable เสมอ ห้าม Hardcode Backend URL ตรงๆ
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
@@ -56,8 +56,9 @@ function Login() {
 
         const data = await response.json();
 
-        // เก็บ JWT ของระบบไว้ใช้เรียก API ที่ต้อง Login ต่อไป
-        localStorage.setItem(TOKEN_KEY, data.token);
+        // เก็บ JWT ของระบบไว้ใช้เรียก API ที่ต้อง Login ต่อไป (ใน Memory เท่านั้น —
+        // docs/SECURITY.md § 1.1 ห้ามเก็บ localStorage กัน XSS ขโมย Token)
+        setToken(data.token);
 
         setLoading(false);
         const name = (data.user && data.user.displayName) || '';
