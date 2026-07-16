@@ -36,3 +36,7 @@ CREATE TABLE line_webhook_events (
 -- ── Index (§ 10) — Purge Job กวาดหา Event เก่ากว่า Retention Cutoff ────────
 -- (PRIMARY KEY อยู่ที่ event_id ไม่ใช่ received_at จึงไม่มี Index นี้ให้อัตโนมัติ)
 CREATE INDEX idx_line_webhook_events_received_at ON line_webhook_events(received_at);
+
+ALTER TABLE line_webhook_events ENABLE ROW LEVEL SECURITY;
+-- ไม่มี Policy สำหรับ authenticated/anon — เข้าถึงได้เฉพาะ service_role เท่านั้น
+-- (Pattern เดียวกับ audit_logs/system_logs — ดู DATABASE.md § 3)
