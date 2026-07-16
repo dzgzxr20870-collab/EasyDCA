@@ -41,14 +41,28 @@ const COINGECKO_IDS = {
   ADA: 'cardano',
 };
 
-// In-memory Cache ระดับ Module (อยู่ในหน่วยความจำของ Process เดียว)
-// โครงสร้าง: Map<symbol, { price: number, expiresAt: number }>
+// In-memory Cache ระดับ Module (อยู่ในหน่วยความจำของ Process เดียว) — Crypto (CoinGecko)
+// โครงสร้าง: Map<symbol, { thb?: number, usd?: number, expiresAt: number }>
+// รวม THB + USD ไว้ Entry เดียวต่อ Symbol (แก้ Gap 2 — เดิมแยก priceCache/usdPriceCache
+// คนละชุด ทำให้ getCurrentPrice/getCurrentPriceUsd ยิง CoinGecko คนละ Request สำหรับ
+// Symbol เดียวกัน ทั้งที่ /simple/price รองรับ vs_currencies=thb,usd ในคำขอเดียวได้)
+// Field thb/usd ที่ "ไม่มี" (undefined) หมายถึงสกุลนั้นยังไม่มี Cache ที่ใช้ได้ (ยิงไม่สำเร็จ
+// ครั้งล่าสุด) ต้อง Fetch ใหม่ทันทีตอนถูกขอ ไม่ใช่รอ TTL เดิมของอีกสกุลหมดอายุ
 //
 // ⚠️ คำเตือนเรื่อง Scale: Cache นี้ผูกกับ Process เดียว ถ้าวันหน้า Scale เป็น
 // Multi-instance (เช่น Railway scale up หลาย Replica) แต่ละ Instance จะมี
 // Cache แยกกัน ไม่ Sync กัน → รวมกันอาจยิง CoinGecko เกิน Rate Limit ได้อยู่ดี
-// ต้องย้ายไปใช้ Shared Cache (Redis) แทนตอนนั้น
-const priceCache = new Map();
+// ต้องย้ายไปใช้ Shared Cache (Redis) แทนตอนนั้น — ข้อจำกัดเดียวกันนี้ครอบคลุมถึง
+// cryptoInFlightRequests ด้านล่างด้วย (Coalescing ทำงานแค่ภายใน Process เดียวกัน)
+const cryptoPriceCache = new Map();
+
+// Request Coalescing (แก้ Gap 1 — Dogpile): ถ้ามีการยิง CoinGecko สำหรับ Symbol นี้
+// "ค้างอยู่แล้ว" (ยังไม่ Resolve) ให้รอ Promise เดิมแทนการยิงซ้ำ — กัน N Request พร้อมกัน
+// ตอน Cache หมดอายุพอดี ยิง CoinGecko กลายเป็น N ครั้งทั้งที่ตั้งใจ Cache ไว้แค่ 1
+// ครั้ง/นาที/Symbol อยู่แล้ว โครงสร้าง: Map<symbol, Promise<{thb, usd}>> — Key แยกตาม
+// Symbol เพื่อให้ Symbol ต่างกันยิงพร้อมกันได้อิสระ ไม่ Serialize รวมกันเป็น Lock เดียว
+// ทั้ง Module (จะทำให้ Latency ของ Symbol ที่ไม่เกี่ยวข้องกันแย่ลงโดยไม่ได้ประโยชน์อะไร)
+const cryptoInFlightRequests = new Map();
 
 // ── Twelve Data (หุ้นสหรัฐ) ────────────────────────────────────────────────
 const TWELVE_DATA_QUOTE_URL = 'https://api.twelvedata.com/quote';
@@ -61,7 +75,7 @@ const USD_THB_PAIR = 'USD/THB';
 // ของการบันทึก DCA อย่างมีนัยสำคัญ
 const FX_RATE_CACHE_TTL_MS = 10 * 60 * 1000;
 
-// Cache แยกกัน 2 ชุด (ไม่ปนกับ priceCache ของ Crypto เพื่อไม่แตะ Logic เดิม):
+// Cache แยกกัน 2 ชุด (ไม่ปนกับ cryptoPriceCache ของ Crypto เพื่อไม่แตะ Logic เดิม):
 //  - stockPriceCache: ราคาหุ้น "เป็น THB แล้ว" TTL 60 วินาที (เท่า Crypto)
 //  - fxRateCache: อัตราแลกเปลี่ยน USD/THB TTL 10 นาที
 const stockPriceCache = new Map();
@@ -70,6 +84,8 @@ const fxRateCache = new Map();
 // ราคา "เป็น USD ตามจริง" (Native) TTL 60 วินาที — ใช้เฉพาะ Multi-Currency Round 10
 // ตอนผู้ใช้ซื้อ/ขายด้วย "จำนวนเงินรวมเป็น USD" (ต้องหาร quantity จากราคา USD ไม่ใช่ THB
 // เพราะบันทึกธุรกรรมเป็น USD ตามจริง) — แยก Cache จาก stockPriceCache (ที่เก็บ THB)
+// ⚠️ ใช้เฉพาะหุ้นสหรัฐ (stock_us) เท่านั้น — Crypto ย้ายไป cryptoPriceCache แล้ว
+// (Entry เดียวกับราคา THB เพื่อยิง CoinGecko ครั้งเดียวได้ทั้งสองสกุล — แก้ Gap 2)
 const usdPriceCache = new Map();
 
 // ── ทองคำไทย (Phase 3 Round 7) ─────────────────────────────────────────────
@@ -118,12 +134,15 @@ const FUND_MASTER_MAX_PAGES = 200;
 const navCache = new Map(); // Map<`${projId}|${className}`, { navDate, lastVal, expiresAt }>
 let fundMasterCache = null; // { items: [...], expiresAt } — ทั้ง Master List (Cache รวม)
 
-// ยิง CoinGecko แล้วคืนราคา THB เป็น Number — คืน null ถ้าล้มเหลวทุกกรณี
-// (Network error, Timeout, Status ไม่ใช่ 2xx, Response ไม่มีราคาที่คาดไว้)
-// ไม่ throw เพื่อให้ getCurrentPrice จัดการ Fallback ได้ที่เดียว
-async function fetchPriceFromCoinGecko(coingeckoId) {
+// ยิง CoinGecko "ครั้งเดียว" ได้ทั้งราคา THB และ USD (vs_currencies=thb,usd — แก้ Gap 2)
+// คืน { thb: number|null, usd: number|null } — แต่ละสกุลตรวจสอบแยกกันเอง (ต้องเป็น
+// ตัวเลขบวกที่ Finite มิฉะนั้นเป็น null) ไม่ปัดตกทั้ง Response แค่เพราะสกุลใดสกุลหนึ่ง
+// มีปัญหา (เช่น CoinGecko อาจมี Response ผิดปกติเฉพาะบางสกุลได้) — คืน null ทั้งคู่เมื่อ
+// ยิงไม่สำเร็จเลย (Network error, Timeout, Status ไม่ใช่ 2xx, Response Shape ผิด)
+// ไม่ throw เพื่อให้ Caller จัดการ Fallback ได้ที่เดียว (Pattern เดิมของไฟล์นี้)
+async function fetchCryptoPricesFromCoinGecko(coingeckoId) {
   const url =
-    `${COINGECKO_SIMPLE_PRICE_URL}?ids=${encodeURIComponent(coingeckoId)}&vs_currencies=thb`;
+    `${COINGECKO_SIMPLE_PRICE_URL}?ids=${encodeURIComponent(coingeckoId)}&vs_currencies=thb,usd`;
 
   // AbortController ตัด Request ที่ค้างเกิน REQUEST_TIMEOUT_MS ทิ้ง
   const controller = new AbortController();
@@ -135,60 +154,105 @@ async function fetchPriceFromCoinGecko(coingeckoId) {
     if (!response.ok) {
       const detail = await response.text().catch(() => '');
       console.error(`[priceFeed] CoinGecko API failed: ${response.status} ${detail}`);
-      return null;
+      return { thb: null, usd: null };
     }
 
     const data = await response.json();
-    const price = data?.[coingeckoId]?.thb;
+    const rawThb = data?.[coingeckoId]?.thb;
+    const rawUsd = data?.[coingeckoId]?.usd;
 
-    // ราคาต้องเป็นตัวเลขบวกที่ Finite เท่านั้น — กัน Response รูปแบบผิด/ว่าง
-    if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0) {
-      console.error(`[priceFeed] CoinGecko returned no valid price for ${coingeckoId}`);
-      return null;
+    // ราคาต้องเป็นตัวเลขบวกที่ Finite เท่านั้น — กัน Response รูปแบบผิด/ว่าง (ตรวจ
+    // แยกรายสกุล — สกุลหนึ่งพังไม่ทำให้อีกสกุลที่ถูกต้องถูกทิ้งไปด้วย)
+    const thb =
+      typeof rawThb === 'number' && Number.isFinite(rawThb) && rawThb > 0 ? rawThb : null;
+    const usd =
+      typeof rawUsd === 'number' && Number.isFinite(rawUsd) && rawUsd > 0 ? rawUsd : null;
+
+    if (thb === null) {
+      console.error(`[priceFeed] CoinGecko returned no valid THB price for ${coingeckoId}`);
+    }
+    if (usd === null) {
+      console.error(`[priceFeed] CoinGecko returned no valid USD price for ${coingeckoId}`);
     }
 
-    return price;
+    return { thb, usd };
   } catch (err) {
     console.error(`[priceFeed] CoinGecko request error: ${err.message}`);
-    return null;
+    return { thb: null, usd: null };
   } finally {
     clearTimeout(timeout);
   }
 }
 
-// ยิง CoinGecko คืน "ราคาเป็น USD" (Number) — Pattern เดียวกับ fetchPriceFromCoinGecko
-// แต่ vs_currencies=usd (ใช้สำหรับ Multi-Currency Round 10) คืน null ถ้าล้มเหลว ไม่ throw
-async function fetchCryptoPriceUsd(coingeckoId) {
-  const url =
-    `${COINGECKO_SIMPLE_PRICE_URL}?ids=${encodeURIComponent(coingeckoId)}&vs_currencies=usd`;
+// Coalescing (แก้ Gap 1): ถ้ามี Fetch ของ Symbol นี้ค้างอยู่แล้ว คืน Promise เดิมแทน
+// การยิง CoinGecko ซ้ำ — "ไม่ใช่" async function โดยตั้งใจ (ไม่มี await ในตัวมันเอง)
+// เพื่อให้ทั้งการเช็ค Map, การเรียก fetchCryptoPricesFromCoinGecko, และการ Set Map
+// เกิดขึ้น "Synchronous" ในจังหวะเดียวกันก่อน Caller จะ await — นี่คือสิ่งที่ทำให้ 2
+// Request พร้อมกัน (Symbol เดียวกัน) เห็น In-flight Entry เดียวกันจริง ไม่ Race กัน
+// ล้าง Entry ออกจาก Map ใน finally เสมอ (สำเร็จหรือพัง) ไม่งั้นรอบ Cache หมดอายุถัดไป
+// จะเจอ Entry ค้าง (Stale) แทนที่จะเริ่ม Fetch ใหม่
+function fetchCoalescedCryptoPrices(symbol, coingeckoId) {
+  const inFlight = cryptoInFlightRequests.get(symbol);
+  if (inFlight) return inFlight;
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const promise = fetchCryptoPricesFromCoinGecko(coingeckoId).finally(() => {
+    cryptoInFlightRequests.delete(symbol);
+  });
+  cryptoInFlightRequests.set(symbol, promise);
+  return promise;
+}
 
-  try {
-    const response = await fetch(url, { method: 'GET', signal: controller.signal });
+// Cache ผลลัพธ์ที่ Fetch ได้ — เก็บเฉพาะสกุลที่สำเร็จ (ห้าม Cache ค่า null ตาม Pattern
+// เดิมของไฟล์นี้ ปล่อยให้ Request ถัดไป Retry ทันทีไม่ต้องรอ TTL) ถ้าสำเร็จแค่สกุลเดียว
+// ยัง Cache สกุลนั้นไว้ตามปกติ ไม่ทิ้งทั้งคู่เพียงเพราะอีกสกุลพัง (ดู Spec Gap 2)
+//
+// ⚠️ ต้อง Merge กับ Entry เดิมที่ยังไม่หมดอายุ ไม่ใช่สร้าง Entry ใหม่ทับทั้งก้อน — มิฉะนั้น
+// ถ้ารอบ Fetch นี้ได้แค่สกุลเดียว (เช่น usd สำเร็จแต่ thb ล้มเหลวชั่วคราว) จะทำให้ thb ที่
+// เพิ่งสำเร็จจากรอบก่อนหน้าและยังไม่หมดอายุถูกทิ้งไปด้วยทั้งที่ไม่มีอะไรผิดปกติกับค่านั้นเลย
+// (Regression ที่พบตอน Review — บั่นทอนเป้าหมายของ Merged Cache ที่ต้องการลด Fetch)
+function cacheCryptoPrices(symbol, prices) {
+  if (prices.thb === null && prices.usd === null) return;
 
-    if (!response.ok) {
-      const detail = await response.text().catch(() => '');
-      console.error(`[priceFeed] CoinGecko USD price failed: ${response.status} ${detail}`);
-      return null;
-    }
+  const now = Date.now();
+  const existing = cryptoPriceCache.get(symbol);
+  // เริ่มจาก Field เดิมที่ยังไม่หมดอายุ (ถ้ามี) แล้วค่อยเอาผลรอบนี้ทับเฉพาะสกุลที่สำเร็จ
+  // — สกุลที่รอบนี้ล้มเหลว (null) ต้องไม่ไปลบ/ทับ Field เดิมที่ยังใช้ได้
+  const entry = existing && existing.expiresAt > now
+    ? { thb: existing.thb, usd: existing.usd }
+    : {};
 
-    const data = await response.json();
-    const price = data?.[coingeckoId]?.usd;
+  entry.expiresAt = now + CACHE_TTL_MS;
+  if (prices.thb !== null) entry.thb = prices.thb;
+  if (prices.usd !== null) entry.usd = prices.usd;
+  cryptoPriceCache.set(symbol, entry);
+}
 
-    if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0) {
-      console.error(`[priceFeed] CoinGecko returned no valid USD price for ${coingeckoId}`);
-      return null;
-    }
-
-    return price;
-  } catch (err) {
-    console.error(`[priceFeed] CoinGecko USD request error: ${err.message}`);
-    return null;
-  } finally {
-    clearTimeout(timeout);
+// อ่าน/เติมราคา THB ของ Crypto Symbol หนึ่งตัว ผ่าน cryptoPriceCache ร่วมกับ
+// getCryptoUsdPrice ด้านล่าง (Entry เดียวกัน) — Cache Hit เฉพาะเมื่อ field thb ของ
+// Entry นี้ "มีอยู่จริง" (ไม่ใช่แค่ Entry ยังไม่หมดอายุ เพราะอีกสกุลอาจสำเร็จแต่ thb
+// พังก็ได้ ต้องแยกเช็ครายสกุล)
+async function getCryptoThbPrice(symbol, coingeckoId) {
+  const cached = cryptoPriceCache.get(symbol);
+  if (cached && cached.expiresAt > Date.now() && cached.thb !== undefined) {
+    return cached.thb;
   }
+
+  const prices = await fetchCoalescedCryptoPrices(symbol, coingeckoId);
+  cacheCryptoPrices(symbol, prices);
+  return prices.thb;
+}
+
+// อ่าน/เติมราคา USD ของ Crypto Symbol หนึ่งตัว — Pattern เดียวกับ getCryptoThbPrice
+// (Entry/Cache/Coalescing เดียวกัน ต่างแค่ Field ที่อ่าน)
+async function getCryptoUsdPrice(symbol, coingeckoId) {
+  const cached = cryptoPriceCache.get(symbol);
+  if (cached && cached.expiresAt > Date.now() && cached.usd !== undefined) {
+    return cached.usd;
+  }
+
+  const prices = await fetchCoalescedCryptoPrices(symbol, coingeckoId);
+  cacheCryptoPrices(symbol, prices);
+  return prices.usd;
 }
 
 // ยิง Twelve Data /quote คืน "ราคาปิดล่าสุดเป็น USD" (Number) — คืน null ถ้า
@@ -669,21 +733,8 @@ async function getCurrentPrice(symbol) {
   const coingeckoId = COINGECKO_IDS[normalized];
   if (!coingeckoId) return null;
 
-  // Cache Hit ที่ยังไม่หมดอายุ → ใช้เลย ไม่ยิง API
-  const cached = priceCache.get(normalized);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.price;
-  }
-
-  const price = await fetchPriceFromCoinGecko(coingeckoId);
-
-  // สำคัญ: ห้าม Cache ค่า null/Error — ปล่อยให้ Request ถัดไป Retry ทันที
-  // ไม่ต้องรอ TTL หมด (ป้องกันกรณี CoinGecko ล้มชั่วคราวแล้ว User ติด Error
-  // ยาวถึง 60 วินาทีทั้งที่ API อาจกลับมาทำงานแล้ว)
-  if (price === null) return null;
-
-  priceCache.set(normalized, { price, expiresAt: Date.now() + CACHE_TTL_MS });
-  return price;
+  // Cache/Coalescing ร่วมกับ getCurrentPriceUsd (Entry เดียวกันต่อ Symbol — แก้ Gap 2)
+  return getCryptoThbPrice(normalized, coingeckoId);
 }
 
 // คืนราคาปัจจุบันของ Symbol "เป็น USD ตามจริง" (Native, Number) หรือ null ถ้าหาไม่ได้
@@ -697,32 +748,38 @@ async function getCurrentPriceUsd(symbol) {
   if (typeof symbol !== 'string') return null;
   const normalized = symbol.trim().toUpperCase();
 
-  const cached = usdPriceCache.get(normalized);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.price;
+  const type = symbolRegistry.lookupType(normalized);
+
+  // Crypto (CoinGecko) — ใช้ cryptoPriceCache ร่วมกับ getCurrentPrice (Entry เดียวกัน
+  // ต่อ Symbol แก้ Gap 2) แทน usdPriceCache เดิม — usdPriceCache ยังคงใช้เฉพาะหุ้น
+  // สหรัฐด้านล่างเหมือนเดิมทุกประการ (ไม่แตะ Scope ของงานนี้)
+  const coingeckoId = COINGECKO_IDS[normalized];
+  if (coingeckoId) {
+    return getCryptoUsdPrice(normalized, coingeckoId);
   }
 
-  const type = symbolRegistry.lookupType(normalized);
-  let price = null;
-
   if (type === 'stock_us') {
+    const cached = usdPriceCache.get(normalized);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.price;
+    }
+
     const apiKey = process.env.TWELVE_DATA_API_KEY;
     if (!apiKey) {
       console.error('[priceFeed] Twelve Data API key (TWELVE_DATA_API_KEY) is not configured');
       return null;
     }
-    price = await fetchUsStockPriceUsd(normalized, apiKey);
-  } else if (COINGECKO_IDS[normalized]) {
-    price = await fetchCryptoPriceUsd(COINGECKO_IDS[normalized]);
-  } else {
-    return null;
+
+    const price = await fetchUsStockPriceUsd(normalized, apiKey);
+
+    // ห้าม Cache null (Retry ทันที เหมือน Pattern อื่น)
+    if (price === null) return null;
+
+    usdPriceCache.set(normalized, { price, expiresAt: Date.now() + CACHE_TTL_MS });
+    return price;
   }
 
-  // ห้าม Cache null (Retry ทันที เหมือน Pattern อื่น)
-  if (price === null) return null;
-
-  usdPriceCache.set(normalized, { price, expiresAt: Date.now() + CACHE_TTL_MS });
-  return price;
+  return null;
 }
 
 module.exports = {

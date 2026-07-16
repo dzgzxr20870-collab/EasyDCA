@@ -5,11 +5,21 @@
 
 const SIMPLE_PRICE_URL = 'https://api.coingecko.com/api/v3/simple/price';
 
-// Mock CoinGecko ตอบราคาสำเร็จสำหรับ coingeckoId ที่ระบุ
+// Mock CoinGecko ตอบราคาสำเร็จสำหรับ coingeckoId ที่ระบุ (thb เท่านั้น — usd ไม่ส่งมา
+// จำลอง Response แบบเดิมก่อน Gap 2 Fix ที่ยังใช้ได้ปกติ เพราะ vs_currencies=thb,usd
+// เป็น Superset ของ vs_currencies=thb เดิม)
 function mockCoinGeckoSuccess(coingeckoId, priceThb) {
   jest.spyOn(global, 'fetch').mockResolvedValue({
     ok: true,
     json: async () => ({ [coingeckoId]: { thb: priceThb } }),
+  });
+}
+
+// Mock CoinGecko ตอบทั้ง THB และ USD พร้อมกัน (Response จริงหลัง Gap 2 Fix)
+function mockCoinGeckoBothCurrencies(coingeckoId, priceThb, priceUsd) {
+  return jest.spyOn(global, 'fetch').mockResolvedValue({
+    ok: true,
+    json: async () => ({ [coingeckoId]: { thb: priceThb, usd: priceUsd } }),
   });
 }
 
@@ -127,6 +137,142 @@ describe('getCurrentPrice — Cache (TTL 60 วินาที)', () => {
 
     expect(firstFail).toBeNull();
     expect(secondOk).toBe(3400000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('getCurrentPrice / getCurrentPriceUsd — Request Coalescing + Merged THB/USD Cache', () => {
+  test('2 Request พร้อมกันของ Symbol เดียวกัน (getCurrentPrice ซ้ำ) → ยิง CoinGecko แค่ 1 ครั้ง (แก้ Dogpile)', async () => {
+    const fetchMock = mockCoinGeckoBothCurrencies('bitcoin', 3400000, 95000);
+
+    const [first, second] = await Promise.all([
+      priceFeedService.getCurrentPrice('BTC'),
+      priceFeedService.getCurrentPrice('BTC'),
+    ]);
+
+    expect(first).toBe(3400000);
+    expect(second).toBe(3400000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('ขอทั้ง THB (getCurrentPrice) และ USD (getCurrentPriceUsd) พร้อมกัน → ยิง CoinGecko แค่ 1 ครั้ง (แก้ Gap 2)', async () => {
+    const fetchMock = mockCoinGeckoBothCurrencies('bitcoin', 3400000, 95000);
+
+    const [thb, usd] = await Promise.all([
+      priceFeedService.getCurrentPrice('BTC'),
+      priceFeedService.getCurrentPriceUsd('BTC'),
+    ]);
+
+    expect(thb).toBe(3400000);
+    expect(usd).toBe(95000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const calledUrl = fetchMock.mock.calls[0][0];
+    expect(calledUrl).toContain('vs_currencies=thb,usd');
+  });
+
+  test('Cache Warm ทั้งคู่แล้ว → เรียกซ้ำ (THB หรือ USD) ไม่ยิง API เพิ่ม', async () => {
+    const fetchMock = mockCoinGeckoBothCurrencies('bitcoin', 3400000, 95000);
+
+    await priceFeedService.getCurrentPrice('BTC');
+    await priceFeedService.getCurrentPriceUsd('BTC');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // ยังอยู่ใน TTL (60s) — เรียกซ้ำทั้งสองฟังก์ชันต้องไม่ยิง API เพิ่มเลย
+    jest.advanceTimersByTime(30 * 1000);
+    const thbAgain = await priceFeedService.getCurrentPrice('BTC');
+    const usdAgain = await priceFeedService.getCurrentPriceUsd('BTC');
+
+    expect(thbAgain).toBe(3400000);
+    expect(usdAgain).toBe(95000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('THB ถูกต้องแต่ USD Invalid (หรือขาดหาย) ในรอบ Fetch เดียวกัน → ยัง Cache/คืน THB ได้ตามปกติ ส่วน USD คืน null และไม่ถูก Cache (Retry รอบถัดไป)', async () => {
+    const fetchMock = jest
+      .spyOn(global, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        // usd หายไปจาก Response รอบแรก (Shape ผิดปกติเฉพาะสกุลนี้) — thb ปกติ
+        json: async () => ({ bitcoin: { thb: 3400000 } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ bitcoin: { thb: 3400000, usd: 95000 } }),
+      });
+
+    // ยิงพร้อมกัน (Coalesce เป็น Fetch เดียว) — thb/usd มาจาก Response รอบแรกรอบเดียวกัน
+    const [thb, usdFirstTry] = await Promise.all([
+      priceFeedService.getCurrentPrice('BTC'),
+      priceFeedService.getCurrentPriceUsd('BTC'),
+    ]);
+
+    expect(thb).toBe(3400000);
+    expect(usdFirstTry).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // เรียก USD ใหม่ (ไม่ถูก Cache จากรอบแรก → Retry ทันทีไม่รอ TTL) → ได้ค่าจาก Response รอบ 2
+    const usdSecondTry = await priceFeedService.getCurrentPriceUsd('BTC');
+    expect(usdSecondTry).toBe(95000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    // thb เดิมยังใช้ Cache ได้ปกติ (ไม่ถูกกระทบจาก Retry ของ usd — ไม่ยิง Fetch ที่ 3)
+    const thbStillCached = await priceFeedService.getCurrentPrice('BTC');
+    expect(thbStillCached).toBe(3400000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  test('Field ที่ยังไม่หมดอายุจากรอบก่อน (thb) ต้องไม่ถูกทับด้วย null ตอนอีกสกุล (usd) Refetch รอบใหม่ (Merge ไม่ใช่ Replace)', async () => {
+    const fetchMock = jest
+      .spyOn(global, 'fetch')
+      // รอบ 1: thb สำเร็จ, usd ขาดหายจาก Response — thb เข้า Cache (usd ยังไม่ถูก Cache)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ bitcoin: { thb: 3400000 } }),
+      })
+      // รอบ 2 (Trigger เพราะ usd ยังไม่เคย Cache จากรอบ 1): thb ล้มเหลวชั่วคราว (หายไปจาก
+      // Response รอบนี้) แต่ usd สำเร็จ — thb เดิมจากรอบ 1 "ยังไม่หมดอายุ" ต้องไม่ถูกทับ
+      // ด้วย null (นี่คือ Bug ที่พบตอน Review: cacheCryptoPrices เดิมสร้าง Entry ใหม่ทับ
+      // ทั้งก้อนแทนที่จะ Merge ทำให้ thb ที่ยังใช้ได้หายไปจาก Cache ทั้งที่ไม่มีอะไรผิดปกติ)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ bitcoin: { usd: 95000 } }),
+      });
+
+    const thbRound1 = await priceFeedService.getCurrentPrice('BTC');
+    expect(thbRound1).toBe(3400000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // ยังไม่ Advance เวลาเลย (thb ยังไม่หมดอายุ) — usd ไม่เคยถูก Cache จากรอบ 1 จึง Trigger
+    // Fetch รอบ 2
+    const usdRound2 = await priceFeedService.getCurrentPriceUsd('BTC');
+    expect(usdRound2).toBe(95000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    // Regression Check: thb จากรอบ 1 ต้องยังอยู่ใน Cache (ไม่ถูกรอบ 2 ทับด้วย null) —
+    // เรียกซ้ำต้องได้ค่าเดิมจาก Cache โดยไม่ยิง Fetch รอบที่ 3
+    const thbAfterRound2 = await priceFeedService.getCurrentPrice('BTC');
+    expect(thbAfterRound2).toBe(3400000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  test('2 Request พร้อมกันของคนละ Symbol (BTC, ETH) → ยิงคนละ Request แยกกัน (ไม่ Over-coalesce)', async () => {
+    const fetchMock = jest.spyOn(global, 'fetch').mockImplementation((url) => {
+      if (url.includes('ids=bitcoin')) {
+        return Promise.resolve({ ok: true, json: async () => ({ bitcoin: { thb: 3400000, usd: 95000 } }) });
+      }
+      if (url.includes('ids=ethereum')) {
+        return Promise.resolve({ ok: true, json: async () => ({ ethereum: { thb: 120000, usd: 3500 } }) });
+      }
+      return Promise.resolve({ ok: false, status: 404, text: async () => 'unexpected' });
+    });
+
+    const [btc, eth] = await Promise.all([
+      priceFeedService.getCurrentPrice('BTC'),
+      priceFeedService.getCurrentPrice('ETH'),
+    ]);
+
+    expect(btc).toBe(3400000);
+    expect(eth).toBe(120000);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
