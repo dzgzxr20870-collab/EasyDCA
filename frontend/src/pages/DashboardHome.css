@@ -70,7 +70,13 @@
 .dh-hello .dh-leaf { font-size: 19px; }
 .dh-hello p { color: var(--muted); font-size: 13px; margin-top: 1px; }
 .dh-sp { flex: 1; }
-.dh-chip-btn { display: flex; align-items: center; gap: 8px; background: var(--card); border: 1px solid var(--line); padding: 9px 14px; border-radius: 12px; font-weight: 600; font-size: 13px; color: var(--ink2); box-shadow: var(--shadow); }
+/* .dh-app ต่อท้ายในทุก Selector ปุ่มด้านล่างนี้ (แทน .dh-chip-btn เฉยๆ ฯลฯ) เพื่อให้
+   Specificity (0,2,0) ชนะ .dh-app button ที่ (0,1,1) ด้านบน — บั๊ก P0 ที่เจอจริง:
+   .dh-app button { background:none } มี Specificity สูงกว่า Selector Class เดี่ยว
+   ของปุ่มทุกปุ่ม จึงชนะโดยไม่ควร (ปุ่มเขียวเป็นปุ่มขาวว่างเปล่า) ยืนยันด้วย DevTools
+   จริง (getComputedStyle + ไล่ดู CSSRule ที่ Match Element) ไม่ใช่เรื่อง Dashboard.css
+   (ไฟล์เก่า) ชนกันตามที่ตั้งสมมติฐานไว้ตอนแรก — เป็นบั๊กภายในไฟล์นี้เอง */
+.dh-app .dh-chip-btn { display: flex; align-items: center; gap: 8px; background: var(--card); border: 1px solid var(--line); padding: 9px 14px; border-radius: 12px; font-weight: 600; font-size: 13px; color: var(--ink2); box-shadow: var(--shadow); }
 
 .dh-stats { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 14px; }
 .dh-stat { background: var(--card); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow); padding: 16px 18px; }
@@ -107,13 +113,13 @@ label.dh-fl .dh-fl-opt { color: var(--muted); font-weight: 500; }
 .dh-cur-toggle button { font-size: 11px; font-weight: 700; padding: 4px 8px; border-radius: 7px; color: var(--muted); }
 .dh-cur-toggle .dh-cur-on { background: #fff; color: var(--green-ink); box-shadow: 0 1px 3px rgba(0,0,0,.08); }
 .dh-chips { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 8px; }
-.dh-chip { border: 1.5px solid var(--line2); background: #fff; border-radius: 99px; padding: 5px 13px; font-size: 12.5px; font-weight: 700; color: var(--ink2); transition: .13s; }
+.dh-app .dh-chip { border: 1.5px solid var(--line2); background: #fff; border-radius: 99px; padding: 5px 13px; font-size: 12.5px; font-weight: 700; color: var(--ink2); transition: .13s; }
 .dh-chip:hover { border-color: var(--green); color: var(--green-deep); }
-.dh-chip-on { background: var(--green-soft); border-color: var(--green); color: var(--green-ink); }
-.dh-btn-main { background: linear-gradient(135deg, var(--green), var(--green-deep)); color: #fff; font-size: 15.5px; font-weight: 700; border-radius: 13px; padding: 13px; box-shadow: 0 6px 16px rgba(21,115,71,.28); transition: transform .12s, box-shadow .12s; }
+.dh-app .dh-chip-on { background: var(--green-soft); border-color: var(--green); color: var(--green-ink); }
+.dh-app .dh-btn-main { background: linear-gradient(135deg, var(--green), var(--green-deep)); color: #fff; font-size: 15.5px; font-weight: 700; border-radius: 13px; padding: 13px; box-shadow: 0 6px 16px rgba(21,115,71,.28); transition: transform .12s, box-shadow .12s; }
 .dh-btn-main:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 9px 20px rgba(21,115,71,.34); }
 .dh-btn-main:disabled { opacity: .65; cursor: not-allowed; }
-.dh-btn-ghost { border: 1.5px solid var(--line2); border-radius: 11px; padding: 8px 14px; font-weight: 700; font-size: 12.5px; color: var(--ink2); background: #fff; }
+.dh-app .dh-btn-ghost { border: 1.5px solid var(--line2); border-radius: 11px; padding: 8px 14px; font-weight: 700; font-size: 12.5px; color: var(--ink2); background: #fff; }
 .dh-btn-ghost:hover:not(:disabled) { border-color: var(--green); color: var(--green-deep); }
 .dh-btn-ghost-danger:hover:not(:disabled) { border-color: var(--red); color: var(--red); }
 .dh-btn-ghost:disabled { opacity: .6; cursor: not-allowed; }
@@ -187,14 +193,14 @@ label.dh-fl .dh-fl-opt { color: var(--muted); font-weight: 500; }
 .dh-tx-amt small { font-size: 11px; color: var(--muted); }
 .dh-side-b { font-size: 10.5px; font-weight: 700; padding: 2.5px 8px; border-radius: 99px; }
 .dh-b-buy { background: var(--green-soft); color: var(--green-ink); } .dh-b-sell { background: var(--red-soft); color: var(--red); }
-.dh-undo-btn { opacity: 0; transition: .15s; font-size: 11px; border: 1.5px solid var(--line2); border-radius: 11px; padding: 6px 10px; font-weight: 700; color: var(--ink2); background: #fff; }
+.dh-app .dh-undo-btn { opacity: 0; transition: .15s; font-size: 11px; border: 1.5px solid var(--line2); border-radius: 11px; padding: 6px 10px; font-weight: 700; color: var(--ink2); background: #fff; }
 .dh-tx:hover .dh-undo-btn, .dh-undo-btn:focus-visible { opacity: 1; }
 
 /* chart */
 .dh-chart-wrap { padding: 6px 20px 18px; }
 .dh-tabs { display: flex; gap: 5px; }
 .dh-tab { padding: 5.5px 12px; border-radius: 9px; font-size: 12px; font-weight: 700; color: var(--muted); }
-.dh-tab-on { background: var(--green-soft); color: var(--green-ink); }
+.dh-app .dh-tab-on { background: var(--green-soft); color: var(--green-ink); }
 .dh-chart-note { font-size: 11.5px; color: var(--muted); padding: 0 20px 14px; }
 
 .dh-disclaimer-bottom { font-size: 11.5px; color: var(--muted); text-align: center; padding: 4px 20px 24px; line-height: 1.6; }

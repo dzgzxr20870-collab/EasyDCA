@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { getToken, apiGet, apiPost, clearToken } from '../lib/api.js';
 import { getAssetSymbols } from '../lib/symbolsCache.js';
 import { undoErrorMessage } from '../lib/dcaErrors.js';
@@ -45,6 +45,12 @@ function DashboardHome() {
   const [loadError, setLoadError] = useState(null);
   const [overview, setOverview] = useState(null);
   const [symbols, setSymbols] = useState([]);
+  // role มาจาก GET /api/v1/dashboard/me เท่านั้น — ตรวจสอบแล้วว่า overview
+  // (API.md §15.4 / backend/src/services/dashboardOverview.service.js) ไม่มี
+  // Field role ติดมาเลย (role มาจาก JWT req.user.role ที่ Backend แนบไว้เฉพาะ
+  // getMe — dashboard.controller.js บรรทัด ~113-115) จึงต้อง Fetch แยกอีก Endpoint
+  // เข้า Promise.all เดียวกับ symbols/overview ไม่ยิงซ้ำสองรอบ
+  const [planInfo, setPlanInfo] = useState(null);
   const [undoTarget, setUndoTarget] = useState(null);
   const [toast, setToast] = useState(null);
   const [pickerOpenSignal, setPickerOpenSignal] = useState(0);
@@ -69,12 +75,17 @@ function DashboardHome() {
 
     async function load() {
       try {
-        const [symbolsData, overviewData] = await Promise.all([
+        const [symbolsData, overviewData, meData] = await Promise.all([
           getAssetSymbols(),
           apiGet('/api/v1/dashboard/overview'),
+          // Endpoint แยก + catch เอง (Pattern เดียวกับ Dashboard.jsx เดิม) — ถ้า /me
+          // ล่ม ไม่ให้กระทบการโหลดหน้าหลัก (Fallback role=undefined = ไม่ใช่ Admin
+          // ตาม Fail-safe เดิม ไม่ใช่การเดาสิทธิ์)
+          apiGet('/api/v1/dashboard/me').catch(() => ({ role: undefined })),
         ]);
         setSymbols(symbolsData);
         setOverview(overviewData);
+        setPlanInfo(meData);
         setReady(true);
       } catch (err) {
         setLoadError('โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
@@ -153,25 +164,48 @@ function DashboardHome() {
               </div>
             </div>
             <nav>
-              <a className="dh-nav-item dh-nav-active" href="/dashboard">
+              {/* P0: เดิมใช้ <a href> ธรรมดา → Full Page Reload → JWT ใน Memory หาย
+                  (SECURITY.md § 1.1) → Auth Guard เด้งไป Login → LIFF Auto-login คืน
+                  Session → navigate('/dashboard') ค่า Default เสมอ → ผู้ใช้เห็นเป็น
+                  "กดเมนูอื่นแล้ววนกลับ /dashboard" (Root Cause ยืนยันจาก Railway Log:
+                  GET /dashboard/classic ตามด้วย GET / ภายใน 1 วินาที) — เปลี่ยนทุกจุด
+                  ที่นำทางข้ามหน้าเป็น <Link to> (Client-side Route, ไม่ Reload)
+                  Pattern เดียวกับที่เคยแก้บั๊กนี้ให้ปุ่ม Admin ใน Dashboard.jsx มาก่อน */}
+              <Link className="dh-nav-item dh-nav-active" to="/dashboard">
                 <span className="dh-ic">🏠</span> แดชบอร์ด
-              </a>
+              </Link>
               {/* พอร์ตของฉัน/ประวัติรายการ: Mockup ระบุเป็น Phase A2 (หน้าใหม่ที่ยังไม่
                   ออกแบบ) — เชื่อมไปหน้า Dashboard เดิม (/dashboard/classic) เป็นทางเชื่อม
                   ชั่วคราวก่อนมี Phase A2 จริง แทนที่จะเป็น Dead Link "#" (ดู Report) */}
-              <a className="dh-nav-item" href="/dashboard/classic" title="รายละเอียดเต็มรูปแบบ (มุมมองเดิม)">
+              <Link className="dh-nav-item" to="/dashboard/classic" title="รายละเอียดเต็มรูปแบบ (มุมมองเดิม)">
                 <span className="dh-ic">💼</span> พอร์ตของฉัน
-              </a>
-              <a className="dh-nav-item" href="/dashboard/classic" title="รายละเอียดเต็มรูปแบบ (มุมมองเดิม)">
+              </Link>
+              <Link className="dh-nav-item" to="/dashboard/classic" title="รายละเอียดเต็มรูปแบบ (มุมมองเดิม)">
                 <span className="dh-ic">🕐</span> ประวัติรายการ
-              </a>
-              <a className="dh-nav-item dh-nav-disabled" href="#dca" title="ตั้งเตือน DCA ผ่าน LINE ได้แล้ววันนี้">
+              </Link>
+              {/* Anchor ภายในหน้าเดียวกัน (ไม่ใช่นำทางข้ามหน้า) — ไม่ใช้ Link. แก้ id
+                  ที่ผูกผิดจาก "#dca" เป็น "#dh-dca" ให้ตรงกับ id จริงของ Section DCA
+                  ด้านล่าง (พบระหว่างไล่เช็คจุดนี้ — Element ไม่มี id="dca" อยู่จริง) */}
+              <a className="dh-nav-item dh-nav-disabled" href="#dh-dca" title="ตั้งเตือน DCA ผ่าน LINE ได้แล้ววันนี้">
                 <span className="dh-ic">🔔</span> ตั้งเตือน DCA
               </a>
               <div className="dh-nav-sep" />
-              <a className="dh-nav-item" href="/dashboard/classic">
+              <Link className="dh-nav-item" to="/dashboard/classic">
                 <span className="dh-ic">👤</span> โปรไฟล์ / Premium
-              </a>
+              </Link>
+              {/* เฉพาะ Admin (role มาจาก GET /dashboard/me — Fetch ไว้แล้วตอน load())
+                  — ใช้ onClick={() => navigate('/admin')} ตรงตาม Pattern เดิมของ
+                  Dashboard.jsx (บรรทัด 393-405 ที่นั่น) ไม่ใช้ <Link> แม้จุดอื่นในไฟล์
+                  นี้เปลี่ยนเป็น Link ไปแล้ว (P0 รอบก่อน) — ตามคำสั่งชัดเจนของรอบนี้
+                  ให้ทำตาม Dashboard.jsx เป๊ะ (ดู Report: คอมเมนต์ต้นฉบับอธิบายแค่เรื่อง
+                  ห้าม window.location/Full Reload ซึ่ง Link ก็ไม่ทำแบบนั้นเหมือนกัน —
+                  ไม่มีเหตุผลทางเทคนิคที่ต่างจาก Link จริงๆ แต่ทำตามคำสั่งเพื่อความ
+                  สอดคล้องกับพฤติกรรมเดิมที่มีอยู่แล้ว) */}
+              {planInfo?.role === 'admin' && (
+                <button type="button" className="dh-nav-item dh-nav-btn" onClick={() => navigate('/admin')}>
+                  <span className="dh-ic">🛠️</span> Admin
+                </button>
+              )}
               <button type="button" className="dh-nav-item dh-nav-btn" onClick={handleLogout}>
                 <span className="dh-ic">🚪</span> ออกจากระบบ
               </button>
@@ -266,19 +300,21 @@ function DashboardHome() {
 
       {/* ════ Bottom Nav — เฉพาะมือถือแนวตั้ง (LIFF — ช่องทางหลัก) ════ */}
       <nav className="dh-bottomnav">
-        <a className="dh-bn-item dh-bn-active" href="/dashboard">
+        <Link className="dh-bn-item dh-bn-active" to="/dashboard">
           <span className="dh-bn-i">🏠</span>หน้าหลัก
-        </a>
-        <a className="dh-bn-item" href="/dashboard/classic">
+        </Link>
+        <Link className="dh-bn-item" to="/dashboard/classic">
           <span className="dh-bn-i">💼</span>พอร์ต
-        </a>
+        </Link>
+        {/* Anchor ภายในหน้าเดียวกัน (Scroll ไปฟอร์ม ไม่ใช่นำทางข้ามหน้า) — ไม่ใช้ Link
+            ตามที่ระบุไว้ชัดเจนว่าไม่ต้องแก้จุดนี้ */}
         <a className="dh-bn-item dh-bn-rec" href="#dh-dca" onClick={handleBottomNavRecordClick}>
           <span className="dh-bn-btn">＋</span>
           <span className="dh-bn-lbl">บันทึก</span>
         </a>
-        <a className="dh-bn-item" href="/dashboard/classic">
+        <Link className="dh-bn-item" to="/dashboard/classic">
           <span className="dh-bn-i">🕐</span>ประวัติ
-        </a>
+        </Link>
         <button type="button" className="dh-bn-item dh-bn-plain-btn" onClick={handleLogout}>
           <span className="dh-bn-i">👤</span>โปรไฟล์
         </button>
