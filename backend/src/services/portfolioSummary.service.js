@@ -19,6 +19,59 @@ function roundToTwo(value) {
 //
 // คืน null เมื่อพอร์ตว่างเปล่า (isEmpty) → Caller ต้อง Skip ไม่ Push ให้ User
 // ที่ไม่มีอะไรจะสรุป
+// ตีราคาตลาดให้ Holding แต่ละตัว (Extract จาก Loop เดิมของ buildSummaryForUser
+// แบบยกมาทั้งก้อน — พฤติกรรม/ลำดับการ Route ราคาเหมือนเดิมทุกประการ)
+//
+// เหตุผลที่แยกออกมา: Dashboard รอบใหม่ (S8 R1a) ต้องการ "มูลค่ารายตัว + รู้ว่าตัวไหน
+// ไม่มีราคา" เพื่อทำ Allocation ตามประเภทสินทรัพย์ ซึ่ง buildSummaryForUser คำนวณ
+// อยู่ภายในแล้วแต่ไม่ได้คืนออกมา — แยกเป็นฟังก์ชันกลางแทนการ Copy Logic การ Route
+// ราคา (fund → NAV ตาม Class / USD → getCurrentPriceUsd / อื่นๆ → getCurrentPrice)
+// ไปเขียนใหม่ที่อื่น ซึ่งจะกลายเป็นสองแหล่งความจริงทันที
+//
+// คืน [{ holding, currency, price, priceUnavailable }] — เฉพาะตัวที่ heldQuantity > 0
+// price = null เมื่อดึงราคาไม่ได้ (หุ้นไทยที่ยังไม่มี Feed / API ล่ม / NAV ดึงไม่ได้)
+// โดย "ไม่เดาราคา" ให้เด็ดขาด — Consumer ตัดสินใจเองว่าจะข้าม (นับ excluded) หรือ
+// ตีมูลค่าที่ต้นทุนแทน
+async function priceHoldings(holdings) {
+  const priced = [];
+
+  for (const holding of holdings) {
+    // getPortfolioSummary กรอง heldQuantity <= 0 ออกให้แล้ว แต่กันไว้อีกชั้น
+    if (holding.heldQuantity <= 0) continue;
+
+    // สกุลของสินทรัพย์ (จาก getPortfolioSummary) — USD ตีมูลค่าด้วยราคา USD ตามจริง
+    const currency = holding.currency === 'USD' ? 'USD' : 'THB';
+
+    // กองทุนรวม (Round 7) — ดึง NAV ตรง Class (proj_id+fund_class_name) แทน
+    // getCurrentPrice (ที่รับ symbol อย่างเดียวไม่พอ) — ห่อ try/catch คืน null เอง
+    // เพื่อให้ Cron สรุปพอร์ต "ข้าม" กองทุนที่ NAV ดึงไม่ได้ (นับ excluded) แทน
+    // การพังทั้งงาน (Fail Isolated เหมือนสินทรัพย์ราคาไม่ได้ตัวอื่น)
+    let price;
+    if (holding.type === 'fund' && holding.projId && holding.fundClassName) {
+      try {
+        const nav = await priceFeedService.getMutualFundNav(holding.projId, holding.fundClassName);
+        price = nav.lastVal;
+      } catch (err) {
+        price = null;
+      }
+    } else if (currency === 'USD') {
+      price = await priceFeedService.getCurrentPriceUsd(holding.symbol);
+    } else {
+      price = await priceFeedService.getCurrentPrice(holding.symbol);
+    }
+
+    const priceUnavailable = price === null || price === undefined;
+    priced.push({
+      holding,
+      currency,
+      price: priceUnavailable ? null : price,
+      priceUnavailable,
+    });
+  }
+
+  return priced;
+}
+
 async function buildSummaryForUser(userId, periodLabel) {
   const summary = await portfolioService.getPortfolioSummary(userId);
 
@@ -34,34 +87,12 @@ async function buildSummaryForUser(userId, periodLabel) {
   const investedByCurrency = { THB: 0, USD: 0 };
   let excludedCount = 0;
 
-  for (const holding of summary.holdings) {
-    // getPortfolioSummary กรอง heldQuantity <= 0 ออกให้แล้ว แต่กันไว้อีกชั้น
-    if (holding.heldQuantity <= 0) continue;
-
-    // สกุลของสินทรัพย์ (จาก getPortfolioSummary) — USD ตีมูลค่าด้วยราคา USD ตามจริง
-    const cur = holding.currency === 'USD' ? 'USD' : 'THB';
-
-    // กองทุนรวม (Round 7) — ดึง NAV ตรง Class (proj_id+fund_class_name) แทน
-    // getCurrentPrice (ที่รับ symbol อย่างเดียวไม่พอ) — ห่อ try/catch คืน null เอง
-    // เพื่อให้ Cron สรุปพอร์ต "ข้าม" กองทุนที่ NAV ดึงไม่ได้ (นับ excluded) แทน
-    // การพังทั้งงาน (Fail Isolated เหมือนสินทรัพย์ราคาไม่ได้ตัวอื่น)
-    let price;
-    if (holding.type === 'fund' && holding.projId && holding.fundClassName) {
-      try {
-        const nav = await priceFeedService.getMutualFundNav(holding.projId, holding.fundClassName);
-        price = nav.lastVal;
-      } catch (err) {
-        price = null;
-      }
-    } else if (cur === 'USD') {
-      price = await priceFeedService.getCurrentPriceUsd(holding.symbol);
-    } else {
-      price = await priceFeedService.getCurrentPrice(holding.symbol);
-    }
-
+  for (const { holding, currency: cur, price, priceUnavailable } of await priceHoldings(
+    summary.holdings
+  )) {
     // ไม่มีราคาตลาด (หุ้นไทยที่ยังไม่มี Feed / API ล้มเหลว) → ไม่รวมเข้ายอดคำนวณ
     // กำไร-ขาดทุน แต่นับไว้เพื่อบอก User ว่าตัวเลขนี้ไม่ครบทุก Asset
-    if (price === null || price === undefined) {
+    if (priceUnavailable) {
       excludedCount += 1;
       continue;
     }
@@ -114,4 +145,5 @@ async function buildSummaryForUser(userId, periodLabel) {
 
 module.exports = {
   buildSummaryForUser,
+  priceHoldings,
 };

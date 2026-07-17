@@ -535,8 +535,9 @@ Premium)
 |---|---|---|---|---|
 | GET | `/api/v1/transactions` | ✅ | Free | List ธุรกรรมของ User — รองรับ Pagination (Section 8) และ Sort/Filter (Section 9): Sort ได้ที่ `date`, `amountThb`, `createdAt`; Filter ได้ที่ `type`, `assetId`, `portfolioId`, `dateFrom`, `dateTo` |
 | GET | `/api/v1/transactions/{id}` | ✅ | Free | รายละเอียดธุรกรรม 1 รายการ |
-| POST | `/api/v1/transactions` | ✅ | Free | สร้างธุรกรรมใหม่ (Web Dashboard — ฝั่ง LINE Bot ใช้ Internal Service เดียวกันหลัง Flow Confirm ใน SRS.md § 2.3) Body: `{ assetSymbol, type, amountThb, pricePerUnit, quantity, feeThb, date, note, portfolioId? }`. ถ้า `type = sell` ต้องผ่านการตรวจสอบ `INSUFFICIENT_QUANTITY` ก่อนบันทึก ([DATABASE.md § 12](./DATABASE.md)) ถ้า Free และ Asset ใหม่เกิน Limit → `ASSET_LIMIT_REACHED` |
-| POST | `/api/v1/transactions/{id}/reverse` | ✅ | Free | สร้างธุรกรรมตรงข้ามเพื่อ "ยกเลิกรายการ" (รองรับคำสั่ง "ยกเลิก" ใน SRS.md § 2.2) — ไม่ลบ/แก้ Record เดิมตามกฎ Immutable ([DATABASE.md § 8](./DATABASE.md)) |
+| POST | `/api/v1/transactions` | ✅ | Free | **✅ ทำแล้ว (S8 R1a)** — บันทึกรายการซื้อ (DCA) จากฟอร์มเว็บ ผ่าน `transaction.service` ตัวเดียวกับ LINE **สัญญาจริงดู [Section 15](#15-s8-r1a--web-dca-endpoints-สัญญาจริง)** (Body จริงคือ `{ symbol, amountTotal, currency, date?, note?, pricePerUnit? }` — **ไม่ใช่** Body ที่เอกสารรุ่นก่อนร่างไว้) |
+| POST | `/api/v1/transactions/undo-last` | ✅ | Free | **✅ ทำแล้ว (S8 R1a)** — ยกเลิก "รายการล่าสุดของตัวเอง" ด้วย Reversal Pattern (Immutable Ledger — [DATABASE.md § 8](./DATABASE.md)) ดู [Section 15](#15-s8-r1a--web-dca-endpoints-สัญญาจริง) |
+| POST | `/api/v1/transactions/{id}/reverse` | — | — | 🚧 **ยังไม่ได้ทำ (ร่างไว้เฉยๆ)** — S8 R1a เลือกทำ `POST /transactions/undo-last` แทน เพื่อให้ Semantics ตรงกับคำสั่ง "ยกเลิก" ของ LINE เป๊ะ (ย้อนได้เฉพาะรายการล่าสุด ผ่าน `undoTransaction.service` ตัวเดียวกัน) — การรับ `{id}` อิสระจะเปิดให้ย้อนรายการเก่ากลางประวัติได้ ซึ่งทำให้ Moving Average Cost Basis เพี้ยนและไม่มีใน LINE |
 
 > **ไม่มี `PATCH`/`DELETE` ตรงๆ บน `transactions`** เพราะ `transactions`
 > เป็น Append-only ตามนโยบาย Soft Delete ([DATABASE.md § 8](./DATABASE.md))
@@ -549,6 +550,7 @@ Check ใน [SRS.md § 2.3 [2]](./SRS.md)
 
 | Method | Path | Auth | Plan | คำอธิบาย |
 |---|---|---|---|---|
+| GET | `/api/v1/assets/symbols` | ✅ | Free | **✅ ทำแล้ว (S8 R1a)** — รายการสินทรัพย์ทั้งหมดที่ระบบรองรับ (Static จาก `symbolRegistry.service`) สำหรับ Dropdown ค้นหาบนเว็บ ดู [Section 15](#15-s8-r1a--web-dca-endpoints-สัญญาจริง) |
 | GET | `/api/v1/assets` | ✅ | Free | List สินทรัพย์ของ User — Filter ได้ที่ `isActive`, `portfolioId`, `type` |
 | GET | `/api/v1/assets/{id}` | ✅ | Free | รายละเอียดสินทรัพย์ 1 รายการ พร้อม Quantity/Average Cost ปัจจุบัน (คำนวณจาก `transactions` ตาม [DATABASE.md § 12](./DATABASE.md)) |
 | PATCH | `/api/v1/assets/{id}` | ✅ | Free (`isActive`) / Premium (`portfolioId`) | แก้ไข `isActive` (Soft Delete เมื่อขายหมด) หรือย้าย `portfolioId` (Premium เท่านั้น — Free ไม่มี `portfolioId` ให้ย้าย) |
@@ -625,6 +627,259 @@ Endpoint ในกลุ่มนี้บันทึก `audit_logs` เสม
 
 ---
 
-**Version:** 1.0.0 | **Last Updated:** 1 กรกฎาคม 2569
+## 15. S8 R1a — Web DCA Endpoints (สัญญาจริง)
+
+Endpoint ที่ **ทำจริงและมีเทสต์ครอบแล้ว** ในรอบ S8 R1a (Backend สำหรับ Dashboard
+ใหม่ + กล่องบันทึก DCA บนเว็บ) — Frontend รอบถัดไปเขียนตามสัญญาในหัวข้อนี้ได้เลย
+ทุก Endpoint ผ่าน `requireAuth` + `requireConsent` และ Filter ด้วย `userId` จาก JWT
+เสมอ (ไม่เคยรับ `userId` จาก Body/Query)
+
+### ⚠️ รูปแบบ Error ของฝั่งเว็บ (ต่างจาก Section 4)
+
+Section 4 ร่างไว้ว่า Error ต้องเป็น `{ success:false, error:{ code, message } }` แต่
+**โค้ดจริงของทุก Endpoint ฝั่งเว็บ** (`auth` / `dashboard` / `payment` / `reports`)
+ตอบแบบ Flat `{ error: "CODE" }` มาตั้งแต่ต้น และ `frontend/src/lib/api.js` อ่าน
+`body.error` เป็น Error Code อยู่ — Endpoint ในรอบนี้จึงยึดรูปแบบเดิมของโค้ดจริง
+(เปลี่ยนเป็นรูปแบบใน Section 4 = Frontend ปัจจุบันพังทันที) และ **เพิ่ม** `message`
+ภาษาไทยที่แสดงให้ผู้ใช้ได้ตรงๆ:
+
+```json
+{
+  "error": "PRICE_REQUIRED_FOR_ASSET",
+  "message": "สินทรัพย์นี้ยังไม่มีราคาตลาดอัตโนมัติ (เช่น หุ้นไทย) กรุณากรอก \"ราคาต่อหน่วย\" ที่ซื้อด้วย",
+  "details": { "symbol": "PTT", "type": "stock_th" }
+}
+```
+
+| Field | คำอธิบาย |
+|---|---|
+| `error` | Error Code (`UPPER_SNAKE_CASE`) — ใช้ตัดสินใจใน Code |
+| `message` | ข้อความไทยพร้อมแสดงผู้ใช้ตรงๆ |
+| `details` | รายละเอียดเพิ่มเติม (ไม่มี Field นี้ถ้าไม่มีรายละเอียด) |
+
+---
+
+### 15.1 GET `/api/v1/assets/symbols`
+
+รายการสินทรัพย์ทั้งหมดที่ระบบรองรับ (224 ตัว ณ ปัจจุบัน) สำหรับ Dropdown ค้นหา
+
+- ข้อมูล Static ไม่แตะ DB — ตอบ `Cache-Control: private, max-age=3600`
+- **ไม่มีกองทุนรวม (`fund`)** ใน List นี้ (กองทุน Resolve ผ่าน SEC API ในเส้นทาง LINE เท่านั้น)
+- `type` ที่เป็นไปได้: `crypto` / `stock_th` / `stock_us` / `gold_bar` / `gold_ornament`
+
+**Response `200`**
+```json
+{
+  "symbols": [
+    { "symbol": "BTC", "name": "Bitcoin บิตคอยน์", "type": "crypto" },
+    { "symbol": "PTT", "name": "ปตท.", "type": "stock_th" },
+    { "symbol": "AAPL", "name": "Apple แอปเปิล", "type": "stock_us" },
+    { "symbol": "GOLD", "name": "ทองคำแท่ง (ราคาสมาคมฯ)", "type": "gold_bar" }
+  ]
+}
+```
+
+---
+
+### 15.2 POST `/api/v1/transactions`
+
+บันทึกรายการซื้อ (DCA) จากฟอร์มเว็บ — เรียก `transaction.service.processBuyCommand`
+ตัวเดียวกับที่ LINE ใช้หลังกดยืนยัน (ไม่มีตรรกะสร้างธุรกรรมแยกของเว็บ)
+
+**Request Body**
+
+| Field | Type | บังคับ | คำอธิบาย |
+|---|---|---|---|
+| `symbol` | string | ✅ | ต้องอยู่ใน Registry (case-insensitive, ตัดช่องว่างให้) |
+| `amountTotal` | number | ✅ | **จำนวนเงินรวม** (ไม่ใช่จำนวนหน่วย) > 0 — หน่วยตาม `currency` |
+| `currency` | `"THB"` \| `"USD"` | — | Default `"THB"` — `"USD"` ใช้ได้เฉพาะ `crypto` / `stock_us` |
+| `date` | string `YYYY-MM-DD` | — | Default = วันนี้ (Asia/Bangkok) — ย้อนหลังได้, **อนาคตไม่ได้** |
+| `note` | string | — | ≤ 500 ตัวอักษร — ห้ามขึ้นต้นด้วย `UNDO_OF:` (Marker ของระบบ) |
+| `pricePerUnit` | number | ⚠️ | **บังคับสำหรับ `stock_th`** (ไม่มี Price Feed) / ถ้าส่งมาสำหรับสินทรัพย์อื่น = ใช้ราคานี้แทนราคาตลาด (ตรงกับ LINE ที่พิมพ์ `"ซื้อ AAPL 10 หุ้น ราคา 190"` ได้) |
+
+**2 เส้นทางที่ Map เข้า Logic เดิมของ LINE:**
+
+| กรณี | ส่ง `pricePerUnit`? | เกิดอะไรขึ้น |
+|---|---|---|
+| `crypto` / `stock_us` / `gold_bar` / `gold_ornament` | ไม่ต้อง | Service ดึงราคาตลาดเอง แล้วหาร `quantity` (= เส้นทาง `"ซื้อ AAPL 1000"`) |
+| `stock_th` | **บังคับ** | Controller แปลง `quantity = roundToEight(amountTotal / pricePerUnit)` แล้วส่งเข้า Service รูปแบบ `quantity + pricePerUnit` (= เส้นทาง `"ซื้อ PTT 50 หุ้น ราคา 34"`) |
+
+**Request ตัวอย่าง**
+```json
+{ "symbol": "AAPL", "amountTotal": 1000, "currency": "THB", "date": "2026-07-17", "note": "DCA รายเดือน" }
+```
+```json
+{ "symbol": "PTT", "amountTotal": 1700, "pricePerUnit": 34, "currency": "THB", "date": "2026-07-17" }
+```
+
+**Response `201`**
+```json
+{
+  "transaction": {
+    "id": "9f1c2e6a-1234-4bcd-9876-0a1b2c3d4e5f",
+    "symbol": "AAPL",
+    "units": 5.24934383,
+    "pricePerUnit": 190.5,
+    "amountTotal": 1000,
+    "currency": "THB",
+    "date": "2026-07-17",
+    "note": "DCA รายเดือน",
+    "priceSource": "twelvedata",
+    "newAssetCreated": false
+  },
+  "monthSummary": {
+    "month": "2026-07",
+    "count": 3,
+    "amountByCurrency": { "THB": 3000, "USD": 50 }
+  }
+}
+```
+
+> `amountTotal` ใน Response = **ยอดที่บันทึกจริง** (สกุลตาม `currency`) ให้ Frontend
+> แสดงค่านี้ ไม่ใช่ค่าที่ผู้ใช้กรอก — เส้นทาง "ระบุราคาเอง" คำนวณกลับจาก `units × price`
+> `priceSource`: `coingecko` / `twelvedata` / `thaigold` / `secnav` / `user`
+
+**Error ที่เป็นไปได้**
+
+| Code | HTTP | เมื่อไหร่ |
+|---|---|---|
+| `VALIDATION_ERROR` | 400 | `amountTotal` ไม่ใช่เลขบวก / `date` ผิดรูปแบบหรือไม่มีจริง / `currency` ไม่รู้จัก / `note` ยาวเกิน |
+| `SYMBOL_NOT_SUPPORTED` | 400 | Symbol ไม่อยู่ใน Registry |
+| `PRICE_REQUIRED_FOR_ASSET` | 400 | หุ้นไทย (หรือสินทรัพย์ไม่มีราคาสด) ไม่ส่ง `pricePerUnit` |
+| `CURRENCY_NOT_SUPPORTED_FOR_ASSET` | 400 | `USD` กับสินทรัพย์ที่ไม่ใช่ `crypto`/`stock_us` |
+| `DATE_IN_FUTURE` | 400 | วันที่เกินวันนี้ (เทียบ Asia/Bangkok) |
+| `AMOUNT_TOO_SMALL_FOR_PRICE` | 400 | เงินน้อยจน `quantity` ปัดแล้วเป็น 0 |
+| `NOTE_RESERVED_PREFIX` | 400 | `note` ขึ้นต้นด้วย `UNDO_OF:` |
+| `ASSET_LIMIT_REACHED` | 403 | Free Plan ครบ 2 สินทรัพย์ แล้วจะสร้างตัวใหม่ |
+| `PRICE_FEED_NOT_IMPLEMENTED` / `MARKET_PRICE_UNAVAILABLE` / `GOLD_PRICE_UNAVAILABLE` | 503 | ดึงราคาตลาดไม่ได้ (ไม่เดาราคา ไม่บันทึก) |
+
+---
+
+### 15.3 POST `/api/v1/transactions/undo-last`
+
+ยกเลิก **รายการล่าสุดของตัวเอง** (Body ว่าง) — Reuse `undoTransaction.service`
+ตัวเดียวกับคำสั่ง "ยกเลิก" ของ LINE ทุกประการ
+
+> **ไม่มี DELETE by id** — `transactions` เป็น Immutable Ledger
+> ([DATABASE.md § 8](./DATABASE.md)) การยกเลิกคือการ **INSERT รายการตรงข้าม**
+> (`note = "UNDO_OF:<id เดิม>"`) ไม่ลบ/ไม่แก้แถวเดิม
+
+**Response `200`**
+```json
+{
+  "undone": {
+    "transactionId": "9f1c2e6a-1234-4bcd-9876-0a1b2c3d4e5f",
+    "type": "buy",
+    "symbol": "AAPL",
+    "units": 5.24934383,
+    "pricePerUnit": 190.5,
+    "amountTotal": 1000
+  },
+  "reversal": { "transactionId": "1a2b3c4d-5678-4abc-9def-1234567890ab", "type": "sell" },
+  "message": "ยกเลิกรายการซื้อ AAPL เรียบร้อยแล้ว"
+}
+```
+
+| Code | HTTP | เมื่อไหร่ |
+|---|---|---|
+| `NO_TRANSACTION_TO_UNDO` | 400 | ไม่มีธุรกรรมเลย |
+| `ALREADY_UNDONE` | 400 | รายการล่าสุดเป็น Reversal อยู่แล้ว (กดซ้ำ) |
+| `CANNOT_UNDO_QUANTITY_MISMATCH` | 400 | ยอดคงเหลือน้อยกว่าจำนวนที่ซื้อไว้ (มีการขายตามหลัง) |
+
+---
+
+### 15.4 GET `/api/v1/dashboard/overview`
+
+ข้อมูลทั้งหน้า Dashboard ใหม่ในครั้งเดียว (Endpoint เดิมทั้ง 4 ตัวของ
+`/api/v1/dashboard/*` ยังอยู่ครบ ไม่ถูกแตะ)
+
+**Response `200`**
+```json
+{
+  "portfolio": {
+    "totalCurrentValue": 87500.25,
+    "unrealizedPnL": 4200.5,
+    "unrealizedPnLPercent": 5.05,
+    "realizedPnLByCurrency": { "THB": 1500, "USD": 0 },
+    "realizedPnLThbEquivalent": 1500,
+    "investedByCurrency": { "THB": 83299.75, "USD": 0 },
+    "excludedCount": 2,
+    "isEmpty": false
+  },
+  "lifetime": { "count": 42, "amountByCurrency": { "THB": 85000, "USD": 300 } },
+  "thisMonth": { "month": "2026-07", "count": 3, "amountByCurrency": { "THB": 3000, "USD": 50 } },
+  "streakMonths": 6,
+  "allocation": [
+    {
+      "type": "stock_us",
+      "valueByCurrency": { "THB": 45850, "USD": 0 },
+      "valueThbEquivalent": 45850,
+      "assets": [
+        { "symbol": "AAPL", "name": "Apple แอปเปิล", "currency": "THB", "units": 10, "value": 25000, "priceUnavailable": false }
+      ]
+    },
+    {
+      "type": "stock_th",
+      "valueByCurrency": { "THB": 25000, "USD": 0 },
+      "valueThbEquivalent": 25000,
+      "assets": [
+        { "symbol": "PTT", "name": "ปตท.", "currency": "THB", "units": 50, "value": 1700, "priceUnavailable": true }
+      ]
+    }
+  ],
+  "recent": [
+    {
+      "id": "9f1c2e6a-1234-4bcd-9876-0a1b2c3d4e5f",
+      "symbol": "NVDA", "side": "buy", "amountTotal": 1000, "currency": "THB",
+      "date": "2026-07-14", "createdAt": "2026-07-14T14:04:00.000Z",
+      "note": "DCA รายเดือน", "source": "web"
+    }
+  ],
+  "monthlyInvested": [
+    {
+      "month": "2025-08", "count": 1,
+      "amountByCurrency": { "THB": 8000, "USD": 0 },
+      "cumulativeByCurrency": { "THB": 8000, "USD": 0 }
+    }
+  ],
+  "fxRate": 35.12,
+  "fxAsOf": "2026-07-17",
+  "fxStale": false,
+  "fxUnavailableForUsd": false
+}
+```
+
+**สิ่งที่ Frontend ต้องรู้:**
+
+1. **`portfolio.isEmpty = true`** → พอร์ตว่าง Response จะมีแค่ `{ "isEmpty": true }`
+   ใน `portfolio` (ไม่มี Field ตัวเลขอื่น) — ต้องเช็คก่อนอ่าน
+2. **`allocation[].assets[].priceUnavailable = true`** → ตัวนั้น **ไม่มีราคาตลาด**
+   (หุ้นไทย/NAV ล่ม) ค่า `value` คือ **ต้นทุน** ไม่ใช่มูลค่าตลาด → ควรติดหมายเหตุใน UI
+   (การ์ด P&L ด้านบน **ไม่รวม** ตัวพวกนี้ — ดู `portfolio.excludedCount`)
+3. **ยอดทุกก้อนแยกสกุล (`amountByCurrency`)** ไม่ถูกบวกข้ามสกุลให้ — ดูเหตุผลด้านล่าง
+4. **`fxUnavailableForUsd = true`** → มี USD ในพอร์ตแต่ดึงเรตไม่ได้ → **ห้าม**แสดงยอดรวม
+   เทียบบาท (จะผิด) ให้เตือนผู้ใช้แทน
+5. **`monthlyInvested`** = กราฟ **"เงินที่ลงไป"** ไม่ใช่มูลค่าพอร์ตย้อนหลัง — คืนครบ 12
+   เดือนต่อเนื่องเสมอ (เดือนที่ไม่มีรายการ = 0) `cumulative` เริ่มนับจากเดือนแรกของ
+   หน้าต่าง 12 เดือน (ไม่รวมยอดก่อนหน้านั้น — ยอดสะสมตลอดกาลอยู่ที่ `lifetime`)
+
+> **ทำไมไม่รวม THB+USD เป็นก้อนเดียวในกราฟ/สถิติย้อนหลัง**
+> `transactions.amount_thb` เก็บ "ยอดในสกุลของแถวนั้น" ตามจริง (migration 012 —
+> แถว `currency='USD'` เก็บ USD) และ **ไม่มีคอลัมน์เก็บยอดเทียบบาท ณ วันที่ทำรายการ**
+> ระบบก็ไม่เก็บเรต FX ย้อนหลังไว้ที่ใด → การรวมย้อนหลังต้องใช้เรตย้อนหลังที่ไม่มีจริง
+> การใช้เรต "วันนี้" แปลงยอดของปีที่แล้วจะได้ตัวเลขที่ผิดและเปลี่ยนไปเรื่อยๆ ทุกวัน
+> จึงคืนแยกสกุลให้ Frontend ตัดสินใจแสดงเอง (เช่น 2 เส้น/2 แท่ง หรือให้ผู้ใช้สลับสกุล)
+> — ส่วนการ์ด "มูลค่าพอร์ตวันนี้" รวมข้ามสกุลได้ เพราะเป็นมูลค่า ณ ปัจจุบัน ใช้เรต
+> ปัจจุบัน (`fxRate`) ถูกต้องตามนิยาม
+
+**นิยาม `streakMonths`:** จำนวนเดือนติดต่อกันที่มีรายการซื้ออย่างน้อย 1 รายการ นับ
+ถอยหลังจากเดือนปัจจุบัน (Asia/Bangkok) — เดือนปัจจุบันนับรวมถ้ามี ≥1 รายการ ถ้ายัง
+ไม่มีจะเริ่มนับจากเดือนก่อนหน้า (ผู้ใช้ยังมีเวลาทั้งเดือนที่จะบันทึก จึงไม่ตัด Streak
+เป็น 0 ทันทีในวันที่ 1) ขาดเดือนใด = จบทันที / **รายการที่ถูกยกเลิกแล้วไม่นับ**
+(ทั้งแถวต้นฉบับและแถว Reversal) ทั้งใน Streak, `count` และยอดเงินทุกก้อน
+
+---
+
+**Version:** 1.0.0 | **Last Updated:** 17 กรกฎาคม 2569
 
 *อ้างอิงจาก [PROJECT_BRIEF.md](../PROJECT_BRIEF.md)*

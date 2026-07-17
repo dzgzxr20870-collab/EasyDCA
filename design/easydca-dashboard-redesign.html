@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EasyDCA by JaydeX — Dashboard ใหม่ (Design Mockup โดย Fable)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#F6F3EC; --card:#FFFFFF; --ink:#22301F; --ink2:#4A5A47; --muted:#8B9587;
+    --line:#ECE6D9; --line2:#E2DccF;
+    --green:#1E9E55; --green-deep:#157347; --green-ink:#0E5233;
+    --green-soft:#E9F6EE; --green-soft2:#F1F9F0; --lime:#C9E96E; --lime-soft:#F3FADF;
+    --red:#DE5050; --red-soft:#FDEEEE; --amber:#F0A93B; --amber-soft:#FCF3E1;
+    --blue:#4A90D9;
+    --r:18px; --r-sm:12px;
+    --shadow:0 1px 2px rgba(28,48,28,.05),0 10px 28px rgba(30,70,40,.07);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    font-family:'IBM Plex Sans Thai','Noto Sans Thai',ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;
+    background:var(--bg); color:var(--ink); font-size:14.5px; line-height:1.55;
+    -webkit-font-smoothing:antialiased;
+  }
+  button{font-family:inherit;cursor:pointer;border:none;background:none}
+  input,select,textarea{font-family:inherit;font-size:inherit;color:inherit}
+
+  .shell{display:grid;grid-template-columns:236px minmax(0,1fr) 312px;gap:20px;max-width:1480px;margin:0 auto;padding:20px}
+  @media(max-width:1180px){.shell{grid-template-columns:220px minmax(0,1fr)}}
+  @media(max-width:820px){.shell{grid-template-columns:minmax(0,1fr)}}
+  /* หมายเหตุ: display:none ของ .rail/.sidebar ไปอยู่ท้ายไฟล์ — ต้องมาหลังกฎ base ไม่งั้นโดน override */
+
+  /* ── Sidebar ── */
+  .sidebar{position:sticky;top:20px;align-self:start;display:flex;flex-direction:column;gap:16px;height:calc(100vh - 40px)}
+  .side-card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow)}
+  .brand{display:flex;align-items:center;gap:10px;padding:18px 18px 12px}
+  .brand-logo{width:38px;height:38px;border-radius:12px;background:linear-gradient(135deg,#DFF3D9,#C9E96E);display:grid;place-items:center;font-size:20px}
+  .brand b{font-size:19px;letter-spacing:.2px}
+  .brand small{display:block;color:var(--muted);font-size:11px;font-weight:500;margin-top:-2px}
+  nav{padding:6px 10px 14px;display:flex;flex-direction:column;gap:2px}
+  .nav-item{display:flex;align-items:center;gap:11px;padding:10.5px 12px;border-radius:12px;color:var(--ink2);font-weight:500;font-size:14.5px;text-decoration:none;transition:background .15s}
+  .nav-item:hover{background:var(--green-soft2)}
+  .nav-item.active{background:var(--green-soft);color:var(--green-ink);font-weight:700}
+  .nav-item .ic{width:20px;text-align:center;font-size:16px}
+  .nav-sep{height:1px;background:var(--line);margin:8px 12px}
+  .garden{margin-top:auto;padding:16px;text-align:center}
+  .garden .lv{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;color:var(--muted);font-weight:600}
+  .garden .lv b{color:var(--green-ink);font-size:14px}
+  .bar{height:8px;background:#EDF3E6;border-radius:99px;margin:8px 0 4px;overflow:hidden}
+  .bar>i{display:block;height:100%;width:56%;background:linear-gradient(90deg,var(--green),var(--lime));border-radius:99px}
+  .garden p{font-size:11.5px;color:var(--muted);text-align:left}
+
+  /* ── Main ── */
+  .main{display:flex;flex-direction:column;gap:20px;min-width:0}
+  .topbar{display:flex;align-items:center;gap:14px}
+  .hello h1{font-size:22px;font-weight:700}
+  .hello h1 .leaf{font-size:19px}
+  .hello p{color:var(--muted);font-size:13px;margin-top:1px}
+  .topbar .sp{flex:1}
+  .chip-btn{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);padding:9px 14px;border-radius:12px;font-weight:600;font-size:13px;color:var(--ink2);box-shadow:var(--shadow)}
+  .bell{position:relative;width:40px;height:40px;border-radius:12px;background:var(--card);border:1px solid var(--line);display:grid;place-items:center;font-size:16px;box-shadow:var(--shadow)}
+  .bell .dot{position:absolute;top:-5px;right:-5px;background:var(--green);color:#fff;font-size:10px;font-weight:700;min-width:17px;height:17px;border-radius:99px;display:grid;place-items:center;border:2px solid var(--bg)}
+
+  .stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+  @media(max-width:980px){.stats{grid-template-columns:1fr}}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:16px 18px;position:relative;overflow:hidden}
+  .stat .t{display:flex;align-items:center;justify-content:space-between;color:var(--ink2);font-size:13px;font-weight:600}
+  .stat .t .ico{width:34px;height:34px;border-radius:10px;background:var(--green-soft);display:grid;place-items:center;font-size:15px}
+  .stat .v{font-size:25px;font-weight:700;margin-top:8px;letter-spacing:.2px}
+  .stat .v small{font-size:13px;color:var(--muted);font-weight:600}
+  .stat .sub{font-size:12.5px;margin-top:3px;font-weight:600}
+  .up{color:var(--green-deep)} .down{color:var(--red)} .mut{color:var(--muted);font-weight:500}
+  .spark{position:absolute;right:0;bottom:0;left:0;height:34px;opacity:.9}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow)}
+  .card-h{display:flex;align-items:center;gap:10px;padding:16px 20px 0}
+  .card-h h2{font-size:16.5px;font-weight:700}
+  .card-h .tag{font-size:10.5px;font-weight:700;color:var(--green-ink);background:var(--green-soft);padding:3px 9px;border-radius:99px}
+  .card-h .sp{flex:1}
+  .link{color:var(--green-deep);font-weight:700;font-size:13px;text-decoration:none}
+
+  /* ── DCA quick form ── */
+  .dca-grid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:0}
+  @media(max-width:980px){.dca-grid{grid-template-columns:1fr}}
+  .dca-form{padding:14px 20px 20px;display:flex;flex-direction:column;gap:13px}
+  .frow{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  @media(max-width:620px){.frow{grid-template-columns:1fr}}
+  label.fl{display:block;font-size:12.5px;font-weight:700;color:var(--ink2);margin-bottom:6px}
+  label.fl .opt{color:var(--muted);font-weight:500}
+  .inp{width:100%;background:#FBFAF6;border:1.5px solid var(--line2);border-radius:12px;padding:10.5px 13px;font-size:14.5px;font-weight:600;outline:none;transition:border .15s, box-shadow .15s}
+  .inp:focus{border-color:var(--green);box-shadow:0 0 0 3px rgba(30,158,85,.13);background:#fff}
+  .amt-wrap{position:relative}
+  .amt-wrap .cur{position:absolute;right:12px;top:50%;transform:translateY(-50%);font-weight:700;color:var(--muted);font-size:13px}
+  .chips{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}
+  .chip{border:1.5px solid var(--line2);background:#fff;border-radius:99px;padding:5px 13px;font-size:12.5px;font-weight:700;color:var(--ink2);transition:.13s}
+  .chip:hover{border-color:var(--green);color:var(--green-deep)}
+  .chip.on{background:var(--green-soft);border-color:var(--green);color:var(--green-ink)}
+  .btn-main{background:linear-gradient(135deg,var(--green),var(--green-deep));color:#fff;font-size:15.5px;font-weight:700;border-radius:13px;padding:13px;box-shadow:0 6px 16px rgba(21,115,71,.28);transition:transform .12s, box-shadow .12s}
+  .btn-main:hover{transform:translateY(-1px);box-shadow:0 9px 20px rgba(21,115,71,.34)}
+  .btn-main:active{transform:translateY(0)}
+  .btn-ghost{border:1.5px solid var(--line2);border-radius:11px;padding:8px 14px;font-weight:700;font-size:12.5px;color:var(--ink2);background:#fff}
+  .btn-ghost:hover{border-color:var(--green);color:var(--green-deep)}
+  .form-note{font-size:11.5px;color:var(--muted)}
+
+  /* asset picker */
+  .picker{position:relative}
+  .picker-input{display:flex;align-items:center;gap:10px;background:#FBFAF6;border:1.5px solid var(--line2);border-radius:12px;padding:9px 13px;cursor:pointer;transition:border .15s}
+  .picker-input:hover{border-color:#CBD8C4}
+  .picker.open .picker-input{border-color:var(--green);box-shadow:0 0 0 3px rgba(30,158,85,.13);background:#fff}
+  .avatar{width:30px;height:30px;border-radius:99px;display:grid;place-items:center;font-size:11px;font-weight:800;color:#fff;flex:none}
+  .picker-input .ph{color:var(--muted);font-weight:500}
+  .picker-input .sym b{font-size:14.5px}
+  .picker-input .sym small{display:block;color:var(--muted);font-size:11.5px;margin-top:-2px}
+  .picker-input .car{margin-left:auto;color:var(--muted);font-size:11px}
+  .dd{position:absolute;z-index:40;top:calc(100% + 7px);left:0;width:min(440px,86vw);background:#fff;border:1px solid var(--line);border-radius:15px;box-shadow:0 18px 44px rgba(25,55,30,.16);overflow:hidden;display:none}
+  .picker.open .dd{display:block}
+  .dd-search{display:flex;align-items:center;gap:9px;padding:11px 13px;border-bottom:1px solid var(--line)}
+  .dd-search input{flex:1;border:none;outline:none;font-size:14px;font-weight:600;background:none}
+  .dd-cats{display:flex;gap:6px;padding:9px 12px;border-bottom:1px solid var(--line);overflow-x:auto}
+  .dd-list{max-height:264px;overflow-y:auto;overscroll-behavior:contain}
+  .dd-item{display:flex;align-items:center;gap:11px;padding:9px 14px;cursor:pointer}
+  .dd-item:hover,.dd-item.hi{background:var(--green-soft2)}
+  .dd-item .nm{min-width:0}
+  .dd-item .nm b{font-size:14px}
+  .dd-item .nm small{display:block;color:var(--muted);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tbadge{margin-left:auto;font-size:10px;font-weight:700;padding:2.5px 8px;border-radius:99px;flex:none}
+  .t-us{background:#EAF2FD;color:#2D6AC0}.t-th{background:#FDF0E7;color:#C06A2D}.t-cr{background:#F4EDFC;color:#7A3FC0}.t-au{background:#FBF3DC;color:#9A7B16}
+  .dd-empty{padding:22px 16px;text-align:center;color:var(--muted);font-size:13px}
+  .dd-empty b{color:var(--ink2)}
+  .dd-foot{padding:8px 14px;border-top:1px solid var(--line);font-size:11px;color:var(--muted);background:#FBFAF6}
+
+  /* confirm panel (right of form) */
+  .dca-side{border-left:1px dashed var(--line2);padding:14px 20px 20px;display:flex;flex-direction:column;gap:12px}
+  @media(max-width:980px){.dca-side{border-left:none;border-top:1px dashed var(--line2)}}
+  .today-plan{background:var(--lime-soft);border:1px solid #E3F0BE;border-radius:14px;padding:13px 14px}
+  .today-plan h4{font-size:13px;font-weight:700;color:#57721B;display:flex;align-items:center;gap:7px}
+  .plan-row{display:flex;align-items:center;gap:10px;background:#fff;border:1px solid #E9F2CF;border-radius:11px;padding:8px 10px;margin-top:8px}
+  .plan-row .nm{flex:1;min-width:0}
+  .plan-row .nm b{font-size:13.5px}
+  .plan-row .nm small{display:block;font-size:11px;color:var(--muted)}
+  .plan-row .amt{font-weight:700;font-size:13px}
+  .btn-mini{background:var(--green);color:#fff;font-size:11.5px;font-weight:700;border-radius:9px;padding:6px 11px;flex:none}
+  .btn-mini:hover{background:var(--green-deep)}
+  .confirm-box{border:1.5px solid #CDEBD8;background:var(--green-soft2);border-radius:14px;padding:14px;display:none}
+  .confirm-box.show{display:block;animation:pop .3s ease}
+  @keyframes pop{0%{transform:scale(.96);opacity:0}100%{transform:scale(1);opacity:1}}
+  .confirm-box .ok{display:flex;align-items:center;gap:8px;font-weight:700;color:var(--green-ink);font-size:14px}
+  .confirm-box table{width:100%;margin-top:9px;font-size:13px;border-collapse:collapse}
+  .confirm-box td{padding:3.5px 0}
+  .confirm-box td:last-child{text-align:right;font-weight:700}
+  .confirm-box .acts{display:flex;gap:8px;margin-top:11px}
+  .mascot-line{display:flex;gap:9px;align-items:flex-start;background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-size:12.5px;color:var(--ink2)}
+  .mascot-line .m{font-size:20px;flex:none}
+
+  /* ── allocation + recent ── */
+  .two-col{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:20px}
+  @media(max-width:980px){.two-col{grid-template-columns:1fr}}
+  .alloc-body{display:flex;gap:20px;align-items:center;padding:16px 20px 20px}
+  .donut{width:138px;height:138px;border-radius:50%;position:relative;flex:none;background:conic-gradient(#ccc 0 100%)}
+  .donut::after{content:"";position:absolute;inset:22px;background:var(--card);border-radius:50%}
+  .donut .c{position:absolute;inset:0;display:grid;place-items:center;z-index:2;text-align:center}
+  .donut .c b{font-size:13.5px;display:block}
+  .donut .c small{font-size:10.5px;color:var(--muted);font-weight:600}
+  .legend{flex:1;display:flex;flex-direction:column;gap:8px;min-width:0}
+  .lg-row{display:flex;align-items:center;gap:8px;font-size:12.5px}
+  .lg-row .sw{width:10px;height:10px;border-radius:4px;flex:none}
+  .lg-row .nm{flex:1;font-weight:600;color:var(--ink2);min-width:0}
+  .lg-row .val{font-weight:700;white-space:nowrap}
+  .lg-row .pc{color:var(--muted);font-size:11.5px;width:42px;text-align:right;flex:none}
+
+  .tx-list{padding:8px 8px 12px}
+  .tx{display:flex;align-items:center;gap:12px;padding:9.5px 12px;border-radius:12px}
+  .tx:hover{background:var(--green-soft2)}
+  .tx .nm{flex:1;min-width:0}
+  .tx .nm b{font-size:14px}
+  .tx .nm small{display:block;color:var(--muted);font-size:11.5px}
+  .tx .amt{text-align:right}
+  .tx .amt b{font-size:14px;display:block}
+  .tx .amt small{font-size:11px;color:var(--muted)}
+  .tx .side-b{font-size:10.5px;font-weight:700;padding:2.5px 8px;border-radius:99px}
+  .b-buy{background:var(--green-soft);color:var(--green-ink)} .b-sell{background:var(--red-soft);color:var(--red)}
+  .tx .undo{opacity:0;transition:.15s;font-size:11px}
+  .tx:hover .undo{opacity:1}
+
+  /* chart */
+  .chart-wrap{padding:6px 20px 18px}
+  .tabs{display:flex;gap:5px}
+  .tab{padding:5.5px 12px;border-radius:9px;font-size:12px;font-weight:700;color:var(--muted)}
+  .tab.on{background:var(--green-soft);color:var(--green-ink)}
+  .chart-note{font-size:11.5px;color:var(--muted);padding:0 20px 14px}
+
+  /* ── Rail ── */
+  .rail{display:flex;flex-direction:column;gap:16px}
+  .mascot-card{background:linear-gradient(160deg,#F2FAEA,#E6F5E9 70%);border:1px solid #DFF0D8;border-radius:var(--r);box-shadow:var(--shadow);padding:18px;position:relative;overflow:hidden}
+  .msum-row{display:flex;justify-content:space-between;align-items:baseline;font-size:13px;color:var(--ink2);padding:4px 0}
+  .msum-row b{font-size:14px;color:var(--green-ink)}
+  .bubble{background:#fff;border:1px solid #DFF0D8;border-radius:13px;padding:11px 13px;font-size:13px;color:var(--ink2);text-align:left}
+  .bubble b{color:var(--green-ink)}
+  .rail h3{font-size:14.5px;font-weight:700;padding:15px 18px 0;display:flex;align-items:center;gap:8px}
+  .cal{padding:10px 12px 12px}
+  .cal-row{display:flex;align-items:center;gap:10px;padding:7.5px 8px;border-radius:10px;font-size:13px}
+  .cal-row:hover{background:var(--green-soft2)}
+  .cal-d{width:40px;text-align:center;flex:none}
+  .cal-d b{display:block;font-size:15px;color:var(--green-ink)}
+  .cal-d small{font-size:10px;color:var(--muted);font-weight:700}
+  .cal-row .nm{flex:1;font-weight:600;color:var(--ink2)}
+  .cal-row .amt{font-weight:700;font-size:12.5px}
+  .hold{padding:6px 10px 12px}
+  .hrow{display:flex;align-items:center;gap:10px;padding:8px 9px;border-radius:11px}
+  .hrow:hover{background:var(--green-soft2)}
+  .hrow .nm{flex:1;min-width:0}
+  .hrow .nm b{font-size:13.5px}
+  .hrow .nm small{display:block;font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .hrow .pl{text-align:right}
+  .hrow .pl b{font-size:13px;display:block}
+  .hrow .pl small{font-size:11px;font-weight:700}
+  .nofeed{font-size:9.5px;font-weight:700;background:var(--amber-soft);color:#8A6D1F;border-radius:99px;padding:2px 7px}
+  .disclaimer{font-size:11px;color:var(--muted);text-align:center;padding:2px 10px 10px}
+
+  /* toast */
+  .toast{position:fixed;bottom:26px;left:50%;transform:translate(-50%,180px);background:var(--green-ink);color:#fff;font-weight:600;font-size:13.5px;padding:12px 20px;border-radius:99px;box-shadow:0 14px 34px rgba(14,50,30,.35);transition:transform .35s cubic-bezier(.2,.9,.3,1.2);z-index:99;display:flex;gap:9px;align-items:center;pointer-events:none}
+  .toast.show{transform:translate(-50%,0)}
+
+  /* ── มือถือแนวตั้ง (LIFF portrait — ช่องทางหลัก) ── */
+  .m-brand{display:none}
+  .bottomnav{display:none}
+  @media(max-width:1180px){.rail{display:none}}
+  @media(max-width:820px){
+    .sidebar{display:none}
+    .shell{padding:14px 14px 112px;gap:16px}
+    .btn-main,.inp,.picker-input{scroll-margin-bottom:120px;scroll-margin-top:16px}
+    .m-brand{display:flex;align-items:center;gap:10px}
+    .m-brand .brand-logo{width:36px;height:36px;border-radius:11px;background:linear-gradient(135deg,#DFF3D9,#C9E96E);display:grid;place-items:center;font-size:18px}
+    .m-brand b{font-size:17.5px}
+    .m-brand small{display:block;color:var(--muted);font-size:10.5px;margin-top:-2px;font-weight:500}
+    .m-brand .sp{flex:1}
+    .topbar{flex-wrap:wrap;gap:10px}
+    .topbar .bell{display:none}
+    .hello h1{font-size:19.5px}
+    .stat .v{font-size:22px}
+    /* ลำดับบนมือถือ: แบรนด์ → ทักทาย → ฟอร์มบันทึก (action หลัก) → สถิติ/ที่เหลือ */
+    .m-brand{order:-3}
+    .topbar{order:-2}
+    #dca{order:-1}
+    /* rail กลับมาแสดง (โดนซ่อนที่ 1180) — ไหลต่อท้าย main เป็นคอลัมน์เดียว */
+    .rail{display:flex}
+    /* การ์ดยืนยัน/แผนวันนี้ อยู่ใต้ฟอร์ม (dca-grid เป็น 1 คอลัมน์แล้วที่ 980) */
+    .card-h{flex-wrap:wrap;row-gap:8px}
+    .card-h h2{font-size:15.5px}
+    .btn-main{padding:14px;font-size:16px}
+    .inp{padding:12px 13px}
+    .chip{padding:7px 14px}
+    .toast{bottom:104px}
+    .bottomnav{position:fixed;left:0;right:0;bottom:0;z-index:60;display:grid;grid-template-columns:repeat(5,1fr);background:#fff;border-top:1px solid var(--line);padding:7px 8px calc(9px + env(safe-area-inset-bottom));box-shadow:0 -10px 28px rgba(30,60,35,.09)}
+    .bn-item{display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10.5px;font-weight:600;color:var(--muted);padding:5px 2px;border-radius:10px;text-decoration:none}
+    .bn-item.active{color:var(--green-ink)}
+    .bn-item .i{font-size:19px;line-height:1.1}
+    .bn-rec{transform:translateY(-16px);gap:2px}
+    .bn-rec .btn{width:54px;height:54px;border-radius:99px;background:linear-gradient(135deg,var(--green),var(--green-deep));display:grid;place-items:center;color:#fff;font-size:26px;font-weight:700;box-shadow:0 8px 18px rgba(21,115,71,.4);border:4px solid var(--bg)}
+    .bn-rec .lbl{font-size:10.5px;color:var(--green-ink);font-weight:700}
+  }
+  @media(max-width:620px){
+    .alloc-body{flex-direction:column;gap:14px}
+    .legend{width:100%}
+    .donut{width:150px;height:150px}
+    .donut::after{inset:24px}
+  }
+  ::-webkit-scrollbar{width:9px;height:9px}
+  ::-webkit-scrollbar-thumb{background:#D8D2C4;border-radius:99px;border:2px solid #fff}
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- ════ SIDEBAR ════ -->
+  <aside class="sidebar">
+    <div class="side-card" style="flex:1;display:flex;flex-direction:column">
+      <div class="brand">
+        <div class="brand-logo">🌱</div>
+        <div><b>EasyDCA</b><small>by JaydeX · Investment Companion</small></div>
+      </div>
+      <nav>
+        <a class="nav-item active" href="#"><span class="ic">🏠</span> แดชบอร์ด</a>
+        <a class="nav-item" href="#" title="หน้าตัวอย่าง — Phase A2"><span class="ic">💼</span> พอร์ตของฉัน</a>
+        <a class="nav-item" href="#" title="หน้าตัวอย่าง — Phase A2"><span class="ic">🕐</span> ประวัติรายการ</a>
+        <a class="nav-item" href="#" title="Phase B"><span class="ic">🔔</span> ตั้งเตือน DCA</a>
+        <a class="nav-item" href="#"><span class="ic">⭐</span> Premium</a>
+        <div class="nav-sep"></div>
+        <a class="nav-item" href="#"><span class="ic">👤</span> โปรไฟล์</a>
+        <a class="nav-item" href="#"><span class="ic">🚪</span> ออกจากระบบ</a>
+      </nav>
+      <div class="garden">
+        <div class="lv"><span>ความสม่ำเสมอ</span><b>🔥 3 เดือนติด</b></div>
+        <div class="bar"><i></i></div>
+        <p style="margin-top:6px">DCA ครบทุกรอบที่วางแผนไว้ ต่อเนื่อง 3 เดือน — เดือนนี้อีก 2 รอบจะครบเดือนที่ 4</p>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ════ MAIN ════ -->
+  <main class="main">
+    <div class="m-brand">
+      <div class="brand-logo">🌱</div>
+      <div><b>EasyDCA</b><small>by JaydeX</small></div>
+      <div class="sp"></div>
+      <button class="bell">🔔<span class="dot">2</span></button>
+    </div>
+    <div class="topbar">
+      <div class="hello">
+        <h1>สวัสดีครับ, คุณ Easy <span class="leaf">🌱</span></h1>
+        <p>การลงทุนที่ดี เริ่มจากวินัยที่สม่ำเสมอ</p>
+      </div>
+      <div class="sp"></div>
+      <button class="bell">🔔<span class="dot">2</span></button>
+      <button class="chip-btn">📅 <span id="today-label">—</span></button>
+    </div>
+
+    <!-- stat cards -->
+    <section class="stats">
+      <div class="stat">
+        <div class="t"><span>มูลค่าพอร์ตรวม</span><span class="ico">💰</span></div>
+        <div class="v">96,150<small>.75 THB</small></div>
+        <div class="sub up">▲ +8,650.75 THB (+9.9%) จากต้นทุน</div>
+        <svg class="spark" viewBox="0 0 300 34" preserveAspectRatio="none"><path d="M0,26 C30,24 45,20 70,21 S120,14 150,15 200,8 230,9 280,4 300,5 L300,34 L0,34 Z" fill="#1E9E55" opacity=".12"/><path d="M0,26 C30,24 45,20 70,21 S120,14 150,15 200,8 230,9 280,4 300,5" fill="none" stroke="#1E9E55" stroke-width="2"/></svg>
+      </div>
+      <div class="stat">
+        <div class="t"><span>เงินลงทุนสะสม</span><span class="ico">🪙</span></div>
+        <div class="v">87,500<small>.00 THB</small></div>
+        <div class="sub mut">จากการบันทึก DCA ทั้งหมด 26 ครั้ง</div>
+      </div>
+      <div class="stat">
+        <div class="t"><span>DCA เดือนนี้</span><span class="ico">📅</span></div>
+        <div class="v"><span id="stat-month-count">2</span> <small>ครั้ง</small></div>
+        <div class="sub" style="color:#9A6B12;font-weight:700">🔥 ต่อเนื่อง 3 เดือนติด — อย่าให้ขาด!</div>
+      </div>
+    </section>
+
+    <!-- ═══ หัวข้อ DCA — quick record (โจทย์หลักของผู้ใช้) ═══ -->
+    <section class="card" id="dca">
+      <div class="card-h">
+        <h2>บันทึก DCA</h2><span class="tag">ง่าย ครบ จบในกล่องเดียว</span>
+        <div class="sp"></div>
+        <a class="link" href="#" title="Phase B — บันทึกผ่าน LINE ได้เหมือนกัน">หรือพิมพ์ในแชท LINE ก็ได้ →</a>
+      </div>
+      <div class="dca-grid">
+        <form class="dca-form" id="dca-form" autocomplete="off">
+          <div class="frow">
+            <div>
+              <label class="fl" for="f-date">วันที่ลงทุน</label>
+              <input class="inp" type="date" id="f-date">
+            </div>
+            <div>
+              <label class="fl">สินทรัพย์ <span class="opt">— เลื่อนดูหรือพิมพ์ค้นหา</span></label>
+              <div class="picker" id="picker">
+                <div class="picker-input" id="picker-input" tabindex="0">
+                  <span id="pk-avatar" class="avatar" style="background:#CBD5C0">?</span>
+                  <span class="ph" id="pk-label">เลือกสินทรัพย์…</span>
+                  <span class="car">▼</span>
+                </div>
+                <div class="dd">
+                  <div class="dd-search">🔍<input id="dd-q" placeholder="พิมพ์ชื่อหรือสัญลักษณ์ เช่น AMD, ปตท, บิตคอยน์"></div>
+                  <div class="dd-cats" id="dd-cats"></div>
+                  <div class="dd-list" id="dd-list"></div>
+                  <div class="dd-foot">ทั้งหมด <b id="dd-count">0</b> รายการ · ไม่เจอที่ต้องการ? แจ้งเพิ่มได้ที่แชท LINE</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="frow">
+            <div>
+              <label class="fl" for="f-amt">จำนวนเงินที่ลงทุน (DCA)</label>
+              <div class="amt-wrap">
+                <input class="inp" id="f-amt" inputmode="decimal" placeholder="0.00">
+                <span class="cur" id="f-cur">THB</span>
+              </div>
+              <div class="chips" id="amt-chips">
+                <button type="button" class="chip" data-amt="500">500</button>
+                <button type="button" class="chip" data-amt="1000">1,000</button>
+                <button type="button" class="chip" data-amt="3000">3,000</button>
+                <button type="button" class="chip" data-amt="5000">5,000</button>
+                <button type="button" class="chip" data-amt="10000">10,000</button>
+              </div>
+            </div>
+            <div>
+              <label class="fl" for="f-note">รายละเอียด <span class="opt">(ไม่บังคับ)</span></label>
+              <input class="inp" id="f-note" placeholder="เช่น DCA ประจำเดือน ก.ค.">
+              <div class="form-note" style="margin-top:9px">ระบบดึงราคาตลาด ณ เวลาบันทึกให้อัตโนมัติ แล้วคำนวณจำนวนหน่วยให้เอง — ไม่ต้องกรอกราคาเอง</div>
+            </div>
+          </div>
+          <button class="btn-main" type="submit">บันทึก DCA</button>
+          <div class="form-note">* EasyDCA by JaydeX เป็นผู้ช่วยบันทึกและติดตามพอร์ต ไม่ใช่โบรกเกอร์ ไม่มีการส่งคำสั่งซื้อขายจริง และไม่แนะนำการซื้อขายหลักทรัพย์รายตัว</div>
+        </form>
+
+        <div class="dca-side">
+          <div class="today-plan">
+            <h4>⏰ วันนี้ถึงรอบ DCA ของคุณ</h4>
+            <div class="plan-row">
+              <span class="avatar" style="background:#2D6AC0">SET</span>
+              <div class="nm"><b>SET50</b><small>ทุกวันที่ 16 ของเดือน</small></div>
+              <span class="amt">฿3,000</span>
+              <button class="btn-mini" data-fill="SET|3000">บันทึกเลย</button>
+            </div>
+            <div class="plan-row">
+              <span class="avatar" style="background:#F7931A">₿</span>
+              <div class="nm"><b>Bitcoin</b><small>ทุกวันพฤหัส</small></div>
+              <span class="amt">฿1,000</span>
+              <button class="btn-mini" data-fill="BTC|1000">บันทึกเลย</button>
+            </div>
+          </div>
+          <div class="confirm-box" id="confirm-box"></div>
+          <div class="mascot-line" id="mascot-line">
+            <span class="m">💡</span>
+            <span>วันนี้ยังไม่ได้บันทึก DCA — กดปุ่ม "บันทึกเลย" จากแผนด้านบน ระบบจะกรอกให้อัตโนมัติ</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- allocation + recent -->
+    <section class="two-col">
+      <div class="card">
+        <div class="card-h"><h2>ภาพรวมการลงทุน</h2></div>
+        <div class="alloc-body">
+          <div class="donut" id="donut"><div class="c"><small>มูลค่ารวม</small><b id="donut-total">—</b></div></div>
+          <div class="legend" id="legend"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-h"><h2>รายการล่าสุด</h2><div class="sp"></div><a class="link" href="#">ดูทั้งหมด →</a></div>
+        <div class="tx-list" id="tx-list"></div>
+      </div>
+    </section>
+
+    <!-- cumulative invested chart -->
+    <section class="card">
+      <div class="card-h">
+        <h2>เงินลงทุนสะสม</h2><span class="tag">คำนวณจากรายการจริงของคุณ</span>
+        <div class="sp"></div>
+        <div class="tabs" id="chart-tabs">
+          <button class="tab" data-m="3">3 เดือน</button>
+          <button class="tab on" data-m="6">6 เดือน</button>
+          <button class="tab" data-m="12">1 ปี</button>
+        </div>
+      </div>
+      <div class="chart-wrap"><svg id="chart" viewBox="0 0 760 210" width="100%" height="210" preserveAspectRatio="none"></svg></div>
+      <div class="chart-note">* แสดง "เงินที่ลงไปสะสม" ไม่ใช่มูลค่าพอร์ตย้อนหลัง (มูลค่าย้อนหลังต้องเก็บราคาในอดีต — อยู่ใน Roadmap)</div>
+    </section>
+  </main>
+
+  <!-- ════ RIGHT RAIL ════ -->
+  <aside class="rail">
+    <div class="mascot-card">
+      <h3 style="padding:0 0 10px;font-size:14.5px">📈 สรุปเดือนนี้ (ก.ค.)</h3>
+      <div class="msum-row"><span>บันทึก DCA แล้ว</span><b id="rail-month-count">2 ครั้ง</b></div>
+      <div class="msum-row"><span>เงินลงทุนเดือนนี้</span><b id="rail-month-amt">฿2,000</b></div>
+      <div class="msum-row"><span>ตามแผนที่ตั้งไว้</span><b>2 จาก 4 รอบ</b></div>
+      <div class="bar" style="margin-top:10px"><i id="rail-plan-bar" style="width:50%"></i></div>
+      <div class="bubble" id="rail-bubble" style="margin-top:11px">เหลืออีก <b>2 รอบ</b> (SET50 · Bitcoin) จะครบตามแผนเดือนนี้ — บันทึกได้จากกล่องด้านซ้ายเลย</div>
+    </div>
+
+    <div class="card">
+      <h3>📅 ปฏิทิน DCA (7 วันข้างหน้า)</h3>
+      <div class="cal">
+        <div class="cal-row"><div class="cal-d"><b>16</b><small>ก.ค.</small></div><span class="nm">SET50 · รายเดือน</span><span class="amt">฿3,000</span></div>
+        <div class="cal-row"><div class="cal-d"><b>16</b><small>ก.ค.</small></div><span class="nm">Bitcoin · รายสัปดาห์</span><span class="amt">฿1,000</span></div>
+        <div class="cal-row"><div class="cal-d"><b>20</b><small>ก.ค.</small></div><span class="nm">AAPL · รายเดือน</span><span class="amt">฿2,000</span></div>
+        <div class="cal-row"><div class="cal-d"><b>23</b><small>ก.ค.</small></div><span class="nm">Bitcoin · รายสัปดาห์</span><span class="amt">฿1,000</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>💼 สินทรัพย์ที่ถือ</h3>
+      <div class="hold" id="hold-list"></div>
+      <div class="disclaimer">ราคาหุ้นไทยยังไม่มีแหล่งข้อมูลสด — แสดงมูลค่าที่ต้นทุนไปก่อน</div>
+    </div>
+  </aside>
+</div>
+
+<!-- Bottom nav — เฉพาะมือถือแนวตั้ง -->
+<nav class="bottomnav">
+  <a class="bn-item active" href="#"><span class="i">🏠</span>หน้าหลัก</a>
+  <a class="bn-item" href="#" title="หน้าตัวอย่าง"><span class="i">💼</span>พอร์ต</a>
+  <a class="bn-item bn-rec" href="#dca" id="bn-rec"><span class="btn">＋</span><span class="lbl">บันทึก</span></a>
+  <a class="bn-item" href="#" title="หน้าตัวอย่าง"><span class="i">🕐</span>ประวัติ</a>
+  <a class="bn-item" href="#" title="หน้าตัวอย่าง"><span class="i">👤</span>โปรไฟล์</a>
+</nav>
+
+<div class="toast" id="toast">✅ บันทึกสำเร็จ</div>
+
+<script>
+/* ══ Symbol registry — ตรงกับ symbolRegistry.service.js จริง (224 ตัว หลังปิด AMD gap) ══ */
+const SYMBOLS = [
+// crypto (8)
+["BTC","Bitcoin บิตคอยน์","cr"],["ETH","Ethereum อีเธอเรียม","cr"],["USDT","Tether","cr"],["BNB","BNB ไบแนนซ์คอยน์","cr"],["XRP","XRP ริปเปิล","cr"],["SOL","Solana โซลานา","cr"],["DOGE","Dogecoin ด็อจคอยน์","cr"],["ADA","Cardano คาร์ดาโน","cr"],
+// หุ้นไทย (24)
+["PTT","ปตท.","th"],["CPALL","ซีพี ออลล์ (เซเว่น)","th"],["AOT","ท่าอากาศยานไทย","th"],["ADVANC","แอดวานซ์ (AIS)","th"],["SCB","ไทยพาณิชย์ (SCBX)","th"],["KBANK","กสิกรไทย","th"],["BBL","กรุงเทพ","th"],["SET","ดัชนี SET50","th"],["PTTEP","ปตท.สผ.","th"],["SCC","ปูนซิเมนต์ไทย","th"],["GULF","กัลฟ์","th"],["INTUCH","อินทัช","th"],["TRUE","ทรู คอร์ปอเรชั่น","th"],["DELTA","เดลต้า","th"],["OR","ปตท. น้ำมันและการค้าปลีก","th"],["GPSC","โกลบอล เพาเวอร์","th"],["BDMS","กรุงเทพดุสิตเวชการ","th"],["CPN","เซ็นทรัลพัฒนา","th"],["MINT","ไมเนอร์","th"],["KTB","กรุงไทย","th"],["TTB","ทีเอ็มบีธนชาต","th"],["CPF","เจริญโภคภัณฑ์อาหาร","th"],["IVL","อินโดรามา","th"],["EA","พลังงานบริสุทธิ์","th"],
+// ทองคำ (2)
+["GOLD","ทองคำแท่ง (ราคาสมาคมฯ)","au"],["GOLDORN","ทองรูปพรรณ","au"],
+// หุ้น US + ETF (190)
+["AAPL","Apple แอปเปิล","us"],["MSFT","Microsoft ไมโครซอฟท์","us"],["GOOGL","Alphabet (Google) A","us"],["GOOG","Alphabet (Google) C","us"],["AMZN","Amazon แอมะซอน","us"],["NVDA","NVIDIA เอ็นวิเดีย","us"],["META","Meta (Facebook)","us"],["TSLA","Tesla เทสลา","us"],
+["AMD","Advanced Micro Devices เอเอ็มดี","us"],["INTC","Intel อินเทล","us"],["AVGO","Broadcom","us"],["QCOM","Qualcomm","us"],["TXN","Texas Instruments","us"],["MU","Micron","us"],["AMAT","Applied Materials","us"],["LRCX","Lam Research","us"],["KLAC","KLA Corp","us"],["ADI","Analog Devices","us"],["MRVL","Marvell","us"],["ON","ON Semiconductor","us"],["MCHP","Microchip","us"],["NXPI","NXP Semiconductors","us"],["ASML","ASML (ADR เนเธอร์แลนด์)","us"],["TSM","TSMC (ADR ไต้หวัน)","us"],["ARM","Arm Holdings (ADR)","us"],["SWKS","Skyworks","us"],
+["ORCL","Oracle ออราเคิล","us"],["CRM","Salesforce","us"],["ADBE","Adobe อะโดบี","us"],["NOW","ServiceNow","us"],["INTU","Intuit","us"],["SNOW","Snowflake","us"],["PLTR","Palantir พาลันเทียร์","us"],["PANW","Palo Alto Networks","us"],["CRWD","CrowdStrike","us"],["FTNT","Fortinet","us"],["NET","Cloudflare","us"],["DDOG","Datadog","us"],["TEAM","Atlassian","us"],["WDAY","Workday","us"],["SHOP","Shopify (ADR แคนาดา)","us"],["UBER","Uber อูเบอร์","us"],["ABNB","Airbnb แอร์บีเอ็นบี","us"],["BKNG","Booking Holdings","us"],["NFLX","Netflix เน็ตฟลิกซ์","us"],["SPOT","Spotify สปอติฟาย","us"],["PYPL","PayPal เพย์พาล","us"],["SQ","Block (Square)","us"],["COIN","Coinbase คอยน์เบส","us"],["IBM","IBM ไอบีเอ็ม","us"],["CSCO","Cisco ซิสโก้","us"],["HPQ","HP เอชพี","us"],["DELL","Dell เดลล์","us"],
+["JPM","JPMorgan Chase","us"],["BAC","Bank of America","us"],["WFC","Wells Fargo","us"],["C","Citigroup ซิตี้กรุ๊ป","us"],["GS","Goldman Sachs","us"],["MS","Morgan Stanley","us"],["V","Visa วีซ่า","us"],["MA","Mastercard มาสเตอร์การ์ด","us"],["AXP","American Express","us"],["BLK","BlackRock","us"],["SCHW","Charles Schwab","us"],["SPGI","S&P Global","us"],["ICE","Intercontinental Exchange","us"],["CME","CME Group","us"],["BRK.B","Berkshire Hathaway B","us"],["USB","US Bancorp","us"],["PNC","PNC Financial","us"],["TFC","Truist","us"],
+["JNJ","Johnson & Johnson","us"],["UNH","UnitedHealth","us"],["PFE","Pfizer ไฟเซอร์","us"],["MRK","Merck","us"],["ABBV","AbbVie","us"],["LLY","Eli Lilly","us"],["TMO","Thermo Fisher","us"],["ABT","Abbott","us"],["DHR","Danaher","us"],["BMY","Bristol Myers Squibb","us"],["AMGN","Amgen","us"],["GILD","Gilead","us"],["CVS","CVS Health","us"],["MDT","Medtronic","us"],["ISRG","Intuitive Surgical","us"],["VRTX","Vertex Pharma","us"],["REGN","Regeneron","us"],["ZTS","Zoetis","us"],["CI","Cigna","us"],["ELV","Elevance Health","us"],
+["WMT","Walmart วอลมาร์ท","us"],["COST","Costco คอสต์โก","us"],["HD","Home Depot","us"],["LOW","Lowe's","us"],["TGT","Target ทาร์เก็ต","us"],["PG","Procter & Gamble","us"],["KO","Coca-Cola โคคา-โคล่า","us"],["PEP","PepsiCo เป๊ปซี่","us"],["MCD","McDonald's แมคโดนัลด์","us"],["SBUX","Starbucks สตาร์บัคส์","us"],["NKE","Nike ไนกี้","us"],["DIS","Walt Disney ดิสนีย์","us"],["CMCSA","Comcast","us"],["MDLZ","Mondelez","us"],["CL","Colgate-Palmolive","us"],["EL","Estée Lauder","us"],["YUM","Yum! Brands (KFC)","us"],["CMG","Chipotle","us"],["LULU","Lululemon","us"],["TJX","TJX Companies","us"],["ROST","Ross Stores","us"],["DG","Dollar General","us"],["KHC","Kraft Heinz","us"],["MO","Altria","us"],["PM","Philip Morris","us"],
+["XOM","Exxon Mobil","us"],["CVX","Chevron เชฟรอน","us"],["COP","ConocoPhillips","us"],["SLB","Schlumberger","us"],["OXY","Occidental Petroleum","us"],["PSX","Phillips 66","us"],["VLO","Valero Energy","us"],["MPC","Marathon Petroleum","us"],["KMI","Kinder Morgan","us"],["WMB","Williams Companies","us"],["NEE","NextEra Energy","us"],
+["BA","Boeing โบอิ้ง","us"],["CAT","Caterpillar","us"],["HON","Honeywell","us"],["GE","GE Aerospace","us"],["UPS","UPS ยูพีเอส","us"],["RTX","RTX (Raytheon)","us"],["LMT","Lockheed Martin","us"],["NOC","Northrop Grumman","us"],["DE","Deere & Company","us"],["MMM","3M","us"],["UNP","Union Pacific","us"],["FDX","FedEx เฟดเอ็กซ์","us"],["EMR","Emerson Electric","us"],["ETN","Eaton","us"],["GD","General Dynamics","us"],
+["F","Ford ฟอร์ด","us"],["GM","General Motors","us"],["RIVN","Rivian","us"],["LCID","Lucid","us"],["TM","Toyota (ADR ญี่ปุ่น)","us"],
+["T","AT&T","us"],["VZ","Verizon","us"],["TMUS","T-Mobile US","us"],["WBD","Warner Bros. Discovery","us"],
+["AMT","American Tower (REIT)","us"],["PLD","Prologis (REIT)","us"],["O","Realty Income (REIT)","us"],["SPG","Simon Property (REIT)","us"],
+["SPY","SPDR S&P 500 ETF","us"],["VOO","Vanguard S&P 500 ETF","us"],["VTI","Vanguard Total Market ETF","us"],["QQQ","Invesco QQQ (Nasdaq-100)","us"],["DIA","SPDR Dow Jones ETF","us"],["IWM","iShares Russell 2000 ETF","us"],["SCHD","Schwab US Dividend ETF","us"],["VYM","Vanguard High Dividend ETF","us"],["VIG","Vanguard Dividend Appreciation","us"],["VXUS","Vanguard Total Intl ETF","us"],["VEA","Vanguard Developed Markets","us"],["VWO","Vanguard Emerging Markets","us"],["ARKK","ARK Innovation ETF","us"],["XLK","Technology Select SPDR","us"],["XLF","Financial Select SPDR","us"],["XLE","Energy Select SPDR","us"],["XLV","Health Care Select SPDR","us"],["SOXX","iShares Semiconductor ETF","us"],["SMH","VanEck Semiconductor ETF","us"],["GLD","SPDR Gold Shares (ETF ทอง USD)","us"],["SLV","iShares Silver Trust","us"],["TLT","iShares 20+Y Treasury ETF","us"],["BND","Vanguard Total Bond ETF","us"],["JEPI","JPMorgan Equity Premium ETF","us"],["SCHG","Schwab Large-Cap Growth ETF","us"],
+["NIO","NIO (ADR จีน)","us"],["BABA","Alibaba อาลีบาบา (ADR)","us"],["SOFI","SoFi","us"],["RBLX","Roblox โรบล็อกซ์","us"],["U","Unity Software","us"],["DOCU","DocuSign","us"],["ZM","Zoom","us"],["PINS","Pinterest","us"],["SNAP","Snap สแนป","us"],["TWLO","Twilio","us"]
+];
+const CATS = [["all","ทั้งหมด"],["us","หุ้น US"],["th","หุ้นไทย"],["cr","คริปโต"],["au","ทองคำ"]];
+const TLABEL = {us:["US","t-us"],th:["TH","t-th"],cr:["Crypto","t-cr"],au:["ทอง","t-au"]};
+const AVCOLOR = {us:"#2D6AC0",th:"#C06A2D",cr:"#7A3FC0",au:"#B8912A"};
+
+/* ══ mock state (in-memory เท่านั้น — mockup) ══ */
+const fmt = n => n.toLocaleString("th-TH",{minimumFractionDigits:2,maximumFractionDigits:2});
+const fmt0 = n => n.toLocaleString("th-TH");
+let monthCount = 2, monthAmt = 2000;
+const holdings = [
+  {s:"AAPL", n:"Apple", t:"us", val:25000, cost:22000, live:true},
+  {s:"SET",  n:"ดัชนี SET50", t:"th", val:19000, cost:19000, live:false},
+  {s:"BTC",  n:"Bitcoin", t:"cr", val:10000.75, cost:11000, live:true},
+  {s:"NVDA", n:"NVIDIA", t:"us", val:14350, cost:11500, live:true},
+  {s:"GOLD", n:"ทองคำแท่ง", t:"au", val:15300, cost:14200, live:true},
+  {s:"PTT",  n:"ปตท.", t:"th", val:6000, cost:6000, live:false},
+  {s:"VOO",  n:"Vanguard S&P 500", t:"us", val:6500, cost:5800, live:true},
+];
+const txs = [
+  {s:"NVDA", n:"NVIDIA", t:"us", amt:1000, side:"ซื้อ", d:"14 ก.ค. 69 · 21:04", note:"DCA รายเดือน"},
+  {s:"BTC",  n:"Bitcoin", t:"cr", amt:1000, side:"ซื้อ", d:"9 ก.ค. 69 · 20:12", note:"DCA รายสัปดาห์"},
+  {s:"GOLD", n:"ทองคำแท่ง", t:"au", amt:2000, side:"ซื้อ", d:"1 ก.ค. 69 · 10:03", note:""},
+  {s:"AAPL", n:"Apple", t:"us", amt:2000, side:"ซื้อ", d:"20 มิ.ย. 69 · 19:40", note:"DCA รายเดือน"},
+  {s:"SET",  n:"ดัชนี SET50", t:"th", amt:3000, side:"ซื้อ", d:"16 มิ.ย. 69 · 12:11", note:""},
+];
+const CHART_DATA = {
+  3:[["พ.ค.",71500],["มิ.ย.",80500],["ก.ค.",87500]],
+  6:[["ก.พ.",47000],["มี.ค.",55500],["เม.ย.",63500],["พ.ค.",71500],["มิ.ย.",80500],["ก.ค.",87500]],
+  12:[["ส.ค.",8000],["ก.ย.",16000],["ต.ค.",23500],["พ.ย.",30500],["ธ.ค.",38500],["ม.ค.",47000],["ก.พ.",47000],["มี.ค.",55500],["เม.ย.",63500],["พ.ค.",71500],["มิ.ย.",80500],["ก.ค.",87500]]
+};
+
+/* ══ today label + date default ══ */
+const now = new Date();
+const thMonths=["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
+document.getElementById("today-label").textContent = `${now.getDate()} ${thMonths[now.getMonth()]} ${now.getFullYear()+543}`;
+const fDate=document.getElementById("f-date");
+const iso = d => d.toISOString().slice(0,10);
+fDate.value = iso(now); fDate.max = iso(now);
+
+/* ══ asset picker ══ */
+let pickCat="all", picked=null, hiIdx=-1, filtered=[];
+const picker=document.getElementById("picker"), pkInput=document.getElementById("picker-input");
+const ddQ=document.getElementById("dd-q"), ddList=document.getElementById("dd-list"), ddCats=document.getElementById("dd-cats"), ddCount=document.getElementById("dd-count");
+
+CATS.forEach(([k,label],i)=>{
+  const b=document.createElement("button");
+  b.type="button"; b.className="chip"+(i===0?" on":""); b.textContent=label; b.dataset.k=k;
+  b.onclick=()=>{pickCat=k;[...ddCats.children].forEach(c=>c.classList.toggle("on",c.dataset.k===k));renderList();ddQ.focus();};
+  ddCats.appendChild(b);
+});
+function norm(s){return s.toLowerCase().replace(/\s+/g,"")}
+function renderList(){
+  const q=norm(ddQ.value);
+  filtered = SYMBOLS.filter(([s,n,t])=>(pickCat==="all"||t===pickCat)&&(!q||norm(s).includes(q)||norm(n).includes(q)));
+  hiIdx = filtered.length?0:-1;
+  ddCount.textContent = fmt0(filtered.length);
+  if(!filtered.length){
+    ddList.innerHTML=`<div class="dd-empty">ไม่พบ "<b>${ddQ.value}</b>" ในรายการ<br><span style="font-size:12px">ลองสะกดแบบอื่น หรือแจ้งทีมงานผ่านแชท LINE เพื่อขอเพิ่มสินทรัพย์นี้</span></div>`;
+    return;
+  }
+  ddList.innerHTML = filtered.slice(0,400).map(([s,n,t],i)=>{
+    const [tl,tc]=TLABEL[t];
+    return `<div class="dd-item${i===hiIdx?" hi":""}" data-i="${i}">
+      <span class="avatar" style="background:${AVCOLOR[t]}">${s.slice(0,4)}</span>
+      <span class="nm"><b>${s}</b><small>${n}</small></span>
+      <span class="tbadge ${tc}">${tl}</span></div>`;
+  }).join("");
+  [...ddList.children].forEach(el=>{
+    el.onclick=()=>choose(filtered[+el.dataset.i]);
+    el.onmousemove=()=>{hiIdx=+el.dataset.i;paintHi();};
+  });
+}
+function paintHi(){[...ddList.children].forEach(el=>el.classList.toggle("hi",+el.dataset.i===hiIdx))}
+function choose([s,n,t]){
+  picked={s,n,t};
+  document.getElementById("pk-avatar").style.background=AVCOLOR[t];
+  document.getElementById("pk-avatar").textContent=s.slice(0,4);
+  document.getElementById("pk-label").outerHTML=`<span class="sym" id="pk-label"><b>${s}</b><small>${n}</small></span>`;
+  document.getElementById("f-cur").textContent = t==="us" ? "THB ⇄ USD" : "THB";
+  closeDD();
+}
+function openDD(){picker.classList.add("open");ddQ.value="";renderList();setTimeout(()=>ddQ.focus(),30)}
+function closeDD(){picker.classList.remove("open")}
+pkInput.onclick=()=>picker.classList.contains("open")?closeDD():openDD();
+pkInput.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();openDD()}};
+ddQ.oninput=renderList;
+ddQ.onkeydown=e=>{
+  if(e.key==="ArrowDown"){e.preventDefault();hiIdx=Math.min(hiIdx+1,filtered.length-1);paintHi();ddList.children[hiIdx]?.scrollIntoView({block:"nearest"})}
+  else if(e.key==="ArrowUp"){e.preventDefault();hiIdx=Math.max(hiIdx-1,0);paintHi();ddList.children[hiIdx]?.scrollIntoView({block:"nearest"})}
+  else if(e.key==="Enter"){e.preventDefault();if(filtered[hiIdx])choose(filtered[hiIdx])}
+  else if(e.key==="Escape"){closeDD()}
+};
+document.addEventListener("click",e=>{if(!picker.contains(e.target))closeDD()});
+
+/* ══ amount chips ══ */
+const fAmt=document.getElementById("f-amt");
+document.getElementById("amt-chips").addEventListener("click",e=>{
+  const b=e.target.closest(".chip"); if(!b)return;
+  fAmt.value=fmt0(+b.dataset.amt);
+  [...e.currentTarget.children].forEach(c=>c.classList.toggle("on",c===b));
+});
+fAmt.addEventListener("input",()=>[...document.getElementById("amt-chips").children].forEach(c=>c.classList.remove("on")));
+
+/* ══ prefill from plan ══ */
+document.querySelectorAll("[data-fill]").forEach(b=>b.onclick=()=>{
+  const [s,amt]=b.dataset.fill.split("|");
+  const row=SYMBOLS.find(x=>x[0]===s); if(row)choose(row);
+  fAmt.value=fmt0(+amt);
+  document.getElementById("dca").scrollIntoView({behavior:"smooth",block:"center"});
+  fAmt.focus();
+});
+
+/* ══ submit → confirmation card (pattern ป้านวล) ══ */
+const box=document.getElementById("confirm-box"), toast=document.getElementById("toast");
+document.getElementById("dca-form").onsubmit=e=>{
+  e.preventDefault();
+  const amt=parseFloat((fAmt.value||"").replace(/,/g,""));
+  if(!picked){openDD();return}
+  if(!amt||amt<=0){fAmt.focus();fAmt.style.borderColor="var(--red)";setTimeout(()=>fAmt.style.borderColor="",1200);return}
+  const note=document.getElementById("f-note").value.trim();
+  const d=new Date(fDate.value);
+  const dLabel=`${d.getDate()} ${thMonths[d.getMonth()]} ${(d.getFullYear()+543)%100}`;
+  const noFeed = picked.t==="th";
+  box.className="confirm-box show";
+  box.innerHTML=`
+    <div class="ok">✅ บันทึกสำเร็จ <span class="tbadge ${TLABEL[picked.t][1]}" style="margin-left:auto">${TLABEL[picked.t][0]}</span></div>
+    <table>
+      <tr><td>สินทรัพย์</td><td>${picked.s} · ${picked.n}</td></tr>
+      <tr><td>จำนวนเงิน</td><td>฿${fmt(amt)}</td></tr>
+      <tr><td>วันที่</td><td>${dLabel}</td></tr>
+      ${noFeed
+        ? `<tr><td>ราคา/หน่วย</td><td style="color:#9A6B12">กรอกเองภายหลัง (หุ้นไทยยังไม่มีราคาสด)</td></tr>`
+        : `<tr><td>ราคา/หน่วย</td><td>ดึงราคาตลาดอัตโนมัติ ✓</td></tr>`}
+      ${note?`<tr><td>รายละเอียด</td><td>${note}</td></tr>`:""}
+    </table>
+    <div class="acts">
+      <button type="button" class="btn-ghost">✏️ แก้ไข</button>
+      <button type="button" class="btn-ghost" style="color:var(--red)">↩︎ ยกเลิกรายการนี้</button>
+    </div>`;
+  txs.unshift({s:picked.s,n:picked.n,t:picked.t,amt,side:"ซื้อ",d:`${dLabel} · เมื่อครู่`,note});
+  renderTx();
+  monthCount++; monthAmt+=amt;
+  document.getElementById("stat-month-count").textContent=monthCount;
+  document.getElementById("rail-month-count").textContent=`${monthCount} ครั้ง`;
+  document.getElementById("rail-month-amt").textContent=`฿${fmt0(monthAmt)}`;
+  document.getElementById("mascot-line").innerHTML=`<span class="m">✅</span><span>บันทึกครั้งที่ ${monthCount} ของเดือนนี้เรียบร้อย — รายการเข้าพอร์ตและประวัติแล้ว</span>`;
+  document.getElementById("rail-bubble").innerHTML=`บันทึก <b>${picked.s} ฿${fmt0(amt)}</b> เรียบร้อย — เดือนนี้รวม ${monthCount} ครั้ง (฿${fmt0(monthAmt)})`;
+  toast.classList.add("show"); setTimeout(()=>toast.classList.remove("show"),2600);
+  fAmt.value=""; document.getElementById("f-note").value="";
+  [...document.getElementById("amt-chips").children].forEach(c=>c.classList.remove("on"));
+};
+
+/* ══ recent tx list ══ */
+function renderTx(){
+  document.getElementById("tx-list").innerHTML = txs.slice(0,5).map((t,i)=>`
+    <div class="tx">
+      <span class="avatar" style="background:${AVCOLOR[t.t]}">${t.s.slice(0,4)}</span>
+      <span class="nm"><b>${t.s}</b> <span class="side-b b-buy">${t.side}</span><small>${t.d}${t.note?" · "+t.note:""}</small></span>
+      ${i===0?'<button class="undo btn-ghost" title="เหมือนคำสั่ง undo ใน LINE">↩︎ ยกเลิก</button>':""}
+      <span class="amt"><b>฿${fmt(t.amt)}</b><small>เงินลงทุน</small></span>
+    </div>`).join("");
+}
+renderTx();
+
+/* ══ allocation donut ══ */
+const typeName={us:"หุ้นต่างประเทศ",th:"หุ้นไทย",cr:"คริปโต",au:"ทองคำ"};
+const typeCol={us:"#4A90D9",th:"#2FB56A",cr:"#B98A48",au:"#F0C93B"};
+(function(){
+  const byType={};
+  holdings.forEach(h=>byType[h.t]=(byType[h.t]||0)+h.val);
+  const total=Object.values(byType).reduce((a,b)=>a+b,0);
+  const order=Object.entries(byType).sort((a,b)=>b[1]-a[1]);
+  let acc=0; const stops=[];
+  order.forEach(([t,v])=>{const from=acc/total*100;acc+=v;const to=acc/total*100;stops.push(`${typeCol[t]} ${from}% ${to}%`)});
+  document.getElementById("donut").style.background=`conic-gradient(${stops.join(",")})`;
+  document.getElementById("donut-total").textContent="฿"+fmt0(Math.round(total));
+  document.getElementById("legend").innerHTML=order.map(([t,v])=>`
+    <div class="lg-row"><span class="sw" style="background:${typeCol[t]}"></span>
+    <span class="nm">${typeName[t]}</span><span class="val">฿${fmt0(Math.round(v))}</span>
+    <span class="pc">${(v/total*100).toFixed(1)}%</span></div>`).join("");
+})();
+
+/* ══ holdings rail ══ */
+document.getElementById("hold-list").innerHTML = holdings.map(h=>{
+  const pl=h.val-h.cost, pc=h.cost?pl/h.cost*100:0;
+  const cls=pl>0?"up":pl<0?"down":"mut";
+  return `<div class="hrow">
+    <span class="avatar" style="background:${AVCOLOR[h.t]}">${h.s.slice(0,4)}</span>
+    <span class="nm"><b>${h.s}</b> ${h.live?"":'<span class="nofeed">ที่ต้นทุน</span>'}<small>${h.n}</small></span>
+    <span class="pl"><b>฿${fmt0(Math.round(h.val))}</b>
+    <small class="${cls}">${h.live?(pl>=0?"+":"")+pc.toFixed(1)+"%":"—"}</small></span>
+  </div>`;
+}).join("");
+
+/* ══ cumulative invested chart (SVG, no lib) ══ */
+function drawChart(months){
+  const data=CHART_DATA[months];
+  const svg=document.getElementById("chart");
+  const W=760,H=210,P={l:56,r:16,t:14,b:30};
+  const max=Math.max(...data.map(d=>d[1]))*1.12;
+  const x=i=>P.l+(W-P.l-P.r)*(data.length===1?0:i/(data.length-1));
+  const y=v=>H-P.b-(H-P.t-P.b)*(v/max);
+  let grid="",labels="";
+  for(let g=0;g<=3;g++){
+    const v=max/3*g, yy=y(v);
+    grid+=`<line x1="${P.l}" x2="${W-P.r}" y1="${yy}" y2="${yy}" stroke="#EEE9DD" stroke-width="1"/>`;
+    labels+=`<text x="${P.l-8}" y="${yy+4}" text-anchor="end" font-size="10.5" fill="#8B9587">฿${Math.round(v/1000)}k</text>`;
+  }
+  const pts=data.map((d,i)=>[x(i),y(d[1])]);
+  const line=pts.map((p,i)=>(i?"L":"M")+p[0].toFixed(1)+","+p[1].toFixed(1)).join(" ");
+  const area=line+` L${pts[pts.length-1][0]},${H-P.b} L${pts[0][0]},${H-P.b} Z`;
+  const dots=pts.map((p,i)=>`<circle cx="${p[0]}" cy="${p[1]}" r="3.6" fill="#fff" stroke="#1E9E55" stroke-width="2.4"/><text x="${p[0]}" y="${H-P.b+18}" text-anchor="middle" font-size="10.5" fill="#8B9587">${data[i][0]}</text>`).join("");
+  const last=pts[pts.length-1];
+  svg.innerHTML=`<defs><linearGradient id="ag" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1E9E55" stop-opacity=".22"/><stop offset="1" stop-color="#1E9E55" stop-opacity="0"/></linearGradient></defs>
+    ${grid}${labels}
+    <path d="${area}" fill="url(#ag)"/>
+    <path d="${line}" fill="none" stroke="#1E9E55" stroke-width="2.6" stroke-linecap="round"/>
+    ${dots}
+    <g><rect x="${last[0]-58}" y="${last[1]-30}" rx="7" width="72" height="21" fill="#0E5233"/><text x="${last[0]-22}" y="${last[1]-15.5}" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">฿${fmt0(data[data.length-1][1])}</text></g>`;
+}
+/* ปุ่มบันทึกกลาง bottom nav (มือถือ) → เลื่อนไปฟอร์มแล้วเปิดตัวเลือกสินทรัพย์ */
+document.getElementById("bn-rec").addEventListener("click",e=>{
+  e.preventDefault();
+  document.getElementById("dca").scrollIntoView({behavior:"smooth",block:"start"});
+  setTimeout(()=>{ if(!picked) openDD(); else fAmt.focus(); },450);
+});
+
+drawChart(6);
+document.getElementById("chart-tabs").addEventListener("click",e=>{
+  const b=e.target.closest(".tab"); if(!b)return;
+  [...e.currentTarget.children].forEach(t=>t.classList.toggle("on",t===b));
+  drawChart(+b.dataset.m);
+});
+</script>
+</body>
+</html>

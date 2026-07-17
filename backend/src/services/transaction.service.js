@@ -80,6 +80,17 @@ function roundToEight(value) {
   return Math.round((value + Number.EPSILON) * 1e8) / 1e8;
 }
 
+// "จำนวนหน่วยจากยอดเงินรวม + ราคาต่อหน่วย" — กฎการปัดเศษเดียวของทั้งระบบ
+// (Extract จาก Logic เดิมที่เขียน roundToEight(amount / price) ซ้ำอยู่ 4 จุดใน
+// resolveQuantityAndPrice: USD/กองทุน/ทอง/Crypto — พฤติกรรมเท่าเดิมทุกประการ)
+//
+// Export ออกไปเพื่อให้ Web Controller (POST /api/v1/transactions) ที่ต้องแปลง
+// "ยอดเงินรวม" ของฟอร์มเว็บเป็น "จำนวนหน่วย" ก่อนส่งเข้า Service ในรูปแบบเดิม
+// (quantity + pricePerUnit) ใช้กฎการปัดเศษ "ตัวเดียวกัน" ได้ ไม่ Copy สูตรไปคิดเอง
+function deriveQuantityFromAmount(amountTotal, pricePerUnit) {
+  return roundToEight(Number(amountTotal) / Number(pricePerUnit));
+}
+
 // DATABASE.md § 7 — Field ประเภท DATE ควรอิงวันของผู้ใช้ (Asia/Bangkok)
 // ไม่ใช่ UTC เพื่อไม่ให้ธุรกรรมที่บันทึกช่วงดึกตกไปเป็นวันก่อนหน้า
 function todayInBangkok() {
@@ -197,7 +208,7 @@ async function resolveQuantityAndPrice(params, side = 'buy') {
           { symbol: params.symbol }
         );
       }
-      const quantity = roundToEight(amountUsd / priceUsd);
+      const quantity = deriveQuantityFromAmount(amountUsd, priceUsd);
       return {
         quantity,
         pricePerUnit: priceUsd,
@@ -227,7 +238,7 @@ async function resolveQuantityAndPrice(params, side = 'buy') {
 
       const amountThb = Number(params.amountThb);
       const pricePerUnit = nav.lastVal;
-      const quantity = roundToEight(amountThb / pricePerUnit);
+      const quantity = deriveQuantityFromAmount(amountThb, pricePerUnit);
       return {
         quantity,
         pricePerUnit,
@@ -258,7 +269,7 @@ async function resolveQuantityAndPrice(params, side = 'buy') {
       const amountThb = Number(params.amountThb);
       // ซื้อ = จ่ายราคา "ขายออก" (sell) ; ขาย = ได้ราคา "รับซื้อคืน" (buy)
       const pricePerUnit = side === 'sell' ? gold.buy : gold.sell;
-      const quantity = roundToEight(amountThb / pricePerUnit);
+      const quantity = deriveQuantityFromAmount(amountThb, pricePerUnit);
       return {
         quantity,
         pricePerUnit,
@@ -277,7 +288,7 @@ async function resolveQuantityAndPrice(params, side = 'buy') {
       const amountThb = Number(params.amountThb);
       // ปัด quantity เป็น 8 ตำแหน่งตรงกับ Column Precision NUMERIC(20,8) เอง
       // ใน App Layer — ไม่ปล่อยให้ Database ปัดทิ้งเองแบบไม่มี Control ตอน INSERT
-      const quantity = roundToEight(amountThb / pricePerUnit);
+      const quantity = deriveQuantityFromAmount(amountThb, pricePerUnit);
       // priceSource ตาม Asset Type จริง (coingecko/twelvedata) — ราคามาจาก
       // Price Feed Service ไม่ใช่ที่ User ระบุเอง ใช้แจ้งเตือนผู้ใช้ใน
       // Preview/Confirm Message ว่าราคาอาจคลาดเคลื่อนจาก Exchange ที่ User
@@ -420,7 +431,10 @@ async function processBuyCommand(userId, params, options = {}) {
     feeThb: params.feeThb ?? 0,
     date: params.date ?? todayInBangkok(),
     note: params.note ?? null,
-    source: 'line',
+    // ช่องทางที่บันทึก (DATABASE.md § transactions — CHECK IN ('line','web','slip_ai'))
+    // Default 'line' เมื่อ Caller ไม่ส่งมา = ทุก Path เดิม (LINE/OCR/Bulk Import) ได้ค่า
+    // เท่าเดิมทุกประการ — เว็บ (S8 R1a) ส่ง 'web' เข้ามาเพื่อแยกช่องทางใน Ledger
+    source: params.source ?? 'line',
   });
 
   return {
@@ -432,6 +446,10 @@ async function processBuyCommand(userId, params, options = {}) {
     currency,
     newAssetCreated: newAsset,
     priceSource,
+    // Field ดิบของรายการที่เพิ่งบันทึก — Web Controller ใช้ประกอบการ์ดตอบกลับ
+    // โดยไม่ต้อง Query ซ้ำ (LINE Path เดิมไม่ได้อ่าน Field นี้ = ไม่กระทบ)
+    date: transaction.date,
+    note: transaction.note,
   };
 }
 
@@ -548,7 +566,8 @@ async function processSellCommand(userId, params) {
     feeThb: params.feeThb ?? 0,
     date: params.date ?? todayInBangkok(),
     note: params.note ?? null,
-    source: 'line',
+    // Default 'line' = Path เดิมทั้งหมดได้ค่าเท่าเดิม (เหตุผลเดียวกับ processBuyCommand)
+    source: params.source ?? 'line',
   });
 
   return {
@@ -560,6 +579,8 @@ async function processSellCommand(userId, params) {
     currency,
     remainingQuantity: roundToEight(heldQuantity - quantity),
     priceSource,
+    date: transaction.date,
+    note: transaction.note,
   };
 }
 
@@ -567,6 +588,7 @@ module.exports = {
   TransactionServiceError,
   MAX_FREE_ASSETS,
   calculateHeldQuantity,
+  deriveQuantityFromAmount,
   todayInBangkok,
   validateBuy,
   validateSell,

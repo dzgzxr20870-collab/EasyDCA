@@ -1,6 +1,7 @@
 const portfolioService = require('../services/portfolio.service');
 const profitService = require('../services/profit.service');
 const fxRateService = require('../services/fxRate.service');
+const dashboardOverviewService = require('../services/dashboardOverview.service');
 const transactionRepository = require('../repositories/transaction.repository');
 const userRepository = require('../repositories/user.repository');
 const entitlementService = require('../services/entitlement.service');
@@ -119,4 +120,18 @@ async function getMe(req, res) {
   }
 }
 
-module.exports = { getPortfolio, getHistory, getProfit, getMe };
+// GET /api/v1/dashboard/overview — ข้อมูลทั้งหน้า Dashboard ใหม่ในครั้งเดียว
+// (S8 Round 1a) — Reuse ทุกสูตรเดิมผ่าน dashboardOverview.service ไม่คำนวณเงินที่นี่
+// Endpoint เดิม 4 ตัวด้านบนยังอยู่ครบ ไม่ถูกแตะ (Additive — ของเดิมที่ Frontend
+// ปัจจุบันใช้อยู่ยังทำงานเหมือนเดิมทุกประการ)
+async function getOverview(req, res) {
+  try {
+    const overview = await dashboardOverviewService.getOverview(req.user.id);
+    return res.status(200).json(overview);
+  } catch (err) {
+    console.error(`[dashboard] getOverview failed: ${err.message}`);
+    return res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+}
+
+module.exports = { getPortfolio, getHistory, getProfit, getMe, getOverview };

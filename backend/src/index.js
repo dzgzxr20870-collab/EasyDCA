@@ -13,6 +13,8 @@ const dashboardRoutes = require('./routes/dashboard.routes');
 const paymentRoutes = require('./routes/payment.routes');
 const adminRoutes = require('./routes/admin.routes');
 const reportsRoutes = require('./routes/reports.routes');
+const assetsRoutes = require('./routes/assets.routes');
+const transactionsRoutes = require('./routes/transactions.routes');
 
 const app = express();
 
@@ -52,6 +54,13 @@ app.use('/api/v1/auth', authRoutes);
 
 // Mount Dashboard Routes (Phase 2 — Web Dashboard) ที่ /api/v1/dashboard
 app.use('/api/v1/dashboard', dashboardRoutes);
+
+// Mount Assets Routes (S8 Round 1a — Dropdown ค้นหาสินทรัพย์บนเว็บ) ที่ /api/v1/assets
+app.use('/api/v1/assets', assetsRoutes);
+
+// Mount Transactions Routes (S8 Round 1a — กล่องบันทึก DCA บนเว็บ) ที่ /api/v1/transactions
+// บันทึกผ่าน transaction.service ตัวเดียวกับ LINE ทุกประการ (ดู transactions.controller.js)
+app.use('/api/v1/transactions', transactionsRoutes);
 
 // Mount Payment Routes (Phase 2 Step 3 — Premium ผ่าน PromptPay QR) ที่ /api/v1/payment
 app.use('/api/v1/payment', paymentRoutes);

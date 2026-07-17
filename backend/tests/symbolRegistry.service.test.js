@@ -19,6 +19,23 @@ describe('symbolRegistry.lookupType — Symbol ที่รู้จัก', () 
     expect(lookupType('NVDA')).toBe('stock_us');
   });
 
+  // Beta Prep — ขยาย List หลังพบว่า AMD หายไปจาก List เดิม (บั๊กที่รายงานมา)
+  test('หุ้นสหรัฐที่เพิ่มใหม่ (Beta Prep) → คืน type stock_us ครบทุกหมวด', () => {
+    // AMD คือ Symbol ที่รายงานว่าหายไปจริง — ต้องยืนยันว่าเจอแล้ว
+    expect(lookupType('AMD')).toBe('stock_us');
+    expect(lookupType('GOOG')).toBe('stock_us'); // Alphabet Class C (ต่างจาก GOOGL)
+    // เซมิคอนดักเตอร์ + ADR ต่างชาติที่เทรดเป็น USD
+    expect(lookupType('INTC')).toBe('stock_us');
+    expect(lookupType('TSM')).toBe('stock_us');
+    expect(lookupType('ASML')).toBe('stock_us');
+    // Symbol ที่มีจุด (Share Class) — ต้องยัง Lookup เจอปกติ
+    expect(lookupType('BRK.B')).toBe('stock_us');
+    // ETF ยอดนิยม — จงใจ Classify เป็น stock_us (ไม่ใช่ 'etf') เพราะระบบยังไม่มี
+    // Price Feed Route สำหรับ type 'etf' เลย (ดู Comment ในไฟล์จริง)
+    expect(lookupType('SPY')).toBe('stock_us');
+    expect(lookupType('QQQ')).toBe('stock_us');
+  });
+
   test('ทองคำ → คืน type gold_bar / gold_ornament (Phase 3 Round 7)', () => {
     expect(lookupType('GOLD')).toBe('gold_bar');
     expect(lookupType('GOLDORN')).toBe('gold_ornament');

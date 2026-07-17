@@ -10,6 +10,10 @@ router.use(requireAuth);
 // PDPA Compliance (migration 017) — ต้องกดยืนยัน Privacy Policy ก่อนเห็นข้อมูลจริง
 router.use(requireConsent);
 
+// S8 Round 1a — ข้อมูลทั้งหน้า Dashboard ใหม่ในครั้งเดียว (การ์ดสรุป/Allocation/
+// Streak/รายการล่าสุด/กราฟรายเดือน) Route เดิมด้านล่างยังอยู่ครบตามเดิม
+router.get('/overview', dashboardController.getOverview);
+
 router.get('/portfolio', dashboardController.getPortfolio);
 router.get('/history', dashboardController.getHistory);
 router.get('/profit/:symbol', dashboardController.getProfit);

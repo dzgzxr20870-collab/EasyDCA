@@ -30,11 +30,42 @@ function isReversal(transaction) {
   return typeof transaction.note === 'string' && transaction.note.startsWith(`${UNDO_MARKER}:`);
 }
 
+// คืนเฉพาะรายการที่ "ยังมีผลอยู่จริง" — ตัดทั้งคู่ของการยกเลิกออก:
+//  - แถว Reversal เอง (note = 'UNDO_OF:<id>')
+//  - แถวต้นฉบับที่ถูกย้อน (id ตรงกับที่ Reversal อ้างถึง)
+//
+// ใช้สำหรับ "สถิติการบันทึก" (จำนวนครั้ง DCA / ยอดรวม / Streak / กราฟรายเดือน) ที่
+// การบันทึกแล้วกดยกเลิกไม่ควรถูกนับ — ถ้านับแต่แถว buy โดยไม่ตัด จะได้จำนวนครั้ง/
+// ยอดเงินเกินจริง (ทั้งที่ทั้งคู่หักล้างกันหมดแล้วในเชิงยอดคงเหลือ/ต้นทุน)
+//
+// อยู่ที่ไฟล์นี้เพราะเป็น "นิยามของการยกเลิก" (คู่กับ UNDO_MARKER/isReversal) —
+// Consumer ทุกตัว (Web Controller / Dashboard Stats) Import จากที่เดียว ไม่ Hardcode
+// รูปแบบ note ซ้ำ
+//
+// ⚠️ ไม่กระทบสูตรเงินใดๆ: portfolio.service/profit.service ยังคง Replay ธุรกรรม
+// "ทุกแถวรวม Reversal" ตามเดิมทุกประการ (Reversal คือแถวจริงใน Ledger ที่ต้องนับ
+// เพื่อให้ยอดคงเหลือ/ต้นทุนกลับไปเท่าก่อนบันทึก) — ฟังก์ชันนี้ใช้กับ "สถิติการนับ"
+// เท่านั้น ห้ามนำไปกรองก่อนคำนวณต้นทุน/กำไร
+function excludeUndoneTransactions(transactions) {
+  const reversedIds = new Set();
+  for (const tx of transactions) {
+    if (isReversal(tx)) {
+      reversedIds.add(tx.note.slice(`${UNDO_MARKER}:`.length));
+    }
+  }
+
+  return transactions.filter((tx) => !isReversal(tx) && !reversedIds.has(tx.id));
+}
+
 // ยกเลิก (ย้อนกลับ) Transaction ล่าสุดของ User ด้วย Reversal Pattern
 // (DATABASE.md § 8 — Immutable Ledger) โดยไม่ลบ/แก้ไขรายการเดิมเด็ดขาด
 //
+// options.source = ช่องทางที่กดยกเลิก ('line'|'web') — Default 'line' ทำให้ Caller
+// เดิม (Webhook LINE) ได้พฤติกรรมเท่าเดิมทุกประการ ส่วนเว็บ (S8 R1a) ส่ง 'web' เข้ามา
+// Semantics การยกเลิกอื่นๆ เหมือนกันทุกประการทั้งสองช่องทาง (ย้อนได้เฉพาะรายการล่าสุด)
+//
 // อาจ throw: NO_TRANSACTION_TO_UNDO / ALREADY_UNDONE / CANNOT_UNDO_QUANTITY_MISMATCH
-async function undoLastTransaction(userId) {
+async function undoLastTransaction(userId, options = {}) {
   const [latest] = await transactionRepository.findRecentByUser(userId, 1);
 
   // ไม่มีธุรกรรมเลย — ไม่มีอะไรให้ย้อน
@@ -100,10 +131,23 @@ async function undoLastTransaction(userId) {
     amountThb: latest.amountThb,
     pricePerUnit: latest.pricePerUnit,
     quantity: latest.quantity,
+    // Multi-Currency (Round 10) — สกุลต้องตรงกับรายการต้นฉบับเสมอ
+    //
+    // เดิมไม่ได้ส่ง Field นี้ → Repository เติม DEFAULT 'THB' (migration 012) ทำให้การ
+    // ย้อนรายการ USD ได้แถว Reversal ที่ "บอกสกุลผิด" (amount_thb เก็บ 50 แต่ติดป้าย
+    // THB ทั้งที่เป็น 50 USD) — ยอดคงเหลือ/ต้นทุนไม่เพี้ยนเพราะ calculateHeldQuantity
+    // และ calculateTotalInvested ไม่ได้อ่าน currency (บวก/ลบ amount_thb ตรงๆ ซึ่งหักล้าง
+    // กันพอดีอยู่แล้ว) แต่ทุกจุดที่ "แสดงสกุล" ตามแถวจริงจะโชว์ผิด (รายการล่าสุดบน
+    // Dashboard / GET /dashboard/history / Export รายงาน)
+    //
+    // latest.currency มาจาก transaction.repository.toTransaction ที่ Default 'THB'
+    // ให้แถวเก่าอยู่แล้ว → รายการ THB ทั้งหมดได้ค่า 'THB' เท่าเดิมทุกประการ (ไม่มีผล
+    // ต่อ Path เดิม) ต่างเฉพาะรายการ USD ที่เดิมติดป้ายผิดเท่านั้น
+    currency: latest.currency,
     feeThb: 0,
     date: todayInBangkok(),
     note: buildReversalNote(latest.id),
-    source: 'line',
+    source: options.source ?? 'line',
   });
 
   // transactions เก็บแค่ asset_id — ดึง symbol มาแสดงผลข้อความยืนยัน
@@ -126,5 +170,6 @@ module.exports = {
   UNDO_MARKER,
   buildReversalNote,
   isReversal,
+  excludeUndoneTransactions,
   undoLastTransaction,
 };
