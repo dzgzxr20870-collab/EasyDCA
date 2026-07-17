@@ -365,6 +365,12 @@ function Dashboard() {
       <header className="dashboard-header">
         <div className="dashboard-logo">EasyDCA</div>
         <div className="dashboard-header-actions">
+          {/* S8 R1b — ทางกลับไป Dashboard ใหม่ (Route หลักย้ายไปที่ /dashboard แล้ว
+              หน้านี้ถูกย้ายมาเป็น /dashboard/classic แทน) Client-side Navigate เท่านั้น
+              (ไม่ใช้ window.location — กัน JWT ใน Memory หาย เหมือนปุ่ม Admin ด้านล่าง) */}
+          <button type="button" className="dashboard-theme-btn" onClick={() => navigate('/dashboard')}>
+            ← กลับ Dashboard ใหม่
+          </button>
           <button
             type="button"
             className="dashboard-export-btn"

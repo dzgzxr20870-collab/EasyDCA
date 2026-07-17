@@ -4,6 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>EasyDCA</title>
+    <!-- IBM Plex Sans Thai (S8 R1b — Design Token ของ Dashboard ใหม่ ดู
+         design/easydca-dashboard-redesign.html) — Fallback เป็น Font ระบบถ้าโหลด
+         ไม่สำเร็จ (DashboardHome.css กำหนด Fallback Stack ไว้แล้ว ไม่กระทบหน้าอื่น) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
     <!-- LIFF SDK เป็น Global Script (ไม่ใช่ ES Module) ต้องโหลดแบบ Tag ปกติ
          ไม่ใช่ import ใน main.jsx -->
     <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
