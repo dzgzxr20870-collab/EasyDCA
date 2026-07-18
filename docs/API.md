@@ -878,8 +878,94 @@ Section 4 ร่างไว้ว่า Error ต้องเป็น `{ succe
 เป็น 0 ทันทีในวันที่ 1) ขาดเดือนใด = จบทันที / **รายการที่ถูกยกเลิกแล้วไม่นับ**
 (ทั้งแถวต้นฉบับและแถว Reversal) ทั้งใน Streak, `count` และยอดเงินทุกก้อน
 
+**Field `todayDuePlans` (เพิ่มใน S8 R3 — Additive):** Array ของแผน DCA ที่ "ถึงรอบ
+วันนี้" (เทียบวันนี้ตาม Asia/Bangkok) สำหรับ Panel "วันนี้ถึงรอบ DCA ของคุณ" + ปุ่ม
+"บันทึกเลย" ที่ Prefill ฟอร์มบันทึก DCA ด้วย `symbol` + `amountTotal` + `currency`
+ตรงๆ (Frontend ไม่คำนวณวัน/เงินเอง) — คำนวณจากแผน `active` ผ่าน Logic เดียวกับ Cron
+แจ้งเตือน (รวม Clamp วันสิ้นเดือน) ว่างเปล่า `[]` ถ้าไม่มีแผนถึงรอบ:
+```json
+"todayDuePlans": [
+  { "id": "uuid", "symbol": "SET", "name": "ดัชนี SET50", "amountTotal": 3000,
+    "currency": "THB", "frequency": "monthly", "dayOfWeek": null, "dayOfMonth": 16,
+    "dayLabel": "ทุกวันที่ 16 ของเดือน" }
+]
+```
+> แต่ละ Object มี Field เหมือน "plan view" ของ §15.5 (ยกเว้นไม่มี `active` เพราะเป็น
+> `active` เสมอ) — Frontend ใช้ `symbol`/`amountTotal`/`currency` Prefill ฟอร์ม, ใช้
+> `name`/`dayLabel` แสดงผล
+
 ---
 
-**Version:** 1.0.0 | **Last Updated:** 17 กรกฎาคม 2569
+## 15.5 S8 R3 — DCA Plans Endpoints (แผน DCA บนเว็บ)
+
+**"แผน DCA" = แถวใน `dca_reminders` (migration 002 + 020)** — ตารางเดียวกับ "ตั้งเตือน
+DCA" ที่ตั้งผ่าน LINE ทุกประการ (Single Source of Truth, web=LINE): แผนที่ตั้งบนเว็บ
+โผล่ใน LINE และกลับกัน, Cron แจ้งเตือนเดิมทำงานกับแผนเว็บด้วยทันที
+
+> **หลักการสำคัญ:** ตารางนี้เป็น **Config ของผู้ใช้** (จะ DCA อะไรเมื่อไหร่) **ไม่ใช่
+> Immutable Ledger** เหมือน `transactions` — จึง **UPDATE/DELETE ปกติได้** (แก้/หยุด/
+> ลบแผน) ไม่ต้องทำ Reversal Pattern. ทุก Endpoint ผ่าน `requireAuth` + `requireConsent`
+> และ Scope ด้วย `user_id` จาก JWT เสมอ (`:id` ถูกกรองด้วย user_id ทุก Query กัน IDOR)
+
+Error Response Shape เหมือน §15 (Flat `{ error, message, details? }`).
+
+### 15.5.1 POST `/api/v1/dca-plans` — สร้างแผนใหม่
+
+สร้างแผน 1 แผนต่อ symbol (ถ้ามีแผน symbol เดิมอยู่ → แทนที่ของเดิม เหมือน LINE
+"ตั้งใหม่ทับของเดิม").
+
+| Field | Type | บังคับ | คำอธิบาย |
+|---|---|---|---|
+| `symbol` | string | ✅ | ต้องอยู่ใน Registry (case-insensitive) |
+| `amountTotal` | number | ✅ | จำนวนเงินต่อรอบ > 0 (หน่วยตาม `currency`) |
+| `currency` | `"THB"`\|`"USD"` | — | Default `"THB"` — `"USD"` เฉพาะ `crypto`/`stock_us` |
+| `frequency` | `"weekly"`\|`"monthly"` | ✅ | ความถี่ |
+| `frequencyValue` | int | ✅ | weekly = 0–6 (0=อาทิตย์) / monthly = 1–31 |
+
+**Request:** `{ "symbol":"BTC", "amountTotal":1000, "frequency":"weekly", "frequencyValue":4 }`
+
+**Response `201`:**
+```json
+{ "plan": { "id":"uuid", "symbol":"BTC", "name":"Bitcoin บิตคอยน์",
+  "amountTotal":1000, "currency":"THB", "frequency":"weekly",
+  "dayOfWeek":4, "dayOfMonth":null, "dayLabel":"ทุกวันพฤหัสบดี", "active":true } }
+```
+
+### 15.5.2 GET `/api/v1/dca-plans` — รายการแผนทั้งหมด (active + paused)
+
+คืนแผน **ล่าสุดต่อ symbol** (active = กำลังทำงาน / `active:false` = หยุดชั่วคราว).
+Response `200`: `{ "plans": [ <plan>, ... ] }`
+
+> **หมายเหตุ (Edge):** reminder ที่เคยลบผ่าน LINE (Soft-delete `active=false`) จะโผล่
+> เป็นแผน "paused" บนเว็บ (ไม่ได้หายไป) — ผู้ใช้ Resume หรือลบทิ้งจากเว็บได้
+
+### 15.5.3 PATCH `/api/v1/dca-plans/:id` — แก้ไข / หยุด-เปิด
+
+Request (ทุก Field optional, ส่งเฉพาะที่แก้):
+`{ amountTotal?, currency?, frequency?, frequencyValue?, active? }`
+- `active:false` = หยุดชั่วคราว / `active:true` = เปิดใหม่ (ระบบปิดแผน active อื่นของ
+  symbol เดียวกันให้อัตโนมัติ)
+- เปลี่ยน `frequency` ต้องส่ง `frequencyValue` ที่เข้ากันด้วย
+
+Response `200`: `{ "plan": <plan> }`
+
+### 15.5.4 DELETE `/api/v1/dca-plans/:id` — ลบแผน (Hard delete)
+
+ลบจริง (เป็น Config ไม่ใช่ Ledger). Response `200`: `{ "deleted": { "id":"uuid" } }`
+
+### Error Codes (§15.5)
+
+| Code | HTTP | เมื่อไหร่ |
+|---|---|---|
+| `VALIDATION_ERROR` | 400 | `amountTotal` ไม่ใช่เลขบวก / `currency` ไม่รู้จัก / `active` ไม่ใช่ boolean / PATCH ไม่มี Field ให้แก้ |
+| `SYMBOL_NOT_SUPPORTED` | 400 | Symbol ไม่อยู่ใน Registry |
+| `INVALID_FREQUENCY` | 400 | `frequency` ไม่ใช่ weekly/monthly |
+| `INVALID_FREQUENCY_VALUE` | 400 | `frequencyValue` นอกช่วง (weekly 0–6 / monthly 1–31) |
+| `CURRENCY_NOT_SUPPORTED_FOR_ASSET` | 400 | `USD` กับสินทรัพย์ที่ไม่ใช่ `crypto`/`stock_us` |
+| `PLAN_NOT_FOUND` | 404 | ไม่พบแผน (ไม่ใช่ของ user / ถูกลบไปแล้ว) |
+
+---
+
+**Version:** 1.0.0 | **Last Updated:** 18 กรกฎาคม 2569
 
 *อ้างอิงจาก [PROJECT_BRIEF.md](../PROJECT_BRIEF.md)*

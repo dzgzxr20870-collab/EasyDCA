@@ -142,6 +142,36 @@ describe('createReminder — validation ทั่วไป', () => {
   });
 });
 
+// Regression (S8 R3, migration 020) — currency ต้องไม่ทำให้ LINE Path เดิมเปลี่ยน
+describe('createReminder — currency (migration 020) Backward Compat', () => {
+  test('ไม่ส่ง currency (LINE Path เดิม) → insert payload ไม่มี key currency (repository Default THB เอง)', async () => {
+    await createReminder(USER_ID, { symbol: 'BTC', frequency: 'weekly', dayOfWeek: 1, amountThb: 1000 });
+
+    const insertArg = reminderRepository.insert.mock.calls[0][0];
+    expect(insertArg).not.toHaveProperty('currency'); // LINE ส่งเหมือนเดิมเป๊ะ
+  });
+
+  test('ส่ง currency=USD (เว็บ) → insert ได้ currency=USD', async () => {
+    await createReminder(USER_ID, {
+      symbol: 'AAPL',
+      frequency: 'monthly',
+      dayOfMonth: 15,
+      amountThb: 100,
+      currency: 'USD',
+    });
+
+    expect(reminderRepository.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ currency: 'USD' })
+    );
+  });
+
+  test('currency ไม่ใช่ THB/USD → INVALID_REMINDER', async () => {
+    await expect(
+      createReminder(USER_ID, { symbol: 'BTC', frequency: 'weekly', dayOfWeek: 1, amountThb: 1000, currency: 'EUR' })
+    ).rejects.toMatchObject({ code: 'INVALID_REMINDER' });
+  });
+});
+
 describe('listReminders', () => {
   test('คืนเฉพาะ Reminder ที่ active (ส่งต่อจาก repository)', async () => {
     const rows = [reminder({ id: 'a' }), reminder({ id: 'b', symbol: 'ETH' })];

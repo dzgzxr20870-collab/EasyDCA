@@ -15,6 +15,7 @@ const adminRoutes = require('./routes/admin.routes');
 const reportsRoutes = require('./routes/reports.routes');
 const assetsRoutes = require('./routes/assets.routes');
 const transactionsRoutes = require('./routes/transactions.routes');
+const dcaPlansRoutes = require('./routes/dcaPlans.routes');
 
 const app = express();
 
@@ -61,6 +62,10 @@ app.use('/api/v1/assets', assetsRoutes);
 // Mount Transactions Routes (S8 Round 1a — กล่องบันทึก DCA บนเว็บ) ที่ /api/v1/transactions
 // บันทึกผ่าน transaction.service ตัวเดียวกับ LINE ทุกประการ (ดู transactions.controller.js)
 app.use('/api/v1/transactions', transactionsRoutes);
+
+// Mount DCA Plans Routes (S8 Round 3 — แผน DCA บนเว็บ) ที่ /api/v1/dca-plans
+// อ่าน/เขียนตาราง dca_reminders ตัวเดียวกับ reminder ที่ตั้งผ่าน LINE (ดู dcaPlans.controller.js)
+app.use('/api/v1/dca-plans', dcaPlansRoutes);
 
 // Mount Payment Routes (Phase 2 Step 3 — Premium ผ่าน PromptPay QR) ที่ /api/v1/payment
 app.use('/api/v1/payment', paymentRoutes);

@@ -2,6 +2,8 @@ const portfolioService = require('./portfolio.service');
 const portfolioSummaryService = require('./portfolioSummary.service');
 const fxRateService = require('./fxRate.service');
 const dcaStatsService = require('./dcaStats.service');
+const dcaReminderService = require('./dcaReminder.service');
+const { todayInBangkok } = require('./transaction.service');
 const transactionRepository = require('../repositories/transaction.repository');
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -142,6 +144,12 @@ async function getOverview(userId) {
   }
   const usdRate = fx ? fx.rate : null;
 
+  // ── แผน DCA ที่ "ถึงรอบวันนี้" (S8 R3) — Panel "วันนี้ถึงรอบ DCA ของคุณ" + Prefill
+  // ฟอร์มตอนกด "บันทึกเลย" (Frontend ใช้ symbol/amountTotal/currency ตรงๆ ไม่คำนวณเอง)
+  // Reuse dcaReminder.service (Logic ถึงรอบเดียวกับ Cron findDueReminders) เทียบวันนี้
+  // ตาม Asia/Bangkok (todayInBangkok เดียวกับที่ transaction.service ใช้)
+  const todayDuePlans = await dcaReminderService.getTodayDuePlansForUser(userId, todayInBangkok());
+
   return {
     // ── 1) มูลค่าพอร์ต + P&L (Reuse ทั้งหมด ไม่คำนวณใหม่) ────────────────────
     // summary = null เมื่อพอร์ตว่าง (ยังไม่มีสินทรัพย์ที่ถืออยู่)
@@ -185,6 +193,9 @@ async function getOverview(userId) {
 
     // ── 7) กราฟเงินลงทุนสะสมรายเดือน ย้อนหลัง ≤12 เดือน (แยกสกุล) ───────────
     monthlyInvested: dcaStatsService.getMonthlyInvestedSeries(transactions, CHART_MONTHS),
+
+    // ── 8) แผน DCA ที่ถึงรอบวันนี้ (S8 R3) — Panel "วันนี้ถึงรอบ DCA" + Prefill ───
+    todayDuePlans,
 
     // ── FX ที่ใช้แปลงทุกยอด USD ในหน้านี้ (Pattern เดียวกับ GET /dashboard/portfolio)
     fxRate: usdRate,

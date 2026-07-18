@@ -1,11 +1,13 @@
 jest.mock('../src/services/portfolio.service');
 jest.mock('../src/services/portfolioSummary.service');
 jest.mock('../src/services/fxRate.service');
+jest.mock('../src/services/dcaReminder.service');
 jest.mock('../src/repositories/transaction.repository');
 
 const portfolioService = require('../src/services/portfolio.service');
 const portfolioSummaryService = require('../src/services/portfolioSummary.service');
 const fxRateService = require('../src/services/fxRate.service');
+const dcaReminderService = require('../src/services/dcaReminder.service');
 const transactionRepository = require('../src/repositories/transaction.repository');
 const dashboardOverview = require('../src/services/dashboardOverview.service');
 
@@ -42,6 +44,8 @@ beforeEach(() => {
   portfolioSummaryService.buildSummaryForUser.mockResolvedValue(null);
   portfolioSummaryService.priceHoldings.mockResolvedValue([]);
   fxRateService.getUsdThbRate.mockResolvedValue({ rate: 35, asOf: '2026-07-17', stale: false });
+  // S8 R3 — todayDuePlans (Default ว่าง; เคสที่เจาะจงจะ override เอง)
+  dcaReminderService.getTodayDuePlansForUser.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -265,5 +269,28 @@ describe('getOverview — สถิติ DCA', () => {
     const july = result.monthlyInvested.find((m) => m.month === '2026-07');
     expect(july.amountByCurrency.THB).toBe(1000);
     expect(july.cumulativeByCurrency.THB).toBe(3000);
+  });
+});
+
+describe('getOverview — todayDuePlans (S8 R3)', () => {
+  test('ส่งต่อผลจาก dcaReminderService.getTodayDuePlansForUser ตรงๆ (เทียบวันนี้ Asia/Bangkok)', async () => {
+    const duePlans = [
+      {
+        id: 'plan-1', symbol: 'SET', name: 'ดัชนี SET50', amountTotal: 3000, currency: 'THB',
+        frequency: 'monthly', dayOfWeek: null, dayOfMonth: 16, dayLabel: 'ทุกวันที่ 16 ของเดือน', active: true,
+      },
+    ];
+    dcaReminderService.getTodayDuePlansForUser.mockResolvedValue(duePlans);
+
+    const result = await dashboardOverview.getOverview(USER_ID);
+
+    // 2026-07-17T05:00:00Z = เที่ยงวันที่ 17 ก.ค. ตามเวลาไทย → ส่ง '2026-07-17' เข้า service
+    expect(dcaReminderService.getTodayDuePlansForUser).toHaveBeenCalledWith(USER_ID, '2026-07-17');
+    expect(result.todayDuePlans).toEqual(duePlans);
+  });
+
+  test('ไม่มีแผนถึงรอบ → todayDuePlans เป็น Array ว่าง', async () => {
+    const result = await dashboardOverview.getOverview(USER_ID);
+    expect(result.todayDuePlans).toEqual([]);
   });
 });

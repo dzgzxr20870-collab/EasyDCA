@@ -592,6 +592,69 @@ CREATE INDEX idx_system_logs_user_id ON system_logs(user_id) WHERE user_id IS NO
 
 ---
 
+### `dca_reminders`
+
+**"แผน DCA" ของผู้ใช้** — จะ DCA สินทรัพย์ไหน จำนวนเท่าไหร่ ความถี่/วันใด (migration
+002 สร้าง, migration 020 เพิ่ม `currency`). ตารางนี้ Feed ทั้ง (ก) Cron แจ้งเตือน DCA
+ผ่าน LINE และ (ข) Panel "วันนี้ถึงรอบ DCA" + CRUD บนเว็บ `/api/v1/dca-plans` (S8 R3)
+— **ตารางเดียว ใช้ร่วมทั้ง LINE และเว็บ** (แผน = reminder แถวเดียวกัน)
+
+> ⚠️ **หลักการสำคัญ:** ตารางนี้เป็น **"Config ของผู้ใช้"** ไม่ใช่ Immutable Ledger
+> เหมือน `transactions` (§ 8) — **UPDATE/DELETE ได้ปกติ** (แก้/หยุด/ลบแผน) ไม่ต้องทำ
+> Reversal Pattern. เว็บ DELETE = Hard delete จริง; เว็บ "หยุดชั่วคราว" = `active=false`.
+> (Path LINE เดิม "ลบเตือน" ใช้ Soft-delete `active=false` — ดู `deactivateActive`)
+
+```sql
+CREATE TABLE dca_reminders (
+  id                 UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id            UUID          NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  symbol             TEXT          NOT NULL,
+  frequency          TEXT          NOT NULL CHECK (frequency IN ('weekly', 'monthly')),
+  day_of_week        SMALLINT      CHECK (day_of_week BETWEEN 0 AND 6),   -- weekly (0=อาทิตย์)
+  day_of_month       SMALLINT      CHECK (day_of_month BETWEEN 1 AND 31), -- monthly
+  amount_thb         NUMERIC(15,2) NOT NULL CHECK (amount_thb > 0),
+  -- migration 020 — สกุลของ amount_thb (ป้ายบอกหน่วย แบบเดียวกับ transactions.currency)
+  currency           TEXT          NOT NULL DEFAULT 'THB' CHECK (currency IN ('THB', 'USD')),
+  active             BOOLEAN       NOT NULL DEFAULT true,
+  last_notified_date DATE,         -- กัน Push ซ้ำในวันเดียวกัน (Asia/Bangkok)
+  created_at         TIMESTAMPTZ   NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ   NOT NULL DEFAULT now(),
+  -- weekly ต้องมี day_of_week เท่านั้น / monthly ต้องมี day_of_month เท่านั้น
+  CONSTRAINT dca_reminders_day_consistency CHECK (
+    (frequency = 'weekly'  AND day_of_week  IS NOT NULL AND day_of_month IS NULL) OR
+    (frequency = 'monthly' AND day_of_month IS NOT NULL AND day_of_week  IS NULL)
+  )
+);
+```
+
+| Field | Type | คำอธิบาย |
+|---|---|---|
+| id | UUID | Primary Key |
+| user_id | UUID | FK → users.id |
+| symbol | TEXT | สินทรัพย์ (ตรงกับ symbolRegistry) |
+| frequency | TEXT | `weekly` / `monthly` |
+| day_of_week | SMALLINT | 0–6 (ใช้เมื่อ weekly) |
+| day_of_month | SMALLINT | 1–31 (ใช้เมื่อ monthly; สิ้นเดือน App Layer Clamp) |
+| amount_thb | NUMERIC(15,2) | จำนวนเงินต่อรอบ (หน่วยตาม `currency`) — ใช้แสดง/Prefill ไม่ผูกธุรกรรมจริง |
+| currency | TEXT | `THB` / `USD` (migration 020) — USD เฉพาะ crypto/stock_us |
+| active | BOOLEAN | true=ทำงาน / false=หยุดชั่วคราว (หรือ tombstone ของ create ทับเดิม) |
+| last_notified_date | DATE | วัน Push ล่าสุด (กันซ้ำ) |
+
+**Index:**
+```sql
+CREATE INDEX idx_dca_reminders_user_id ON dca_reminders(user_id);
+CREATE INDEX idx_dca_reminders_active_notify ON dca_reminders(last_notified_date) WHERE active = true;
+-- 1 reminder ที่ Active ต่อ (user, symbol) — createReminder ปิดตัวเก่าก่อนสร้างใหม่เสมอ
+CREATE UNIQUE INDEX idx_dca_reminders_one_active ON dca_reminders(user_id, symbol) WHERE active = true;
+```
+
+> **หมายเหตุ web `/api/v1/dca-plans` (S8 R3):** GET คืน "แถวล่าสุดต่อ symbol" เพื่อ
+> ซ่อน tombstone เก่า (createReminder ทิ้งแถว `active=false` ไว้ทุกครั้งที่ตั้งทับ) และ
+> แสดงได้ทั้ง active + paused. Related: `dca_reminder_setup_sessions` (migration 003) —
+> State ชั่วคราวของ Flow ตั้งเตือนหลายขั้นบน LINE (Ephemeral เหมือน pending_transactions)
+
+---
+
 ## 3. Row Level Security (RLS)
 
 ทุก Table ต้องเปิด RLS — ผู้ใช้เข้าถึงได้เฉพาะข้อมูลของตัวเองเท่านั้น

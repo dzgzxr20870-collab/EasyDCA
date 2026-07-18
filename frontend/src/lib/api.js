@@ -68,6 +68,54 @@ async function apiPost(path, body) {
   return response.json();
 }
 
+// PATCH พร้อมแนบ Token/จัดการ 401 แบบเดียวกับ apiPost (S8 R3 รอบ 3 — จัดการแผน DCA
+// ต้องใช้แก้ active/currency/frequency ของแผนที่มีอยู่แล้ว ไม่ใช่สร้างใหม่)
+async function apiPatch(path, body) {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${getToken()}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (response.status === 401) {
+    clearToken();
+    window.location.href = '/';
+    throw new Error('UNAUTHORIZED');
+  }
+
+  if (!response.ok) {
+    const errBody = await response.json().catch(() => null);
+    throw new Error(errBody?.error || `Request failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// DELETE พร้อมแนบ Token/จัดการ 401 แบบเดียวกับ apiGet/apiPost (S8 R3 รอบ 3 — ลบแผน
+// DCA จริง ไม่มี Body ส่งไป)
+async function apiDelete(path) {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${getToken()}` },
+  });
+
+  if (response.status === 401) {
+    clearToken();
+    window.location.href = '/';
+    throw new Error('UNAUTHORIZED');
+  }
+
+  if (!response.ok) {
+    const errBody = await response.json().catch(() => null);
+    throw new Error(errBody?.error || `Request failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
 // ดาวน์โหลดไฟล์ Binary (เช่น รายงาน PDF/Excel) — แยกจาก apiGet เพราะ Response เป็น
 // Blob ไม่ใช่ JSON (Round 8) คง Logic แนบ Token/จัดการ 401 แบบเดียวกัน คืน
 // { blob, filename } (filename ดึงจาก Content-Disposition ที่ Backend ตั้งมา)
@@ -95,4 +143,4 @@ async function apiDownload(path) {
   return { blob, filename };
 }
 
-export { getToken, setToken, clearToken, apiGet, apiPost, apiDownload, API_BASE_URL };
+export { getToken, setToken, clearToken, apiGet, apiPost, apiPatch, apiDelete, apiDownload, API_BASE_URL };

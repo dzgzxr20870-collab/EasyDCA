@@ -100,6 +100,13 @@
 
 /* ── DCA quick form ── */
 .dh-dca-grid { display: grid; grid-template-columns: minmax(0,1.35fr) minmax(0,1fr); gap: 0; }
+/* S8 R3 รอบ 3 (Code Review): confirmed === null (ทุกครั้งก่อนบันทึกครั้งแรก) →
+   .dh-dca-side ว่างเปล่าแต่ยังกินพื้นที่ ~42% — ให้ฟอร์มเต็มความกว้างแทน Placeholder
+   ที่ไม่มีประโยชน์ (Additive: ไม่แก้ .dh-dca-grid เดิม เพราะตอนมี Confirm ต้องยังใช้
+   2 คอลัมน์แบบเดิม) Rule นี้ไม่กระทบ Media Query ที่บังคับ 1 คอลัมน์อยู่แล้วตอน
+   Mobile ด้านล่าง (ค่าเดียวกัน + .dh-dca-side ว่างอยู่แล้วตอน confirmed เป็น null) */
+.dh-dca-grid.dh-dca-grid-full { grid-template-columns: 1fr; }
+.dh-dca-grid.dh-dca-grid-full .dh-dca-side { display: none; }
 .dh-dca-form { padding: 14px 20px 20px; display: flex; flex-direction: column; gap: 13px; }
 .dh-frow { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 label.dh-fl { display: block; font-size: 12.5px; font-weight: 700; color: var(--ink2); margin-bottom: 6px; }
@@ -157,9 +164,6 @@ label.dh-fl .dh-fl-opt { color: var(--muted); font-weight: 500; }
 
 /* confirm panel (right of form) */
 .dh-dca-side { border-left: 1px dashed var(--line2); padding: 14px 20px 20px; display: flex; flex-direction: column; gap: 12px; }
-.dh-today-plan-placeholder { background: var(--lime-soft); border: 1px solid #E3F0BE; border-radius: 14px; padding: 13px 14px; }
-.dh-today-plan-placeholder h4 { font-size: 13px; font-weight: 700; color: #57721B; margin-bottom: 6px; }
-.dh-today-plan-placeholder p { font-size: 12.5px; color: var(--ink2); }
 .dh-confirm-box { border: 1.5px solid #CDEBD8; background: var(--green-soft2); border-radius: 14px; padding: 14px; animation: dh-pop .3s ease; }
 @keyframes dh-pop { 0% { transform: scale(.96); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
 .dh-confirm-ok { display: flex; align-items: center; gap: 8px; font-weight: 700; color: var(--green-ink); font-size: 14px; }
@@ -205,6 +209,44 @@ label.dh-fl .dh-fl-opt { color: var(--muted); font-weight: 500; }
 
 .dh-disclaimer-bottom { font-size: 11.5px; color: var(--muted); text-align: center; padding: 4px 20px 24px; line-height: 1.6; }
 
+/* ── Plan Banner (S8 R3 รอบ 2 — ย้ายจาก Dashboard.jsx เดิม) ── */
+.dh-plan-banner { background: var(--amber-soft); border: 1px solid #F0DDA8; border-radius: 12px; padding: 11px 16px; font-size: 13px; font-weight: 600; color: #8A6D1F; }
+.dh-plan-banner.dh-plan-premium { background: var(--green-soft); border-color: #CDEBD8; color: var(--green-ink); }
+
+/* ── PortfolioDetailSection (S8 R3 รอบ 2 — พอร์ตของฉัน/ประวัติ/วิธีใช้งาน) ──
+   ปุ่มทั้งหมดในนี้ Reuse Class ที่แก้ P0 Specificity ไปแล้ว (.dh-tab/.dh-tab-on,
+   .dh-btn-ghost, .dh-btn-main, .dh-chip/.dh-chip-on) — ไม่มี Selector ปุ่มใหม่เพิ่ม
+   จึงไม่มีความเสี่ยงชนกับ .dh-app button Reset Rule ซ้ำอีก */
+.dh-legacy-tabnav { display: flex; gap: 6px; flex-wrap: wrap; padding: 4px 20px 14px; }
+.dh-legacy-panel { padding: 4px 20px 20px; }
+.dh-legacy-subhead { font-size: 14.5px; font-weight: 700; margin: 4px 0 12px; }
+.dh-legacy-subhead:not(:first-child) { margin-top: 22px; }
+
+.dh-table-wrap { overflow-x: auto; margin-top: 4px; }
+.dh-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.dh-table th, .dh-table td { padding: 9px 10px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--line); }
+.dh-table th { font-size: 11.5px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .02em; }
+.dh-table tbody tr:hover { background: var(--green-soft2); }
+
+.dh-history-filter { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; font-size: 13px; font-weight: 600; color: var(--ink2); }
+.dh-history-filter select { background: #FBFAF6; border: 1.5px solid var(--line2); border-radius: 10px; padding: 7px 10px; font-size: 13px; font-weight: 600; color: var(--ink); }
+
+.dh-howto-steps { display: flex; flex-direction: column; gap: 14px; }
+.dh-howto-step { display: flex; gap: 14px; align-items: flex-start; }
+.dh-howto-num { width: 28px; height: 28px; border-radius: 99px; background: var(--green-soft); color: var(--green-ink); font-weight: 700; font-size: 13px; display: grid; place-items: center; flex: none; }
+.dh-howto-step h4 { font-size: 14px; font-weight: 700; margin-bottom: 2px; }
+.dh-howto-step p { font-size: 12.5px; color: var(--ink2); margin-bottom: 6px; }
+.dh-cmd { background: #FBFAF6; border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; font-size: 12px; font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; white-space: pre-wrap; color: var(--ink); }
+
+.dh-richmenu-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; }
+.dh-richmenu-grid > div { background: #FBFAF6; border: 1px solid var(--line); border-radius: 12px; padding: 12px; text-align: center; }
+.dh-richmenu-ico { font-size: 22px; margin-bottom: 6px; }
+.dh-richmenu-label { font-size: 13px; font-weight: 700; margin-bottom: 3px; }
+.dh-richmenu-desc { font-size: 11px; color: var(--muted); line-height: 1.4; }
+
+.dh-export-dates { display: flex; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
+.dh-export-dates label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--ink2); }
+
 /* ── Rail ── */
 .dh-rail { display: flex; flex-direction: column; gap: 16px; }
 .dh-month-summary-card { background: linear-gradient(160deg,#F2FAEA,#E6F5E9 70%); border: 1px solid #DFF0D8; border-radius: var(--r); box-shadow: var(--shadow); padding: 18px; }
@@ -244,6 +286,18 @@ label.dh-fl .dh-fl-opt { color: var(--muted); font-weight: 500; }
 .dh-modal-error { font-size: 12.5px; font-weight: 600; color: var(--red); background: var(--red-soft); border-radius: 10px; padding: 8px 12px; margin-top: 10px; }
 .dh-modal-actions { display: flex; gap: 8px; margin-top: 16px; }
 .dh-modal-actions button { flex: 1; }
+
+/* ── S8 R3 รอบ 3: การ์ดแผนที่ถึงรอบวันนี้ (SidePanels) + หน้าจัดการแผน DCA
+   (DcaPlansSection) ── */
+/* .dh-app นำหน้าเสมอ (0,2,0) ให้ชนะ .dh-app button Reset Rule ที่ (0,1,1) — บั๊ก P0
+   เดิม (ปุ่มพื้นหลังหายเป็นปุ่มขาวว่างเปล่า) ดู Comment เต็มด้านบน (บรรทัด ~73-78) */
+.dh-app .dh-quick-record-btn { background: var(--green); color: #fff; font-size: 11.5px; font-weight: 700; border-radius: 99px; padding: 6px 12px; flex: none; }
+.dh-app .dh-quick-record-btn:hover { background: var(--green-deep); }
+.dh-t-active { background: var(--green-soft); color: var(--green-ink); }
+.dh-t-paused { background: var(--amber-soft); color: #8A6D1F; }
+.dh-plan-row-actions { display: flex; gap: 6px; flex: none; }
+.dh-dca-plans { padding: 4px 0 0; display: flex; flex-direction: column; gap: 16px; }
+.dh-dca-plan-form { display: flex; flex-direction: column; gap: 12px; }
 
 /* ── มือถือแนวตั้ง (LIFF portrait — ช่องทางหลัก) ── */
 .dh-bottomnav { display: none; }
@@ -291,4 +345,6 @@ label.dh-fl .dh-fl-opt { color: var(--muted); font-weight: 500; }
   .dh-alloc-body { flex-direction: column; gap: 14px; }
   .dh-legend { width: 100%; }
   .dh-donut-wrap { width: 150px; height: 150px; }
+  /* S8 R3 รอบ 2 — Richmenu Grid 3 คอลัมน์แน่นเกินไปบนจอแคบ ลดเหลือ 2 */
+  .dh-richmenu-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
 }

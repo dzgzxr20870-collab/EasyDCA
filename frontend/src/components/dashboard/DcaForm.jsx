@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import AssetPicker from './AssetPicker.jsx';
 import { apiPost } from '../../lib/api.js';
 import { transactionErrorMessage } from '../../lib/dcaErrors.js';
 import { todayBangkokIso } from '../../lib/dateBangkok.js';
+import { resolvePrefillState } from '../../lib/dcaPlanPrefill.js';
 
 const AMOUNT_CHIPS = [500, 1000, 3000, 5000, 10000];
 // USD Toggle เปิดเฉพาะ stock_us ตามที่ Mockup ทำจริง (t==="us" ? "THB⇄USD" : "THB")
@@ -32,7 +33,10 @@ function fmtAmountInput(n) {
 //   onRequestUndo(txSummary): เรียกเมื่อกด "ยกเลิกรายการนี้" บนการ์ดยืนยัน (เปิด
 //     Confirm Modal ที่ Parent เป็นคนคุม เพื่อใช้ Modal เดียวกับปุ่ม Undo บน
 //     รายการล่าสุด — ไม่ทำ Modal ซ้ำสองที่)
-function DcaForm({ symbols, pickerOpenSignal, onRecorded, onRequestUndo }) {
+//   prefillSignal (S8 R3 รอบ 3): { symbol, amountTotal, currency, nonce } | null —
+//     Parent ตั้งค่าใหม่ (Object ใหม่ทุกครั้ง) เมื่อกด "บันทึกเลย" บนการ์ดแผนที่ถึง
+//     รอบวันนี้ (SidePanels) เพื่อ Prefill ฟอร์มนี้ให้เอง
+function DcaForm({ symbols, pickerOpenSignal, onRecorded, onRequestUndo, prefillSignal = null }) {
   const [date, setDate] = useState(todayBangkokIso());
   const [picked, setPicked] = useState(null);
   const [amountInput, setAmountInput] = useState('');
@@ -48,6 +52,20 @@ function DcaForm({ symbols, pickerOpenSignal, onRecorded, onRequestUndo }) {
   const today = todayBangkokIso();
   const needsManualPrice = picked?.type === 'stock_th';
   const supportsUsd = picked ? USD_TOGGLE_TYPES.includes(picked.type) : false;
+
+  // Prefill จากปุ่ม "บันทึกเลย" (SidePanels) — ไม่ Prefill pricePerUnit เด็ดขาดแม้
+  // เป็นหุ้นไทย (needsManualPrice) ต้องให้ผู้ใช้กรอกราคาเองเสมอ ไม่เดาราคาให้
+  useEffect(() => {
+    const resolved = resolvePrefillState(prefillSignal, symbols);
+    if (!resolved) return;
+    setPicked(resolved.picked);
+    setAmountInput(resolved.amountInputStr);
+    setCurrency(resolved.currency);
+    setSelectedChip(null);
+    setPricePerUnit('');
+    setFormError(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefillSignal]);
 
   function handleChipClick(amt) {
     setAmountInput(fmtAmountInput(amt));
@@ -135,7 +153,7 @@ function DcaForm({ symbols, pickerOpenSignal, onRecorded, onRequestUndo }) {
   }
 
   return (
-    <div className="dh-dca-grid">
+    <div className={`dh-dca-grid${confirmed ? '' : ' dh-dca-grid-full'}`}>
       <form className="dh-dca-form" autoComplete="off" onSubmit={handleSubmit}>
         <div className="dh-frow">
           <div>
@@ -291,15 +309,11 @@ function DcaForm({ symbols, pickerOpenSignal, onRecorded, onRequestUndo }) {
         </div>
       </form>
 
+      {/* S8 R3 รอบ 3 (Code Review): เดิมมี Panel Static "วันนี้ถึงรอบ DCA ของคุณ" ค้าง
+          อยู่ตรงนี้ ซ้ำซ้อนกับ Panel จริงใน SidePanels.jsx (CalendarPlaceholder) ที่ใช้
+          overview.todayDuePlans จริงแล้ว — ข้อความ 2 จุดไม่ตรงกัน (จุดนี้ Static เสมอ)
+          จึงลบออก ให้ SidePanels (Rail ขวา) เป็นจุดเดียวที่บอกสถานะแผนวันนี้ */}
       <div className="dh-dca-side">
-        <div className="dh-today-plan-placeholder">
-          <h4>⏰ วันนี้ถึงรอบ DCA ของคุณ</h4>
-          <p>
-            ตั้งเตือน DCA อัตโนมัติได้ผ่าน LINE — พิมพ์ <b>"ตั้งเตือน"</b> ในแชท EasyDCA เพื่อกำหนดรอบ
-            และจำนวนเงินที่ต้องการ ระบบจะแจ้งเตือนให้บันทึกตามรอบเอง
-          </p>
-        </div>
-
         {confirmed && (
           <div className="dh-confirm-box dh-confirm-box-show">
             <div className="dh-confirm-ok">

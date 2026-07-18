@@ -8,13 +8,10 @@ function fmt(n) {
 // ═══════════════════════════════════════════════════════════════════════
 // SidePanels — คอลัมน์ขวา (Rail): สรุปเดือนนี้ / ปฏิทิน DCA / สินทรัพย์ที่ถือ
 // ═══════════════════════════════════════════════════════════════════════
-// ⚠️ Descope ตามที่ Requirement ระบุไว้ชัดเจน (งานที่ 3 หัวข้อปฏิทิน DCA):
-// overview (§15.4) ไม่มี Field ข้อมูลแผน/รอบเตือน DCA รายวันเลย และรอบนี้เป็น
-// Frontend เท่านั้น (ห้ามเพิ่ม Backend Endpoint) — จึงตัดสองส่วนนี้ออกจริง:
-//   1. "ตามแผนที่ตั้งไว้ N/M รอบ" + Progress Bar ใน Mockup (ต้องมีข้อมูลเป้ารายเดือน
-//      ที่ไม่มีอยู่จริง) → ไม่แสดง
-//   2. "ปฏิทิน DCA (7 วันข้างหน้า)" รายการนัด → ไม่มีข้อมูลรายวันให้ Mark เลย →
-//      แสดงเป็น Empty State ชี้ไปตั้งเตือนผ่าน LINE แทนการเดา/ประดิษฐ์ข้อมูล
+// S8 R3 รอบ 3: "ปฏิทิน DCA" ใช้ overview.todayDuePlans จริงแล้ว (Backend เพิ่ม Field
+// นี้ให้แล้วรอบก่อน) — dayLabel เป็นข้อความที่ Backend สร้างให้แล้ว ใช้ตรงๆ ห้าม
+// คำนวณ/Format วันเอง (ตาม Requirement) ส่วน "ตามแผนที่ตั้งไว้ N/M รอบ" + Progress
+// Bar ใน Mockup ยังคงตัดออก (overview ไม่มีข้อมูลเป้ารายเดือนให้ใช้จริง)
 
 function MonthSummaryPanel({ thisMonth, streakMonths }) {
   return (
@@ -39,15 +36,56 @@ function MonthSummaryPanel({ thisMonth, streakMonths }) {
   );
 }
 
-function CalendarPlaceholder() {
+function CalendarPlaceholder({ todayDuePlans, hasActivePlans, symbolTypeBySymbol, onQuickRecord }) {
+  if (todayDuePlans.length > 0) {
+    return (
+      <div className="dh-card dh-rail-card">
+        <h3>📅 วันนี้ถึงรอบ DCA</h3>
+        <div className="dh-hold-list">
+          {todayDuePlans.map((plan) => {
+            const meta = typeMeta(symbolTypeBySymbol.get(plan.symbol));
+            return (
+              <div className="dh-hrow" key={plan.id}>
+                <span className="dh-avatar" style={{ background: meta.color }}>
+                  {plan.symbol.slice(0, 4)}
+                </span>
+                <span className="dh-hrow-nm">
+                  <b>{plan.symbol}</b>
+                  <small>{plan.dayLabel}</small>
+                </span>
+                <span className="dh-hrow-val">
+                  {fmt(plan.amountTotal)} {plan.currency}
+                </span>
+                <button
+                  type="button"
+                  className="dh-quick-record-btn"
+                  onClick={() => onQuickRecord(plan)}
+                >
+                  บันทึกเลย
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="dh-card dh-rail-card">
       <h3>📅 ปฏิทิน DCA</h3>
       <div className="dh-cal-empty">
-        <p>ยังไม่ได้ตั้งเตือน DCA</p>
-        <p className="dh-cal-empty-hint">
-          ตั้งเตือนอัตโนมัติได้ผ่าน LINE — พิมพ์ <b>"ตั้งเตือน"</b> ในแชท EasyDCA
-        </p>
+        {hasActivePlans ? (
+          <p>วันนี้ไม่มีรอบ DCA ถึงกำหนด</p>
+        ) : (
+          <>
+            <p>ยังไม่ได้ตั้งเตือน DCA</p>
+            <p className="dh-cal-empty-hint">
+              ตั้งเตือนได้ที่เมนู <b>"ตั้งเตือน DCA"</b> ด้านซ้าย หรือผ่าน LINE พิมพ์{' '}
+              <b>"ตั้งเตือน"</b> ในแชท EasyDCA
+            </p>
+          </>
+        )}
       </div>
     </div>
   );
@@ -97,11 +135,19 @@ function HoldingsPanel({ allocation }) {
   );
 }
 
-function SidePanels({ overview }) {
+function SidePanels({ overview, symbols, plans, onQuickRecord }) {
+  const symbolTypeBySymbol = new Map(symbols.map((s) => [s.symbol, s.type]));
+  const hasActivePlans = plans.some((p) => p.active);
+
   return (
     <aside className="dh-rail">
       <MonthSummaryPanel thisMonth={overview.thisMonth} streakMonths={overview.streakMonths} />
-      <CalendarPlaceholder />
+      <CalendarPlaceholder
+        todayDuePlans={overview.todayDuePlans}
+        hasActivePlans={hasActivePlans}
+        symbolTypeBySymbol={symbolTypeBySymbol}
+        onQuickRecord={onQuickRecord}
+      />
       <HoldingsPanel allocation={overview.allocation} />
     </aside>
   );

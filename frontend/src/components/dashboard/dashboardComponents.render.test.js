@@ -20,6 +20,8 @@ import SidePanels from './SidePanels.jsx';
 import UndoConfirmModal from './UndoConfirmModal.jsx';
 import AssetPicker from './AssetPicker.jsx';
 import DcaForm from './DcaForm.jsx';
+import DcaPlansSection from './DcaPlansSection.jsx';
+import PortfolioDetailSection from './PortfolioDetailSection.jsx';
 
 const SYMBOLS = [
   { symbol: 'AAPL', name: 'Apple แอปเปิล', type: 'stock_us' },
@@ -83,6 +85,21 @@ const overviewFull = {
   fxAsOf: '2026-07-17',
   fxStale: false,
   fxUnavailableForUsd: false,
+  // S8 R3 รอบ 3 — แผนที่ถึงรอบวันนี้ (SidePanels.CalendarPlaceholder อ่าน Field นี้ตรงๆ)
+  todayDuePlans: [
+    {
+      id: 'plan-due-1',
+      symbol: 'BTC',
+      name: 'Bitcoin บิตคอยน์',
+      amountTotal: 1000,
+      currency: 'THB',
+      frequency: 'weekly',
+      dayOfWeek: 4,
+      dayOfMonth: null,
+      dayLabel: 'ทุกวันพฤหัสบดี',
+      active: true,
+    },
+  ],
 };
 
 const overviewEmpty = {
@@ -102,12 +119,42 @@ const overviewEmpty = {
   fxAsOf: null,
   fxStale: false,
   fxUnavailableForUsd: false,
+  todayDuePlans: [],
 };
 
 const assetTypeBySymbol = new Map([
   ['AAPL', 'stock_us'],
   ['PTT', 'stock_th'],
 ]);
+
+// S8 R3 รอบ 3 — Plans fixture (GET /api/v1/dca-plans shape) ใช้ทั้ง SidePanels
+// (hasActivePlans) และ DcaPlansSection (List Active+Paused ปนกัน)
+const PLANS_MIXED = [
+  {
+    id: 'plan-1',
+    symbol: 'BTC',
+    name: 'Bitcoin บิตคอยน์',
+    amountTotal: 1000,
+    currency: 'THB',
+    frequency: 'weekly',
+    dayOfWeek: 4,
+    dayOfMonth: null,
+    dayLabel: 'ทุกวันพฤหัสบดี',
+    active: true,
+  },
+  {
+    id: 'plan-2',
+    symbol: 'PTT',
+    name: 'ปตท.',
+    amountTotal: 2000,
+    currency: 'THB',
+    frequency: 'monthly',
+    dayOfWeek: null,
+    dayOfMonth: 16,
+    dayLabel: 'ทุกวันที่ 16 ของเดือน',
+    active: false,
+  },
+];
 
 describe('Render smoke test (renderToStaticMarkup — no crash given realistic API shapes)', () => {
   test('StatCards — พอร์ตมีของ / พอร์ตว่าง', () => {
@@ -155,9 +202,41 @@ describe('Render smoke test (renderToStaticMarkup — no crash given realistic A
     ).not.toThrow();
   });
 
-  test('SidePanels — พอร์ตมีของ / พอร์ตว่าง', () => {
-    expect(() => renderToStaticMarkup(React.createElement(SidePanels, { overview: overviewFull }))).not.toThrow();
-    expect(() => renderToStaticMarkup(React.createElement(SidePanels, { overview: overviewEmpty }))).not.toThrow();
+  test('SidePanels — พอร์ตมีของ (มีแผนถึงรอบวันนี้) / พอร์ตว่าง (ไม่มีแผนเลย)', () => {
+    expect(() =>
+      renderToStaticMarkup(
+        React.createElement(SidePanels, {
+          overview: overviewFull,
+          symbols: SYMBOLS,
+          plans: PLANS_MIXED,
+          onQuickRecord: () => {},
+        })
+      )
+    ).not.toThrow();
+    expect(() =>
+      renderToStaticMarkup(
+        React.createElement(SidePanels, {
+          overview: overviewEmpty,
+          symbols: SYMBOLS,
+          plans: [],
+          onQuickRecord: () => {},
+        })
+      )
+    ).not.toThrow();
+  });
+
+  test('SidePanels — มีแผน Active อยู่ แต่ไม่มีแผนถึงรอบวันนี้ (Empty State ข้อความต่างจากไม่มีแผนเลย)', () => {
+    const overviewNoneDueToday = { ...overviewFull, todayDuePlans: [] };
+    expect(() =>
+      renderToStaticMarkup(
+        React.createElement(SidePanels, {
+          overview: overviewNoneDueToday,
+          symbols: SYMBOLS,
+          plans: PLANS_MIXED, // มี plan-1 active:true แต่ไม่อยู่ใน todayDuePlans รอบนี้
+          onQuickRecord: () => {},
+        })
+      )
+    ).not.toThrow();
   });
 
   test('UndoConfirmModal — target null (ไม่ Render) / มี target', () => {
@@ -192,6 +271,177 @@ describe('Render smoke test (renderToStaticMarkup — no crash given realistic A
           pickerOpenSignal: 0,
           onRecorded: () => {},
           onRequestUndo: () => {},
+        })
+      )
+    ).not.toThrow();
+  });
+
+  // S8 R3 รอบ 3 — prefillSignal prop ใหม่ (Render ไม่ Throw เท่านั้น: useEffect ที่
+  // ใช้ prefillSignal ไม่ทำงานภายใต้ renderToStaticMarkup — ดู
+  // frontend/src/lib/dcaPlanPrefill.test.js สำหรับ Test เชิง Logic จริงของ Prefill)
+  test('DcaForm — รับ prefillSignal ไม่ Crash', () => {
+    expect(() =>
+      renderToStaticMarkup(
+        React.createElement(DcaForm, {
+          symbols: SYMBOLS,
+          pickerOpenSignal: 0,
+          onRecorded: () => {},
+          onRequestUndo: () => {},
+          prefillSignal: { symbol: 'BTC', amountTotal: 1000, currency: 'THB', nonce: 1 },
+        })
+      )
+    ).not.toThrow();
+  });
+
+  // PortfolioDetailSection (S8 R3 รอบ 2) — Shape ตรงกับ GET /dashboard/portfolio,
+  // /dashboard/profit/:symbol, /dashboard/history?limit=1000 (Endpoint เดิมของ
+  // Dashboard.jsx ที่ย้าย Logic มา — คนละ Shape กับ overview ของ §15.4)
+  const LEGACY_PORTFOLIO = {
+    holdings: [
+      { symbol: 'AAPL', currency: 'THB', heldQuantity: 10, averageCost: 2500, totalInvested: 25000 },
+      { symbol: 'PTT', currency: 'THB', heldQuantity: 50, averageCost: 34, totalInvested: 1700 },
+    ],
+    investedByCurrency: { THB: 26700, USD: 0 },
+    totalInvested: 26700,
+    isEmpty: false,
+  };
+  const LEGACY_PROFIT = {
+    AAPL: { currentValue: 27000, profitLoss: 2000, profitLossPercent: 8 },
+    PTT: null, // หุ้นไทยไม่มีราคาตลาด — ทดสอบ excludedCount + Fallback '-'
+  };
+  const LEGACY_TRANSACTIONS = [
+    { id: 't1', symbol: 'AAPL', type: 'buy', amountThb: 2500, pricePerUnit: 2500, quantity: 1, currency: 'THB', date: '2026-07-14' },
+    { id: 't2', symbol: 'PTT', type: 'sell', amountThb: 340, pricePerUnit: 34, quantity: 10, currency: 'THB', date: '2026-06-01' },
+  ];
+
+  test('PortfolioDetailSection — แท็บพอร์ตของฉัน (มี Holding + Excluded)', () => {
+    expect(() =>
+      renderToStaticMarkup(
+        React.createElement(PortfolioDetailSection, {
+          portfolio: LEGACY_PORTFOLIO,
+          profitBySymbol: LEGACY_PROFIT,
+          transactions: LEGACY_TRANSACTIONS,
+          loadError: null,
+          activeTab: 'portfolio',
+          onTabChange: () => {},
+        })
+      )
+    ).not.toThrow();
+  });
+
+  test('PortfolioDetailSection — แท็บประวัติรายการ', () => {
+    expect(() =>
+      renderToStaticMarkup(
+        React.createElement(PortfolioDetailSection, {
+          portfolio: LEGACY_PORTFOLIO,
+          profitBySymbol: LEGACY_PROFIT,
+          transactions: LEGACY_TRANSACTIONS,
+          loadError: null,
+          activeTab: 'history',
+          onTabChange: () => {},
+        })
+      )
+    ).not.toThrow();
+  });
+
+  test('PortfolioDetailSection — แท็บวิธีใช้งาน (Static ล้วน)', () => {
+    expect(() =>
+      renderToStaticMarkup(
+        React.createElement(PortfolioDetailSection, {
+          portfolio: LEGACY_PORTFOLIO,
+          profitBySymbol: LEGACY_PROFIT,
+          transactions: LEGACY_TRANSACTIONS,
+          loadError: null,
+          activeTab: 'howto',
+          onTabChange: () => {},
+        })
+      )
+    ).not.toThrow();
+  });
+
+  test('PortfolioDetailSection — พอร์ตว่างเปล่า (isEmpty)', () => {
+    expect(() =>
+      renderToStaticMarkup(
+        React.createElement(PortfolioDetailSection, {
+          portfolio: { holdings: [], investedByCurrency: { THB: 0, USD: 0 }, totalInvested: 0, isEmpty: true },
+          profitBySymbol: {},
+          transactions: [],
+          loadError: null,
+          activeTab: 'portfolio',
+          onTabChange: () => {},
+        })
+      )
+    ).not.toThrow();
+  });
+
+  test('PortfolioDetailSection — ยังโหลดไม่เสร็จ (portfolio=null)', () => {
+    expect(() =>
+      renderToStaticMarkup(
+        React.createElement(PortfolioDetailSection, {
+          portfolio: null,
+          profitBySymbol: {},
+          transactions: [],
+          loadError: null,
+          activeTab: 'portfolio',
+          onTabChange: () => {},
+        })
+      )
+    ).not.toThrow();
+  });
+
+  test('PortfolioDetailSection — Endpoint ชุดนี้ล่ม (loadError)', () => {
+    expect(() =>
+      renderToStaticMarkup(
+        React.createElement(PortfolioDetailSection, {
+          portfolio: null,
+          profitBySymbol: {},
+          transactions: [],
+          loadError: 'โหลดข้อมูลรายละเอียดพอร์ตไม่สำเร็จ กรุณาลองใหม่อีกครั้ง',
+          activeTab: 'portfolio',
+          onTabChange: () => {},
+        })
+      )
+    ).not.toThrow();
+  });
+
+  // DcaPlansSection (S8 R3 รอบ 3 — หน้าจัดการแผน DCA)
+  test('DcaPlansSection — มีแผน Active+Paused ปนกัน', () => {
+    expect(() =>
+      renderToStaticMarkup(
+        React.createElement(DcaPlansSection, {
+          plans: PLANS_MIXED,
+          symbols: SYMBOLS,
+          loadError: null,
+          onChanged: () => {},
+          showToast: () => {},
+        })
+      )
+    ).not.toThrow();
+  });
+
+  test('DcaPlansSection — ไม่มีแผนเลย (Empty State)', () => {
+    expect(() =>
+      renderToStaticMarkup(
+        React.createElement(DcaPlansSection, {
+          plans: [],
+          symbols: SYMBOLS,
+          loadError: null,
+          onChanged: () => {},
+          showToast: () => {},
+        })
+      )
+    ).not.toThrow();
+  });
+
+  test('DcaPlansSection — โหลด plans ไม่สำเร็จ (loadError)', () => {
+    expect(() =>
+      renderToStaticMarkup(
+        React.createElement(DcaPlansSection, {
+          plans: [],
+          symbols: SYMBOLS,
+          loadError: 'โหลดแผน DCA ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง',
+          onChanged: () => {},
+          showToast: () => {},
         })
       )
     ).not.toThrow();

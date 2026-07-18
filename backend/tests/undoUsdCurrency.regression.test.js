@@ -13,11 +13,15 @@ jest.mock('../src/repositories/transaction.repository');
 jest.mock('../src/repositories/asset.repository');
 jest.mock('../src/services/priceFeed.service');
 jest.mock('../src/services/fxRate.service');
+// getOverview เรียก dcaReminder.service.getTodayDuePlansForUser (S8 R3) — Mock
+// Repository Boundary ให้ไม่มีแผนถึงรอบ (Test นี้โฟกัส undo/currency ของพอร์ต ไม่ใช่ DCA plans)
+jest.mock('../src/repositories/dcaReminder.repository');
 
 const transactionRepository = require('../src/repositories/transaction.repository');
 const assetRepository = require('../src/repositories/asset.repository');
 const priceFeedService = require('../src/services/priceFeed.service');
 const fxRateService = require('../src/services/fxRate.service');
+const dcaReminderRepository = require('../src/repositories/dcaReminder.repository');
 
 const transactionService = require('../src/services/transaction.service');
 const undoTransactionService = require('../src/services/undoTransaction.service');
@@ -107,6 +111,9 @@ beforeEach(() => {
   jest.clearAllMocks();
   jest.useFakeTimers({ now: new Date('2026-07-17T05:00:00Z'), doNotFake: ['performance'] });
   setupFakeDb();
+
+  // S8 R3 — ไม่มีแผน DCA ถึงรอบ (getOverview → getTodayDuePlansForUser → findActiveByUser)
+  dcaReminderRepository.findActiveByUser.mockResolvedValue([]);
 
   // ราคาตลาดปัจจุบัน: AAPL = 100 USD (3500 THB) / PTT ไม่มี Price Feed (หุ้นไทย)
   priceFeedService.getCurrentPriceUsd.mockImplementation(async (symbol) =>
