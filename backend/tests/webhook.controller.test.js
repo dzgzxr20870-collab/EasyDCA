@@ -1184,14 +1184,17 @@ describe('handleEvent — Dashboard Postback', () => {
 });
 
 describe('handleEvent — Add Guide Postback (ปุ่ม "เพิ่มรายการ" ใน Rich Menu)', () => {
-  test('add_guide: reply ด้วยคำแนะนำวิธีพิมพ์คำสั่งซื้อ/ขาย (ไม่ใช่ message("ซื้อ") เปล่าๆ)', async () => {
+  // S8 R2 รอบ 1: add_guide เปลี่ยนจาก "การ์ดสอนพิมพ์คำสั่ง" → "Quick Reply Menu"
+  // (ปลายทางเดียวกับข้อความที่ Parse ไม่ออก) — Intent เดิมของ Test นี้คือ "ปุ่มนี้ต้อง
+  // ไม่ทำตัวเหมือน message('ซื้อ') เปล่าๆ ที่ตก UNKNOWN" ซึ่งยังคงถูกตรวจอยู่
+  // ส่วนการ์ดสอนพิมพ์เดิมย้ายไปอยู่หลังปุ่ม buy_guide (มี Test แยกด้านล่างไฟล์)
+  test('add_guide: reply ด้วย Quick Reply Menu (ไม่ใช่ message("ซื้อ") เปล่าๆ ที่ตก UNKNOWN)', async () => {
     await handleEvent(postbackEvent('action=add_guide'));
 
     expect(pendingService.createPending).not.toHaveBeenCalled();
-    const reply = lastReplyText();
-    expect(reply).toContain('วิธีเพิ่มรายการซื้อ/ขาย');
-    expect(reply).toContain('ซื้อ BTC 0.01 หุ้น ราคา 3400000');
-    expect(reply).toContain('ขาย PTT 50 หุ้น ราคา 34');
+    const call = lineService.replyMessage.mock.calls.at(-1);
+    expect(call[1].quickReply.items).toHaveLength(4);
+    expect(lastReplyText()).not.toContain('ไม่เข้าใจคำสั่งนี้');
   });
 });
 
@@ -1268,7 +1271,9 @@ describe('handleEvent — Bulk Import (Phase 3 Round 6)', () => {
     await handleEvent(textEvent('สวัสดี\nวันนี้อากาศดี'));
 
     expect(bulkImportService.previewBatch).not.toHaveBeenCalled();
-    expect(lastReplyText()).toContain('ไม่เข้าใจคำสั่ง');
+    // S8 R2 รอบ 1: ปลายทางของ "ไม่มี Session + Parse ไม่ออก" เปลี่ยนเป็น Quick Reply
+    // Menu แล้ว — Intent เดิม (ต้องไม่แตะ bulkImportService) ยังตรวจอยู่บรรทัดบน
+    expect(lastReplyText()).toContain('ไม่เข้าใจข้อความนี้');
   });
 
   test('Postback confirm_bulk_import → เรียก confirmBatch พร้อม options (plan/planExpiresAt) แล้ว reply สรุปผล Best-effort', async () => {
@@ -1348,15 +1353,18 @@ describe('handleEvent — Bulk Import (Phase 3 Round 6)', () => {
 });
 
 describe('handleEvent — UNKNOWN', () => {
-  test('คำสั่งไม่รู้จัก → replyMessage ด้วย Unknown Message พร้อมตัวอย่าง', async () => {
+  // S8 R2 รอบ 1: เปลี่ยนจากการ์ด "ไม่เข้าใจคำสั่งนี้" (ทางตัน ไม่มีปุ่ม) → Quick Reply
+  // Menu ที่กดต่อได้ — Intent เดิม (ไม่สร้าง Pending + ตอบอะไรที่ช่วยผู้ใช้ต่อได้) คงเดิม
+  // ตัวอย่างคำสั่งพิมพ์ตรงย้ายไปอยู่ในการ์ด "วิธีใช้งาน" (ปุ่ม help_guide) แทน
+  test('คำสั่งไม่รู้จัก → replyMessage ด้วย Quick Reply Menu (ไม่สร้าง Pending)', async () => {
     commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
 
     await handleEvent(textEvent('อะไรสักอย่าง'));
 
     expect(pendingService.createPending).not.toHaveBeenCalled();
-    const reply = lastReplyText();
-    expect(reply).toContain('ไม่เข้าใจคำสั่ง');
-    expect(reply).toContain('ซื้อ BTC 0.01 หุ้น ราคา 3400000');
+    expect(lastReplyText()).toContain('ไม่เข้าใจข้อความนี้');
+    const call = lineService.replyMessage.mock.calls.at(-1);
+    expect(call[1].quickReply.items).toHaveLength(4);
   });
 });
 
@@ -2226,5 +2234,188 @@ describe('handleEvent — Manual Quantity Fallback (Round 10-B)', () => {
       { plan: 'free' }
     );
     expect(lastReplyText()).toContain('ไม่รู้จักสินทรัพย์');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// S8 R2 รอบ 1 — Fallback Quick Reply Menu
+// ═══════════════════════════════════════════════════════════════════════
+// ครอบคลุม 4 การรับประกันของ DoD:
+//   1. Fallback ทำงานเฉพาะตอน Parse ไม่ออก + ไม่มี Session ค้าง
+//   2. Expert Path (คำสั่งพิมพ์ตรง) ไม่ถูกกระทบเลย
+//   3. PDPA Gate ยังทำงาน "ก่อน" Fallback เสมอ
+//   4. Session Flow เดิม (Reminder Setup / Bulk Import) ไม่ถูกแย่ง
+describe('handleEvent — Fallback Quick Reply Menu (S8 R2 รอบ 1)', () => {
+  // ดึง quickReply items ของข้อความล่าสุดออกมาตรวจโครงสร้างจริง (ไม่ใช่แค่ substring)
+  function lastQuickReplyItems() {
+    const call = lineService.replyMessage.mock.calls.at(-1);
+    return call[1]?.quickReply?.items ?? [];
+  }
+
+  // ── 1. Fallback ทำงานเฉพาะกรณีที่ควร ──────────────────────────────────
+  test('ข้อความมั่ว (Parse ไม่ออก) + ไม่มี Session ค้าง → Quick Reply Menu ครบ 4 ปุ่ม', async () => {
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+
+    await handleEvent(textEvent('สวัสดีครับ อยากลงทุน'));
+
+    const items = lastQuickReplyItems();
+    expect(items).toHaveLength(4);
+    expect(items.map((i) => i.action.label)).toEqual([
+      '📈 บันทึก DCA',
+      '💰 ดูพอร์ต',
+      '🔔 ตั้งเตือน DCA',
+      '❓ วิธีใช้งาน',
+    ]);
+    // ต้องไม่ใช่การ์ด "ไม่เข้าใจคำสั่ง" ทางตันเดิมอีกต่อไป
+    expect(lastReplyText()).not.toContain('ไม่เข้าใจคำสั่งนี้');
+  });
+
+  test('ปุ่ม "ดูพอร์ต" ใช้ message("พอต") — Reuse Command Parser เดิม ไม่สร้าง Handler ใหม่', async () => {
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+
+    await handleEvent(textEvent('อะไรก็ไม่รู้'));
+
+    const portfolioBtn = lastQuickReplyItems().find((i) => i.action.label === '💰 ดูพอร์ต');
+    expect(portfolioBtn.action).toMatchObject({ type: 'message', text: 'พอต' });
+  });
+
+  test('ปุ่ม "ตั้งเตือน DCA" Reuse action เดิม (start_reminder_setup) ไม่ใช่ action ใหม่', async () => {
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+
+    await handleEvent(textEvent('xxxx'));
+
+    const btn = lastQuickReplyItems().find((i) => i.action.label === '🔔 ตั้งเตือน DCA');
+    expect(btn.action).toMatchObject({ type: 'postback', data: 'action=start_reminder_setup' });
+  });
+
+  test('ห้ามมีปุ่ม "ยกเลิก" ของ Flow ตั้งเตือน (cancel_reminder_setup) หลุดมาในเมนูทั่วไป', async () => {
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+
+    await handleEvent(textEvent('มั่วๆ'));
+
+    expect(JSON.stringify(lastQuickReplyItems())).not.toContain('cancel_reminder_setup');
+  });
+
+  // ── 2. Expert Path ต้องไม่ถูกกระทบ ────────────────────────────────────
+  test('Expert Path: พิมพ์ "พอต" (Parse ออก) → ทำงานปกติ ไม่ผ่าน Fallback เลย', async () => {
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.PORTFOLIO, params: {} });
+    portfolioService.getPortfolioSummary.mockResolvedValue({ isEmpty: true, holdings: [] });
+
+    await handleEvent(textEvent('พอต'));
+
+    expect(portfolioService.getPortfolioSummary).toHaveBeenCalledWith(FREE_USER.id);
+    expect(lastQuickReplyItems()).toHaveLength(0); // ไม่ใช่ Fallback Menu
+  });
+
+  test('Expert Path: "ซื้อ BTC 1000" (Parse ออก) → เข้า createPending ตามปกติ ไม่โดน Fallback', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.BUY,
+      params: { symbol: 'BTC', amountThb: 1000 },
+    });
+    pendingService.createPending.mockResolvedValue({
+      id: 'p-1', commandType: 'buy', assetSymbol: 'BTC',
+      quantity: 0.0003, pricePerUnit: 3400000, amountThb: 1000, priceSource: 'coingecko',
+    });
+
+    await handleEvent(textEvent('ซื้อ BTC 1000'));
+
+    expect(pendingService.createPending).toHaveBeenCalled();
+    expect(lastQuickReplyItems()).toHaveLength(0);
+  });
+
+  // ── 3. PDPA Gate ต้องมาก่อนเสมอ ───────────────────────────────────────
+  test('ยังไม่ Consent + พิมพ์ข้อความมั่ว → เจอ PDPA Gate ก่อน ไม่เห็น Fallback Menu', async () => {
+    userRepository.findByLineUserId.mockResolvedValue(NOT_CONSENTED_USER);
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+
+    await handleEvent(textEvent('มั่วๆ'));
+
+    expect(lastQuickReplyItems()).toHaveLength(0);
+    // ต้องไม่แตะ Session ใดๆ เลย (ไม่ประมวลผลคำสั่ง)
+    expect(reminderSetupFlow.getCurrentSession).not.toHaveBeenCalled();
+  });
+
+  test('ยังไม่ Consent + กดปุ่ม add_guide → เจอ PDPA Gate ก่อน ไม่เห็น Fallback Menu', async () => {
+    userRepository.findByLineUserId.mockResolvedValue(NOT_CONSENTED_USER);
+
+    await handleEvent(postbackEvent('action=add_guide'));
+
+    expect(lastQuickReplyItems()).toHaveLength(0);
+  });
+
+  // ── 4. Session Flow เดิมต้องไม่ถูกแย่ง ─────────────────────────────────
+  test('ระหว่าง Session ตั้งเตือน (AWAITING_AMOUNT) พิมพ์ตัวเลข → เข้า Flow เดิม ไม่ใช่ Fallback', async () => {
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+    reminderSetupFlow.getCurrentSession.mockResolvedValue({
+      step: reminderSetupFlow.STEPS.AWAITING_AMOUNT,
+      symbol: 'BTC',
+      frequency: 'monthly',
+    });
+    reminderSetupFlow.handleAmountEntered.mockResolvedValue({
+      symbol: 'BTC', amountThb: 1000, frequency: 'monthly', dayOfMonth: 1,
+    });
+
+    await handleEvent(textEvent('1000'));
+
+    expect(reminderSetupFlow.handleAmountEntered).toHaveBeenCalledWith(FREE_USER.id, 1000);
+    // ไม่ใช่ Fallback Menu (Flow เดิมตอบเอง)
+    expect(JSON.stringify(lastQuickReplyItems())).not.toContain('action=help_guide');
+  });
+
+  test('ระหว่าง Session ตั้งเตือน พิมพ์ข้อความมั่ว (ไม่ใช่ตัวเลข) → ยังอยู่ใน Flow เดิม ไม่โดน Fallback แย่ง', async () => {
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+    reminderSetupFlow.getCurrentSession.mockResolvedValue({
+      step: reminderSetupFlow.STEPS.AWAITING_AMOUNT,
+      symbol: 'BTC',
+      frequency: 'monthly',
+    });
+    const err = new Error('invalid amount');
+    err.code = 'INVALID_AMOUNT';
+    reminderSetupFlow.handleAmountEntered.mockRejectedValue(err);
+
+    await handleEvent(textEvent('ไม่รู้'));
+
+    // ต้องถูกส่งเข้า Flow เดิม (ให้ Flow ตัดสิน INVALID_AMOUNT เอง) ไม่ใช่ Fallback
+    expect(reminderSetupFlow.handleAmountEntered).toHaveBeenCalled();
+    expect(JSON.stringify(lastQuickReplyItems())).not.toContain('action=buy_guide');
+  });
+
+  test('ระหว่าง Session Bulk Import พิมพ์ Batch → เข้า previewBatch เดิม ไม่โดน Fallback แย่ง', async () => {
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+    bulkImportSession.getCurrentSession.mockResolvedValue({ userId: FREE_USER.id });
+    bulkImportService.previewBatch.mockResolvedValue({
+      ok: true, batchId: 'b-1', rows: [], totalAmountThb: 0, count: 0,
+    });
+
+    await handleEvent(textEvent('BTC 0.01 30000 3000000'));
+
+    expect(bulkImportService.previewBatch).toHaveBeenCalled();
+    expect(JSON.stringify(lastQuickReplyItems())).not.toContain('action=help_guide');
+  });
+
+  // ── ปุ่ม Rich Menu "เพิ่มรายการ" (ข้อ B) + ปุ่มย่อยในเมนู ────────────────
+  test('ปุ่ม Rich Menu add_guide → Quick Reply Menu (ไม่ใช่ UNKNOWN / ไม่ใช่การ์ดสอนพิมพ์เดิม)', async () => {
+    await handleEvent(postbackEvent('action=add_guide'));
+
+    expect(lastQuickReplyItems()).toHaveLength(4);
+    expect(lastReplyText()).not.toContain('ไม่เข้าใจคำสั่งนี้');
+  });
+
+  test('ปุ่ม "📈 บันทึก DCA" (buy_guide) → การ์ดสอนพิมพ์คำสั่ง ไม่วนกลับมาเป็นเมนูตัวเอง', async () => {
+    await handleEvent(postbackEvent('action=buy_guide'));
+
+    expect(lastReplyText()).toContain('วิธีเพิ่มรายการซื้อ/ขาย');
+    // ต้องไม่ใช่เมนู (กัน Loop กดแล้ววนกลับที่เดิม)
+    expect(lastQuickReplyItems()).toHaveLength(0);
+  });
+
+  test('ปุ่ม "❓ วิธีใช้งาน" (help_guide) → การ์ดรวมคำสั่งพิมพ์ตรง (Expert Path ยังหาเจอ)', async () => {
+    await handleEvent(postbackEvent('action=help_guide'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('วิธีใช้งาน');
+    expect(reply).toContain('พอต');
+    expect(reply).toContain('กำไร BTC');
+    expect(reply).toContain('นำเข้าพอร์ต');
   });
 });

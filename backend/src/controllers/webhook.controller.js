@@ -594,11 +594,29 @@ async function routePostback(user, data) {
       return flexMessage.buildDashboardLinkMessage(dashboardUrl);
     }
 
-    // ── ปุ่ม "เพิ่มรายการ" (Rich Menu) → สอนวิธีพิมพ์คำสั่งซื้อ/ขายตรงๆ ──────────
+    // ── ปุ่ม "เพิ่มรายการ" (Rich Menu) → Quick Reply Menu (S8 R2 รอบ 1) ──────────
     // Postback (ไม่ใช่ message('ซื้อ')) กันข้อความเปล่าหลุดเข้า Command Parser
     // แล้วตก UNKNOWN โดยไม่ได้ตั้งใจ (ดู Comment ใน setupRichMenu.js)
+    //
+    // เดิมตอบการ์ดสอนพิมพ์คำสั่งตรงๆ (buildAddGuideMessage) — เปลี่ยนเป็นเมนูปุ่ม
+    // เพื่อให้ปลายทางเดียวกับ Fallback ของข้อความที่ Parse ไม่ออก (ประสบการณ์
+    // เดียวกันไม่ว่าจะมาทางปุ่มหรือพิมพ์มั่ว) การ์ดสอนพิมพ์เดิมยังเข้าถึงได้ผ่าน
+    // ปุ่ม "📈 บันทึก DCA" (action=buy_guide) ในเมนูนี้
     case 'add_guide': {
+      return flexMessage.buildFallbackMenuMessage();
+    }
+
+    // ── ปุ่ม "📈 บันทึก DCA" ในเมนู → การ์ดสอนพิมพ์คำสั่งซื้อ/ขาย ────────────────
+    // ⚠️ รอบ 1 เป็น Placeholder เท่านั้น (Reuse buildAddGuideMessage เดิม) — รอบ 2
+    // จะเปลี่ยน case นี้เป็นจุดเริ่ม Guided Buy Flow (ถาม Symbol → จำนวนเงิน → ยืนยัน)
+    // แยก action จาก add_guide โดยตั้งใจ กันปุ่มในเมนูวนกลับมาเปิดเมนูตัวเอง
+    case 'buy_guide': {
       return flexMessage.buildAddGuideMessage();
+    }
+
+    // ── ปุ่ม "❓ วิธีใช้งาน" → รวมคำสั่งพิมพ์ตรงทั้งหมด (Expert Path ต้องหาเจอเสมอ) ──
+    case 'help_guide': {
+      return flexMessage.buildHelpMessage();
     }
 
     // ── Export รายงาน (Phase 3 Round 8) — ข้อความที่ 2: เลือกรูปแบบไฟล์แล้ว ──────
@@ -767,8 +785,16 @@ async function routeText(user, text) {
     return handleBulkImportBatchText(user, text);
   }
 
-  // ไม่เข้าเงื่อนไข Flow → ตอบข้อความ "ไม่เข้าใจคำสั่ง" ตามปกติ
-  return flexMessage.buildUnknownCommandMessage();
+  // ไม่เข้าเงื่อนไข Flow ใดเลย → Quick Reply Menu (S8 R2 รอบ 1) แทนการ์ด
+  // "ไม่เข้าใจคำสั่ง" ทางตันเดิม เพื่อให้ผู้ใช้กดต่อได้ไม่ต้องเดาคำสั่งเอง
+  //
+  // ⚠️ ตำแหน่งนี้สำคัญ: อยู่ "ท้ายสุด" ของ routeText หลังจากผ่านครบทุกชั้นแล้ว
+  //   1. parseCommand จำได้ → routeCommand ไปตั้งแต่ต้นฟังก์ชัน (Expert Path ชนะเสมอ)
+  //   2. Reminder Setup Session (AWAITING_AMOUNT / AWAITING_DAY รายเดือน)
+  //   3. Bulk Import Session
+  // จึงไม่มีทางแย่ง Session Flow เดิมไปได้ และอยู่หลัง PDPA Gate (handleEvent)
+  // อยู่แล้วโดยโครงสร้าง — ผู้ใช้ที่ยังไม่ Consent ไม่มีทางมาถึงบรรทัดนี้
+  return flexMessage.buildFallbackMenuMessage();
 }
 
 // ประมวลผลข้อความที่ 2 ของ Flow นำเข้าพอร์ต (Batch หลายบรรทัด) — เรียก

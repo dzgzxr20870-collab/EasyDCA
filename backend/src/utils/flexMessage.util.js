@@ -1825,6 +1825,70 @@ function buildUnknownCommandMessage() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// Fallback Quick Reply Menu (S8 R2 รอบ 1)
+// ═══════════════════════════════════════════════════════════════════════
+// แทน buildUnknownCommandMessage (ทางตัน ไม่มีปุ่ม) เมื่อ Parse คำสั่งไม่ออกและ
+// ไม่มี Session ค้าง — ให้ผู้ใช้ "กดต่อได้" แทนที่จะต้องเดาคำสั่งเอง
+//
+// ⚠️ ห้ามใช้ textWithQuickReply() ประกอบเมนูนี้: helper ตัวนั้นผนวกปุ่ม
+// "❌ ยกเลิก" (action=cancel_reminder_setup) ต่อท้ายเสมอ ซึ่งเป็นของ Flow ตั้งเตือน
+// โดยเฉพาะ — ถ้าโผล่ในเมนูทั่วไป ผู้ใช้กดแล้วจะเข้า cancelFlow ทั้งที่ไม่มี Session
+// (สับสน + throw) จึงประกอบ quickReply เองที่นี่
+//
+// การเลือกชนิด Action ยึดตาม Convention เดิมของ Rich Menu (setupRichMenu.js):
+//   - คำสั่งที่ "สมบูรณ์ในตัว" → type message (ผ่าน Command Parser เดิมเป๊ะ ไม่ต้อง
+//     เขียน Handler ใหม่ และ Expert Path ได้ผลลัพธ์เดียวกับพิมพ์เอง 100%)
+//   - คำสั่งที่ "ไม่สมบูรณ์/เริ่ม Flow" → type postback (กันข้อความเปล่าหลุดเข้า
+//     Command Parser แล้วตก UNKNOWN — บทเรียนจากปุ่ม 'ซื้อ' เปล่าๆ เดิม)
+function fallbackQuickReplyItems() {
+  return [
+    // Placeholder รอบ 1: ชี้ไปการ์ดสอนพิมพ์คำสั่งซื้อ/ขายเดิม (buildAddGuideMessage)
+    // รอบ 2 จะเปลี่ยน action นี้เป็นจุดเริ่ม Guided Buy Flow เต็มรูปแบบ
+    quickReplyPostback('📈 บันทึก DCA', 'action=buy_guide', '📈 บันทึก DCA'),
+    // Reuse คำสั่ง "พอต" เดิมตรงๆ ผ่าน Command Parser (ไม่มี Handler ใหม่)
+    { type: 'action', action: { type: 'message', label: '💰 ดูพอร์ต', text: 'พอต' } },
+    // Reuse Flow ตั้งเตือน DCA เดิมทั้งดุ้น (action เดียวกับปุ่ม Rich Menu)
+    quickReplyPostback('🔔 ตั้งเตือน DCA', 'action=start_reminder_setup', '🔔 ตั้งเตือน DCA'),
+    quickReplyPostback('❓ วิธีใช้งาน', 'action=help_guide', '❓ วิธีใช้งาน'),
+  ];
+}
+
+function buildFallbackMenuMessage() {
+  return {
+    type: 'text',
+    text: 'ขอโทษครับ ผมไม่เข้าใจข้อความนี้ 🤔\nเลือกเมนูด้านล่างได้เลย หรือจะพิมพ์คำสั่งเองก็ได้ครับ',
+    quickReply: { items: fallbackQuickReplyItems() },
+  };
+}
+
+// การ์ด "วิธีใช้งาน" — รวมคำสั่งพิมพ์ตรงทั้งหมดไว้ที่เดียว (Expert Path ต้องค้นเจอ
+// ได้เสมอ ไม่ถูกซ่อนเพราะมีเมนูปุ่มใหม่) แนบ Quick Reply เดิมต่อท้ายให้กดต่อได้
+function buildHelpMessage() {
+  const card = bubble({
+    headerText: '❓ วิธีใช้งาน EasyDCA',
+    headerColor: COLOR.info,
+    headerBg: COLOR.profitBg,
+    bodyContents: [
+      textLine('พิมพ์คำสั่งเหล่านี้ได้โดยตรง', { size: 'sm', weight: 'bold', color: COLOR.textPrimary }),
+      textLine('บันทึกซื้อ/ขาย', { size: 'xs', weight: 'bold', color: COLOR.textPrimary }),
+      textLine('• ซื้อ BTC 1000', { size: 'sm', color: COLOR.textSecondary }),
+      textLine('• ซื้อ BTC 0.01 หุ้น ราคา 3400000', { size: 'sm', color: COLOR.textSecondary }),
+      textLine('• ขาย PTT 50 หุ้น ราคา 34', { size: 'sm', color: COLOR.textSecondary }),
+      textLine('ดูข้อมูล', { size: 'xs', weight: 'bold', color: COLOR.textPrimary }),
+      textLine('• พอต — สรุปพอร์ตทั้งหมด', { size: 'sm', color: COLOR.textSecondary }),
+      textLine('• กำไร BTC — กำไร/ขาดทุนรายตัว', { size: 'sm', color: COLOR.textSecondary }),
+      textLine('• ประวัติ — รายการล่าสุด', { size: 'sm', color: COLOR.textSecondary }),
+      textLine('จัดการ', { size: 'xs', weight: 'bold', color: COLOR.textPrimary }),
+      textLine('• ยกเลิกล่าสุด — ย้อนรายการล่าสุด', { size: 'sm', color: COLOR.textSecondary }),
+      textLine('• นำเข้าพอร์ต — เพิ่มหลายรายการพร้อมกัน', { size: 'sm', color: COLOR.textSecondary }),
+      textLine('• ดูเตือน / ลบเตือน BTC', { size: 'sm', color: COLOR.textSecondary }),
+    ],
+  });
+
+  return { ...card, quickReply: { items: fallbackQuickReplyItems() } };
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // Bulk Import (Phase 3 Round 6 — นำเข้าพอร์ตแบบ Multi-line)
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -2575,4 +2639,6 @@ module.exports = {
   buildErrorMessage,
   buildAddGuideMessage,
   buildUnknownCommandMessage,
+  buildFallbackMenuMessage,
+  buildHelpMessage,
 };
