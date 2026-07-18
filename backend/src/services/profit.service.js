@@ -9,10 +9,15 @@ const symbolRegistry = require('./symbolRegistry.service');
 // แหล่งราคาจริงตาม Asset Type (Pattern เดียวกับที่ priceFeed.service.js ใช้
 // จัดเส้นทาง Crypto → CoinGecko / หุ้นสหรัฐ → Twelve Data) — ใช้กำหนด
 // priceSource ให้ตรงความจริง แทนการ Hardcode 'coingecko' ตายตัว
-function resolvePriceSource(symbol) {
-  const type = symbolRegistry.lookupType(symbol);
-  if (type === 'stock_us') return 'twelvedata';
-  if (type === 'gold_bar' || type === 'gold_ornament') return 'thaigold';
+//
+// รับ asset.type (จาก DB) เป็นหลัก + symbol ไว้ Fallback ผ่าน Registry เมื่อ type
+// ว่าง/ผิดรูป — เดิมรับแค่ symbol แล้ว Lookup Registry ใหม่ ทำให้ Asset ที่ Registry
+// ไม่รู้จัก (เช่น EOSE ก่อนถูกเพิ่ม) ได้ priceSource='coingecko' ผิดความจริง ทั้งที่
+// ราคาจริงมาจาก Twelve Data → Flex Message แสดงคำเตือนแหล่งราคาผิดแหล่ง
+function resolvePriceSource(type, symbol) {
+  const resolved = type ?? symbolRegistry.lookupType(symbol);
+  if (resolved === 'stock_us') return 'twelvedata';
+  if (resolved === 'gold_bar' || resolved === 'gold_ornament') return 'thaigold';
   return 'coingecko';
 }
 
@@ -116,7 +121,9 @@ async function getAssetProfit(userId, symbol, portfolioId = null) {
   } else if (isUsd) {
     // สินทรัพย์สกุล USD — ตีมูลค่าด้วยราคา "USD ตามจริง" (ไม่ผ่าน THB) เพื่อให้
     // ต้นทุน (USD) กับมูลค่าปัจจุบัน (USD) อยู่สกุลเดียวกัน คำนวณกำไรได้ถูกต้อง
-    currentPrice = await priceFeedService.getCurrentPriceUsd(symbol);
+    // ส่ง asset.type (จาก DB) เข้าไปด้วย — Asset ที่ Registry ยังไม่รู้จัก (สร้างผ่าน
+    // Manual Quantity Fallback) จะยัง Route ไป Twelve Data ได้ถูกต้อง
+    currentPrice = await priceFeedService.getCurrentPriceUsd(symbol, asset.type);
     if (currentPrice === null) {
       throw new ProfitServiceError(
         'PRICE_FEED_NOT_IMPLEMENTED',
@@ -125,7 +132,7 @@ async function getAssetProfit(userId, symbol, portfolioId = null) {
       );
     }
   } else {
-    currentPrice = await priceFeedService.getCurrentPrice(symbol);
+    currentPrice = await priceFeedService.getCurrentPrice(symbol, asset.type);
     if (currentPrice === null) {
       // Symbol ไม่รองรับ Price Feed (เช่นหุ้น) หรือ CoinGecko ล้มเหลว/Timeout —
       // ใช้ Error Code เดิมที่มีอยู่แล้ว ไม่สร้างใหม่ซ้ำซ้อน
@@ -196,7 +203,7 @@ async function getAssetProfit(userId, symbol, portfolioId = null) {
     // priceSource ตาม Asset Type จริง (coingecko/twelvedata/thaigold/secnav) เพื่อให้
     // Flex Message แสดงคำเตือนราคาอ้างอิงจากแหล่งที่ถูกต้อง (priceSourceNote) —
     // funds ไม่มีใน symbolRegistry จึงกำหนด 'secnav' ตรงจาก isFund
-    priceSource: isFund ? 'secnav' : resolvePriceSource(asset.symbol),
+    priceSource: isFund ? 'secnav' : resolvePriceSource(asset.type, asset.symbol),
     // usd = null สำหรับสินทรัพย์ที่ไม่ใช่ทอง หรือทองที่ดึงเรต FX ไม่ได้
     usd,
     // กองทุนรวม (Round 7) — ข้อมูลประกอบการแสดงผล (Class + วันที่ NAV) null ถ้าไม่ใช่กองทุน

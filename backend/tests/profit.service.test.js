@@ -72,7 +72,8 @@ describe('getAssetProfit — คำนวณกำไร/ขาดทุน', ()
 
     const result = await getAssetProfit(USER_ID, 'BTC');
 
-    expect(priceFeedService.getCurrentPrice).toHaveBeenCalledWith('BTC');
+    // ส่ง asset.type ('crypto') เข้าไปด้วย — Dynamic Symbol Resolution
+    expect(priceFeedService.getCurrentPrice).toHaveBeenCalledWith('BTC', 'crypto');
     expect(result).toEqual({
       symbol: 'BTC',
       // Multi-Currency (Round 10) — สินทรัพย์ THB: currency='THB', fxThb=null
@@ -116,8 +117,9 @@ describe('getAssetProfit — คำนวณกำไร/ขาดทุน', ()
 
     const result = await getAssetProfit(USER_ID, 'MSFT');
 
-    // ต้องใช้ราคา USD ไม่ใช่ THB (ไม่ปนสกุล)
-    expect(priceFeedService.getCurrentPriceUsd).toHaveBeenCalledWith('MSFT');
+    // ต้องใช้ราคา USD ไม่ใช่ THB (ไม่ปนสกุล) + ต้องส่ง asset.type เข้าไปด้วย เพื่อให้
+    // Asset ที่ symbolRegistry ยังไม่รู้จัก Route ราคาได้ (Dynamic Symbol Resolution)
+    expect(priceFeedService.getCurrentPriceUsd).toHaveBeenCalledWith('MSFT', 'stock_us');
     expect(priceFeedService.getCurrentPrice).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       symbol: 'MSFT',

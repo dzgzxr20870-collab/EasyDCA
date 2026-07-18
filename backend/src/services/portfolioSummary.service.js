@@ -55,9 +55,12 @@ async function priceHoldings(holdings) {
         price = null;
       }
     } else if (currency === 'USD') {
-      price = await priceFeedService.getCurrentPriceUsd(holding.symbol);
+      // ส่ง holding.type (มาจาก assets.type ผ่าน portfolio.service) เข้าไปด้วย เพื่อให้
+      // Asset ที่ symbolRegistry ยังไม่รู้จัก (สร้างผ่าน Manual Quantity Fallback)
+      // ยัง Route หาราคาได้ถูกต้อง แทนที่จะกลายเป็น priceUnavailable ทั้งที่มี Type อยู่แล้ว
+      price = await priceFeedService.getCurrentPriceUsd(holding.symbol, holding.type);
     } else {
-      price = await priceFeedService.getCurrentPrice(holding.symbol);
+      price = await priceFeedService.getCurrentPrice(holding.symbol, holding.type);
     }
 
     const priceUnavailable = price === null || price === undefined;

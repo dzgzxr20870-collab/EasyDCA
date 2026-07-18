@@ -698,6 +698,31 @@ async function fetchFundMasterList() {
   return items;
 }
 
+// ประเภทสินทรัพย์ที่ระบบ Route ราคาได้จริง — ใช้ Validate knownType ที่รับมาจาก
+// assets.type ก่อนเชื่อ (Data เก่า/ผิดปกติอาจมีค่านอกรายการนี้ได้ ต้องไม่เอาไป Route)
+// ตรงกับ CHECK Constraint ของ assets.type ใน DATABASE.md § assets
+const ROUTABLE_ASSET_TYPES = new Set([
+  'crypto',
+  'stock_th',
+  'stock_us',
+  'etf',
+  'fund',
+  'gold_bar',
+  'gold_ornament',
+]);
+
+// เลือก "ประเภทสินทรัพย์" ที่จะใช้จัดเส้นทางราคา โดยให้ความสำคัญตามลำดับ:
+//   1. knownType (assets.type จาก DB) — แหล่งความจริงสำหรับ Asset ที่มีอยู่แล้ว
+//   2. symbolRegistry.lookupType(symbol) — Fallback สำหรับ Caller เดิมที่ไม่ได้ส่ง
+//      Type มา (Path ฝั่ง "เขียน") และกรณี knownType ว่าง/ผิดรูปจาก Data เก่า
+// คืน null เมื่อทั้งสองทางหาไม่ได้ → Caller คืน null ต่อ (ไม่เดา ไม่ยิง API)
+function resolveAssetType(normalizedSymbol, knownType) {
+  if (typeof knownType === 'string' && ROUTABLE_ASSET_TYPES.has(knownType)) {
+    return knownType;
+  }
+  return symbolRegistry.lookupType(normalizedSymbol);
+}
+
 // คืนราคาปัจจุบันของ Symbol เป็น THB (Number) หรือ null ถ้าหาไม่ได้
 //  - Symbol ไม่มีใน Mapping → คืน null ทันที ไม่ยิง API (ไม่เดา ไม่ throw)
 //  - CoinGecko/Twelve Data ล้มเหลว/Timeout → คืน null (Caller ต้อง Fallback เอง)
@@ -705,11 +730,20 @@ async function fetchFundMasterList() {
 // เป็น PRICE_FEED_NOT_IMPLEMENTED ได้เมื่อราคาหาไม่ได้จริง ไม่ใช่ Error ชนิดใหม่
 // หมายเหตุ: กองทุนรวม "ไม่" route ผ่าน getCurrentPrice เพราะ NAV ต้องใช้ proj_id +
 // fund_class_name (symbol อย่างเดียวไม่พอ) — profit/portfolio เรียก getMutualFundNav ตรง
-async function getCurrentPrice(symbol) {
+//
+// knownType (Optional) — "ประเภทสินทรัพย์ที่รู้อยู่แล้ว" จาก assets.type ใน DB สำหรับ
+// Path ฝั่ง "อ่าน" (Dashboard/Profit/Cron สรุปพอร์ต) ที่มี Asset อยู่ในมือแล้ว
+// ⚠️ เหตุผลที่ต้องมี: Asset ที่สร้างผ่าน Manual Quantity Fallback (Round 10-B) มี
+// assets.type ถูกต้องใน DB (เช่น 'stock_us') แต่ Symbol อาจยังไม่อยู่ใน symbolRegistry
+// (ยังไม่มีใคร Manual เพิ่ม) — ถ้า Route ด้วย Registry อย่างเดียวจะได้ null ทั้งที่
+// Type ที่ถูกต้องอยู่ในมือแล้ว (Root Cause ของบั๊ก EOSE/OKLO ที่เจอซ้ำ)
+// Registry ยังคงเป็น Fallback (Defense in Depth) เมื่อ knownType ว่าง/ผิดรูป และยังเป็น
+// แหล่งความจริงเดียวของ Path ฝั่ง "เขียน" (Validate Symbol ใหม่) ที่ไม่ได้แตะในงานนี้
+async function getCurrentPrice(symbol, knownType = null) {
   if (typeof symbol !== 'string') return null;
   const normalized = symbol.trim().toUpperCase();
 
-  const type = symbolRegistry.lookupType(normalized);
+  const type = resolveAssetType(normalized, knownType);
 
   // หุ้นสหรัฐ (stock_us) → Twelve Data (แปลง USD→THB) — จัดเส้นทางก่อนแล้ว return
   // ไม่แตะ Logic Crypto (CoinGecko) ด้านล่างเลย
@@ -744,11 +778,14 @@ async function getCurrentPrice(symbol) {
 //   - Crypto              → CoinGecko vs_currencies=usd
 //   - อื่นๆ (หุ้นไทย/ทอง/กองทุน) → null (ไม่รองรับซื้อด้วยจำนวนเงิน USD)
 // ไม่ throw (คืน null) เพื่อให้ transaction.service ตัดสิน PRICE_FEED_NOT_IMPLEMENTED เอง
-async function getCurrentPriceUsd(symbol) {
+//
+// knownType (Optional) — เหตุผลและลำดับความสำคัญเหมือน getCurrentPrice ด้านบนทุกประการ
+// (assets.type มาก่อน Registry เป็น Fallback) ดูคำอธิบายเต็มที่ resolveAssetType
+async function getCurrentPriceUsd(symbol, knownType = null) {
   if (typeof symbol !== 'string') return null;
   const normalized = symbol.trim().toUpperCase();
 
-  const type = symbolRegistry.lookupType(normalized);
+  const type = resolveAssetType(normalized, knownType);
 
   // Crypto (CoinGecko) — ใช้ cryptoPriceCache ร่วมกับ getCurrentPrice (Entry เดียวกัน
   // ต่อ Symbol แก้ Gap 2) แทน usdPriceCache เดิม — usdPriceCache ยังคงใช้เฉพาะหุ้น

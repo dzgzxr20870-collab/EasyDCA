@@ -277,6 +277,14 @@ const SYMBOL_TYPES = {
   PINS: 'stock_us',
   SNAP: 'stock_us',
   TWLO: 'stock_us',
+  // Small-cap ที่ผู้ใช้ถือจริงผ่าน Manual Quantity Fallback (Round 10-B) — ยืนยัน
+  // Twelve Data /quote คืนราคาปกติสำหรับ Symbol นี้ (NASDAQ, USD) ก่อนหน้านี้ไม่ได้
+  // ลงทะเบียนไว้ ทำให้ lookupType คืน null และ getCurrentPrice/getCurrentPriceUsd
+  // ไม่เคยยิง Twelve Data เลย (ไม่ใช่ Twelve Data ล่ม)
+  EOSE: 'stock_us', // Eos Energy Enterprises (NASDAQ)
+  // Small-cap อีกตัวที่เคยถูก Flag ไว้คู่กับ EOSE (บั๊กเดียวกัน — ยืนยัน Twelve Data
+  // /quote จริงแล้วว่ามี Ticker นี้: name="Oklo Inc.", exchange="NYSE", currency="USD")
+  OKLO: 'stock_us', // Oklo Inc. (NYSE)
 
   // ── ทองคำ (Phase 3 Round 7) — ราคาเป็น "บาททองคำ" (น้ำหนัก) ผ่าน Thai Gold API ──
   // แยก 2 Symbol ตาม 2 ประเภทที่ราคาต่างกัน (ทองรูปพรรณมีค่ากำเหน็จ):
@@ -526,6 +534,8 @@ const SYMBOL_NAMES = {
   PINS: 'Pinterest',
   SNAP: 'Snap สแนป',
   TWLO: 'Twilio',
+  EOSE: 'Eos Energy Enterprises',
+  OKLO: 'Oklo Inc.',
 
   // ── ทองคำ ───────────────────────────────────────────────────
   GOLD: 'ทองคำแท่ง (ราคาสมาคมฯ)',

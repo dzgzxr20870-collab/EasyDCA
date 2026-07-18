@@ -176,7 +176,9 @@ describe('buildReportData', () => {
     expect(msft.currency).toBe('USD');
     expect(msft.currentValue).toBe(800);
     expect(msft.profitLoss).toBe(200);
-    expect(priceFeedService.getCurrentPriceUsd).toHaveBeenCalledWith('MSFT');
+    // ส่ง holding.type เข้าไปด้วย (Dynamic Symbol Resolution) เพื่อให้ Asset ที่
+    // symbolRegistry ยังไม่รู้จักยังมีราคาในรายงาน PDF/Excel
+    expect(priceFeedService.getCurrentPriceUsd).toHaveBeenCalledWith('MSFT', 'stock_us');
 
     // byCurrency แยกกันชัด ไม่ถัวข้ามสกุล
     expect(data.totals.byCurrency).toEqual({

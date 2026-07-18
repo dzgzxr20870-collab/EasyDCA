@@ -138,10 +138,12 @@ async function fetchHoldingPrice(holding) {
     }
     // Multi-Currency (Round 10) — สินทรัพย์สกุล USD ตีมูลค่าด้วยราคา USD ตามจริง
     // (ไม่ผ่าน THB) เพื่อให้ต้นทุน (USD) กับมูลค่า (USD) อยู่สกุลเดียวกัน
+    // ส่ง holding.type (จาก assets.type) เข้าไปด้วยเหมือน portfolioSummary.priceHoldings
+    // เพื่อให้ Asset ที่ symbolRegistry ยังไม่รู้จักยังมีราคาในรายงาน PDF/Excel
     if (holding.currency === 'USD') {
-      return await priceFeedService.getCurrentPriceUsd(holding.symbol);
+      return await priceFeedService.getCurrentPriceUsd(holding.symbol, holding.type);
     }
-    return await priceFeedService.getCurrentPrice(holding.symbol);
+    return await priceFeedService.getCurrentPrice(holding.symbol, holding.type);
   } catch (err) {
     return null;
   }
