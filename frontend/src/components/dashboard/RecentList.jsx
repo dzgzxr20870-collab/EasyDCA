@@ -1,4 +1,5 @@
 import { typeMeta } from '../../lib/assetTypeMeta.js';
+import { formatTransactionNote } from '../../lib/transactionNote.js';
 
 const THAI_MONTH_SHORT = [
   'ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.',
@@ -48,6 +49,7 @@ function RecentList({ recent, assetTypeBySymbol, onRequestUndo }) {
       <div className="dh-tx-list">
         {recent.map((tx, i) => {
           const meta = typeMeta(assetTypeBySymbol.get(tx.symbol));
+          const noteText = formatTransactionNote(tx.note);
           return (
             <div className="dh-tx" key={tx.id}>
               <span className="dh-avatar" style={{ background: meta.color }}>
@@ -60,7 +62,7 @@ function RecentList({ recent, assetTypeBySymbol, onRequestUndo }) {
                 </span>
                 <small>
                   {formatDateShort(tx.date)}
-                  {tx.note ? ` · ${tx.note}` : ''}
+                  {noteText ? ` · ${noteText}` : ''}
                 </small>
               </span>
               {i === 0 && (

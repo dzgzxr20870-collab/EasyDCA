@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { apiDownload } from '../../lib/api.js';
+import { formatTransactionNote } from '../../lib/transactionNote.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PortfolioDetailSection — ฟีเจอร์ที่ย้ายมาจาก Dashboard.jsx เดิม (S8 R3 รอบ 2)
@@ -268,6 +269,7 @@ function PortfolioDetailSection({ portfolio, profitBySymbol, transactions, loadE
                         <th>ราคาต่อหน่วย</th>
                         <th>จำนวน</th>
                         <th>วันที่</th>
+                        <th>รายละเอียด</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -281,6 +283,7 @@ function PortfolioDetailSection({ portfolio, profitBySymbol, transactions, loadE
                           <td>{formatMoneyCur(tx.pricePerUnit, tx.currency, 8)}</td>
                           <td>{formatNumber(tx.quantity, 8)}</td>
                           <td>{tx.date}</td>
+                          <td>{formatTransactionNote(tx.note) ?? '-'}</td>
                         </tr>
                       ))}
                     </tbody>

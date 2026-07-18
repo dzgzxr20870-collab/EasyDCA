@@ -193,6 +193,17 @@ describe('Render smoke test (renderToStaticMarkup — no crash given realistic A
     ).not.toThrow();
   });
 
+  // S8 R3 — Reversal Transaction (note = 'UNDO_OF:<id>') ต้องไม่ Crash และไม่โชว์
+  // UUID ดิบ (dcaPlansErrors ปกป้อง Error Code ดิบ ตัวนี้ปกป้อง Note ดิบแบบเดียวกัน)
+  test('RecentList — รายการ Reversal (note = UNDO_OF:<id>) ไม่ Crash', () => {
+    const reversalRecent = [{ ...overviewFull.recent[0], note: 'UNDO_OF:9f1c2e6a-1234-4bcd-9876-0a1b2c3d4e5f' }];
+    expect(() =>
+      renderToStaticMarkup(
+        React.createElement(RecentList, { recent: reversalRecent, assetTypeBySymbol, onRequestUndo: () => {} })
+      )
+    ).not.toThrow();
+  });
+
   test('InvestedChart — มีข้อมูล / ทุกเดือน count=0', () => {
     expect(() =>
       renderToStaticMarkup(React.createElement(InvestedChart, { monthlyInvested: overviewFull.monthlyInvested }))
@@ -310,8 +321,12 @@ describe('Render smoke test (renderToStaticMarkup — no crash given realistic A
     PTT: null, // หุ้นไทยไม่มีราคาตลาด — ทดสอบ excludedCount + Fallback '-'
   };
   const LEGACY_TRANSACTIONS = [
-    { id: 't1', symbol: 'AAPL', type: 'buy', amountThb: 2500, pricePerUnit: 2500, quantity: 1, currency: 'THB', date: '2026-07-14' },
-    { id: 't2', symbol: 'PTT', type: 'sell', amountThb: 340, pricePerUnit: 34, quantity: 10, currency: 'THB', date: '2026-06-01' },
+    // S8 R3 — note ปกติที่ผู้ใช้พิมพ์เอง ต้องแสดงตรงๆ ในคอลัมน์ "รายละเอียด"
+    { id: 't1', symbol: 'AAPL', type: 'buy', amountThb: 2500, pricePerUnit: 2500, quantity: 1, currency: 'THB', date: '2026-07-14', note: 'DCA รายเดือน' },
+    // note = 'UNDO_OF:<id>' (Reversal Transaction) ต้องแปลงเป็นข้อความอ่านง่าย ไม่โชว์ UUID ดิบ
+    { id: 't2', symbol: 'PTT', type: 'sell', amountThb: 340, pricePerUnit: 34, quantity: 10, currency: 'THB', date: '2026-06-01', note: 'UNDO_OF:9f1c2e6a-1234-4bcd-9876-0a1b2c3d4e5f' },
+    // ไม่มี note เลย (รายการเก่า) → คอลัมน์ต้องไม่พัง แสดง '-'
+    { id: 't3', symbol: 'AAPL', type: 'buy', amountThb: 1000, pricePerUnit: 2500, quantity: 0.4, currency: 'THB', date: '2026-05-01' },
   ];
 
   test('PortfolioDetailSection — แท็บพอร์ตของฉัน (มี Holding + Excluded)', () => {
