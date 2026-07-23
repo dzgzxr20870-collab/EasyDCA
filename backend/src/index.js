@@ -16,6 +16,7 @@ const reportsRoutes = require('./routes/reports.routes');
 const assetsRoutes = require('./routes/assets.routes');
 const transactionsRoutes = require('./routes/transactions.routes');
 const dcaPlansRoutes = require('./routes/dcaPlans.routes');
+const healthAlertService = require('./services/healthAlert.service');
 
 const app = express();
 
@@ -78,9 +79,27 @@ app.use('/api/v1/admin', adminRoutes);
 // ทุก Route ผ่าน requireAuth + เช็ค Premium ในชั้น Controller (ดู reports.controller.js)
 app.use('/api/v1/reports', reportsRoutes);
 
-// Railway Health Check (ดู docs/DEPLOYMENT.md § 3.1)
-app.get('/health', (req, res) => {
-  res.status(200).json({ success: true, data: { status: 'ok' } });
+// Railway Health Check (ดู docs/DEPLOYMENT.md § 3.1) — ไม่ต้อง Auth (UptimeRobot/
+// Railway ต้องเรียกได้จากภายนอกโดยตรง) เช็คว่า Database (Supabase) เชื่อมต่อได้จริง
+// จริง ไม่ใช่แค่ Process ยังไม่ตาย — คืน 503 ถ้าเชื่อมต่อไม่ได้ (ให้ UptimeRobot/
+// Railway จับได้จริงว่าระบบมีปัญหา) พร้อม Push แจ้ง Admin ผ่าน LINE แบบ Debounce
+// (ดู healthAlert.service — Push แค่ตอนเปลี่ยนสถานะ ไม่ Push ซ้ำระหว่างยังพังต่อเนื่อง)
+//
+// "Process ยังรันอยู่" ไม่ต้องเช็คแยก — ถ้า Process ตายจริง Route นี้จะไม่ตอบอะไร
+// เลย (Connection Refused/Timeout) ซึ่ง UptimeRobot จับเป็น Down ได้อยู่แล้วเช่นกัน
+app.get('/health', async (req, res) => {
+  try {
+    const { healthy } = await healthAlertService.checkAndAlert();
+    if (!healthy) {
+      return res.status(503).json({ success: false, data: { status: 'degraded' } });
+    }
+    return res.status(200).json({ success: true, data: { status: 'ok' } });
+  } catch (err) {
+    // ไม่ควรเกิด (checkAndAlert Catch ไว้แล้วภายใน) แต่กันพลาดไม่ให้ Route นี้เอง
+    // ทำให้ Process Crash — ตอบ 503 เสมอถ้ามี Error ที่ไม่คาดคิดหลุดออกมา
+    console.error(`[health] unexpected error: ${err.message}`);
+    return res.status(503).json({ success: false, data: { status: 'error' } });
+  }
 });
 
 // ⚠️ Cron Job ทั้งหมดถูกย้ายไปรันที่ src/worker.js แยก Process ต่างหากแล้ว (S6 Group E

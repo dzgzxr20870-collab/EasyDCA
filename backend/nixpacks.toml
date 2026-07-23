@@ -1,0 +1,13 @@
+# Infra ก่อน Beta — Nightly Backup ต้องใช้ Binary `pg_dump` (dbBackup.job.js) ซึ่ง
+# ไม่ได้มาพร้อม Railway Nixpacks Node.js Provider โดย Default — เพิ่ม `postgresql`
+# (Nix Package ที่รวม pg_dump/psql Client Tools) เข้าไปในขั้นตอน Setup ของ Build
+#
+# ⚠️ "..." (บรรทัดถัดไป) จำเป็นเด็ดขาด — ยืนยันจาก Nixpacks Official Docs
+# (nixpacks.com/docs/configuration/file): ถ้าไม่มี "..." นำหน้า nixPkgs ของ
+# nixpacks.toml จะ Override ทับ List ที่ Node.js Provider Detect เองทั้งหมด (รวม
+# nodejs/yarn) เหลือแค่ ['postgresql'] อย่างเดียว → Build ทั้ง Service (ทั้ง backend
+# และ easydca-worker ที่ใช้ Root Directory /backend ร่วมกัน) จะพังเพราะไม่มี nodejs
+# ให้รัน ไม่ใช่แค่ Backup Job เสียอย่างเดียว — มี "..." แล้วจะ Extend (Merge) แทน
+# ได้ผลลัพธ์เป็น [...Provider Detect เดิม, 'postgresql']
+[phases.setup]
+nixPkgs = ['...', 'postgresql']

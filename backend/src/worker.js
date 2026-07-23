@@ -34,6 +34,7 @@ const {
 } = require('./jobs/portfolioSummary.job');
 const { schedulePortfolioSnapshot } = require('./jobs/portfolioSnapshot.job');
 const { schedulePurgeStaleWebhookEvents } = require('./jobs/webhookEventCleanup.job');
+const { scheduleNightlyBackup } = require('./jobs/dbBackup.job');
 
 // Schedule Cron Job ทั้งหมด — ลำดับไม่มีผล (แต่ละตัวลงทะเบียนอิสระต่อกัน) คงลำดับ/
 // Comment เดิมจาก index.js ไว้เพื่อให้ยังรู้ที่มา/รอบเวลาของแต่ละตัวได้ง่าย
@@ -67,12 +68,15 @@ function scheduleAllJobs() {
   // Purge LINE Webhook Event ที่เก่ากว่า 7 วันค้าง (Idempotency Guard — migration 013) ตี 3
   // (webhookEventCleanup.job.js)
   schedulePurgeStaleWebhookEvents();
+  // pg_dump ฐานข้อมูล → บีบอัด → อัปโหลด Cloudflare R2 → ลบ Backup เก่าเกิน Retention
+  // ทุกคืนตี 3 Asia/Bangkok (dbBackup.job.js — Infra ก่อน Beta)
+  scheduleNightlyBackup();
 }
 
 scheduleAllJobs();
 
 // node-cron ลงทะเบียน Timer ไว้แล้ว (Event Loop มี Task ค้างอยู่) Process จึงมีชีวิตอยู่
 // เองตามธรรมชาติ ไม่ต้องมี setInterval/Sleep Loop เทียมเพื่อ "กันไม่ให้ Process ตาย"
-logger.info('worker process started', { jobCount: 11 });
+logger.info('worker process started', { jobCount: 12 });
 
 module.exports = { scheduleAllJobs };

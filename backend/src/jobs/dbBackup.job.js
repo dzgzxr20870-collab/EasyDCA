@@ -1,0 +1,88 @@
+const cron = require('node-cron');
+const config = require('../config/env');
+const { runPgDump } = require('../utils/pgDump.util');
+const backupStorage = require('../services/backupStorage.service');
+const { pushAdminAlert } = require('../services/healthAlert.service');
+
+// ── Nightly Database Backup (Infra ก่อน Beta) ────────────────────────────────
+// รันทุกคืนตี 3 เวลาไทย (ช่วง Traffic ต่ำสุด — เวลาเดียวกับ Cron Purge อื่นๆ) —
+// pg_dump ฐานข้อมูล Supabase → บีบอัด (gzip) → อัปโหลดขึ้น Cloudflare R2 → ลบไฟล์
+// เก่าเกิน Retention ทิ้ง (ดู config.backup.retentionDays)
+//
+// แจ้งเตือนถ้าล้มเหลว: Reuse healthAlert.service.pushAdminAlert เดิม (ไม่สร้าง
+// กลไก Push ใหม่ซ้ำ) — ต่างจาก Debounce ของ /health เพราะ Backup รันแค่วันละครั้ง
+// อยู่แล้ว ไม่มีความเสี่ยง Push รัวจากการเรียกถี่ จึง Push ตรงๆ ทุกครั้งที่ล้มเหลวได้
+const BACKUP_PREFIX = 'db-backups/';
+
+function backupKey(now = new Date()) {
+  // ISO Timestamp แทน ':'/'.' ด้วย '-' กัน Object Key มีอักขระที่ S3-compatible
+  // Storage บาง Client จัดการยาก (Path/URL ไม่ควรมี Colon)
+  const timestamp = now.toISOString().replace(/[:.]/g, '-');
+  return `${BACKUP_PREFIX}easydca-${timestamp}.sql.gz`;
+}
+
+// ลบ Backup ที่เก่ากว่า Retention ทิ้ง — คืนจำนวนที่ลบสำเร็จ (Error Isolation ราย
+// ไฟล์: ไฟล์หนึ่งลบไม่สำเร็จไม่ทำให้ทั้ง Batch หยุด — Pattern เดียวกับ Cron อื่นๆ
+// ในโปรเจกต์ที่ Loop ทีละ Record)
+async function purgeOldBackups(retentionDays = config.backup.retentionDays) {
+  const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+  const objects = await backupStorage.listBackups(BACKUP_PREFIX);
+  const stale = objects.filter((obj) => obj.lastModified && obj.lastModified.getTime() < cutoff);
+
+  let deletedCount = 0;
+  for (const obj of stale) {
+    try {
+      await backupStorage.deleteBackup(obj.key);
+      deletedCount += 1;
+    } catch (err) {
+      console.error(`[cron:db-backup] failed to delete stale backup ${obj.key}: ${err.message}`);
+    }
+  }
+  return deletedCount;
+}
+
+async function runNightlyBackup() {
+  const databaseUrl = config.supabase.databaseUrl;
+  if (!databaseUrl) {
+    const msg = 'DATABASE_URL is not configured';
+    console.error(`[cron:db-backup] skipped: ${msg}`);
+    await pushAdminAlert(`🔴 EasyDCA: Backup ฐานข้อมูลรายคืนข้ามรอบ — ${msg}`);
+    return;
+  }
+
+  if (!backupStorage.isConfigured()) {
+    const msg = 'R2 credentials (R2_ACCOUNT_ID/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY/R2_BUCKET_NAME) are not fully configured';
+    console.error(`[cron:db-backup] skipped: ${msg}`);
+    await pushAdminAlert(`🔴 EasyDCA: Backup ฐานข้อมูลรายคืนข้ามรอบ — ${msg}`);
+    return;
+  }
+
+  const key = backupKey();
+
+  try {
+    const buffer = await runPgDump(databaseUrl);
+    await backupStorage.uploadBackup(key, buffer);
+    console.log(`[cron:db-backup] uploaded ${key} (${buffer.length} bytes)`);
+
+    const deletedCount = await purgeOldBackups();
+    console.log(`[cron:db-backup] retention purge complete: deleted ${deletedCount} stale backup(s)`);
+  } catch (err) {
+    // ต้อง catch ไว้เสมอ — Cron พังแค่รอบเดียวไม่ควรทำให้ Worker Process Crash
+    console.error(`[cron:db-backup] failed: ${err.message}`);
+    await pushAdminAlert(`🔴 EasyDCA: Backup ฐานข้อมูลรายคืนล้มเหลว — ${err.message}`);
+  }
+}
+
+function scheduleNightlyBackup() {
+  // '0 3 * * *' = ตี 3 ทุกวัน Asia/Bangkok (เวลาเดียวกับ webhookEventCleanup/
+  // reminderSetupCleanup/bulkImportCleanup — ช่วง Traffic ต่ำสุดของโปรเจกต์)
+  return cron.schedule('0 3 * * *', runNightlyBackup, { timezone: 'Asia/Bangkok' });
+}
+
+module.exports = {
+  scheduleNightlyBackup,
+  // Export ฟังก์ชัน Run/Helper ตรงๆ ให้ Unit Test เรียกได้โดยไม่ต้องรอ Cron Schedule จริง
+  runNightlyBackup,
+  purgeOldBackups,
+  backupKey,
+};

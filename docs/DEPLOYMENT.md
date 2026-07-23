@@ -112,9 +112,23 @@
     Project เดียวกัน หรือแยกเป็นคนละ Project ก็ได้ตามความสะดวก)
 
 [7] ตั้งค่า Health Check Path
-    - backend: กำหนด Endpoint เช่น GET /health คืนค่า 200 เมื่อ API
-      และการเชื่อมต่อ Database ปกติ — Railway ใช้ Endpoint นี้ตรวจสอบ
-      ว่า Deploy สำเร็จก่อน Switch Traffic
+    - backend: กำหนด Endpoint GET /health คืนค่า 200 เมื่อ API และการ
+      เชื่อมต่อ Database ปกติ, 503 ถ้า Database เชื่อมต่อไม่ได้
+      (Implemented — ดู src/index.js + healthAlert.service.js) Railway
+      ใช้ Endpoint นี้ตรวจสอบว่า Deploy สำเร็จก่อน Switch Traffic
+    - ตั้ง UptimeRobot Monitor (Free Tier, Interval 5 นาที) ชี้มาที่
+      https://<backend-domain>/health แยกต่างหาก (Railway Health Check
+      ใช้ตอน Deploy เท่านั้น ไม่ใช่ Uptime Monitoring ต่อเนื่องระยะยาว) —
+      ต้อง Setup ผ่าน UptimeRobot Dashboard เอง (Login เว็บ)
+
+[8] Service "backend" และ "easydca-worker" ใช้ backend/nixpacks.toml ร่วมกัน
+    (Root Directory เดียวกัน) — nixPkgs = ["...", "postgresql"] ต้องมี "..."
+    นำหน้าเสมอ (Extend Package ที่ Node.js Provider Detect เอง ไม่ใช่
+    Override ทับ — ยืนยันจาก Nixpacks Docs) ถ้าลืม "..." Build จะพังทั้ง 2
+    Service เพราะขาด nodejs ไม่ใช่แค่ Backup Job ใช้ pg_dump ไม่ได้อย่างเดียว
+    — ตรวจสอบ Log Build หลัง Deploy เสมอว่าไม่มี Error เกี่ยวกับ Nix Package
+    ก่อนเชื่อว่า Deploy สำเร็จจริง (ถ้า Build ล้มเหลว Railway จะคง Deployment
+    เดิมไว้ไม่ Switch Traffic ตามปกติ — ดู § 6 Rollback Plan)
 ```
 
 ### 3.2 ขั้นตอน Deploy ปกติ (Routine Deploy)

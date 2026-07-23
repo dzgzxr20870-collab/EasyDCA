@@ -23,8 +23,9 @@ cp .env.example .env
 |---|---|---|
 | `LINE_CHANNEL_SECRET` | ✅ | Channel Secret สำหรับตรวจสอบ Webhook Signature ป้องกันคำขอปลอม ได้จาก LINE Developers Console |
 | `LINE_CHANNEL_ACCESS_TOKEN` | ✅ | Token สำหรับส่งข้อความกลับไปยังผู้ใช้ผ่าน LINE Messaging API ได้จาก LINE Developers Console |
-| `LINE_NOTIFY_TOKEN` | ✅ | Token สำหรับส่งแจ้งเตือนถึง Admin ผ่าน LINE Notify ใช้แจ้งเมื่อมีสลิปชำระเงินเข้า |
+| `LINE_NOTIFY_TOKEN` | ❌ | ⚠️ **LINE Notify ปิดบริการแล้ว ขอ Token ใหม่ไม่ได้** — ตัวแปรนี้เหลือไว้เผื่อ Legacy Config เท่านั้น ไม่ถูกใช้จริง ช่องทางแจ้งเตือน Admin ปัจจุบันคือ LINE Push ผ่าน `ADMIN_LINE_USER_IDS` ด้านล่าง (ดู [SECURITY.md § 9.4](./SECURITY.md) และ Infra ก่อน Beta — /health + Error Alert) |
 | `LIFF_ID` | ✅ | ID ของ LIFF App สำหรับ Login ด้วย LINE Account บน Web Dashboard |
+| `ADMIN_LINE_USER_IDS` | ❌ | `line_user_id` ของ Admin ที่รับ LINE Push แจ้งเตือน คั่นด้วย `,` ถ้าหลายคน — Reuse ตัวเดียวกันทั้งแจ้งคำขอชำระเงินเข้าใหม่ (payment.service) และ Critical Alert (`/health` ล่ม, Backup ล้มเหลว — healthAlert.service) ถ้าไม่ตั้งค่า จะไม่มีใครได้รับแจ้งเตือนเลย (Log ไว้เฉยๆ ไม่ Crash) |
 
 ---
 
@@ -74,14 +75,46 @@ cp .env.example .env
 
 ---
 
+## Nightly Backup (Cloudflare R2)
+
+ใช้โดย `backend/src/jobs/dbBackup.job.js` (รันบน Service `easydca-worker` เท่านั้น
+ตี 3 ทุกคืน Asia/Bangkok) — ถ้าไม่ตั้งค่าครบ Job จะข้ามรอบนั้นแล้ว Push แจ้ง Admin
+ผ่าน `ADMIN_LINE_USER_IDS` แทนที่จะ Crash Worker Process
+
+| Variable | จำเป็น | คำอธิบาย |
+|---|---|---|
+| `R2_ACCOUNT_ID` | ❌* | Cloudflare Account ID — Cloudflare Dashboard → R2 → Overview (ใช้ประกอบ Endpoint URL) |
+| `R2_ACCESS_KEY_ID` | ❌* | Access Key ID — สร้างที่ R2 → Manage API Tokens → Create API Token (ให้สิทธิ์ Object Read & Write เฉพาะ Bucket ที่ใช้เก็บ Backup) |
+| `R2_SECRET_ACCESS_KEY` | ❌* | Secret Access Key คู่กับ Access Key ID ด้านบน (แสดงครั้งเดียวตอนสร้าง Token — เก็บไว้ทันที) |
+| `R2_BUCKET_NAME` | ❌* | ชื่อ Bucket ที่สร้างไว้เก็บ Backup โดยเฉพาะ (แนะนำแยก Bucket จากการใช้งานอื่น) |
+| `BACKUP_RETENTION_DAYS` | ❌ | จำนวนวันเก็บ Backup ย้อนหลังก่อนลบทิ้งอัตโนมัติ (Default: `14`) |
+
+\* ทั้ง 4 ตัวต้องตั้งค่าครบพร้อมกันถึงจะเริ่ม Backup ได้จริง (Job เช็ค `isConfigured()`
+ก่อนทุกครั้ง) — `DATABASE_URL` (ในหมวด Supabase ด้านบน) ก็ต้องมีค่าด้วยเช่นกัน
+เพราะเป็น Connection String ที่ `pg_dump` ใช้เชื่อมต่อจริง
+
+⚠️ **ต้องมี Binary `pg_dump` บน Railway ด้วย** — ทั้ง Service `backend` และ
+`easydca-worker` ใช้ `backend/nixpacks.toml` ร่วมกัน (Root Directory เดียวกัน)
+ประกาศ `nixPkgs = ["...", "postgresql"]` เพื่อ **Extend** Package ที่ Nixpacks
+Node.js Provider Detect เองอยู่แล้ว (`nodejs`/`yarn` ฯลฯ) ไม่ใช่ Override ทับ —
+`"..."` เป็นส่วนบังคับ (ยืนยันจาก [Nixpacks Docs](https://nixpacks.com/docs/configuration/file));
+ถ้าลืม `"..."` Build จะพังทั้ง 2 Service เพราะขาด `nodejs` ไม่ใช่แค่ Backup ใช้
+ไม่ได้ — Syntax ตรวจสอบกับเอกสารทางการแล้ว แต่ยังไม่เคย Deploy จริงบน Railway
+ให้เห็นผลลัพธ์ปลายทาง (Build สำเร็จ + `pg_dump` เรียกได้จริง) ต้องตรวจสอบ Log
+Build + Worker หลัง Deploy รอบแรกที่มีการตั้งค่าตัวแปรครบ
+
+---
+
 ## ตัวอย่างไฟล์ `.env.example`
 
 ```env
 # ===== LINE =====
 LINE_CHANNEL_SECRET=your_line_channel_secret_here
 LINE_CHANNEL_ACCESS_TOKEN=your_line_channel_access_token_here
-LINE_NOTIFY_TOKEN=your_line_notify_token_here
+# LINE_NOTIFY_TOKEN — ปิดบริการแล้ว ไม่ต้องตั้งค่า (ดูตารางด้านบน)
 LIFF_ID=your_liff_id_here
+# ADMIN_LINE_USER_IDS — line_user_id ของ Admin คั่นด้วย ',' (แจ้งคำขอชำระเงิน + Critical Alert)
+ADMIN_LINE_USER_IDS=Uxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 # ===== Supabase =====
 SUPABASE_URL=https://xxxx.supabase.co
@@ -103,6 +136,13 @@ PORT=3000
 
 # ===== Claude API (Phase 4 only) =====
 # CLAUDE_API_KEY=your_claude_api_key_here
+
+# ===== Nightly Backup (Cloudflare R2) — easydca-worker Service เท่านั้น =====
+# R2_ACCOUNT_ID=your_cloudflare_account_id_here
+# R2_ACCESS_KEY_ID=your_r2_access_key_id_here
+# R2_SECRET_ACCESS_KEY=your_r2_secret_access_key_here
+# R2_BUCKET_NAME=easydca-db-backups
+# BACKUP_RETENTION_DAYS=14
 ```
 
 ---

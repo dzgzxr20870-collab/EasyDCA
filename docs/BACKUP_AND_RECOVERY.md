@@ -54,14 +54,32 @@
 
 ### 2.2 ที่เก็บสำรอง (Redundancy)
 
-- **External Storage สำรอง** — Export `pg_dump` และไฟล์สำคัญไปเก็บไว้ที่
-  ผู้ให้บริการ Cloud Storage อื่นที่แยกจาก Supabase โดยสิ้นเชิง (เช่น
-  Google Drive/Cloud Storage บัญชีแยกต่างหาก) เพื่อป้องกันกรณี Supabase
-  Project ทั้งหมดมีปัญหา (Account ถูกล็อค, บริการล่มระดับ Provider)
+- **External Storage สำรอง — Implemented (Infra ก่อน Beta):**
+  `backend/src/jobs/dbBackup.job.js` รัน `pg_dump` ทุกคืนตี 3 Asia/Bangkok
+  บน Service `easydca-worker` → บีบอัด (gzip) → อัปโหลดไปยัง **Cloudflare
+  R2** (S3-compatible, แยกจาก Supabase โดยสิ้นเชิง — เลือกเพราะ Free Tier
+  10GB + ไม่มีค่า Egress + Auth เป็น Access Key ตรงๆ ไม่ต้องพึ่ง OAuth) เพื่อ
+  ป้องกันกรณี Supabase Project ทั้งหมดมีปัญหา (Account ถูกล็อค, บริการล่ม
+  ระดับ Provider) — ดู Environment Variables ที่ต้องตั้งใน
+  [ENV_VARIABLES.md § Nightly Backup](./ENV_VARIABLES.md)
+- ⚠️ **ยังไม่เข้ารหัสไฟล์ Backup แยกต่างหาก** (Encrypted Archive) ก่อนอัปโหลด
+  ในรอบ Implement นี้ — พึ่ง Encryption at Rest ของ Cloudflare R2 เอง (Data
+  เข้ารหัสอยู่แล้วบน Storage ฝั่ง Provider) แต่ยังไม่มี Client-side
+  Encryption เพิ่มอีกชั้นตามที่ระบุไว้เดิมในเอกสารนี้ — ควรพิจารณาเพิ่มก่อน
+  Production จริงที่มีข้อมูลผู้ใช้จำนวนมาก (Bucket ตั้ง Private เท่านั้น
+  ไม่ Public Access เป็นการป้องกันชั้นแรกที่มีอยู่แล้ว)
+- **Retention:** เก็บ 14 วันล่าสุด (Default — Override ได้ผ่าน
+  `BACKUP_RETENTION_DAYS`) ลบของเก่ากว่านั้นทิ้งอัตโนมัติทุกรอบที่ Backup
+  สำเร็จ (`purgeOldBackups`)
+- **แจ้งเตือนถ้า Backup ล้มเหลว:** Push หา Admin ทันทีผ่านกลไกเดียวกับ
+  Critical Alert (§ 9.4 ใน [SECURITY.md](./SECURITY.md)) — ไม่ใช่แค่ Log เงียบๆ
 - ไฟล์ Backup ที่ Export ออกมาต้องเข้ารหัสก่อนเก็บ (Encrypted Archive)
-  เนื่องจากมีข้อมูลส่วนบุคคลของผู้ใช้อยู่ในนั้น
+  เนื่องจากมีข้อมูลส่วนบุคคลของผู้ใช้อยู่ในนั้น — ดูหมายเหตุด้านบน (ยังไม่
+  Implement ส่วนนี้)
 - **จำนวนชุดขั้นต่ำ:** เก็บอย่างน้อย 2 ชุดล่าสุดในที่เก็บสำรอง (คนละ
-  สถานที่จาก Supabase) เพื่อไม่ให้พึ่งพา Backup ชุดเดียว
+  สถานที่จาก Supabase) เพื่อไม่ให้พึ่งพา Backup ชุดเดียว — Retention 14 วัน
+  ด้านบนรับประกันข้อนี้อยู่แล้วตราบใดที่ Backup รันสำเร็จอย่างน้อย 2
+  ครั้งใน 14 วัน
 
 ---
 

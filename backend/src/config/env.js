@@ -116,4 +116,19 @@ module.exports = {
     premiumPriceMonthly: Number(process.env.PREMIUM_PRICE_MONTHLY || 59),
     premiumPriceYearly: Number(process.env.PREMIUM_PRICE_YEARLY || 590),
   },
+  // Nightly Backup (Infra ก่อน Beta) — Cloudflare R2 (S3-compatible, ไม่ผูก OAuth)
+  // ⚠️ ไม่บังคับใน REQUIRED_ENV_VARS — ถ้าไม่ตั้งค่า dbBackup.job จะ Alert Admin
+  // แล้วข้ามรอบนั้นไป (Fail Gracefully) ไม่ทำให้ Worker Process Crash
+  //   - R2_ACCOUNT_ID: จาก Cloudflare Dashboard → R2 → Overview (ส่วนหนึ่งของ Endpoint URL)
+  //   - R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY: สร้างที่ R2 → Manage API Tokens
+  //   - R2_BUCKET_NAME: ชื่อ Bucket ที่สร้างไว้เก็บ Backup โดยเฉพาะ
+  backup: {
+    r2AccountId: process.env.R2_ACCOUNT_ID || null,
+    r2AccessKeyId: process.env.R2_ACCESS_KEY_ID || null,
+    r2SecretAccessKey: process.env.R2_SECRET_ACCESS_KEY || null,
+    r2Bucket: process.env.R2_BUCKET_NAME || null,
+    // จำนวนวันที่เก็บ Backup ย้อนหลัง — Override ได้ถ้าต้องการ (Default 14 วัน
+    // อยู่กึ่งกลางช่วงแนะนำ 7-30 วันใน BACKUP_AND_RECOVERY.md § 1.4)
+    retentionDays: Number(process.env.BACKUP_RETENTION_DAYS || 14),
+  },
 };
