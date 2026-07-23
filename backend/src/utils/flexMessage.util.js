@@ -2323,6 +2323,12 @@ function ocrPostback(action, ocr) {
   if (ocr.currency === 'USD') p.set('cur', 'USD');
   // วันที่ส่งเฉพาะปุ่มยืนยัน (Path Postback ไม่ผ่าน Command Parser ที่ไม่รองรับวันที่)
   if (action === 'ocr_confirm' && ocr.dateIso) p.set('date', ocr.dateIso);
+  // แนบรูปสลิป (S8) — พก "token" ของไฟล์ที่อัปโหลดไว้แล้ว (รูปแบบ "{timestamp}.{ext}"
+  // ~18 ตัวอักษร) เฉพาะปุ่มยืนยัน เพราะเป็นจังหวะเดียวที่ Transaction ถูกสร้างจริง
+  // ⚠️ ไม่พก path เต็มที่มี userId นำหน้า — Postback data ผู้ใช้แก้ได้ ถ้าพก path เต็ม
+  // จะแก้ให้ชี้ไฟล์ของ User คนอื่นได้ ฝั่ง Handler จึงประกอบ path จาก user.id ที่
+  // Authenticate แล้วเสมอ (ดู storage.service.buildTransactionSlipPath)
+  if (action === 'ocr_confirm' && ocr.slipToken) p.set('slip', ocr.slipToken);
   return p.toString();
 }
 

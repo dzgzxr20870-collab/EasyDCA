@@ -30,6 +30,7 @@ jest.mock('../src/services/reportExport.service');
 jest.mock('../src/services/slipOcr.service');
 jest.mock('../src/services/mutualFund.service');
 jest.mock('../src/repositories/asset.repository');
+jest.mock('../src/repositories/transaction.repository');
 jest.mock('../src/repositories/lineWebhookEvent.repository');
 // Override เฉพาะค่าที่ Postback Premium/Dashboard ใช้ (adminIds/liff.id/publicBaseUrl)
 // ให้ Deterministic — คงค่าอื่นจาก config จริง (.env) ไว้
@@ -72,6 +73,7 @@ const reportExportService = require('../src/services/reportExport.service');
 const slipOcrService = require('../src/services/slipOcr.service');
 const mutualFundService = require('../src/services/mutualFund.service');
 const assetRepository = require('../src/repositories/asset.repository');
+const transactionRepository = require('../src/repositories/transaction.repository');
 const lineWebhookEventRepository = require('../src/repositories/lineWebhookEvent.repository');
 const entitlement = require('../src/services/entitlement.service');
 const commandParser = require('../src/services/commandParser.service');
@@ -2417,5 +2419,166 @@ describe('handleEvent — Fallback Quick Reply Menu (S8 R2 รอบ 1)', () => 
     expect(reply).toContain('พอต');
     expect(reply).toContain('กำไร BTC');
     expect(reply).toContain('นำเข้าพอร์ต');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// S8 — แนบรูปสลิป OCR เข้า Transaction
+// ═══════════════════════════════════════════════════════════════════════
+// การรับประกันหลัก: การแนบรูปเป็น Metadata แบบ Best-effort ล้วน — ห้ามมีทางใดที่
+// ทำให้ "การบันทึกธุรกรรม" ล้มเหลวหรือถูก Rollback เพราะเรื่องรูป
+describe('handleEvent — แนบรูปสลิป OCR (S8)', () => {
+  const PREMIUM_USER = {
+    ...FREE_USER,
+    plan: 'premium',
+    planExpiresAt: new Date(Date.now() + 30 * 86400000).toISOString(),
+  };
+  const VALID_TOKEN = '1750000000000.jpg';
+
+  function imageEvent(messageId = 'img-1') {
+    return {
+      type: 'message',
+      replyToken: 'reply-token-1',
+      source: { userId: 'U123' },
+      message: { type: 'image', id: messageId },
+    };
+  }
+
+  beforeEach(() => {
+    userRepository.findByLineUserId.mockResolvedValue(PREMIUM_USER);
+    entitlement.isPremiumActive.mockReturnValue(true);
+    // ไม่มีคำขอชำระเงินค้าง → รูปถูกตีความเป็น "สลิปสินทรัพย์" (เข้า Flow OCR)
+    // ไม่ใช่สลิปโอนเงิน Premium (ดูลำดับใน handleImage)
+    paymentService.findPendingByUserId.mockResolvedValue(null);
+    // buildTransactionSlipPath เป็น Pure Function — ให้ Mock ทำงานเหมือนของจริง
+    // (ประกอบ path จาก userId + token, คืน null ถ้า token ผิดรูป) เพื่อให้ Test
+    // ตรวจ Logic ความปลอดภัยของ Controller ได้จริง ไม่ใช่ตรวจ Mock ที่คืนค่าคงที่
+    storageService.buildTransactionSlipPath.mockImplementation((userId, token) =>
+      /^\d{10,}\.(jpg|png|webp|gif)$/.test(String(token)) ? `${userId}-${token}` : null
+    );
+  });
+
+  // ── ขั้นอัปโหลดตอน OCR อ่านรูป ────────────────────────────────────────
+  test('อัปโหลดสลิปสำเร็จ → ปุ่มยืนยันพก slip token ไปด้วย', async () => {
+    lineService.getMessageContent.mockResolvedValue({
+      buffer: Buffer.from('img'),
+      contentType: 'image/jpeg',
+    });
+    slipOcrService.extractSlip.mockResolvedValue({
+      symbol: 'BTC', side: 'buy', quantity: 0.01, pricePerUnit: 3400000,
+      amountThb: 34000, currency: 'THB', dateIso: '2026-07-18', confidence: 'high',
+    });
+    storageService.uploadTransactionSlip.mockResolvedValue({
+      path: `${PREMIUM_USER.id}-${VALID_TOKEN}`,
+      token: VALID_TOKEN,
+    });
+
+    await handleEvent(imageEvent());
+
+    expect(storageService.uploadTransactionSlip).toHaveBeenCalledWith(
+      PREMIUM_USER.id, expect.any(Buffer), 'image/jpeg'
+    );
+    expect(lastReplyText()).toContain(`slip=${VALID_TOKEN}`);
+  });
+
+  test('⚠️ อัปโหลดล้มเหลว (Storage ล่ม) → Flow OCR เดิมต้องไม่พัง ผู้ใช้ยังเห็นการ์ด Preview', async () => {
+    lineService.getMessageContent.mockResolvedValue({
+      buffer: Buffer.from('img'),
+      contentType: 'image/jpeg',
+    });
+    slipOcrService.extractSlip.mockResolvedValue({
+      symbol: 'BTC', side: 'buy', quantity: 0.01, pricePerUnit: 3400000,
+      amountThb: 34000, currency: 'THB', dateIso: null, confidence: 'high',
+    });
+    storageService.uploadTransactionSlip.mockRejectedValue(new Error('storage down'));
+
+    await handleEvent(imageEvent());
+
+    const reply = lastReplyText();
+    // ยังตอบการ์ด Preview ตามปกติ (ไม่ใช่การ์ด Error)
+    expect(reply).toContain('BTC');
+    expect(reply).toContain('ocr_confirm');
+    // แค่ไม่มี token แนบไปด้วยเท่านั้น
+    expect(reply).not.toContain('slip=');
+  });
+
+  // ── ขั้นยืนยัน (ocr_confirm) พก token ต่อเข้า pending ──────────────────
+  test('ocr_confirm พก slip token ที่ถูกต้อง → ส่งต่อเข้า createPending', async () => {
+    pendingService.createPending.mockResolvedValue({
+      id: 'p-1', commandType: 'buy', assetSymbol: 'BTC',
+      quantity: 0.01, pricePerUnit: 3400000, amountThb: 34000, priceSource: 'coingecko',
+    });
+
+    await handleEvent(
+      postbackEvent(`action=ocr_confirm&sym=BTC&side=buy&qty=0.01&price=3400000&slip=${VALID_TOKEN}`)
+    );
+
+    expect(pendingService.createPending).toHaveBeenCalledWith(
+      PREMIUM_USER.id,
+      expect.objectContaining({ params: expect.objectContaining({ slipToken: VALID_TOKEN }) }),
+      expect.anything()
+    );
+  });
+
+  test('🔒 ocr_confirm ที่ token ถูกแก้เป็นรูปแบบมั่ว (Path Traversal) → ไม่ส่งต่อเข้า DB', async () => {
+    pendingService.createPending.mockResolvedValue({
+      id: 'p-1', commandType: 'buy', assetSymbol: 'BTC',
+      quantity: 0.01, pricePerUnit: 3400000, amountThb: 34000, priceSource: 'coingecko',
+    });
+
+    await handleEvent(
+      postbackEvent('action=ocr_confirm&sym=BTC&side=buy&qty=0.01&price=3400000&slip=../../reports/secret.pdf')
+    );
+
+    const params = pendingService.createPending.mock.calls[0][1].params;
+    expect(params.slipToken).toBeUndefined();
+  });
+
+  // ── ขั้นบันทึกจริง (confirm) แนบ path เข้า transaction ─────────────────
+  test('confirm ที่ pending มี slipToken → แนบ path เข้า transaction ที่สร้างแล้ว', async () => {
+    pendingService.confirmPending.mockResolvedValue({
+      commandType: 'buy',
+      result: { transactionId: 'tx-99', symbol: 'BTC', quantity: 0.01, pricePerUnit: 3400000, amountThb: 34000 },
+      pending: { id: 'p-1', slipToken: VALID_TOKEN },
+    });
+    transactionRepository.attachSlipImagePath.mockResolvedValue({});
+
+    await handleEvent(postbackEvent('action=confirm&pendingId=p-1'));
+
+    expect(transactionRepository.attachSlipImagePath).toHaveBeenCalledWith(
+      'tx-99',
+      `${PREMIUM_USER.id}-${VALID_TOKEN}`
+    );
+    // ผู้ใช้ยังได้ข้อความยืนยันสำเร็จตามปกติ
+    expect(lastReplyText()).toContain('BTC');
+  });
+
+  test('⚠️ แนบ path ล้มเหลว (DB ล่ม) → ธุรกรรมยังสำเร็จ ผู้ใช้เห็นข้อความยืนยัน ไม่ใช่ Error', async () => {
+    pendingService.confirmPending.mockResolvedValue({
+      commandType: 'buy',
+      result: { transactionId: 'tx-99', symbol: 'BTC', quantity: 0.01, pricePerUnit: 3400000, amountThb: 34000 },
+      pending: { id: 'p-1', slipToken: VALID_TOKEN },
+    });
+    transactionRepository.attachSlipImagePath.mockRejectedValue(new Error('db down'));
+
+    await handleEvent(postbackEvent('action=confirm&pendingId=p-1'));
+
+    const reply = lastReplyText();
+    // ⚠️ หัวใจของ Fail Isolation: ห้ามตอบ Error ทั้งที่ธุรกรรมบันทึกสำเร็จไปแล้ว
+    expect(reply).not.toContain('เกิดข้อผิดพลาด');
+    expect(reply).toContain('BTC');
+  });
+
+  test('Regression: confirm ธุรกรรมปกติ (ไม่มีสลิป) → ไม่เรียก attach เลย ทำงานเหมือนเดิม', async () => {
+    pendingService.confirmPending.mockResolvedValue({
+      commandType: 'buy',
+      result: { transactionId: 'tx-100', symbol: 'ETH', quantity: 1, pricePerUnit: 120000, amountThb: 120000 },
+      pending: { id: 'p-2', slipToken: null },
+    });
+
+    await handleEvent(postbackEvent('action=confirm&pendingId=p-2'));
+
+    expect(transactionRepository.attachSlipImagePath).not.toHaveBeenCalled();
+    expect(lastReplyText()).toContain('ETH');
   });
 });

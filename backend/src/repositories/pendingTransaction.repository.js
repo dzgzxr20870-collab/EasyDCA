@@ -26,6 +26,10 @@ function toPending(row) {
     // กองทุนรวมไทย (Round 7) — พก Class ผ่าน Flow Preview→Confirm (nullable)
     projId: row.proj_id ?? null,
     fundClassName: row.fund_class_name ?? null,
+    // แนบรูปสลิป (S8 — migration 021) — token ของไฟล์ที่อัปโหลดไว้ตอน AI OCR อ่าน
+    // พกข้ามขั้น Preview→Confirm เพื่อให้แนบเข้า transaction ตอนบันทึกจริงได้
+    // (null สำหรับธุรกรรมที่ไม่ได้มาจากสลิป ซึ่งเป็นกรณีส่วนใหญ่)
+    slipToken: row.slip_token ?? null,
     status: row.status,
     expiresAt: row.expires_at,
     resolvedAt: row.resolved_at,
@@ -58,6 +62,8 @@ async function create(data) {
       // เดียวกัน (Phase 3 Round 6) เพื่อให้ Postback ยืนยัน/ยกเลิกทั้งก้อนใช้ค่านี้
       // ค้นหา ไม่ส่งมา (undefined) = NULL ตามปกติของ Flow ซื้อ/ขายทีละรายการเดิม
       batch_id: data.batchId ?? null,
+      // แนบรูปสลิป (S8) — nullable, มีค่าเฉพาะ Pending ที่มาจาก AI Slip OCR
+      slip_token: data.slipToken ?? null,
       // กองทุนรวมไทย (Round 7 — migration 010) — nullable สำหรับสินทรัพย์อื่น
       proj_id: data.projId ?? null,
       fund_class_name: data.fundClassName ?? null,

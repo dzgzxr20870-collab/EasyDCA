@@ -14,6 +14,7 @@ const entitlement = require('../services/entitlement.service');
 const symbolRegistry = require('../services/symbolRegistry.service');
 const mutualFundService = require('../services/mutualFund.service');
 const assetRepository = require('../repositories/asset.repository');
+const transactionRepository = require('../repositories/transaction.repository');
 const lineWebhookEventRepository = require('../repositories/lineWebhookEvent.repository');
 const lineService = require('../services/line.service');
 const storageService = require('../services/storage.service');
@@ -333,6 +334,35 @@ async function routeCommand(user, parsed) {
 }
 
 
+// แนบรูปสลิปเข้า Transaction ที่ "บันทึกสำเร็จแล้ว" (S8) — Best-effort เต็มรูปแบบ
+//
+// ⚠️ ห้าม throw ออกจากฟังก์ชันนี้เด็ดขาด: ถูกเรียกหลัง transaction ถูก Commit ลง DB
+// จริงแล้ว ถ้าปล่อย Error ทะลุขึ้นไป replyWithError จะตอบผู้ใช้ว่า "ผิดพลาด" ทั้งที่
+// ธุรกรรมบันทึกสำเร็จไปแล้ว (ผู้ใช้อาจกดซ้ำ → เข้าใจผิดว่ายังไม่บันทึก) — เหตุผล
+// เดียวกับที่ pendingTransaction.service Swallow Error ของ attachTransaction
+//
+// ไม่ทำอะไรเลยเมื่อ pending ไม่มี slipToken (ธุรกรรมทั่วไปที่ไม่ได้มาจากสลิป)
+async function attachSlipBestEffort(userId, pending, result) {
+  const token = pending?.slipToken;
+  if (!token || !result?.transactionId) return;
+
+  try {
+    // ประกอบ path จาก userId ที่ Authenticate แล้ว (ไม่ใช่ค่าที่มาจาก Postback)
+    const path = storageService.buildTransactionSlipPath(userId, token);
+    if (!path) {
+      console.error(`[webhook] invalid slip token on pending ${pending.id}; skip attach`);
+      return;
+    }
+    await transactionRepository.attachSlipImagePath(result.transactionId, path);
+  } catch (err) {
+    console.error(
+      `[webhook] attachSlipImagePath failed AFTER commit ` +
+        `(transactionId=${result.transactionId}): ${err.message} — transaction is already ` +
+        'persisted; slip will simply be missing from history'
+    );
+  }
+}
+
 // ประมวลผล Postback จากปุ่มในข้อความ Preview (ยืนยัน/แก้ไข/ยกเลิก)
 // data รูปแบบ "action=<confirm|edit|cancel>&pendingId=<uuid>" (flexMessage.util)
 async function routePostback(user, data) {
@@ -342,10 +372,17 @@ async function routePostback(user, data) {
 
   switch (action) {
     case 'confirm': {
-      const { commandType, result } = await pendingService.confirmPending(pendingId, {
+      const { commandType, result, pending } = await pendingService.confirmPending(pendingId, {
         plan: user.plan,
         planExpiresAt: user.planExpiresAt,
       });
+
+      // แนบรูปสลิป (S8) — ทำ "หลัง" ธุรกรรมถูกบันทึกสำเร็จแล้วเสมอ และ Fail Isolated
+      // เต็มรูปแบบ: ถ้าแนบไม่สำเร็จ (Storage/DB ล่ม) ห้าม Rollback ธุรกรรมที่บันทึกไป
+      // แล้วเด็ดขาด — ผู้ใช้ต้องเห็นว่าบันทึกสำเร็จตามปกติ แค่ไม่มีรูปแนบเท่านั้น
+      // (Pattern เดียวกับ attachTransaction ใน pendingTransaction.service ที่ Swallow
+      // Error ไว้ด้วยเหตุผลเดียวกัน)
+      await attachSlipBestEffort(user.id, pending, result);
       // ⚠️ ถ้ามาถึงบรรทัดนี้ = Transaction จริงถูกบันทึกลง DB สำเร็จแล้ว
       // (pendingService.confirmPending คืน result ก็ต่อเมื่อ Commit สำเร็จ) —
       // กรณี attachTransaction พังทีหลัง Service จะ Swallow ไว้แล้ว (ดู Comment
@@ -687,6 +724,14 @@ async function routePostback(user, data) {
       if (params.get('cur') === 'USD') commandParams.currency = 'USD';
       const dateIso = params.get('date');
       if (dateIso) commandParams.date = dateIso; // ISO 'YYYY-MM-DD' (createPending ใช้ตรงๆ)
+      // แนบรูปสลิป (S8) — พก token ต่อไปให้ pending row เก็บไว้ เพื่อให้ขั้น 'confirm'
+      // (คนละ Postback) แนบรูปเข้า transaction ที่สร้างเสร็จแล้วได้ + ตั้ง source='slip_ai'
+      // Validate รูปแบบ token ที่นี่เลย (buildTransactionSlipPath คืน null ถ้าผิดรูป)
+      // เพื่อไม่ให้ค่าที่ผู้ใช้แก้มามั่วๆ ถูกเก็บลง DB
+      const slipToken = params.get('slip');
+      if (slipToken && storageService.buildTransactionSlipPath(user.id, slipToken)) {
+        commandParams.slipToken = slipToken;
+      }
 
       // Manual Quantity Fallback (Round 10-B) — สลิป Amount-only ของสินทรัพย์ที่ไม่ใช่
       // Crypto: ถ้ายืนยันตรงๆ แล้วระบบหาราคาตลาดไม่ได้ (ไม่มี Price Feed / SEC ไม่ config /
@@ -900,6 +945,18 @@ async function handlePaymentSlipImage(event, pending) {
   await lineService.replyMessage(event.replyToken, flexMessage.buildSlipReceivedMessage());
 }
 
+// อัปโหลดรูปสลิปธุรกรรมขึ้น Storage แบบ Best-effort (S8) — คืน token ถ้าสำเร็จ,
+// null ถ้าล้มเหลว (ไม่ throw) เพื่อให้ Flow OCR เดิมทำงานต่อได้เสมอแม้ Storage ล่ม
+async function uploadOcrSlipBestEffort(userId, buffer, contentType) {
+  try {
+    const { token } = await storageService.uploadTransactionSlip(userId, buffer, contentType);
+    return token;
+  } catch (err) {
+    console.error(`[webhook] transaction slip upload failed (non-fatal): ${err.message}`);
+    return null;
+  }
+}
+
 // ── (Round 9) สลิปซื้อ/ขายสินทรัพย์ — AI OCR (Premium เท่านั้น) ──────────────
 // ไม่ใช่ Premium → ตอบชวนอัพเกรดทันที (ไม่เรียก Claude — ประหยัดค่าใช้จ่าย)
 // Premium → ดึงรูป → slipOcr.extractSlip (มี Rate Limit + Quota + เรียก Claude Vision)
@@ -920,6 +977,14 @@ async function handleAssetSlipImage(event, user) {
     // Manual Quantity Fallback (Round 10-B) — เติมชนิดสินทรัพย์ให้ Preview ตัดสินใจว่าจะ
     // เสนอปุ่ม "กรอกจำนวนหุ้น" ไหม (Amount-only + ไม่ใช่ Crypto = ไม่มี Price Feed อัตโนมัติ)
     ocr.assetType = symbolRegistry.lookupType(ocr.symbol);
+    // แนบรูปสลิป (S8) — ต้องอัปโหลด "ตรงนี้" เท่านั้น เพราะ Flow OCR เป็น Stateless:
+    // ตอนผู้ใช้กดยืนยันเป็นคนละ Webhook Event ซึ่ง buffer หายไปแล้ว จึงเก็บไฟล์ไว้ก่อน
+    // แล้วพก token สั้นๆ ไปกับ Postback ให้ขั้นยืนยันประกอบ path กลับเอง
+    //
+    // ⚠️ Fail Isolated: อัปโหลดไม่สำเร็จ (Storage ล่ม/ไฟล์ใหญ่เกิน/MIME ไม่รองรับ)
+    // ต้องไม่ทำให้ Flow OCR เดิมพัง — ผู้ใช้ยังเห็นการ์ด Preview และบันทึกธุรกรรมได้
+    // ตามปกติ แค่ไม่มีรูปแนบเท่านั้น (Log ไว้พอ)
+    ocr.slipToken = await uploadOcrSlipBestEffort(user.id, buffer, contentType);
     await lineService.replyMessage(event.replyToken, flexMessage.buildOcrPreviewMessage(ocr));
   } catch (err) {
     // getMessageContent (ไม่มี code) → OCR_FAILED | SlipOcrError → code เฉพาะ

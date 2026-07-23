@@ -18,6 +18,10 @@ function toTransaction(row) {
     date: row.date,
     note: row.note,
     source: row.source,
+    // Storage path ของรูปสลิปต้นฉบับที่ AI OCR อ่าน (migration 021) — null สำหรับ
+    // ธุรกรรมที่ไม่ได้มาจากสลิป (พิมพ์เอง/Web/Bulk Import) ซึ่งเป็นกรณีส่วนใหญ่
+    // ⚠️ เป็น "path" ไม่ใช่ URL — Bucket เป็น Private ต้อง Sign ก่อนใช้เปิดจริง
+    slipImagePath: row.slip_image_path ?? null,
     createdAt: row.created_at,
   };
 }
@@ -160,6 +164,51 @@ async function findAllByAsset(assetId) {
   return data.map(toTransaction);
 }
 
+// แนบ Storage path ของรูปสลิปเข้ากับ Transaction ที่ "สร้างสำเร็จไปแล้ว" (S8)
+// — Pattern เดียวกับ payment.repository.updateSlipImageUrl (แนบหลักฐานทีหลัง
+// แบบ Best-effort ไม่ใช่ส่วนหนึ่งของการสร้างรายการ)
+//
+// ⚠️ อัปเดตเฉพาะคอลัมน์ Metadata นี้คอลัมน์เดียว ห้ามแตะตัวเลขการเงินใดๆ —
+// transactions เป็น Immutable Ledger (DATABASE.md § กฎห้ามลบ/แก้ย้อนหลัง)
+// การเขียนนี้เป็นข้อยกเว้นที่ปลอดภัยเพราะเป็นการ "เติมหลักฐานประกอบ" ที่เดิมเป็น
+// NULL ไม่ได้เปลี่ยนความหมายทางบัญชีของแถวเลย
+//
+// คืน Transaction ที่อัปเดตแล้ว | throw ถ้า DB error (Caller ห่อ try/catch เพื่อให้
+// การแนบรูปล้มเหลวไม่ทำให้ธุรกรรมที่บันทึกสำเร็จแล้วพังตาม)
+async function attachSlipImagePath(id, slipImagePath) {
+  const { data, error } = await supabaseAdmin
+    .from('transactions')
+    .update({ slip_image_path: slipImagePath })
+    .eq('id', id)
+    .select('*')
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Failed to attach slip image path to transaction ${id}: ${error.message}`);
+  }
+
+  return toTransaction(data);
+}
+
+// ดึง Transaction แถวเดียวโดยตรวจความเป็นเจ้าของไปพร้อมกัน (userId ต้องตรง) —
+// ใช้โดย Endpoint เปิดรูปสลิปเพื่อกันผู้ใช้ขอ Signed URL ของสลิปคนอื่นด้วยการเดา
+// transaction id คืน null ถ้าไม่พบ "หรือ" ไม่ใช่ของ User คนนั้น (แยกไม่ออกโดยเจตนา
+// — ไม่บอกใบ้ว่า id นั้นมีอยู่จริงไหม)
+async function findByIdForUser(id, userId) {
+  const { data, error } = await supabaseAdmin
+    .from('transactions')
+    .select('*')
+    .eq('id', id)
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Failed to find transaction ${id}: ${error.message}`);
+  }
+
+  return toTransaction(data);
+}
+
 module.exports = {
   create,
   findRecentByUser,
@@ -167,4 +216,6 @@ module.exports = {
   findByUserAndDateRange,
   findAllByAsset,
   findAllUserIdsWithTransactions,
+  attachSlipImagePath,
+  findByIdForUser,
 };

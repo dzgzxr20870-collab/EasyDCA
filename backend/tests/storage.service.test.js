@@ -186,3 +186,80 @@ describe('deleteAllSlipsForUser', () => {
     await expect(storageService.deleteAllSlipsForUser(['pay-1'])).rejects.toThrow('remove failed');
   });
 });
+
+// PDPA Self-Service Erasure (userErasure.service) — ลบรูปสลิปธุรกรรมทั้งหมดของ User
+// ออกจาก Bucket transaction-slips จริง (List by Prefix "{userId}-" ครอบคลุมไฟล์ Orphan
+// ที่ OCR อัปโหลดไว้ก่อนผู้ใช้ยืนยันด้วย ต่างจากการ Query slip_image_path ที่จะพลาดไป)
+describe('deleteAllTransactionSlipsForUser', () => {
+  const USER_ID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+  const OTHER_ID = 'ffffffff-1111-2222-3333-444444444444';
+
+  test('List Bucket (search=userId) แล้ว Filter เฉพาะไฟล์ที่ขึ้นต้นด้วย Prefix "{userId}-"', async () => {
+    __storageBucket.list.mockResolvedValue({
+      data: [
+        { name: `${USER_ID}-1000.jpg` },
+        { name: `${USER_ID}-2000.png` }, // Orphan (ยังไม่ผูก transaction) ก็ต้องลบ
+        { name: `${OTHER_ID}-3000.jpg` }, // ของ User อื่น — ไม่ควรถูกลบ (กันหลุดมากับ search)
+      ],
+      error: null,
+    });
+    __storageBucket.remove.mockResolvedValue({ data: [], error: null });
+
+    const count = await storageService.deleteAllTransactionSlipsForUser(USER_ID);
+
+    expect(supabaseAdmin.storage.from).toHaveBeenCalledWith('transaction-slips');
+    expect(__storageBucket.list).toHaveBeenCalledWith('', { search: USER_ID });
+    expect(__storageBucket.remove).toHaveBeenCalledWith([
+      `${USER_ID}-1000.jpg`,
+      `${USER_ID}-2000.png`,
+    ]);
+    expect(count).toBe(2);
+  });
+
+  test('userId ว่าง/undefined → คืน 0 ไม่เรียก List/Remove เลย', async () => {
+    const count = await storageService.deleteAllTransactionSlipsForUser(undefined);
+
+    expect(count).toBe(0);
+    expect(__storageBucket.list).not.toHaveBeenCalled();
+    expect(__storageBucket.remove).not.toHaveBeenCalled();
+  });
+
+  test('ไม่มีไฟล์ตรง Prefix เลยใน Bucket → คืน 0 ไม่เรียก Remove (User ไม่เคยส่งสลิปธุรกรรม)', async () => {
+    __storageBucket.list.mockResolvedValue({
+      data: [{ name: `${OTHER_ID}-9999.jpg` }],
+      error: null,
+    });
+
+    const count = await storageService.deleteAllTransactionSlipsForUser(USER_ID);
+
+    expect(count).toBe(0);
+    expect(__storageBucket.remove).not.toHaveBeenCalled();
+  });
+
+  test('List คืน data ว่าง (null) → คืน 0 ไม่ throw', async () => {
+    __storageBucket.list.mockResolvedValue({ data: null, error: null });
+
+    const count = await storageService.deleteAllTransactionSlipsForUser(USER_ID);
+
+    expect(count).toBe(0);
+    expect(__storageBucket.remove).not.toHaveBeenCalled();
+  });
+
+  test('List ล้มเหลว (error) → throw (ให้ Caller Isolate เอง)', async () => {
+    __storageBucket.list.mockResolvedValue({ data: null, error: { message: 'list failed' } });
+    await expect(storageService.deleteAllTransactionSlipsForUser(USER_ID)).rejects.toThrow(
+      'list failed'
+    );
+  });
+
+  test('Remove ล้มเหลว (error) → throw', async () => {
+    __storageBucket.list.mockResolvedValue({
+      data: [{ name: `${USER_ID}-1000.jpg` }],
+      error: null,
+    });
+    __storageBucket.remove.mockResolvedValue({ data: null, error: { message: 'remove failed' } });
+    await expect(storageService.deleteAllTransactionSlipsForUser(USER_ID)).rejects.toThrow(
+      'remove failed'
+    );
+  });
+});

@@ -13,6 +13,8 @@ const USER_ID = 'user-1';
 
 beforeEach(() => {
   jest.clearAllMocks();
+  // Default: การลบสลิปธุรกรรมสำเร็จโดยไม่มีไฟล์ (Test ที่สนใจเรื่องนี้ Override เอง)
+  storageService.deleteAllTransactionSlipsForUser.mockResolvedValue(0);
 });
 
 describe('eraseUserData', () => {
@@ -25,6 +27,10 @@ describe('eraseUserData', () => {
     storageService.deleteAllSlipsForUser.mockImplementation(async () => {
       callOrder.push('deleteAllSlipsForUser');
       return 3;
+    });
+    storageService.deleteAllTransactionSlipsForUser.mockImplementation(async () => {
+      callOrder.push('deleteAllTransactionSlipsForUser');
+      return 2;
     });
     userRepository.anonymize.mockImplementation(async () => {
       callOrder.push('anonymize');
@@ -39,19 +45,25 @@ describe('eraseUserData', () => {
 
     expect(paymentRepository.findAllByUserId).toHaveBeenCalledWith(USER_ID);
     expect(storageService.deleteAllSlipsForUser).toHaveBeenCalledWith(['pay-1', 'pay-2']);
+    expect(storageService.deleteAllTransactionSlipsForUser).toHaveBeenCalledWith(USER_ID);
     expect(userRepository.anonymize).toHaveBeenCalledWith(USER_ID);
     expect(erasureLogRepository.create).toHaveBeenCalledWith({
       userId: USER_ID,
       hadPendingPayment: true,
     });
-    // ลำดับต้องเป็น: หา Payment ก่อน → ลบสลิป → Anonymize → บันทึก Log (ไม่ใช่สลับกัน)
+    // ลำดับต้องเป็น: หา Payment → ลบสลิปชำระเงิน → ลบสลิปธุรกรรม → Anonymize → Log
     expect(callOrder).toEqual([
       'findAllByUserId',
       'deleteAllSlipsForUser',
+      'deleteAllTransactionSlipsForUser',
       'anonymize',
       'erasureLog.create',
     ]);
-    expect(result).toEqual({ paymentCount: 2, deletedSlipCount: 3 });
+    expect(result).toEqual({
+      paymentCount: 2,
+      deletedSlipCount: 3,
+      deletedTransactionSlipCount: 2,
+    });
   });
 
   test('ไม่มี Payment เลย → ยังคง Anonymize + บันทึก Log ได้ตามปกติ (deleteAllSlipsForUser รับ Array ว่าง)', async () => {
@@ -67,7 +79,11 @@ describe('eraseUserData', () => {
       userId: USER_ID,
       hadPendingPayment: false,
     });
-    expect(result).toEqual({ paymentCount: 0, deletedSlipCount: 0 });
+    expect(result).toEqual({
+      paymentCount: 0,
+      deletedSlipCount: 0,
+      deletedTransactionSlipCount: 0,
+    });
   });
 
   test('hadPendingPayment default เป็น false ถ้าไม่ส่ง Option มาเลย', async () => {
@@ -95,6 +111,7 @@ describe('eraseUserData', () => {
     await expect(userErasureService.eraseUserData(USER_ID)).resolves.toEqual({
       paymentCount: 0,
       deletedSlipCount: 0,
+      deletedTransactionSlipCount: 0,
     });
     expect(userRepository.anonymize).toHaveBeenCalledWith(USER_ID);
   });
@@ -105,6 +122,32 @@ describe('eraseUserData', () => {
 
     await expect(userErasureService.eraseUserData(USER_ID)).rejects.toThrow('storage down');
     expect(userRepository.anonymize).not.toHaveBeenCalled();
+  });
+
+  // สลิปธุรกรรม (S8) ต้อง Error Isolated — ต่างจากสลิปชำระเงินด้านบนที่ Throw หยุด Flow
+  test('deleteAllTransactionSlipsForUser ล้มเหลว → ไม่ Throw, ยัง Anonymize + บันทึก Log ต่อ (Error Isolated)', async () => {
+    paymentRepository.findAllByUserId.mockResolvedValue([]);
+    storageService.deleteAllSlipsForUser.mockResolvedValue(0);
+    storageService.deleteAllTransactionSlipsForUser.mockRejectedValue(
+      new Error('transaction bucket down')
+    );
+    userRepository.anonymize.mockResolvedValue({ id: USER_ID });
+    erasureLogRepository.create.mockResolvedValue({ id: 'log-1' });
+
+    const result = await userErasureService.eraseUserData(USER_ID, { hadPendingPayment: false });
+
+    // Flow ส่วนอื่นต้องทำงานต่อครบ แม้ลบสลิปธุรกรรมพัง
+    expect(userRepository.anonymize).toHaveBeenCalledWith(USER_ID);
+    expect(erasureLogRepository.create).toHaveBeenCalledWith({
+      userId: USER_ID,
+      hadPendingPayment: false,
+    });
+    // ลบไม่สำเร็จ → นับเป็น 0 (ไม่ใช่ค่าที่ Throw)
+    expect(result).toEqual({
+      paymentCount: 0,
+      deletedSlipCount: 0,
+      deletedTransactionSlipCount: 0,
+    });
   });
 
   test('userRepository.anonymize ล้มเหลว → Throw ทันที ไม่บันทึก Log', async () => {

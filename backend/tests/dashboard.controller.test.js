@@ -3,13 +3,21 @@ jest.mock('../src/services/profit.service');
 jest.mock('../src/services/fxRate.service');
 jest.mock('../src/repositories/transaction.repository');
 jest.mock('../src/repositories/user.repository');
+jest.mock('../src/services/storage.service');
 
 const portfolioService = require('../src/services/portfolio.service');
 const profitService = require('../src/services/profit.service');
 const fxRateService = require('../src/services/fxRate.service');
 const transactionRepository = require('../src/repositories/transaction.repository');
 const userRepository = require('../src/repositories/user.repository');
-const { getPortfolio, getHistory, getProfit, getMe } = require('../src/controllers/dashboard.controller');
+const storageService = require('../src/services/storage.service');
+const {
+  getPortfolio,
+  getHistory,
+  getProfit,
+  getMe,
+  getTransactionSlip,
+} = require('../src/controllers/dashboard.controller');
 
 // profit.service เป็น Automock — ต้องประกาบ ProfitServiceError เองเพราะ
 // jest.mock automock ทำให้ Class เดิมหายไป (Pattern เดียวกับที่ต้องระวังใน
@@ -148,6 +156,14 @@ describe('getHistory', () => {
     { id: 'tx-3', symbol: 'BTC', type: 'sell', amountThb: 200, date: '2026-07-01' },
   ];
 
+  // S8 — getHistory เติมธง hasSlip (Additive) ให้ทุกแถว และตัด slipImagePath ออกจาก
+  // Response (ไม่เปิดเผยโครงสร้าง Storage ให้ Client) — Helper นี้ทำให้ Test เดิม
+  // ยังตรวจ "ข้อมูลธุรกรรมที่คืนออกไป" ได้เหมือนเดิมโดยไม่ต้องเขียน field ซ้ำทุกที่
+  const withSlip = (txs) => txs.map(({ slipImagePath, ...tx }) => ({
+    ...tx,
+    hasSlip: Boolean(slipImagePath),
+  }));
+
   test('สำเร็จ (ไม่มี Query Param) → 200 { transactions } ทั้งหมด', async () => {
     transactionRepository.findAllByUser.mockResolvedValue(ALL_TX);
 
@@ -157,7 +173,7 @@ describe('getHistory', () => {
 
     expect(transactionRepository.findAllByUser).toHaveBeenCalledWith(USER_ID);
     expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith({ transactions: ALL_TX });
+    expect(res.json).toHaveBeenCalledWith({ transactions: withSlip(ALL_TX) });
   });
 
   test('Filter ด้วย ?symbol=BTC → คืนเฉพาะรายการ BTC', async () => {
@@ -168,7 +184,7 @@ describe('getHistory', () => {
     await getHistory(req, res);
 
     expect(res.json).toHaveBeenCalledWith({
-      transactions: [ALL_TX[0], ALL_TX[2]],
+      transactions: withSlip([ALL_TX[0], ALL_TX[2]]),
     });
   });
 
@@ -179,7 +195,26 @@ describe('getHistory', () => {
     const res = mockRes();
     await getHistory(req, res);
 
-    expect(res.json).toHaveBeenCalledWith({ transactions: [ALL_TX[0]] });
+    expect(res.json).toHaveBeenCalledWith({ transactions: withSlip([ALL_TX[0]]) });
+  });
+
+  // ── แนบรูปสลิป (S8) ────────────────────────────────────────────────────
+  test('แถวที่มี slipImagePath → hasSlip:true และ "ไม่" ส่ง path ออกไปให้ Client', async () => {
+    transactionRepository.findAllByUser.mockResolvedValue([
+      { ...ALL_TX[0], slipImagePath: 'user-1-1750000000000.jpg' },
+      ALL_TX[1],
+    ]);
+
+    const req = mockReq();
+    const res = mockRes();
+    await getHistory(req, res);
+
+    const body = res.json.mock.calls[0][0];
+    expect(body.transactions[0].hasSlip).toBe(true);
+    expect(body.transactions[1].hasSlip).toBe(false);
+    // Path ต้องไม่รั่วออกไป (Bucket เป็น Private — เปิดผ่าน Endpoint เฉพาะเท่านั้น)
+    expect(body.transactions[0]).not.toHaveProperty('slipImagePath');
+    expect(JSON.stringify(body)).not.toContain('1750000000000.jpg');
   });
 
   test('Error ไม่คาดคิด → 500 INTERNAL_ERROR', async () => {
@@ -358,5 +393,69 @@ describe('getMe', () => {
 
     expect(res.status).toHaveBeenCalledWith(500);
     expect(res.json).toHaveBeenCalledWith({ error: 'INTERNAL_ERROR' });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// getTransactionSlip — เปิดรูปสลิปต้นฉบับ (S8)
+// ═══════════════════════════════════════════════════════════════════════
+describe('getTransactionSlip', () => {
+  const TX_WITH_SLIP = {
+    id: 'tx-1',
+    userId: USER_ID,
+    slipImagePath: 'user-uuid-1-1750000000000.jpg',
+  };
+
+  test('มีสลิป + เป็นเจ้าของ → 200 { signedUrl } (Sign สดตอนกด ไม่เก็บ URL ไว้ใน DB)', async () => {
+    transactionRepository.findByIdForUser.mockResolvedValue(TX_WITH_SLIP);
+    storageService.createTransactionSlipSignedUrl.mockResolvedValue('https://signed.example/slip.jpg?token=abc');
+    storageService.TRANSACTION_SLIP_SIGNED_URL_TTL_SECONDS = 300;
+
+    const req = mockReq({ params: { id: 'tx-1' } });
+    const res = mockRes();
+    await getTransactionSlip(req, res);
+
+    // ตรวจความเป็นเจ้าของที่ชั้น Query (ส่ง userId ไปกรองด้วย ไม่ใช่ดึงมาแล้วเทียบทีหลัง)
+    expect(transactionRepository.findByIdForUser).toHaveBeenCalledWith('tx-1', USER_ID);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({
+      signedUrl: 'https://signed.example/slip.jpg?token=abc',
+      expiresInSeconds: 300,
+    });
+  });
+
+  test('ธุรกรรมของคนอื่น (findByIdForUser คืน null) → 404 ไม่บอกใบ้ว่า id มีจริง + ไม่ Sign', async () => {
+    transactionRepository.findByIdForUser.mockResolvedValue(null);
+
+    const req = mockReq({ params: { id: 'tx-ของคนอื่น' } });
+    const res = mockRes();
+    await getTransactionSlip(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith({ error: 'SLIP_NOT_FOUND' });
+    expect(storageService.createTransactionSlipSignedUrl).not.toHaveBeenCalled();
+  });
+
+  test('ธุรกรรมมีจริงแต่ไม่มีสลิป (พิมพ์เอง) → 404 SLIP_NOT_FOUND ไม่ Sign', async () => {
+    transactionRepository.findByIdForUser.mockResolvedValue({ id: 'tx-2', slipImagePath: null });
+
+    const req = mockReq({ params: { id: 'tx-2' } });
+    const res = mockRes();
+    await getTransactionSlip(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(storageService.createTransactionSlipSignedUrl).not.toHaveBeenCalled();
+  });
+
+  test('มีสลิปแต่ Sign ไม่สำเร็จ (ไฟล์หาย/Storage ล่ม) → 502 (แยกจาก 404 "ไม่มีสลิป")', async () => {
+    transactionRepository.findByIdForUser.mockResolvedValue(TX_WITH_SLIP);
+    storageService.createTransactionSlipSignedUrl.mockResolvedValue(null);
+
+    const req = mockReq({ params: { id: 'tx-1' } });
+    const res = mockRes();
+    await getTransactionSlip(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(502);
+    expect(res.json).toHaveBeenCalledWith({ error: 'SLIP_UNAVAILABLE' });
   });
 });

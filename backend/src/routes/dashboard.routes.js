@@ -18,5 +18,8 @@ router.get('/portfolio', dashboardController.getPortfolio);
 router.get('/history', dashboardController.getHistory);
 router.get('/profit/:symbol', dashboardController.getProfit);
 router.get('/me', dashboardController.getMe);
+// S8 — เปิดรูปสลิปต้นฉบับของธุรกรรม (302 → Signed URL อายุสั้น) ผ่าน requireAuth +
+// requireConsent เหมือน Route อื่นทุกตัวในไฟล์นี้ (Mount รวมไว้ด้านบนแล้ว)
+router.get('/transactions/:id/slip', dashboardController.getTransactionSlip);
 
 module.exports = router;

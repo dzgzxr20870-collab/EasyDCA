@@ -5,6 +5,7 @@ const dashboardOverviewService = require('../services/dashboardOverview.service'
 const transactionRepository = require('../repositories/transaction.repository');
 const userRepository = require('../repositories/user.repository');
 const entitlementService = require('../services/entitlement.service');
+const storageService = require('../services/storage.service');
 
 function roundToTwo(value) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
@@ -68,7 +69,18 @@ async function getHistory(req, res) {
       transactions = transactions.slice(0, limit);
     }
 
-    return res.status(200).json({ transactions });
+    // แนบรูปสลิป (S8) — คืนแค่ธง hasSlip ไม่ใช่ URL โดยเจตนา: Bucket เป็น Private
+    // ต้องใช้ Signed URL ที่หมดอายุ ถ้าจะ Sign ทุกแถวตรงนี้จะกลายเป็นการยิง Storage
+    // API 1000 ครั้งต่อการโหลดตารางหนึ่งครั้ง (limit=1000) ทั้งที่ผู้ใช้อาจไม่กดดูสัก
+    // รูปเลย — Frontend จึงลิงก์ไป GET /dashboard/transactions/:id/slip แทน แล้วค่อย
+    // Sign สดตอนกดจริง (ทีละรูป) | ไม่ส่ง slipImagePath ออกไปด้วยเพื่อไม่เปิดเผย
+    // โครงสร้าง Storage ให้ Client โดยไม่จำเป็น
+    const withSlipFlag = transactions.map(({ slipImagePath, ...tx }) => ({
+      ...tx,
+      hasSlip: Boolean(slipImagePath),
+    }));
+
+    return res.status(200).json({ transactions: withSlipFlag });
   } catch (err) {
     console.error(`[dashboard] getHistory failed: ${err.message}`);
     return res.status(500).json({ error: 'INTERNAL_ERROR' });
@@ -134,4 +146,42 @@ async function getOverview(req, res) {
   }
 }
 
-module.exports = { getPortfolio, getHistory, getProfit, getMe, getOverview };
+// GET /api/v1/dashboard/transactions/:id/slip — เปิดรูปสลิปต้นฉบับของธุรกรรม (S8)
+//
+// Bucket transaction-slips เป็น Private (สลิปโบรกเกอร์มักโชว์เลขบัญชี/ยอดคงเหลือ)
+// จึงไม่มี URL ถาวรให้ลิงก์ตรง — Endpoint นี้สร้าง Signed URL อายุ 5 นาทีสดๆ ตอน
+// เจ้าของกดดู แล้วคืนเป็น JSON ให้ Frontend เอาไปแสดง
+//
+// ⚠️ คืน JSON ไม่ใช่ 302 Redirect โดยเจตนา: ทุก Route ที่นี่ต้องมี Header
+// "Authorization: Bearer" ซึ่ง <a href> ธรรมดาแนบไม่ได้ — Frontend จึงต้องเรียกผ่าน
+// apiGet (ที่แนบ Token ให้) แล้วรับ URL มาแสดงเอง ถ้าตอบเป็น 302 ตัว fetch จะวิ่งตาม
+// Redirect ไปโหลดไฟล์รูปมาเป็น Response แทนที่จะได้ URL กลับมา ใช้งานไม่ได้
+//
+// ⚠️ ตรวจความเป็นเจ้าของที่ชั้น Query (findByIdForUser กรอง user_id ไปพร้อมกัน)
+// ไม่ใช่ดึงมาแล้วค่อยเทียบ — กันเดา transaction id ของคนอื่นเพื่อขอ Signed URL
+// ตอบ 404 เหมือนกันทั้งกรณี "ไม่มีจริง" และ "ไม่ใช่ของเรา" (ไม่บอกใบ้ว่า id มีอยู่)
+async function getTransactionSlip(req, res) {
+  try {
+    const tx = await transactionRepository.findByIdForUser(req.params.id, req.user.id);
+    if (!tx || !tx.slipImagePath) {
+      return res.status(404).json({ error: 'SLIP_NOT_FOUND' });
+    }
+
+    const signedUrl = await storageService.createTransactionSlipSignedUrl(tx.slipImagePath);
+    if (!signedUrl) {
+      // Sign ไม่สำเร็จ (ไฟล์หายจาก Bucket/Storage ล่ม) — แยก Error จาก 404 เพื่อให้
+      // แยกออกว่า "ไม่มีสลิป" กับ "มีสลิปแต่เปิดไม่ได้ตอนนี้" คนละเรื่องกัน
+      return res.status(502).json({ error: 'SLIP_UNAVAILABLE' });
+    }
+
+    return res.status(200).json({
+      signedUrl,
+      expiresInSeconds: storageService.TRANSACTION_SLIP_SIGNED_URL_TTL_SECONDS,
+    });
+  } catch (err) {
+    console.error(`[dashboard] getTransactionSlip failed: ${err.message}`);
+    return res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+}
+
+module.exports = { getPortfolio, getHistory, getProfit, getMe, getOverview, getTransactionSlip };

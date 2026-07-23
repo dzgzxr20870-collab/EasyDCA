@@ -359,6 +359,44 @@ describe('Render smoke test (renderToStaticMarkup — no crash given realistic A
     ).not.toThrow();
   });
 
+  // S8 — คอลัมน์ "สลิป" ในตารางประวัติ: แสดงปุ่มดูสลิปเฉพาะแถวที่ hasSlip
+  test('PortfolioDetailSection — แท็บประวัติ: แถวที่ hasSlip โชว์ปุ่มดูสลิป, แถวอื่นโชว์ "-"', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(PortfolioDetailSection, {
+        portfolio: LEGACY_PORTFOLIO,
+        profitBySymbol: LEGACY_PROFIT,
+        transactions: [
+          { ...LEGACY_TRANSACTIONS[0], hasSlip: true },
+          { ...LEGACY_TRANSACTIONS[1] }, // ไม่มี hasSlip เลย (รายการเก่าก่อน migration 021)
+        ],
+        loadError: null,
+        activeTab: 'history',
+        onTabChange: () => {},
+      })
+    );
+
+    expect(html).toContain('<th>สลิป</th>');
+    expect(html).toContain('ดูสลิป');
+    // แถวที่ไม่มีสลิปต้องไม่มีปุ่ม (นับจำนวนปุ่มต้องเป็น 1 ตัวเท่านั้น)
+    expect(html.match(/ดูสลิป/g)).toHaveLength(1);
+  });
+
+  test('PortfolioDetailSection — แท็บประวัติ: ไม่มีรายการไหนมีสลิปเลย → ไม่มีปุ่มดูสลิป (Backward Compat)', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(PortfolioDetailSection, {
+        portfolio: LEGACY_PORTFOLIO,
+        profitBySymbol: LEGACY_PROFIT,
+        transactions: LEGACY_TRANSACTIONS, // ทั้งหมดไม่มี field hasSlip (Response เดิม)
+        loadError: null,
+        activeTab: 'history',
+        onTabChange: () => {},
+      })
+    );
+
+    expect(html).toContain('<th>สลิป</th>');
+    expect(html).not.toContain('ดูสลิป');
+  });
+
   test('PortfolioDetailSection — แท็บวิธีใช้งาน (Static ล้วน)', () => {
     expect(() =>
       renderToStaticMarkup(

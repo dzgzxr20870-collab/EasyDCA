@@ -40,6 +40,12 @@ function toCommitParams(pending) {
     // พร้อม proj_id/fund_class_name (undefined สำหรับสินทรัพย์อื่น)
     projId: pending.projId ?? undefined,
     fundClassName: pending.fundClassName ?? undefined,
+    // แนบรูปสลิป (S8) — Pending ที่มาจาก AI Slip OCR บันทึก source='slip_ai' ให้ตรง
+    // ความจริง (ค่านี้มีใน CHECK constraint ของ transactions มาตั้งแต่แรกแต่ไม่เคยถูก
+    // ใช้จริงเลย — ธุรกรรมจากสลิปถูกบันทึกปนเป็น 'line' มาตลอด) ใช้ params.source ที่
+    // transaction.service รองรับอยู่แล้ว (`source: params.source ?? 'line'`) จึงไม่ต้อง
+    // แก้ Logic การสร้าง Transaction เลยแม้แต่บรรทัดเดียว
+    ...(pending.slipToken ? { source: 'slip_ai' } : {}),
   };
 }
 
@@ -89,6 +95,8 @@ async function createPending(userId, parsed, options = {}) {
     // กองทุนรวม (Round 7) — พก Class ผ่าน Flow Preview→Confirm (null สำหรับสินทรัพย์อื่น)
     projId: params.projId ?? null,
     fundClassName: params.fundClassName ?? null,
+    // แนบรูปสลิป (S8) — token ของรูปที่อัปโหลดไว้ตอน OCR (null สำหรับ Path เดิมทั้งหมด)
+    slipToken: params.slipToken ?? null,
   });
 
   // priceSource + fx + goldUsd ไม่มี Column รองรับใน pending_transactions (ตรวจ
@@ -172,7 +180,10 @@ async function confirmPending(pendingId, options = {}) {
     );
   }
 
-  return { commandType: claimed.commandType, result };
+  // คืน pending record ที่ Claim ไว้ด้วย (Additive — Caller เดิมที่ Destructure แค่
+  // { commandType, result } ไม่กระทบเลย) เพื่อให้ Controller เข้าถึง slipToken ที่
+  // Snapshot ไว้ตอน Preview แล้วแนบรูปสลิปเข้า transaction ที่เพิ่งสร้าง (S8)
+  return { commandType: claimed.commandType, result, pending: claimed };
 }
 
 // ยกเลิก Pending (SRS.md § 2.3 — ปุ่ม ❌ ยกเลิก)

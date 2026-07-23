@@ -204,6 +204,10 @@ CREATE TABLE transactions (
   note            TEXT,
   source          TEXT        NOT NULL DEFAULT 'line'
                   CHECK (source IN ('line', 'web', 'slip_ai')),
+  -- แนบรูปสลิป AI OCR (S8 — migration 021) — Storage path (ไม่ใช่ URL) ใน Bucket
+  -- 'transaction-slips' ซึ่งเป็น Private Bucket: ต้อง Sign ก่อนเปิดดูเสมอ
+  -- NULL สำหรับธุรกรรมที่ไม่ได้มาจากสลิป (พิมพ์เอง/Web/Bulk Import) = กรณีส่วนใหญ่
+  slip_image_path TEXT,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
@@ -220,7 +224,8 @@ CREATE TABLE transactions (
 | fee_thb | NUMERIC(10,2) | ค่าธรรมเนียม (บาท) |
 | date | DATE | วันที่ทำธุรกรรม (ไม่ใช่วันที่บันทึก) |
 | note | TEXT | หมายเหตุ (nullable) |
-| source | TEXT | ช่องทางบันทึก: `line` / `web` / `slip_ai` |
+| source | TEXT | ช่องทางบันทึก: `line` / `web` / `slip_ai` (ตั้ง `slip_ai` เมื่อมาจาก AI Slip OCR — S8) |
+| slip_image_path | TEXT | Storage path รูปสลิปต้นฉบับใน Bucket `transaction-slips` (Private) — nullable |
 | created_at | TIMESTAMPTZ | วันที่บันทึกเข้าระบบ |
 
 **Index:**

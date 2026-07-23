@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { apiDownload } from '../../lib/api.js';
+import { apiDownload, apiGet } from '../../lib/api.js';
 import { formatTransactionNote } from '../../lib/transactionNote.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -66,6 +66,30 @@ function PortfolioDetailSection({ portfolio, profitBySymbol, transactions, loadE
   // ผู้ใช้แก้ไขข้อมูลใน Preview ไม่ได้ (ไม่ใช่ฟอร์ม) กด "← แก้ไข" เพื่อกลับไปเลือกใหม่
   const [exportStep, setExportStep] = useState('choose');
   const [pendingFormat, setPendingFormat] = useState(null);
+
+  // ── ดูรูปสลิปต้นฉบับ (S8) ────────────────────────────────────────────────
+  // Bucket เป็น Private → ไม่มี URL ถาวรให้ใส่ใน <a href> ตรงๆ ต้องขอ Signed URL
+  // อายุสั้นผ่าน apiGet (ที่แนบ Bearer Token ให้) ตอนผู้ใช้กดดูเท่านั้น แล้วแสดงใน
+  // Modal — เลือก Modal แทน window.open เพราะ Popup Blocker มักบล็อกการเปิดแท็บ
+  // ใหม่ที่เกิด "หลัง await" (ไม่นับเป็น User Gesture โดยตรงในบางเบราว์เซอร์)
+  const [slipUrl, setSlipUrl] = useState(null);
+  const [slipLoadingId, setSlipLoadingId] = useState(null);
+  const [slipError, setSlipError] = useState(null);
+
+  async function openSlip(txId) {
+    setSlipError(null);
+    setSlipLoadingId(txId);
+    try {
+      const { signedUrl } = await apiGet(`/dashboard/transactions/${txId}/slip`);
+      setSlipUrl(signedUrl);
+    } catch (err) {
+      setSlipError(
+        err.message === 'SLIP_NOT_FOUND' ? 'ไม่พบรูปสลิปของรายการนี้' : 'เปิดรูปสลิปไม่สำเร็จ'
+      );
+    } finally {
+      setSlipLoadingId(null);
+    }
+  }
 
   const excludedCount = useMemo(() => {
     if (!portfolio) return 0;
@@ -270,6 +294,7 @@ function PortfolioDetailSection({ portfolio, profitBySymbol, transactions, loadE
                         <th>จำนวน</th>
                         <th>วันที่</th>
                         <th>รายละเอียด</th>
+                        <th>สลิป</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -284,6 +309,22 @@ function PortfolioDetailSection({ portfolio, profitBySymbol, transactions, loadE
                           <td>{formatNumber(tx.quantity, 8)}</td>
                           <td>{tx.date}</td>
                           <td>{formatTransactionNote(tx.note) ?? '-'}</td>
+                          {/* สลิป (S8) — มีลิงก์เฉพาะรายการที่บันทึกจากรูปสลิป (hasSlip)
+                              รายการที่พิมพ์เอง/นำเข้าเป็น '-' เหมือนคอลัมน์อื่น */}
+                          <td>
+                            {tx.hasSlip ? (
+                              <button
+                                type="button"
+                                className="dh-link-btn"
+                                onClick={() => openSlip(tx.id)}
+                                disabled={slipLoadingId === tx.id}
+                              >
+                                {slipLoadingId === tx.id ? 'กำลังเปิด…' : '🧾 ดูสลิป'}
+                              </button>
+                            ) : (
+                              '-'
+                            )}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -382,6 +423,49 @@ function PortfolioDetailSection({ portfolio, profitBySymbol, transactions, loadE
       )}
 
       {/* ── Modal Export (Reuse Endpoint เดิม + เพิ่ม Preview ก่อนยืนยัน 1 จังหวะ) ── */}
+      {/* ── Modal ดูรูปสลิปต้นฉบับ (S8) ─────────────────────────────────────
+          แสดง Signed URL ที่เพิ่งขอมา (อายุ 5 นาที) — ปิด Modal แล้ว State ถูกล้าง
+          ทำให้กดดูรอบหน้าได้ URL ใหม่เสมอ ไม่ค้าง URL ที่หมดอายุไว้ */}
+      {(slipUrl || slipError) && (
+        <div
+          className="dh-modal-overlay"
+          onClick={() => {
+            setSlipUrl(null);
+            setSlipError(null);
+          }}
+        >
+          <div className="dh-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="dh-modal-header">
+              <h3>🧾 สลิปต้นฉบับ</h3>
+            </div>
+            <div className="dh-modal-body">
+              {slipError ? (
+                <p className="dh-modal-error">{slipError}</p>
+              ) : (
+                <>
+                  <img src={slipUrl} alt="รูปสลิปต้นฉบับของรายการนี้" className="dh-slip-img" />
+                  <p className="dh-modal-hint">
+                    ลิงก์รูปนี้มีอายุ 5 นาทีเพื่อความปลอดภัย หากหมดอายุให้กด "ดูสลิป" ใหม่อีกครั้ง
+                  </p>
+                </>
+              )}
+              <div className="dh-modal-actions">
+                <button
+                  type="button"
+                  className="dh-btn-ghost"
+                  onClick={() => {
+                    setSlipUrl(null);
+                    setSlipError(null);
+                  }}
+                >
+                  ปิด
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showExport && (
         <div className="dh-modal-overlay" onClick={closeExportModal}>
           <div className="dh-modal" onClick={(e) => e.stopPropagation()}>

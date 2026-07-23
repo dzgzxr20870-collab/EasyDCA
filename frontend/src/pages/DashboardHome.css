@@ -287,6 +287,16 @@ label.dh-fl .dh-fl-opt { color: var(--muted); font-weight: 500; }
 .dh-modal-actions { display: flex; gap: 8px; margin-top: 16px; }
 .dh-modal-actions button { flex: 1; }
 
+/* ── ดูรูปสลิปต้นฉบับ (S8) ─────────────────────────────────────────────── */
+/* ปุ่มลิงก์ในตารางประวัติ — ใช้ <button> (ไม่ใช่ <a href>) เพราะต้องขอ Signed URL
+   ผ่าน API ที่แนบ Bearer Token ก่อน จึงจัดสไตล์ให้ดูเหมือนลิงก์ */
+.dh-app .dh-link-btn { background: none; border: 0; padding: 0; font-size: inherit; font-weight: 700; color: var(--green-deep); cursor: pointer; text-decoration: underline; }
+.dh-app .dh-link-btn:hover:not(:disabled) { color: var(--green); }
+.dh-app .dh-link-btn:disabled { color: var(--muted); cursor: default; text-decoration: none; }
+/* รูปสลิปใน Modal — จำกัดความสูงไม่ให้ล้นจอบนสลิปแนวตั้งยาวๆ (สลิปโบรกเกอร์
+   ส่วนใหญ่เป็นภาพหน้าจอมือถือแนวตั้ง) ให้ Scroll ในกรอบแทน */
+.dh-slip-img { display: block; width: 100%; max-height: 60vh; object-fit: contain; border-radius: 10px; border: 1px solid var(--line2); background: #fafafa; }
+
 /* ── S8 R3 รอบ 3: การ์ดแผนที่ถึงรอบวันนี้ (SidePanels) + หน้าจัดการแผน DCA
    (DcaPlansSection) ── */
 /* .dh-app นำหน้าเสมอ (0,2,0) ให้ชนะ .dh-app button Reset Rule ที่ (0,1,1) — บั๊ก P0
