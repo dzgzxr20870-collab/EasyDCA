@@ -831,3 +831,145 @@ describe('buildErasureConfirmMessage / buildDataErasedMessage (PDPA Erasure)', (
     expect(text).toContain('ลบข้อมูล');
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Bug Fix: LINE ปฏิเสธ Reply ทั้งข้อความ (400) ถ้า label ของปุ่มใน quickReply.items
+// ยาวเกิน 20 ตัวอักษร — เจอจริงจาก Production Log (buildGuidedBuyBusyMessage นับได้
+// 29 ตัว) ผู้ใช้ไม่เห็น Error ใดๆ เลย (Reply Fail เงียบๆ ฝั่ง User)
+//
+// นับความยาวแบบ Unicode Code Point (Array.from().length) ไม่ใช่ String.length
+// (UTF-16 Code Unit) — ยืนยันจาก Log จริงที่นับ Label ที่พังได้ "29 ตัวอักษร" ตรงกับ
+// Array.from().length เป๊ะ (String.length ของ Label เดียวกันจะได้ 30 เพราะ Emoji
+// นอก BMP กิน 2 Code Unit)
+//
+// Scope: เฉพาะ quickReply.items[].action.label เท่านั้น (ไม่รวม Label ของปุ่ม type
+// 'button' ใน Flex Message bubble/footer เช่นปุ่มยืนยัน/แก้ไข/ยกเลิกใน Preview) เพราะ
+// Error 400 ที่ยืนยันได้จริงจาก Production ชี้เฉพาะ path "quickReply.items[].action"
+// เท่านั้น — LINE Docs ยืนยัน Constraint ของ Flex Button component ไม่ได้ (เว็บ Docs
+// เป็น JS-rendered SPA, WebFetch/curl ดึงเนื้อหาจริงไม่ได้) จึงไม่ขยาย Scope การ Test
+// อัตโนมัตินี้ไปที่ Flex Button — จุดที่พบว่ายาวเกินระหว่างสแกน (premiumPeriodButtons)
+// ถูกย่อไว้กันเหนียวแล้วในโค้ดโดยตรง แต่ไม่ได้ผูก Test อัตโนมัติไว้เพราะ Path ต่างกัน
+describe('LINE Quick Reply Label ≤ 20 ตัวอักษร (Hard Limit ของ LINE Messaging API)', () => {
+  const flexMessage = require('../src/utils/flexMessage.util');
+  const MAX_LABEL_LENGTH = 20;
+  const labelLength = (label) => Array.from(String(label)).length;
+
+  // ดึงทุก quickReply.items[].action.label ออกจาก Message Object แบบ Recursive
+  // (เผื่ออนาคตห่อ Message หลายชั้น หรือคืนเป็น Array ของหลายข้อความ) — คืน
+  // [{ label, path }] เพื่อให้ Assert Fail ชี้ตำแหน่งที่ผิดได้ตรงจุด ไม่ใช่แค่ "Fail เฉยๆ"
+  function collectLabels(value, path = 'message') {
+    const found = [];
+    if (!value || typeof value !== 'object') return found;
+
+    if (Array.isArray(value)) {
+      value.forEach((v, i) => found.push(...collectLabels(v, `${path}[${i}]`)));
+      return found;
+    }
+
+    if (Array.isArray(value.quickReply?.items)) {
+      value.quickReply.items.forEach((item, i) => {
+        if (item?.action?.label !== undefined) {
+          found.push({ label: item.action.label, path: `${path}.quickReply.items[${i}]` });
+        }
+      });
+    }
+
+    Object.entries(value).forEach(([key, v]) => found.push(...collectLabels(v, `${path}.${key}`)));
+    return found;
+  }
+
+  // หมายเหตุ: ไม่ใช่ทุกฟังก์ชัน Build Message จะมี quickReply เลย (การ์ดข้อมูลเฉยๆ
+  // อย่าง buildAddGuideMessage/buildUnknownCommandMessage ไม่มีปุ่มเลย) — ฟังก์ชันนี้
+  // จึงแค่ตรวจว่า "ถ้ามี Label ก็ต้องไม่เกิน Limit" ไม่ได้บังคับว่าต้องมี Label เสมอ
+  // (ความครอบคลุมของ collectLabels เองถูกยืนยันแยกด้วย Canary Test ด้านล่าง)
+  function expectAllLabelsWithinLimit(message) {
+    const labels = collectLabels(message);
+    // รวม Violation เป็น Array แล้ว Assert ทีเดียว (แทนที่จะ expect() ทีละ Label) —
+    // Jest ไม่รองรับ Custom Message เป็น Argument ที่ 2 ของ expect() (ต่างจาก Chai)
+    // วิธีนี้ทำให้ Fail Message เห็นชัดว่า Label ไหน/ยาวเท่าไรโดยไม่ต้อง Custom Matcher
+    const violations = labels
+      .filter(({ label }) => labelLength(label) > MAX_LABEL_LENGTH)
+      .map(({ label, path }) => `${path}: "${label}" (${labelLength(label)} ตัวอักษร)`);
+    expect(violations).toEqual([]);
+  }
+
+  // Canary: ยืนยันว่า collectLabels() หา Label เจอจริง (กัน Test ทั้งชุดผ่านเงียบๆ
+  // เพราะ Bug ใน collectLabels เอง ไม่ใช่เพราะไม่มีอะไรให้ตรวจ) — ใช้ฟังก์ชันที่รู้
+  // อยู่แล้วว่ามีปุ่มแน่ๆ (Fallback Menu มี 4 ปุ่มเสมอ)
+  test('Canary: collectLabels() หา Label เจอจริงจาก buildFallbackMenuMessage (กัน False-Positive ทั้งชุด)', () => {
+    const labels = collectLabels(flexMessage.buildFallbackMenuMessage());
+    expect(labels.length).toBe(4);
+  });
+
+  // ── Tier 1: ฟังก์ชันที่เรียกได้ตรงๆ ไม่มี Argument เลย (Static Message ล้วนๆ) ──────
+  // Auto-discover จาก module.exports จริง (เช็คด้วย fn.length === 0 = จำนวน Parameter
+  // ที่ประกาศไว้) ไม่ใช่ List ที่เขียนมือ — ฟังก์ชันแบบนี้ที่เพิ่มใหม่ในอนาคตจะถูก
+  // ตรวจอัตโนมัติทันทีโดยไม่ต้องแก้ Test นี้เลย
+  const zeroArgBuilders = Object.entries(flexMessage).filter(
+    ([name, fn]) => typeof fn === 'function' && name.startsWith('build') && fn.length === 0
+  );
+
+  test('มีฟังก์ชัน Build Message แบบไม่มี Argument อย่างน้อย 1 ตัว (กัน Test Suite นี้เงียบๆ ไม่ตรวจอะไรเลยถ้า Export เปลี่ยนโครงสร้าง)', () => {
+    expect(zeroArgBuilders.length).toBeGreaterThan(0);
+  });
+
+  test.each(zeroArgBuilders)('%s() — ทุก Label ใน quickReply ≤ 20 ตัวอักษร (ถ้ามี)', (_name, fn) => {
+    expectAllLabelsWithinLimit(fn());
+  });
+
+  // ── Tier 2: ฟังก์ชันที่ต้องมี Argument แบบง่าย (String/Number/Array สั้นๆ) ────────
+  // เขียนมือเจาะจงทีละฟังก์ชัน (Auto-discover ทำไม่ได้จริงเพราะไม่รู้ Shape ของ
+  // Argument ที่ถูกต้องล่วงหน้า) ครอบคลุมทุกฟังก์ชันที่ Build Message ที่มี quickReply
+  // และรับ Argument ในไฟล์นี้ ณ ตอนที่เขียน Test นี้ (ยืนยันจากการอ่านทั้งไฟล์แล้ว) —
+  // ฟังก์ชันใหม่ในอนาคตที่รับ Argument จะไม่ถูกตรวจอัตโนมัติ ต้องเพิ่มเคสใหม่ที่นี่เอง
+  //
+  // Worst-case ของ Label ที่ประกอบจาก Symbol/ตัวแปร Dynamic:
+  //  - buildGuidedBuySymbolQuickReply Symbol ยาวสุด 20 ตัวจริง (normalizeSymbol ของ
+  //    guidedBuyFlow.service บังคับ MAX_SYMBOL_LENGTH=20 ก่อนเข้า Session ได้)
+  //  - buildSymbolQuickReply (Flow ตั้งเตือน) ทดสอบด้วย Symbol ยาว 25 ตัว (เกิน 20)
+  //    เพราะ assets.symbol เป็น TEXT ไม่มีการจำกัดความยาวที่ DB/Command Parser เลย —
+  //    Bug Fix รอบนี้เพิ่ม .slice(0,20) ที่ Label กันไว้แล้ว (เคส Fail บนโค้ดเก่า)
+  const simpleArgCases = [
+    [
+      'buildSymbolQuickReply (worst-case: Symbol ยาว 25 ตัว — DB ไม่จำกัดความยาว)',
+      () => flexMessage.buildSymbolQuickReply(['A'.repeat(25), 'BTC']),
+    ],
+    ['buildAskAmountMessage', () => flexMessage.buildAskAmountMessage('BTC')],
+    [
+      'buildFundClassPickerMessage (worst-case: ชื่อ Class ยาวเกิน 20 ตัว)',
+      () =>
+        flexMessage.buildFundClassPickerMessage(
+          {
+            projId: 'M0001',
+            projAbbrName: 'K-SELECT',
+            classes: [{ fundClassName: 'K-SELECT-VERY-LONG-CLASS-XYZ', fundClassDetail: 'x' }],
+          },
+          { amountThb: 1000 }
+        ),
+    ],
+    [
+      'buildGuidedBuySymbolQuickReply (worst-case: Symbol ยาวเต็ม MAX_SYMBOL_LENGTH=20)',
+      () => flexMessage.buildGuidedBuySymbolQuickReply(['A'.repeat(20), 'PTT']),
+    ],
+    ['buildGuidedBuyAskAmountMessage', () => flexMessage.buildGuidedBuyAskAmountMessage('BTC')],
+    ['buildGuidedBuyAmountQuickReply', () => flexMessage.buildGuidedBuyAmountQuickReply('BTC')],
+    [
+      // Red-Green: เคสนี้คือบั๊กจริงจาก Production — Fail บนโค้ดเก่า (29 ตัวอักษร),
+      // Pass บนโค้ดใหม่หลังย่อ Label แล้ว
+      'buildGuidedBuyBusyMessage (kind=reminder_setup)',
+      () => flexMessage.buildGuidedBuyBusyMessage('reminder_setup'),
+    ],
+    [
+      'buildGuidedBuyBusyMessage (kind=bulk_import)',
+      () => flexMessage.buildGuidedBuyBusyMessage('bulk_import'),
+    ],
+    [
+      'buildExportFormatQuickReply',
+      () => flexMessage.buildExportFormatQuickReply({ range: 'month' }, 'เดือนนี้'),
+    ],
+  ];
+
+  test.each(simpleArgCases)('%s — ทุก Label ใน quickReply ≤ 20 ตัวอักษร', (_name, buildFn) => {
+    expectAllLabelsWithinLimit(buildFn());
+  });
+});

@@ -1199,7 +1199,13 @@ function buildSymbolQuickReply(symbols) {
   const items = (symbols ?? [])
     .slice(0, 12)
     .map((symbol) =>
-      quickReplyPostback(symbol, `action=reminder_symbol&symbol=${symbol}`, symbol)
+      quickReplyPostback(
+        String(symbol).slice(0, 20), // LINE label ≤ 20 ตัวอักษร — assets.symbol เป็น TEXT
+        // ไม่จำกัดความยาวที่ DB จึงต้อง Slice ที่นี่เอง (Pattern เดียวกับ
+        // buildGuidedBuySymbolQuickReply) data/displayText ยังใช้ symbol เต็มเสมอ
+        `action=reminder_symbol&symbol=${symbol}`,
+        symbol
+      )
     );
 
   return textWithQuickReply('จะตั้งเตือน DCA ให้สินทรัพย์ไหนดีครับ? เลือกจากพอร์ตของคุณได้เลย', items);
@@ -1395,8 +1401,12 @@ function buildGuidedBuyBusyMessage(kind) {
       'ทำให้จบก่อนได้เลย หรือถ้าไม่เอาแล้ว กดปุ่มด้านล่างเพื่อทิ้งของเดิมแล้วเริ่มบันทึก DCA ใหม่',
     quickReply: {
       items: [
+        // Bug Fix: Label เดิม '🔄 ทิ้งของเดิม เริ่มบันทึก DCA' ยาว 29 ตัวอักษร เกิน
+        // Limit 20 ตัวของ LINE (quickReply.items[].action.label) ทำให้ Reply ทั้ง
+        // ข้อความถูกปฏิเสธ 400 เงียบๆ (Log ฝั่ง Server เท่านั้น ผู้ใช้ไม่เห็นอะไรเลย)
+        // — displayText/ข้อความเต็มยังคงความหมายเดิมไว้ (Label สั้นแค่ปุ่มเท่านั้น)
         quickReplyPostback(
-          '🔄 ทิ้งของเดิม เริ่มบันทึก DCA',
+          '🔄 เริ่มบันทึกใหม่',
           'action=gbuy_force_start',
           'เริ่มบันทึก DCA ใหม่'
         ),
@@ -1766,7 +1776,10 @@ function buildPremiumStatusMessage(expiresAt) {
         type: 'box',
         layout: 'vertical',
         spacing: 'sm',
-        contents: premiumPeriodButtons('ต่ออายุรายเดือน 59 บาท', 'ต่ออายุรายปี 590 บาท'),
+        // Bug Fix: 'ต่ออายุรายเดือน 59 บาท' เดิมยาว 22 ตัวอักษร เกิน Limit 20 ของ LINE
+        // (พบระหว่างสแกน Label ทั้งไฟล์ตามบั๊ก Guided Buy Busy Message ด้านบน — ย่อ
+        // ไว้กันไว้ก่อนแม้ Flex Button (ไม่ใช่ quickReply) เพราะเป็น Flow จ่ายเงินจริง)
+        contents: premiumPeriodButtons('ต่อรายเดือน 59 บาท', 'ต่อรายปี 590 บาท'),
       },
     },
   };
