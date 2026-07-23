@@ -74,6 +74,14 @@ const ERROR_MESSAGES = {
   PORTFOLIO_EMPTY_FOR_REMINDER:
     'คุณยังไม่มีสินทรัพย์ในพอร์ต จึงยังตั้งเตือน DCA ไม่ได้ ลองบันทึกการซื้อครั้งแรกก่อน เช่น "ซื้อ BTC 1000"',
   INVALID_AMOUNT: 'จำนวนเงินไม่ถูกต้อง กรุณาพิมพ์เป็นตัวเลขที่มากกว่า 0 (เช่น 1000) อีกครั้ง',
+  // Guided Buy Flow (guidedBuyFlow.service — S8 R2 รอบ 2) — แยก Code จาก
+  // SETUP_SESSION_NOT_FOUND ของ Flow ตั้งเตือน เพราะปุ่มที่ให้กดเริ่มใหม่คนละปุ่มกัน
+  GUIDED_BUY_SESSION_NOT_FOUND:
+    'ไม่พบขั้นตอนการบันทึกที่ค้างอยู่ (อาจหมดเวลา 5 นาทีแล้ว) กรุณากดปุ่ม "📈 บันทึก DCA" ที่เมนูเพื่อเริ่มใหม่',
+  GUIDED_BUY_INVALID_SYMBOL:
+    'ชื่อย่อสินทรัพย์ไม่ถูกต้อง กรุณาพิมพ์เป็นชื่อย่อคำเดียว (เช่น BTC, PTT, AAPL) อีกครั้ง',
+  GUIDED_BUY_SESSION_BUSY:
+    'คุณมีขั้นตอนอื่นค้างอยู่ กรุณาทำให้จบก่อน หรือกด "ยกเลิก" ของขั้นตอนนั้นแล้วเริ่มใหม่',
   INVALID_DAY:
     'วันที่ไม่ถูกต้อง สำหรับรายเดือนกรุณาพิมพ์เลข 1-31 หรือเลือกจากปุ่มที่ระบบส่งให้',
   INTERNAL_ERROR: 'เกิดข้อผิดพลาดบางอย่าง กรุณาลองใหม่อีกครั้งในภายหลัง',
@@ -1254,6 +1262,149 @@ function buildReminderSetupCancelledMessage() {
   });
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// Guided Buy Flow (S8 R2 รอบ 2) — บันทึก DCA แบบกดปุ่มทีละขั้น
+// ═══════════════════════════════════════════════════════════════════════
+// ขั้นตอน: เลือก/พิมพ์ Symbol → เลือก/พิมพ์จำนวนเงิน → การ์ด Preview เดิม
+// (buildPreviewMessage + ปุ่ม confirm/cancel ของ Expert Path — ไม่มีปุ่มยืนยันใหม่)
+//
+// ⚠️ ห้ามใช้ textWithQuickReply() ประกอบข้อความของ Flow นี้เด็ดขาด: helper ตัวนั้น
+// ผนวกปุ่ม "❌ ยกเลิก" ที่มี action=cancel_reminder_setup (ของ Flow ตั้งเตือน) ต่อท้าย
+// เสมอ — ถ้าหลุดมาอยู่ใน Guided Buy ผู้ใช้กดแล้วจะไปเรียก reminderSetupFlow.cancelFlow
+// ทั้งที่ไม่มี Session ตั้งเตือน (Session ของ Guided Buy จะค้างอยู่ต่อ = ยกเลิกไม่ได้จริง)
+// นี่คือบั๊กเดียวกับที่เจอใน S8 R2 รอบ 1 จึงมี helper คู่แยกของตัวเองด้านล่าง
+//
+// ⚠️ ห้ามแนะนำซื้อ/ขายรายตัว: ทุกข้อความในกลุ่มนี้ "ถาม" ว่าผู้ใช้ซื้ออะไรไปแล้ว
+// เพื่อบันทึก ไม่มีคำชักชวน/เสนอแนะสินทรัพย์ใดๆ — ปุ่ม Symbol มาจากพอร์ตของผู้ใช้เอง
+// เท่านั้น (ไม่ใช่รายการที่ระบบคัดมาแนะนำ) และตัวเลขจำนวนเงินเป็นค่ากลมทั่วไป
+const GUIDED_BUY_CANCEL_ACTION = 'cancel_guided_buy';
+
+// ปุ่มยกเลิกเฉพาะของ Guided Buy — action ห้ามซ้ำกับ cancel_reminder_setup
+function guidedBuyCancelItem() {
+  return quickReplyPostback('❌ ยกเลิก', `action=${GUIDED_BUY_CANCEL_ACTION}`, 'ยกเลิกการบันทึก');
+}
+
+// คู่แฝดของ textWithQuickReply สำหรับ Flow นี้ (ผนวกปุ่มยกเลิกของ Guided Buy แทน)
+function guidedBuyTextWithQuickReply(text, items = []) {
+  return {
+    type: 'text',
+    text,
+    quickReply: { items: [...items, guidedBuyCancelItem()] },
+  };
+}
+
+// ── ขั้น 1: เลือกสินทรัพย์ ────────────────────────────────────────────────
+// symbols = Symbol ที่ผู้ใช้ "ถืออยู่จริงในพอร์ตตัวเอง" (guidedBuyFlow.startFlow
+// จำกัดมาแล้วไม่เกิน 11 ตัว) — ไม่ใช่รายการแนะนำจากระบบ
+// LINE จำกัด 13 items/ข้อความ: 11 Symbol + "พิมพ์ชื่อเอง" + "ยกเลิก" = 13 พอดี
+// พอร์ตว่าง (ซื้อครั้งแรก) → ไม่มีปุ่ม Symbol เลย เหลือ "พิมพ์ชื่อเอง" เป็นทางเดียว
+function buildGuidedBuySymbolQuickReply(symbols) {
+  const list = (symbols ?? []).slice(0, 11);
+
+  const items = list.map((symbol) =>
+    quickReplyPostback(
+      String(symbol).slice(0, 20), // LINE label ≤ 20 ตัวอักษร
+      `action=gbuy_symbol&sym=${encodeURIComponent(symbol)}`,
+      symbol
+    )
+  );
+
+  items.push(quickReplyPostback('✏️ พิมพ์ชื่อเอง', 'action=gbuy_symbol_manual', 'พิมพ์ชื่อเอง'));
+
+  const text =
+    list.length > 0
+      ? 'บันทึกการซื้อของสินทรัพย์ไหนครับ? เลือกจากพอร์ตของคุณ หรือกด "พิมพ์ชื่อเอง"'
+      : 'บันทึกการซื้อของสินทรัพย์ไหนครับ? พิมพ์ชื่อย่อมาได้เลย (เช่น BTC, PTT, AAPL)';
+
+  return guidedBuyTextWithQuickReply(text, items);
+}
+
+// ผู้ใช้กด "พิมพ์ชื่อเอง" — ชวนพิมพ์ชื่อย่อ (ยังอยู่ขั้น AWAITING_SYMBOL)
+function buildGuidedBuyAskSymbolMessage() {
+  return guidedBuyTextWithQuickReply(
+    'พิมพ์ชื่อย่อสินทรัพย์ที่ต้องการบันทึกมาได้เลยครับ (เช่น BTC, PTT, AAPL, K-SELECT)'
+  );
+}
+
+// ── ขั้น 2: จำนวนเงิน — Amount Chips + กำหนดเอง ───────────────────────────
+// ⚠️ ข้อจำกัดที่ตั้งใจ (S8 R2 รอบ 2): Guided Flow รอบนี้เป็น "บาท (THB) เท่านั้น"
+// ไม่มีปุ่มเลือกสกุลเงิน — ผู้ใช้ที่ต้องการบันทึกเป็น USD ยังใช้ Expert Path เดิมได้
+// ครบ ("ซื้อ BTC 100 USD") และ Dashboard เว็บก็ยังมี Toggle THB/USD ตามเดิม
+// นี่คือการตัด Scope ให้รอบนี้เล็กลง ไม่ใช่ความตกหล่น — ถ้าจะเพิ่มต้องใส่ขั้นเลือกสกุล
+// ก่อนขั้นนี้ และเปลี่ยนชุดตัวเลข Chips ให้เหมาะกับ USD (50/100/300/500)
+const GUIDED_BUY_AMOUNT_CHIPS = [500, 1000, 3000, 5000];
+
+function buildGuidedBuyAmountQuickReply(symbol) {
+  const items = GUIDED_BUY_AMOUNT_CHIPS.map((amount) =>
+    quickReplyPostback(
+      `${formatNumber(amount)} บาท`,
+      `action=gbuy_amount&amt=${amount}`,
+      `${formatNumber(amount)} บาท`
+    )
+  );
+
+  items.push(quickReplyPostback('✏️ กำหนดเอง', 'action=gbuy_amount_manual', 'กำหนดเอง'));
+
+  return guidedBuyTextWithQuickReply(
+    `บันทึกซื้อ ${symbol} เป็นเงินกี่บาทครับ? เลือกจากปุ่ม หรือกด "กำหนดเอง" เพื่อพิมพ์เอง`,
+    items
+  );
+}
+
+// ผู้ใช้กด "กำหนดเอง" — ชวนพิมพ์ตัวเลข (ยังอยู่ขั้น AWAITING_AMOUNT)
+function buildGuidedBuyAskAmountMessage(symbol) {
+  return guidedBuyTextWithQuickReply(
+    `พิมพ์จำนวนเงินที่ซื้อ ${symbol} มาได้เลยครับ (เช่น 1500) หน่วยเป็นบาท`
+  );
+}
+
+// ยืนยันว่ายกเลิก Guided Buy แล้ว (กดปุ่มยกเลิกกลางทาง) — ต้องบอกชัดว่า
+// "ยังไม่มีการบันทึกรายการใดๆ" เพราะ Flow นี้เกี่ยวกับเงินโดยตรง
+function buildGuidedBuyCancelledMessage() {
+  return bubble({
+    headerText: '❌ ยกเลิกการบันทึกแล้ว',
+    headerColor: COLOR.textSecondary,
+    headerBg: COLOR.warningBg,
+    bodyContents: [
+      textLine('ยกเลิกขั้นตอนบันทึก DCA แล้ว ยังไม่มีรายการใดถูกบันทึกลงพอร์ต', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      textLine('อยากเริ่มใหม่กดปุ่ม "📈 บันทึก DCA" ที่เมนูได้เลย', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
+}
+
+// ── Session ชนกันตอน "เริ่ม" Flow (ตัดสินใจ: บล็อก ไม่เขียนทับเงียบๆ) ─────────
+// ผู้ใช้มี Session ของ Flow อื่นค้างอยู่ (ตั้งเตือน DCA / นำเข้าพอร์ต) แล้วกด
+// "บันทึก DCA" — บอกให้รู้ตัวว่ามีอะไรค้าง แล้วให้ "ผู้ใช้เลือกเอง" ว่าจะทิ้งของเดิม
+// (ปุ่ม) หรือกลับไปทำต่อให้จบ (ไม่กดอะไร รอ 5 นาที Session หมดอายุเองก็ได้)
+//
+// ปุ่มนี้ใช้ action=gbuy_force_start ของตัวเอง ไม่ Reuse cancel_reminder_setup /
+// cancel_bulk_import (ซึ่งยกเลิกได้แค่ทีละ Flow และไม่เริ่ม Guided Buy ต่อให้)
+function buildGuidedBuyBusyMessage(kind) {
+  const label = kind === 'bulk_import' ? 'นำเข้าพอร์ต' : 'ตั้งเตือน DCA';
+
+  return {
+    type: 'text',
+    text:
+      `ตอนนี้คุณมีขั้นตอน "${label}" ค้างอยู่ครับ 🙏\n` +
+      'ทำให้จบก่อนได้เลย หรือถ้าไม่เอาแล้ว กดปุ่มด้านล่างเพื่อทิ้งของเดิมแล้วเริ่มบันทึก DCA ใหม่',
+    quickReply: {
+      items: [
+        quickReplyPostback(
+          '🔄 ทิ้งของเดิม เริ่มบันทึก DCA',
+          'action=gbuy_force_start',
+          'เริ่มบันทึก DCA ใหม่'
+        ),
+      ],
+    },
+  };
+}
+
 // ข้อความ Push สรุปพอร์ตรายสัปดาห์/รายเดือน (portfolioSummary.job) — bubble()
 // คืน Flex Message Object แบบเดียวกับที่ LINE Push API รับได้ ใช้ Pattern สี
 // เขียว/แดงตามกำไร-ขาดทุนเหมือน buildProfitMessage
@@ -1842,8 +1993,9 @@ function buildUnknownCommandMessage() {
 //     Command Parser แล้วตก UNKNOWN — บทเรียนจากปุ่ม 'ซื้อ' เปล่าๆ เดิม)
 function fallbackQuickReplyItems() {
   return [
-    // Placeholder รอบ 1: ชี้ไปการ์ดสอนพิมพ์คำสั่งซื้อ/ขายเดิม (buildAddGuideMessage)
-    // รอบ 2 จะเปลี่ยน action นี้เป็นจุดเริ่ม Guided Buy Flow เต็มรูปแบบ
+    // รอบ 2: จุดเริ่ม Guided Buy Flow เต็มรูปแบบ (เลือก Symbol → จำนวนเงิน → Preview)
+    // ปลายทางคือ routeCommand(BUY) → createPending เส้นเดียวกับ Expert Path เป๊ะ
+    // Expert Path ยังหาเจอเสมอผ่านปุ่ม "❓ วิธีใช้งาน" (buildHelpMessage) ด้านล่าง
     quickReplyPostback('📈 บันทึก DCA', 'action=buy_guide', '📈 บันทึก DCA'),
     // Reuse คำสั่ง "พอต" เดิมตรงๆ ผ่าน Command Parser (ไม่มี Handler ใหม่)
     { type: 'action', action: { type: 'message', label: '💰 ดูพอร์ต', text: 'พอต' } },
@@ -2623,6 +2775,13 @@ module.exports = {
   buildDayOfMonthQuickReply,
   buildAskAmountMessage,
   buildReminderSetupCancelledMessage,
+  // Guided Buy Flow (S8 R2 รอบ 2)
+  buildGuidedBuySymbolQuickReply,
+  buildGuidedBuyAskSymbolMessage,
+  buildGuidedBuyAmountQuickReply,
+  buildGuidedBuyAskAmountMessage,
+  buildGuidedBuyCancelledMessage,
+  buildGuidedBuyBusyMessage,
   buildAdminPaymentRequestMessage,
   buildAdminApproveAckMessage,
   buildAdminRejectAckMessage,

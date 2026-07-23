@@ -19,6 +19,23 @@ jest.mock('../src/services/reminderSetupFlow.service', () => {
     cancelFlow: jest.fn(),
   };
 });
+// Guided Buy Flow (S8 R2 รอบ 2) — Mock ฟังก์ชันแต่คง STEPS จริงไว้ (Pattern เดียวกับ
+// reminderSetupFlow ด้านบน)
+jest.mock('../src/services/guidedBuyFlow.service', () => {
+  const actual = jest.requireActual('../src/services/guidedBuyFlow.service');
+  return {
+    STEPS: actual.STEPS,
+    GuidedBuyError: actual.GuidedBuyError,
+    getCurrentSession: jest.fn(),
+    findBlockingSession: jest.fn(),
+    startFlow: jest.fn(),
+    handleSymbolSelected: jest.fn(),
+    requireAwaitingSymbol: jest.fn(),
+    requireAwaitingAmount: jest.fn(),
+    handleAmountEntered: jest.fn(),
+    cancelFlow: jest.fn(),
+  };
+});
 jest.mock('../src/services/line.service');
 jest.mock('../src/services/storage.service');
 jest.mock('../src/services/payment.service');
@@ -63,6 +80,7 @@ const profitService = require('../src/services/profit.service');
 const historyService = require('../src/services/history.service');
 const reminderService = require('../src/services/dcaReminder.service');
 const reminderSetupFlow = require('../src/services/reminderSetupFlow.service');
+const guidedBuyFlow = require('../src/services/guidedBuyFlow.service');
 const lineService = require('../src/services/line.service');
 const storageService = require('../src/services/storage.service');
 const paymentService = require('../src/services/payment.service');
@@ -132,6 +150,9 @@ beforeEach(() => {
   reminderSetupFlow.getCurrentSession.mockResolvedValue(null);
   // Default: ไม่มี Bulk Import Session ค้าง — Test ของ Flow นำเข้าพอร์ตจะ Override เอง
   bulkImportSession.getCurrentSession.mockResolvedValue(null);
+  // Default: ไม่มี Guided Buy Session ค้าง — Test ของ Guided Buy Flow จะ Override เอง
+  guidedBuyFlow.getCurrentSession.mockResolvedValue(null);
+  guidedBuyFlow.cancelFlow.mockResolvedValue(undefined);
   // Default: ไม่ถือ Asset ใดอยู่ + ค้นกองทุนไม่พบ (Symbol ที่ไม่รู้จักถือเป็น unknown asset)
   // — Test ของ Flow กองทุนจะ Override เอง
   assetRepository.findByUserAndSymbol.mockResolvedValue(null);
@@ -2403,12 +2424,20 @@ describe('handleEvent — Fallback Quick Reply Menu (S8 R2 รอบ 1)', () => 
     expect(lastReplyText()).not.toContain('ไม่เข้าใจคำสั่งนี้');
   });
 
-  test('ปุ่ม "📈 บันทึก DCA" (buy_guide) → การ์ดสอนพิมพ์คำสั่ง ไม่วนกลับมาเป็นเมนูตัวเอง', async () => {
+  // S8 R2 รอบ 2: buy_guide เปลี่ยนจาก Placeholder (การ์ดสอนพิมพ์) → จุดเริ่ม Guided
+  // Buy Flow เต็มรูปแบบ — Intent เดิมของ Test นี้ ("ปุ่มนี้ต้องไม่วนกลับมาเป็นเมนู
+  // ตัวเอง") ยังถูกตรวจอยู่ผ่าน Assert ว่าไม่มีปุ่ม add_guide/buy_guide ในคำตอบ
+  test('ปุ่ม "📈 บันทึก DCA" (buy_guide) → เริ่ม Guided Buy Flow ไม่วนกลับมาเป็นเมนูตัวเอง', async () => {
+    guidedBuyFlow.startFlow.mockResolvedValue({ symbols: ['BTC', 'PTT'] });
+
     await handleEvent(postbackEvent('action=buy_guide'));
 
-    expect(lastReplyText()).toContain('วิธีเพิ่มรายการซื้อ/ขาย');
-    // ต้องไม่ใช่เมนู (กัน Loop กดแล้ววนกลับที่เดิม)
-    expect(lastQuickReplyItems()).toHaveLength(0);
+    expect(guidedBuyFlow.startFlow).toHaveBeenCalledWith(FREE_USER.id);
+    const items = JSON.stringify(lastQuickReplyItems());
+    expect(items).toContain('action=gbuy_symbol&sym=BTC');
+    // ต้องไม่วนกลับมาเป็นเมนูตัวเอง (กัน Loop กดแล้วอยู่ที่เดิม)
+    expect(items).not.toContain('action=buy_guide');
+    expect(items).not.toContain('action=add_guide');
   });
 
   test('ปุ่ม "❓ วิธีใช้งาน" (help_guide) → การ์ดรวมคำสั่งพิมพ์ตรง (Expert Path ยังหาเจอ)', async () => {

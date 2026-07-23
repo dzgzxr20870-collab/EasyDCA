@@ -27,6 +27,7 @@ const { schedulePlanDowngrade } = require('./jobs/planDowngrade.job');
 const { scheduleReminderPush } = require('./jobs/dcaReminder.job');
 const { schedulePurgeStaleSetupSessions } = require('./jobs/reminderSetupCleanup.job');
 const { schedulePurgeStaleBulkImportSessions } = require('./jobs/bulkImportCleanup.job');
+const { schedulePurgeStaleGuidedBuySessions } = require('./jobs/guidedBuyCleanup.job');
 const {
   scheduleWeeklySummaryPush,
   scheduleMonthlySummaryPush,
@@ -47,6 +48,9 @@ function scheduleAllJobs() {
   // Purge Bulk Import Session ที่หมดอายุค้าง ตี 3 (bulkImportCleanup.job.js —
   // Phase 3 Round 6) — Pending Batch เองถูก Cron pendingCleanup.job.js Cover ให้แล้ว
   schedulePurgeStaleBulkImportSessions();
+  // Purge Guided Buy Session ที่หมดอายุค้าง ตี 3 (guidedBuyCleanup.job.js — S8 R2
+  // รอบ 2) — Pending ที่ Flow นี้สร้างถูก Cron pendingCleanup.job.js Cover ให้แล้ว
+  schedulePurgeStaleGuidedBuySessions();
   // Push สรุปพอร์ตรายสัปดาห์ (อาทิตย์ 08:00) และรายเดือน (วันที่ 1 08:00)
   // Asia/Bangkok (portfolioSummary.job.js)
   scheduleWeeklySummaryPush();
@@ -69,6 +73,6 @@ scheduleAllJobs();
 
 // node-cron ลงทะเบียน Timer ไว้แล้ว (Event Loop มี Task ค้างอยู่) Process จึงมีชีวิตอยู่
 // เองตามธรรมชาติ ไม่ต้องมี setInterval/Sleep Loop เทียมเพื่อ "กันไม่ให้ Process ตาย"
-logger.info('worker process started', { jobCount: 10 });
+logger.info('worker process started', { jobCount: 11 });
 
 module.exports = { scheduleAllJobs };

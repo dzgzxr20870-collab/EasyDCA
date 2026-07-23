@@ -658,6 +658,14 @@ CREATE UNIQUE INDEX idx_dca_reminders_one_active ON dca_reminders(user_id, symbo
 > แสดงได้ทั้ง active + paused. Related: `dca_reminder_setup_sessions` (migration 003) —
 > State ชั่วคราวของ Flow ตั้งเตือนหลายขั้นบน LINE (Ephemeral เหมือน pending_transactions)
 
+> **ตาราง Session ชั่วคราวของ LINE Flow (Ephemeral Working State — ข้อยกเว้นของ § 8):**
+> `dca_reminder_setup_sessions` (003), `bulk_import_sessions` (007), และ
+> `guided_buy_sessions` (022 — Guided Buy Flow "📈 บันทึก DCA" แบบกดปุ่ม: เก็บ
+> `step` + `symbol` ระหว่างขั้น) ทั้ง 3 ตารางใช้ `user_id` เป็น PK (1 Session/User),
+> TTL แบบ Sliding 5 นาทีนับจาก `updated_at`, RLS แบบ service_role อย่างเดียว, และมี
+> Cron Purge ของตัวเองที่ตี 3. ตารางเหล่านี้ **ไม่เก็บผลลัพธ์ทางการเงินใดๆ** — Guided
+> Buy จบด้วยการเรียก `pendingTransaction.createPending()` เส้นเดียวกับคำสั่งพิมพ์เอง
+
 ---
 
 ## 3. Row Level Security (RLS)

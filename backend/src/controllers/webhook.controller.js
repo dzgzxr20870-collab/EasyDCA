@@ -7,6 +7,7 @@ const historyService = require('../services/history.service');
 const undoService = require('../services/undoTransaction.service');
 const reminderService = require('../services/dcaReminder.service');
 const reminderSetupFlow = require('../services/reminderSetupFlow.service');
+const guidedBuyFlow = require('../services/guidedBuyFlow.service');
 const pendingService = require('../services/pendingTransaction.service');
 const paymentService = require('../services/payment.service');
 const userErasureService = require('../services/userErasure.service');
@@ -27,6 +28,19 @@ const logger = require('../utils/logger.util');
 
 const { COMMANDS } = commandParser;
 const { STEPS } = reminderSetupFlow;
+const GUIDED_STEPS = guidedBuyFlow.STEPS;
+
+// Error Code ที่แปลว่า "ระบบหาราคาตลาดของสินทรัพย์นี้ให้ไม่ได้" — ใช้ตัดสินใจว่าจะ
+// เสนอทางออก Manual Quantity Fallback (Round 10-B) ให้ผู้ใช้กรอกจำนวนหุ้นเอง แทนที่
+// จะตอบ Error ทั่วไปที่บอกให้พิมพ์คำสั่งใหม่ทั้งหมด
+// ใช้ร่วมกัน 2 จุด: ocr_confirm (สลิป AI — Round 9/10-B) และ Guided Buy Flow (S8 R2
+// รอบ 2) ซึ่งทั้งคู่ส่ง "ยอดเงินอย่างเดียว" เข้า routeCommand เหมือนกันเป๊ะ
+const MANUAL_FALLBACK_CODES = [
+  'PRICE_FEED_NOT_IMPLEMENTED',
+  'SEC_NOT_CONFIGURED',
+  'MARKET_PRICE_UNAVAILABLE',
+  'MUTUAL_FUND_NAV_UNAVAILABLE',
+];
 
 // แปลง Text ที่ผู้ใช้พิมพ์ (จำนวนเงิน/วันที่) เป็นตัวเลข — รองรับเลขไทย + Comma
 // ผ่าน commandParser.normalizeText แล้วดึงเฉพาะตัวเลขตัวแรก (เผื่อพิมพ์ "1000 บาท")
@@ -363,6 +377,46 @@ async function attachSlipBestEffort(userId, pending, result) {
   }
 }
 
+// ── Guided Buy Flow (S8 R2 รอบ 2) — ขั้นสุดท้าย: ได้ Symbol + จำนวนเงินครบแล้ว ──
+//
+// ⚠️ กฎเหล็กของงานนี้: "ห้ามสร้าง Logic คำนวณเงิน/บันทึก Transaction คู่ขนานใหม่"
+// ฟังก์ชันนี้จึงประกอบ parsed object รูปแบบเดียวกับที่ commandParser.parseCommand
+// คืนให้ Expert Path ("ซื้อ BTC 1000" → { command: BUY, params: { symbol, amountThb } })
+// แล้วส่งเข้า routeCommand ตัวเดิม — ไม่แตะ createPending ตรงๆ เพราะ routeCommand มี
+// 3 ชั้นที่ต้องได้ครบ: symbolRegistry type resolution → กองทุน (Class Picker) →
+// Manual Quantity Fallback → แล้วค่อย createPending → การ์ด Preview + ปุ่ม confirm เดิม
+// (Pattern เดียวกับที่ ocr_confirm ทำอยู่แล้ว ไม่ใช่ของใหม่)
+//
+// การลบ Session: ลบ "หลัง routeCommand สำเร็จ" เท่านั้น — ถ้า throw (เช่น
+// ASSET_LIMIT_REACHED) Session ยังค้างที่ AWAITING_AMOUNT ให้ผู้ใช้ลองยอดใหม่ได้ทันที
+// โดยไม่ต้องเริ่ม Flow ใหม่ทั้งหมด (Pattern เดียวกับ reminderSetupFlow.handleAmountEntered)
+async function finishGuidedBuy(user, symbol, amountThb) {
+  const parsed = { command: COMMANDS.BUY, params: { symbol, amountThb } };
+
+  // Manual Quantity Fallback (Round 10-B) — Guided Flow ส่ง "ยอดเงินอย่างเดียว" เสมอ
+  // เหมือนสลิป Amount-only จึงเจอปัญหาเดียวกัน: สินทรัพย์ที่ไม่ใช่ Crypto มักไม่มี
+  // Price Feed อัตโนมัติ (หุ้น Small-cap อย่าง EOSE/OKLO) ระบบจึงคำนวณจำนวนหุ้นจาก
+  // ยอดเงินให้ไม่ได้ → ชี้ทางให้กรอกจำนวนหุ้นเองผ่าน Expert Path แทน (ไม่ตอบ Error ตัน)
+  const amountOnlyManual = symbolRegistry.lookupType(symbol) !== 'crypto';
+
+  try {
+    const reply = await routeCommand(user, parsed);
+    await guidedBuyFlow.cancelFlow(user.id);
+    return reply;
+  } catch (err) {
+    if (amountOnlyManual && MANUAL_FALLBACK_CODES.includes(err.code)) {
+      // ส่งไม้ต่อให้ Expert Path — จบ Guided Session ตรงนี้เลย ไม่ปล่อยค้างไว้ดัก
+      // ข้อความที่ผู้ใช้กำลังจะพิมพ์ (ข้อความ Prefill นั้น parseCommand จับได้เองอยู่แล้ว
+      // และ Expert Path ชนะ Session เสมอ แต่การปล่อย Session ตายค้างไว้ไม่มีประโยชน์)
+      await guidedBuyFlow.cancelFlow(user.id);
+      return flexMessage.buildOcrManualQuantityMessage(
+        `ซื้อ ${symbol} <จำนวนหุ้น> หุ้น รวม ${amountThb}`
+      );
+    }
+    throw err;
+  }
+}
+
 // ประมวลผล Postback จากปุ่มในข้อความ Preview (ยืนยัน/แก้ไข/ยกเลิก)
 // data รูปแบบ "action=<confirm|edit|cancel>&pendingId=<uuid>" (flexMessage.util)
 async function routePostback(user, data) {
@@ -643,12 +697,63 @@ async function routePostback(user, data) {
       return flexMessage.buildFallbackMenuMessage();
     }
 
-    // ── ปุ่ม "📈 บันทึก DCA" ในเมนู → การ์ดสอนพิมพ์คำสั่งซื้อ/ขาย ────────────────
-    // ⚠️ รอบ 1 เป็น Placeholder เท่านั้น (Reuse buildAddGuideMessage เดิม) — รอบ 2
-    // จะเปลี่ยน case นี้เป็นจุดเริ่ม Guided Buy Flow (ถาม Symbol → จำนวนเงิน → ยืนยัน)
-    // แยก action จาก add_guide โดยตั้งใจ กันปุ่มในเมนูวนกลับมาเปิดเมนูตัวเอง
+    // ── Guided Buy Flow (S8 R2 รอบ 2) — บันทึก DCA แบบกดปุ่มทีละขั้น ────────────
+    // จุดเริ่ม: ปุ่ม "📈 บันทึก DCA" ในเมนู (แยก action จาก add_guide โดยตั้งใจ
+    // กันปุ่มในเมนูวนกลับมาเปิดเมนูตัวเอง)
+    //
+    // Session ชนกัน: startFlow โยน GUIDED_BUY_SESSION_BUSY ถ้ามี Flow อื่นค้างอยู่ —
+    // จับที่นี่แล้วตอบข้อความบอกสถานะ + ปุ่มให้ผู้ใช้ตัดสินใจเอง (ห้ามเขียนทับเงียบๆ)
     case 'buy_guide': {
-      return flexMessage.buildAddGuideMessage();
+      try {
+        const { symbols } = await guidedBuyFlow.startFlow(user.id);
+        return flexMessage.buildGuidedBuySymbolQuickReply(symbols);
+      } catch (err) {
+        if (err.code === 'GUIDED_BUY_SESSION_BUSY') {
+          return flexMessage.buildGuidedBuyBusyMessage(err.details?.kind);
+        }
+        throw err;
+      }
+    }
+
+    // ผู้ใช้ยืนยันว่าจะทิ้ง Session เดิม (ตั้งเตือน/นำเข้าพอร์ต) แล้วเริ่ม Guided Buy —
+    // force: true ล้าง Session อื่นให้ "ตามคำสั่งผู้ใช้โดยตรง" ไม่ใช่การทับเงียบๆ
+    case 'gbuy_force_start': {
+      const { symbols } = await guidedBuyFlow.startFlow(user.id, { force: true });
+      return flexMessage.buildGuidedBuySymbolQuickReply(symbols);
+    }
+
+    // ขั้น 1 — เลือก Symbol จากปุ่ม (พอร์ตของผู้ใช้เอง)
+    case 'gbuy_symbol': {
+      const session = await guidedBuyFlow.handleSymbolSelected(user.id, params.get('sym'));
+      return flexMessage.buildGuidedBuyAmountQuickReply(session.symbol);
+    }
+
+    // ขั้น 1 — กด "พิมพ์ชื่อเอง" (ยังอยู่ขั้นเดิม รอข้อความ — ดักที่ routeText)
+    case 'gbuy_symbol_manual': {
+      await guidedBuyFlow.requireAwaitingSymbol(user.id);
+      return flexMessage.buildGuidedBuyAskSymbolMessage();
+    }
+
+    // ขั้น 2 — เลือกจำนวนเงินจาก Chips → จบ Flow (Preview)
+    case 'gbuy_amount': {
+      const { symbol, amountThb } = await guidedBuyFlow.handleAmountEntered(
+        user.id,
+        Number(params.get('amt'))
+      );
+      return finishGuidedBuy(user, symbol, amountThb);
+    }
+
+    // ขั้น 2 — กด "กำหนดเอง" (ยังอยู่ขั้นเดิม รอข้อความ — ดักที่ routeText)
+    case 'gbuy_amount_manual': {
+      const session = await guidedBuyFlow.requireAwaitingAmount(user.id);
+      return flexMessage.buildGuidedBuyAskAmountMessage(session.symbol);
+    }
+
+    // ปุ่มยกเลิกของ Guided Buy — action แยกจาก cancel_reminder_setup เด็ดขาด
+    // (บทเรียน S8 R2 รอบ 1: ปุ่มยกเลิกข้าม Flow = ยกเลิกไม่ได้จริง + throw)
+    case 'cancel_guided_buy': {
+      await guidedBuyFlow.cancelFlow(user.id);
+      return flexMessage.buildGuidedBuyCancelledMessage();
     }
 
     // ── ปุ่ม "❓ วิธีใช้งาน" → รวมคำสั่งพิมพ์ตรงทั้งหมด (Expert Path ต้องหาเจอเสมอ) ──
@@ -742,12 +847,6 @@ async function routePostback(user, data) {
       try {
         return await routeCommand(user, { command, params: commandParams });
       } catch (err) {
-        const MANUAL_FALLBACK_CODES = [
-          'PRICE_FEED_NOT_IMPLEMENTED',
-          'SEC_NOT_CONFIGURED',
-          'MARKET_PRICE_UNAVAILABLE',
-          'MUTUAL_FUND_NAV_UNAVAILABLE',
-        ];
         if (amountOnlyManual && MANUAL_FALLBACK_CODES.includes(err.code)) {
           const curSuffix = commandParams.currency === 'USD' ? ' USD' : '';
           const prefill = `${side === 'sell' ? 'ขาย' : 'ซื้อ'} ${commandParams.symbol} <จำนวนหุ้น> หุ้น รวม ${amt}${curSuffix}`;
@@ -830,6 +929,27 @@ async function routeText(user, text) {
     return handleBulkImportBatchText(user, text);
   }
 
+  // ── Guided Buy (S8 R2 รอบ 2) — ข้อความที่ผู้ใช้พิมพ์เองในขั้น "พิมพ์ชื่อเอง"/
+  // "กำหนดเอง" | ต้องอยู่ "หลัง" Bulk Import และ "ก่อน" Fallback Menu ตาม Priority
+  // Order ที่กำหนดไว้ (Expert Path → Reminder Setup → Bulk Import → Guided Buy →
+  // Fallback) — ในทางปฏิบัติ Session 3 ชนิดนี้อยู่ร่วมกันไม่ได้อยู่แล้วเพราะ
+  // guidedBuyFlow.startFlow บล็อกตอนเริ่ม แต่คงลำดับไว้ให้ตรงข้อกำหนดเชิงป้องกัน
+  const guidedSession = await guidedBuyFlow.getCurrentSession(user.id);
+  if (guidedSession) {
+    if (guidedSession.step === GUIDED_STEPS.AWAITING_SYMBOL) {
+      const updated = await guidedBuyFlow.handleSymbolSelected(user.id, text);
+      return flexMessage.buildGuidedBuyAmountQuickReply(updated.symbol);
+    }
+
+    if (guidedSession.step === GUIDED_STEPS.AWAITING_AMOUNT) {
+      const { symbol, amountThb } = await guidedBuyFlow.handleAmountEntered(
+        user.id,
+        parseNumericText(text)
+      );
+      return finishGuidedBuy(user, symbol, amountThb);
+    }
+  }
+
   // ไม่เข้าเงื่อนไข Flow ใดเลย → Quick Reply Menu (S8 R2 รอบ 1) แทนการ์ด
   // "ไม่เข้าใจคำสั่ง" ทางตันเดิม เพื่อให้ผู้ใช้กดต่อได้ไม่ต้องเดาคำสั่งเอง
   //
@@ -837,6 +957,7 @@ async function routeText(user, text) {
   //   1. parseCommand จำได้ → routeCommand ไปตั้งแต่ต้นฟังก์ชัน (Expert Path ชนะเสมอ)
   //   2. Reminder Setup Session (AWAITING_AMOUNT / AWAITING_DAY รายเดือน)
   //   3. Bulk Import Session
+  //   4. Guided Buy Session (AWAITING_SYMBOL / AWAITING_AMOUNT — S8 R2 รอบ 2)
   // จึงไม่มีทางแย่ง Session Flow เดิมไปได้ และอยู่หลัง PDPA Gate (handleEvent)
   // อยู่แล้วโดยโครงสร้าง — ผู้ใช้ที่ยังไม่ Consent ไม่มีทางมาถึงบรรทัดนี้
   return flexMessage.buildFallbackMenuMessage();
