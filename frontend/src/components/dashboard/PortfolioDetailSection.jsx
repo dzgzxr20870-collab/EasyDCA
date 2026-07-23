@@ -80,7 +80,7 @@ function PortfolioDetailSection({ portfolio, profitBySymbol, transactions, loadE
     setSlipError(null);
     setSlipLoadingId(txId);
     try {
-      const { signedUrl } = await apiGet(`/dashboard/transactions/${txId}/slip`);
+      const { signedUrl } = await apiGet(`/api/v1/dashboard/transactions/${txId}/slip`);
       setSlipUrl(signedUrl);
     } catch (err) {
       setSlipError(
