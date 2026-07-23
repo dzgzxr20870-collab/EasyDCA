@@ -860,6 +860,81 @@ describe('handleEvent — DCA Reminder Setup Flow (Quick Reply)', () => {
     expect(lastReplyText()).toContain('AAPL');
   });
 
+  // ── Bug Fix: พิมพ์ Label ปุ่ม "บันทึก DCA" เอง (ไม่ใช่กดปุ่ม — ปุ่มจริงเป็น
+  // Postback action=buy_guide เสมอ) ระหว่างมี Reminder Session ค้างในขั้นที่ Text
+  // ปกติ (ตัวเลข) ข้างบนไม่ได้ดักไว้ (AWAITING_DAY แบบ weekly) — ต้องได้ Busy Message
+  // เหมือนกดปุ่ม buy_guide เป๊ะ ไม่ใช่ตกไป Fallback Menu ทั่วไป
+  test('Session ตั้งเตือน AWAITING_DAY (weekly) + พิมพ์ "บันทึก DCA" → Busy Message ไม่ใช่ Fallback', async () => {
+    reminderSetupFlow.getCurrentSession.mockResolvedValue({
+      step: 'AWAITING_DAY',
+      symbol: 'PTT',
+      frequency: 'weekly',
+    });
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+    guidedBuyFlow.startFlow.mockRejectedValue(
+      new guidedBuyFlow.GuidedBuyError('GUIDED_BUY_SESSION_BUSY', 'busy', { kind: 'reminder_setup' })
+    );
+
+    await handleEvent(textEvent('📈 บันทึก DCA'));
+
+    expect(guidedBuyFlow.startFlow).toHaveBeenCalledWith(FREE_USER.id);
+    // ไม่แตะ Session ตั้งเตือนเดิมเลย (แค่แจ้ง ไม่ล้างทิ้งเงียบๆ)
+    expect(reminderSetupFlow.handleDaySelected).not.toHaveBeenCalled();
+    expect(reminderSetupFlow.cancelFlow).not.toHaveBeenCalled();
+    const reply = lastReplyText();
+    expect(reply).toContain('ตั้งเตือน DCA');
+    expect(reply).toContain('action=gbuy_force_start');
+    // ต้องไม่ใช่ Fallback Menu ทั่วไป (Guided Buy Busy Message มีปุ่มเดียว ไม่ใช่ 4 ปุ่ม)
+    expect(reply).not.toContain('ทำรายการด้านล่างนี้ได้เลย');
+  });
+
+  // เคสเสริม: AWAITING_DAY แบบ "monthly" เดิมตีความ Text ใดๆ เป็นวันที่เสมอ (แม้ไม่ใช่
+  // ตัวเลข) — ต้องเช็ค Guided Buy Trigger ก่อนเสมอ ไม่งั้น "บันทึก DCA" จะถูกแปลงเป็น
+  // NaN แล้วโยน INVALID_DAY ผิดๆ แทนที่จะแจ้ง Busy Message ที่ถูกต้อง
+  test('Session ตั้งเตือน AWAITING_DAY (monthly) + พิมพ์ "บันทึก DCA" → Busy Message ไม่ใช่ตีความเป็นวันที่ผิดๆ', async () => {
+    reminderSetupFlow.getCurrentSession.mockResolvedValue({
+      step: 'AWAITING_DAY',
+      symbol: 'AAPL',
+      frequency: 'monthly',
+    });
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+    guidedBuyFlow.startFlow.mockRejectedValue(
+      new guidedBuyFlow.GuidedBuyError('GUIDED_BUY_SESSION_BUSY', 'busy', { kind: 'reminder_setup' })
+    );
+
+    await handleEvent(textEvent('บันทึก DCA'));
+
+    expect(guidedBuyFlow.startFlow).toHaveBeenCalledWith(FREE_USER.id);
+    expect(reminderSetupFlow.handleDaySelected).not.toHaveBeenCalled();
+    const reply = lastReplyText();
+    expect(reply).toContain('ตั้งเตือน DCA');
+    expect(reply).not.toContain('วันที่ไม่ถูกต้อง'); // ข้อความ INVALID_DAY จริง — ต้องไม่ถูกตีความผิดเป็นวันที่
+  });
+
+  // กัน Regression: ตัวเลขจริงตอน AWAITING_AMOUNT ต้องยังถูกตีความเป็นจำนวนเงินของ
+  // Reminder เหมือนเดิม ไม่ถูก Guided Buy Trigger แซง (Test เดิมด้านบนที่ชื่อ "Text
+  // จำนวนเงินตอน AWAITING_AMOUNT" ครอบคลุมอยู่แล้วเช่นกัน — Assert ซ้ำอีกชั้นตรงนี้
+  // เพื่อให้เห็นชัดว่า guidedBuyFlow.startFlow ไม่ถูกเรียกเลย)
+  test('Session ตั้งเตือน AWAITING_AMOUNT + พิมพ์ตัวเลข → ยังตีความเป็นจำนวนเงินเหมือนเดิม ไม่ถูก Guided Trigger แซง', async () => {
+    reminderSetupFlow.getCurrentSession.mockResolvedValue({
+      step: 'AWAITING_AMOUNT',
+      symbol: 'BTC',
+      frequency: 'weekly',
+    });
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+    reminderSetupFlow.handleAmountEntered.mockResolvedValue({
+      symbol: 'BTC',
+      frequency: 'weekly',
+      dayOfWeek: 1,
+      amountThb: 1000,
+    });
+
+    await handleEvent(textEvent('1000'));
+
+    expect(reminderSetupFlow.handleAmountEntered).toHaveBeenCalledWith(FREE_USER.id, 1000);
+    expect(guidedBuyFlow.startFlow).not.toHaveBeenCalled();
+  });
+
   test('กดปุ่มหลัง Session หมดอายุ → SETUP_SESSION_NOT_FOUND แปลเป็นข้อความไทย', async () => {
     const err = new Error('expired');
     err.code = 'SETUP_SESSION_NOT_FOUND';
@@ -1296,7 +1371,7 @@ describe('handleEvent — Bulk Import (Phase 3 Round 6)', () => {
     expect(bulkImportService.previewBatch).not.toHaveBeenCalled();
     // S8 R2 รอบ 1: ปลายทางของ "ไม่มี Session + Parse ไม่ออก" เปลี่ยนเป็น Quick Reply
     // Menu แล้ว — Intent เดิม (ต้องไม่แตะ bulkImportService) ยังตรวจอยู่บรรทัดบน
-    expect(lastReplyText()).toContain('ไม่เข้าใจข้อความนี้');
+    expect(lastReplyText()).toContain('ทำรายการด้านล่างนี้ได้เลย');
   });
 
   test('Postback confirm_bulk_import → เรียก confirmBatch พร้อม options (plan/planExpiresAt) แล้ว reply สรุปผล Best-effort', async () => {
@@ -1385,7 +1460,7 @@ describe('handleEvent — UNKNOWN', () => {
     await handleEvent(textEvent('อะไรสักอย่าง'));
 
     expect(pendingService.createPending).not.toHaveBeenCalled();
-    expect(lastReplyText()).toContain('ไม่เข้าใจข้อความนี้');
+    expect(lastReplyText()).toContain('ทำรายการด้านล่างนี้ได้เลย');
     const call = lineService.replyMessage.mock.calls.at(-1);
     expect(call[1].quickReply.items).toHaveLength(4);
   });
@@ -2291,6 +2366,19 @@ describe('handleEvent — Fallback Quick Reply Menu (S8 R2 รอบ 1)', () => 
     ]);
     // ต้องไม่ใช่การ์ด "ไม่เข้าใจคำสั่ง" ทางตันเดิมอีกต่อไป
     expect(lastReplyText()).not.toContain('ไม่เข้าใจคำสั่งนี้');
+  });
+
+  // Bug Fix: พิมพ์ Label ปุ่ม "บันทึก DCA" เองตรงๆ (ไม่มี Session ค้างเลย) → ต้องเริ่ม
+  // Guided Buy Flow ให้เลย (เหมือนกดปุ่มจริง) ไม่ใช่ตกไป Fallback Menu ทั่วไปเฉยๆ
+  test('ไม่มี Session ค้างเลย + พิมพ์ "บันทึก DCA" ตรงๆ → เริ่ม Guided Buy Flow เหมือนกดปุ่ม', async () => {
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+    guidedBuyFlow.startFlow.mockResolvedValue({ symbols: ['BTC', 'PTT'] });
+
+    await handleEvent(textEvent('บันทึก DCA'));
+
+    expect(guidedBuyFlow.startFlow).toHaveBeenCalledWith(FREE_USER.id);
+    const items = JSON.stringify(lastQuickReplyItems());
+    expect(items).toContain('action=gbuy_symbol&sym=BTC');
   });
 
   test('ปุ่ม "ดูพอร์ต" ใช้ message("พอต") — Reuse Command Parser เดิม ไม่สร้าง Handler ใหม่', async () => {

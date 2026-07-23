@@ -52,6 +52,14 @@ function parseNumericText(text) {
   return match ? Number(match[0]) : NaN;
 }
 
+// ตรงกับ Label/displayText ของปุ่ม "📈 บันทึก DCA" (flexMessage.util.js
+// fallbackQuickReplyItems) — ปุ่มจริงเป็น Postback (action=buy_guide) เสมอ ไม่เคย
+// ส่งข้อความนี้เป็น Text จริง (LINE ไม่ Echo displayText ของปุ่ม Postback กลับมา
+// เป็น Message Event) แต่ผู้ใช้พิมพ์ข้อความนี้เองได้ (เช่น พิมพ์ตามที่เคยเห็นในแชท
+// หลัง Quick Reply เดิมหายไปตอนเปลี่ยนขั้น) — Emoji ไม่บังคับ, ไม่สนใจตัวพิมพ์เล็ก/
+// ใหญ่ (ผ่าน commandParser.normalizeText เหมือน Text อื่นทั้งหมด)
+const GUIDED_BUY_TRIGGER_TEXT = /^(?:📈\s*)?บันทึก\s*dca$/;
+
 // DATABASE.md — users.display_name เป็น NOT NULL ใช้ชื่อชั่วคราวนี้เป็น
 // Fallback เมื่อดึง LINE Profile API ไม่สำเร็จ (pictureUrl nullable อยู่แล้ว
 // จึงยังส่ง null ได้ตามปกติ)
@@ -417,6 +425,22 @@ async function finishGuidedBuy(user, symbol, amountThb) {
   }
 }
 
+// เริ่ม Guided Buy Flow หรือแจ้ง Busy Message ถ้ามี Session อื่นค้างอยู่ — Reuse
+// ร่วมกันทั้ง 2 ทางเข้า: ปุ่ม "📈 บันทึก DCA" (Postback action=buy_guide) และ
+// พิมพ์ข้อความตรงกับ Label ปุ่มเอง (GUIDED_BUY_TRIGGER_TEXT ใน routeText) — ต้อง
+// ได้ผลลัพธ์เดียวกันเป๊ะไม่ว่าจะเข้าทางไหน (ห้ามมี Logic คู่ขนาน)
+async function startGuidedBuyOrBusyMessage(user) {
+  try {
+    const { symbols } = await guidedBuyFlow.startFlow(user.id);
+    return flexMessage.buildGuidedBuySymbolQuickReply(symbols);
+  } catch (err) {
+    if (err.code === 'GUIDED_BUY_SESSION_BUSY') {
+      return flexMessage.buildGuidedBuyBusyMessage(err.details?.kind);
+    }
+    throw err;
+  }
+}
+
 // ประมวลผล Postback จากปุ่มในข้อความ Preview (ยืนยัน/แก้ไข/ยกเลิก)
 // data รูปแบบ "action=<confirm|edit|cancel>&pendingId=<uuid>" (flexMessage.util)
 async function routePostback(user, data) {
@@ -704,15 +728,7 @@ async function routePostback(user, data) {
     // Session ชนกัน: startFlow โยน GUIDED_BUY_SESSION_BUSY ถ้ามี Flow อื่นค้างอยู่ —
     // จับที่นี่แล้วตอบข้อความบอกสถานะ + ปุ่มให้ผู้ใช้ตัดสินใจเอง (ห้ามเขียนทับเงียบๆ)
     case 'buy_guide': {
-      try {
-        const { symbols } = await guidedBuyFlow.startFlow(user.id);
-        return flexMessage.buildGuidedBuySymbolQuickReply(symbols);
-      } catch (err) {
-        if (err.code === 'GUIDED_BUY_SESSION_BUSY') {
-          return flexMessage.buildGuidedBuyBusyMessage(err.details?.kind);
-        }
-        throw err;
-      }
+      return startGuidedBuyOrBusyMessage(user);
     }
 
     // ผู้ใช้ยืนยันว่าจะทิ้ง Session เดิม (ตั้งเตือน/นำเข้าพอร์ต) แล้วเริ่ม Guided Buy —
@@ -909,6 +925,16 @@ async function routeText(user, text) {
 
   // Text ไม่ใช่คำสั่งที่รู้จัก + มี Session ค้าง → อาจเป็น Input ของ Flow
   if (session) {
+    // Guided Buy — Bug Fix: เช็คก่อนตีความเป็น Input ของ Flow ตั้งเตือนเสมอ (ไม่ว่า
+    // Session จะอยู่ขั้นไหนก็ตาม) เพราะ Text นี้ไม่ใช่ตัวเลข/วันที่ที่ Flow ตั้งเตือน
+    // ต้องการ — ถ้าปล่อยให้ AWAITING_DAY (monthly) ตีความก่อน จะกลายเป็นวันที่ผิดๆ
+    // (INVALID_DAY) แทนที่จะแจ้ง Busy Message ที่ถูกต้อง ส่วน AWAITING_AMOUNT ไม่ชน
+    // กันเลยเพราะ parseNumericText("บันทึก dca") ไม่มีทางตรงกับ Regex นี้อยู่แล้ว
+    // (ตัวเลขจริงยังตีความเป็นจำนวนเงิน/วันที่ตามปกติเหมือนเดิมทุกกรณี)
+    if (GUIDED_BUY_TRIGGER_TEXT.test(commandParser.normalizeText(text))) {
+      return startGuidedBuyOrBusyMessage(user);
+    }
+
     if (session.step === STEPS.AWAITING_AMOUNT) {
       const reminder = await reminderSetupFlow.handleAmountEntered(user.id, parseNumericText(text));
       return flexMessage.buildReminderSetMessage(reminder);
@@ -950,6 +976,18 @@ async function routeText(user, text) {
     }
   }
 
+  // ── Guided Buy — Bug Fix: พิมพ์ข้อความตรงกับ Label ปุ่ม "📈 บันทึก DCA" เอง ────
+  // (ไม่ใช่การกดปุ่มจริง — ปุ่มจริงเป็น Postback action=buy_guide เสมอ) กรณี "มี
+  // Reminder Session ค้างอยู่" ถูกดักไปแล้วตั้งแต่ต้น Block ด้านบน (บรรทัดแรกใน
+  // `if (session)`) จุดนี้จึงเหลือแค่กรณี "ไม่มี Session ค้างเลย" (Guided Session ก็
+  // ไม่มี — ไม่งั้น Block ด้านบนจะ Return ไปก่อนแล้ว) ซึ่งเดิม Text นี้ไม่ตรง COMMANDS
+  // ใดเลย (UNKNOWN) จึงตกไป Fallback Menu ทั่วไปเฉยๆ แทนที่จะเริ่ม Guided Buy Flow
+  // ให้เลย — ต้องอยู่ "หลัง" ทุก Session ที่รับ Text ปกติได้จริง (กันไม่ให้แซง Input
+  // จริงของ Flow อื่น) และ "ก่อน" Fallback ท้ายสุดเสมอ
+  if (GUIDED_BUY_TRIGGER_TEXT.test(commandParser.normalizeText(text))) {
+    return startGuidedBuyOrBusyMessage(user);
+  }
+
   // ไม่เข้าเงื่อนไข Flow ใดเลย → Quick Reply Menu (S8 R2 รอบ 1) แทนการ์ด
   // "ไม่เข้าใจคำสั่ง" ทางตันเดิม เพื่อให้ผู้ใช้กดต่อได้ไม่ต้องเดาคำสั่งเอง
   //
@@ -958,6 +996,7 @@ async function routeText(user, text) {
   //   2. Reminder Setup Session (AWAITING_AMOUNT / AWAITING_DAY รายเดือน)
   //   3. Bulk Import Session
   //   4. Guided Buy Session (AWAITING_SYMBOL / AWAITING_AMOUNT — S8 R2 รอบ 2)
+  //   5. GUIDED_BUY_TRIGGER_TEXT (พิมพ์ Label ปุ่ม "บันทึก DCA" เอง — Bug Fix)
   // จึงไม่มีทางแย่ง Session Flow เดิมไปได้ และอยู่หลัง PDPA Gate (handleEvent)
   // อยู่แล้วโดยโครงสร้าง — ผู้ใช้ที่ยังไม่ Consent ไม่มีทางมาถึงบรรทัดนี้
   return flexMessage.buildFallbackMenuMessage();

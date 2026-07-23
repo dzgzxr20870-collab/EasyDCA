@@ -2005,10 +2005,12 @@ function fallbackQuickReplyItems() {
   ];
 }
 
+// Tone: ชวนทำรายการต่อ ไม่ใช่แจ้ง Error (ห้ามใช้คำว่า "ไม่เข้าใจ"/"ขอโทษ") — จุดนี้
+// เป็นทางออกปกติของ Flow (Parse ไม่ออก + ไม่มี Session ค้าง) ไม่ใช่ระบบมีปัญหา
 function buildFallbackMenuMessage() {
   return {
     type: 'text',
-    text: 'ขอโทษครับ ผมไม่เข้าใจข้อความนี้ 🤔\nเลือกเมนูด้านล่างได้เลย หรือจะพิมพ์คำสั่งเองก็ได้ครับ',
+    text: 'สามารถทำรายการด้านล่างนี้ได้เลยครับ 👇 หรือพิมพ์คำสั่งเองก็ได้',
     quickReply: { items: fallbackQuickReplyItems() },
   };
 }
