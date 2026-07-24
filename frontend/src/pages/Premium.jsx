@@ -3,6 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { getToken, stashReturnTo, apiGet, apiPost, apiUpload, API_BASE_URL } from '../lib/api.js';
 // Reuse Style Pattern เดียวกับ Dashboard/Admin (การ์ด/ปุ่ม) — ไม่ทำ CSS ใหม่
 import './Dashboard.css';
+// Mascot — ข้อยกเว้นกฎ "ห้าม Mascot" ของโปรเจกต์ จำกัดเฉพาะหน้า /premium เท่านั้น
+// (ผู้ใช้อนุมัติ/ออกแบบเองแล้ว) ห้ามนำไปใช้หน้าอื่น
+import mascotPremium from '../assets/mascot-premium.png';
 
 // ชื่อเดือนไทยเต็ม — Copy Pattern เดียวกับ Dashboard.jsx/DashboardHome.jsx
 // (formatThaiDate เขียน Inline ในแต่ละหน้า ไม่มี Shared Util ข้ามหน้าในโปรเจกต์นี้)
@@ -44,10 +47,67 @@ function buildFeatureRows(assetLimit) {
   ];
 }
 
-function featureCellText(value) {
-  if (value === true) return '✓';
-  if (value === false) return '✗';
-  return value;
+// Render List <li> ของการ์ดเทียบแผน จาก buildFeatureRows แถวเดียวกัน (column =
+// 'free' | 'premium') — ค่าที่เป็น String (เช่น "จำกัด 2 ตัว") ต่อท้ายในวงเล็บ,
+// false = ปิด (✗ + สีจาง), อย่างอื่นถือว่าเปิด (✓)
+function renderPlanFeatureList(rows, column) {
+  return rows.map((row) => {
+    const value = row[column];
+    const enabled = value !== false;
+    const detail = typeof value === 'string' ? ` (${value})` : '';
+    return (
+      <li key={row.label} className={enabled ? undefined : 'off'}>
+        <span className="dashboard-premium-plan-check">{enabled ? '✓' : '✗'}</span>
+        <span>
+          {row.label}
+          {detail}
+        </span>
+      </li>
+    );
+  });
+}
+
+// พอร์ตตัวอย่างประกอบ Hero (Decorative Mock) — สัดส่วนสมมติทั่วไป ไม่ใช่ข้อมูลจริง
+// ของ User และไม่ใช่ผลตอบแทนที่ Premium การันตีให้ได้ (EasyDCA ห้ามสื่อการันตี/ผล
+// ตอบแทนการลงทุนตามกฎยืนของโปรเจกต์) — ใช้สัดส่วน Asset Allocation (องค์ประกอบพอร์ต)
+// แทนตัวเลขผลตอบแทน/กำไร กัน User เข้าใจผิดว่าเป็นการการันตีผลตอบแทน ต้องมี Label
+// "ภาพประกอบ" กำกับเสมอ (ดู Disclaimer ท้ายการ์ด)
+const MOCK_ALLOCATION = [
+  { label: 'คริปโต', pct: 40 },
+  { label: 'หุ้นสหรัฐ', pct: 35 },
+  { label: 'ทองคำ', pct: 25 },
+];
+
+// Benefit "Premium จะช่วยคุณ" — อ้างอิงเฉพาะ Feature/Gate จริงที่มีอยู่แล้วเท่านั้น
+// (Asset Limit, DCA Planner Gate, AI Slip OCR Gate (Round 9, Premium เท่านั้น),
+// Export Gate) ห้ามใส่ Feature ที่ระบบยังไม่มีจริง (เช่น Multi-Portfolio)
+const PREMIUM_BENEFITS = [
+  {
+    icon: '💼',
+    title: 'ถือสินทรัพย์ได้ไม่จำกัด',
+    desc: 'ติดตามพอร์ตของคุณได้ทุกสินทรัพย์ ไม่ต้องเลือกว่าจะเก็บอะไรบ้าง',
+  },
+  {
+    icon: '🔔',
+    title: 'ตั้งแผน DCA อัตโนมัติได้ไม่จำกัด',
+    desc: 'ตั้งเตือนซื้อสินทรัพย์ได้หลายแผนพร้อมกัน ไม่ติดเพดานเหมือนแผนฟรี',
+  },
+  {
+    icon: '🤖',
+    title: 'AI อ่านสลิปให้อัตโนมัติ',
+    desc: 'แนบรูปสลิปซื้อขาย แล้วให้ AI กรอกรายการให้ทันที ไม่ต้องพิมพ์เอง',
+  },
+  {
+    icon: '📄',
+    title: 'ส่งออกรายงาน PDF/Excel',
+    desc: 'ดาวน์โหลดรายงานพอร์ตของคุณไปใช้ต่อได้ทุกเมื่อที่ต้องการ',
+  },
+];
+
+// เลื่อนหน้าไปที่การ์ดเทียบแผน — ใช้กับปุ่ม CTA ใน Hero (Pattern scrollIntoView
+// เดียวกับที่ DashboardHome.jsx ใช้กับเมนู Sidebar Anchor)
+function scrollToPlans() {
+  document.getElementById('dashboard-premium-plans')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -62,12 +122,18 @@ function featureCellText(value) {
 //
 // Route Guard: Pattern เดียวกับ DashboardHome/Admin — ไม่มี Token (เช่นเปิดหน้านี้ตรงๆ
 // หลัง Refresh ที่ทำ JWT ใน Memory หาย) → เด้งกลับ Login (/) ให้ LIFF Re-auth ใหม่
+//
+// Business Model: จ่ายครั้งเดียวต่อรอบ (ไม่ใช่ Subscription ที่ตัดเงินอัตโนมัติ) —
+// plan_expires_at หมดอายุเองแล้ว Cron (planDowngrade.job.js) ลดเป็น Free ให้อัตโนมัติ
+// ไม่มี Auto-renew ให้ "ยกเลิก" จึงใช้ Copy "ไม่ต้องผูกมัดระยะยาว" แทน (ดู Perks Strip)
 
-// ป้ายราคาแพ็กเกจ (Presentation) — ยอดจริงที่ต้องโอน (รวมเศษสตางค์) มาจาก Response
-// ของ requestPayment เท่านั้น ไม่คำนวณเองฝั่ง Client
+// ราคาแพ็กเกจจริง (Presentation) — ยอดที่ต้องโอนจริง (รวมเศษสตางค์เฉพาะคำขอ) มาจาก
+// Response ของ requestPayment เท่านั้น ไม่คำนวณเองฝั่ง Client — priceThb ใช้แสดงผล
+// บนการ์ดเทียบแผน + คำนวณ "เฉลี่ยต่อเดือน" ของแพ็กเกจรายปีเท่านั้น (Single Source
+// เดียวกับที่เคยใช้ Generate QR กันเลขไม่ตรงกัน 2 จุด)
 const PLAN_OPTIONS = [
-  { value: 'monthly', label: 'รายเดือน', priceLabel: '59 บาท / เดือน' },
-  { value: 'yearly', label: 'รายปี', priceLabel: '590 บาท / ปี (ประหยัดกว่า)' },
+  { value: 'monthly', label: 'รายเดือน', priceThb: 59, priceUnit: 'บาท / เดือน' },
+  { value: 'yearly', label: 'รายปี', priceThb: 590, priceUnit: 'บาท / ปี' },
 ];
 
 // ข้อความ Error → ภาษาไทย (code จาก Backend payment.controller STATUS_BY_CODE)
@@ -111,9 +177,12 @@ function Premium() {
     assetLimit: 2,
   });
 
-  const [billingPeriod, setBillingPeriod] = useState('monthly');
+  // billingPeriod ที่กำลังสร้าง QR อยู่ (null = ไม่มี) — การ์ดเทียบแผนแต่ละใบยิง
+  // handleCreatePayment(period) ตรงๆ เมื่อกด "เลือกแพ็กเกจนี้" (รวมขั้นเลือก+ยืนยัน
+  // เป็นคลิกเดียวต่อการ์ด แทน Chip-Select + ปุ่มแยกแบบเดิม) ไม่ใช่ Logic การเงินใหม่
+  // ยังเรียก POST /api/v1/payment/request Endpoint เดิมทุกประการ
+  const [creatingPeriod, setCreatingPeriod] = useState(null);
   const [payment, setPayment] = useState(null); // { paymentId, amountThb, expiresAt }
-  const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState(null);
 
   const [slipFile, setSlipFile] = useState(null);
@@ -144,11 +213,11 @@ function Premium() {
 
   const featureRows = buildFeatureRows(planInfo.assetLimit ?? 2);
 
-  async function handleCreatePayment() {
+  async function handleCreatePayment(period) {
     setCreateError(null);
-    setCreating(true);
+    setCreatingPeriod(period);
     try {
-      const result = await apiPost('/api/v1/payment/request', { billingPeriod });
+      const result = await apiPost('/api/v1/payment/request', { billingPeriod: period });
       setPayment({
         paymentId: result.paymentId,
         amountThb: result.amountThb,
@@ -163,7 +232,7 @@ function Premium() {
     } catch (err) {
       setCreateError(errorText(err.message));
     } finally {
-      setCreating(false);
+      setCreatingPeriod(null);
     }
   }
 
@@ -211,71 +280,134 @@ function Premium() {
       </header>
 
       <div className="dashboard-container">
-        {/* ── ตารางเทียบ Feature Free vs Premium ──────────────────────────────── */}
+        {/* ── Hero Banner + Mascot (ข้อยกเว้นเฉพาะหน้านี้) ─────────────────────── */}
         {!payment && (
-          <section className="dashboard-section">
-            <h2>เทียบสิทธิ์ Free vs Premium</h2>
-            <div className="dashboard-table-wrap">
-              <table className="dashboard-table">
-                <thead>
-                  <tr>
-                    <th>ฟีเจอร์</th>
-                    <th className="dashboard-table-center">Free</th>
-                    <th className="dashboard-table-center">Premium</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {featureRows.map((row) => (
-                    <tr key={row.label}>
-                      <td>{row.label}</td>
-                      <td className="dashboard-table-center">{featureCellText(row.free)}</td>
-                      <td className="dashboard-table-center">{featureCellText(row.premium)}</td>
-                    </tr>
+          <section className="dashboard-premium-hero">
+            <div>
+              <h1 className="dashboard-premium-hero-title">EasyDCA Premium</h1>
+              <p className="dashboard-premium-hero-sub">
+                ปลดล็อกการทำ DCA แบบเต็มรูปแบบ — ติดตามสินทรัพย์ไม่จำกัด ตั้งแผนอัตโนมัติไม่จำกัด
+                พร้อมให้ AI ช่วยอ่านสลิปและส่งออกรายงานพอร์ตของคุณได้ทุกเมื่อ
+              </p>
+              {planInfo.isPremiumActive && (
+                <p className="dashboard-premium-hero-expiry">
+                  สมาชิกของคุณจะหมดอายุวันที่ {formatThaiDate(planInfo.planExpiresAt)}
+                </p>
+              )}
+              <button type="button" className="dashboard-premium-hero-cta" onClick={scrollToPlans}>
+                {planInfo.isPremiumActive ? '🔄 ต่ออายุสมาชิก Premium' : '👑 อัพเกรดเป็น Premium'}
+              </button>
+            </div>
+
+            <div className="dashboard-premium-hero-right">
+              <img src={mascotPremium} alt="EasyDCA Mascot" className="dashboard-premium-mascot" />
+              <div className="dashboard-premium-mock-card">
+                <p className="dashboard-premium-mock-title">ตัวอย่างสัดส่วนพอร์ต</p>
+                <div className="dashboard-premium-mock-bars">
+                  {MOCK_ALLOCATION.map((row) => (
+                    <div className="dashboard-premium-mock-bar-row" key={row.label}>
+                      <span className="dashboard-premium-mock-bar-label">{row.label}</span>
+                      <span className="dashboard-premium-mock-bar-track">
+                        <span
+                          className="dashboard-premium-mock-bar-fill"
+                          style={{ width: `${row.pct}%` }}
+                        />
+                      </span>
+                      <span>{row.pct}%</span>
+                    </div>
                   ))}
-                </tbody>
-              </table>
+                </div>
+                <p className="dashboard-premium-mock-disclaimer">
+                  *ภาพประกอบตัวอย่าง ไม่ใช่ข้อมูลพอร์ตหรือผลตอบแทนจริง
+                </p>
+              </div>
             </div>
           </section>
         )}
 
-        {/* ── ขั้นที่ 1: เลือกแพ็กเกจ + สร้าง QR ──────────────────────────────── */}
+        {/* ── List "Premium จะช่วยคุณ" ─────────────────────────────────────────── */}
         {!payment && (
           <section className="dashboard-section">
-            <h2>{planInfo.isPremiumActive ? '🔄 ต่ออายุสมาชิก Premium' : '👑 อัพเกรดเป็น Premium'}</h2>
-            <p className="dashboard-card-sub">
-              {planInfo.isPremiumActive
-                ? `สมาชิกของคุณจะหมดอายุวันที่ ${formatThaiDate(planInfo.planExpiresAt)} — ต่ออายุตอนนี้เพื่อใช้งานต่อเนื่องไม่มีสะดุด`
-                : 'ปลดล็อกทุกฟีเจอร์: สินทรัพย์ไม่จำกัด, แผน DCA ไม่จำกัด และส่งออกรายงาน PDF/Excel'}
-            </p>
-
-            <div className="dashboard-chip-group" style={{ marginTop: '1rem' }}>
-              {PLAN_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  className={`dashboard-chip${billingPeriod === opt.value ? ' on' : ''}`}
-                  onClick={() => setBillingPeriod(opt.value)}
-                >
-                  {opt.label} · {opt.priceLabel}
-                </button>
+            <h2>Premium จะช่วยคุณ</h2>
+            <ul className="dashboard-premium-benefits">
+              {PREMIUM_BENEFITS.map((b) => (
+                <li className="dashboard-premium-benefit" key={b.title}>
+                  <span className="dashboard-premium-benefit-ic">{b.icon}</span>
+                  <div>
+                    <p className="dashboard-premium-benefit-title">{b.title}</p>
+                    <p className="dashboard-premium-benefit-desc">{b.desc}</p>
+                  </div>
+                </li>
               ))}
-            </div>
+            </ul>
+          </section>
+        )}
 
+        {/* ── การ์ดเทียบแผน 3 คอลัมน์ (Free / Premium รายเดือน / Premium รายปี-เด่น) ── */}
+        {!payment && (
+          <section className="dashboard-section" id="dashboard-premium-plans">
+            <h2>เลือกแผนที่ใช่สำหรับคุณ</h2>
             {createError && <p className="dashboard-message error">{createError}</p>}
+            <div className="dashboard-premium-plans">
+              <div className="dashboard-premium-plan-card">
+                <p className="dashboard-premium-plan-name">Free</p>
+                <p className="dashboard-premium-plan-price">ฟรี</p>
+                <p className="dashboard-premium-plan-note">&nbsp;</p>
+                <ul className="dashboard-premium-plan-features">
+                  {renderPlanFeatureList(featureRows, 'free')}
+                </ul>
+                <div className="dashboard-premium-plan-current">
+                  {!planInfo.isPremiumActive ? 'แผนที่คุณใช้อยู่ตอนนี้' : ' '}
+                </div>
+              </div>
 
-            <div style={{ marginTop: '1rem' }}>
-              <button
-                type="button"
-                className="dashboard-logout-btn"
-                onClick={handleCreatePayment}
-                disabled={creating}
-              >
-                {creating
-                  ? 'กำลังสร้าง QR...'
-                  : planInfo.isPremiumActive
-                    ? 'สร้าง QR ต่ออายุ'
-                    : 'สร้าง QR ชำระเงิน'}
-              </button>
+              {PLAN_OPTIONS.map((opt) => {
+                const featured = opt.value === 'yearly';
+                return (
+                  <div
+                    key={opt.value}
+                    className={`dashboard-premium-plan-card${featured ? ' featured' : ''}`}
+                  >
+                    {featured && <span className="dashboard-premium-plan-badge">แนะนำ · คุ้มกว่า</span>}
+                    <p className="dashboard-premium-plan-name">Premium {opt.label}</p>
+                    <p className="dashboard-premium-plan-price">
+                      {opt.priceThb.toLocaleString('th-TH')} <small>{opt.priceUnit}</small>
+                    </p>
+                    <p className="dashboard-premium-plan-note">
+                      {featured ? `เฉลี่ย ~${Math.round(opt.priceThb / 12)} บาท/เดือน` : ' '}
+                    </p>
+                    <ul className="dashboard-premium-plan-features">
+                      {renderPlanFeatureList(featureRows, 'premium')}
+                    </ul>
+                    <button
+                      type="button"
+                      className={`dashboard-premium-plan-btn${featured ? ' primary' : ''}`}
+                      onClick={() => handleCreatePayment(opt.value)}
+                      disabled={creatingPeriod !== null}
+                    >
+                      {creatingPeriod === opt.value ? 'กำลังสร้าง QR...' : 'เลือกแพ็กเกจนี้'}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
+        {/* ── Perks Strip — เฉพาะข้อความที่เป็นจริงตาม Business Model ปัจจุบัน ──────── */}
+        {!payment && (
+          <section className="dashboard-section">
+            <div className="dashboard-premium-perks">
+              <div className="dashboard-premium-perk">
+                <span className="dashboard-premium-perk-ic">🔓</span> ไม่ต้องผูกมัดระยะยาว
+              </div>
+              <div className="dashboard-premium-perk">
+                <span className="dashboard-premium-perk-ic">💳</span> ชำระเงินปลอดภัยผ่าน PromptPay
+              </div>
+              <div className="dashboard-premium-perk">
+                <span className="dashboard-premium-perk-ic">🔒</span> ข้อมูล Backup ของคุณเข้ารหัสระดับธนาคาร
+                (AES-256-GCM)
+              </div>
             </div>
           </section>
         )}

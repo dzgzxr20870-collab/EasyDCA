@@ -354,13 +354,6 @@
   font-size: 13px;
 }
 
-/* ตารางเทียบ Feature Free vs Premium (หน้า /premium) — จัดกึ่งกลางคอลัมน์ Free/Premium */
-.dashboard-table th.dashboard-table-center,
-.dashboard-table td.dashboard-table-center {
-  text-align: center;
-  white-space: normal;
-}
-
 .profit-positive {
   color: var(--dca-pos);
   font-weight: 600;
@@ -709,4 +702,341 @@
 .dashboard-format-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Premium Redesign (หน้า /premium เท่านั้น) — Hero + Mascot, การ์ดเทียบแผน 3
+   คอลัมน์, List Benefit, Perks Strip ข้อยกเว้น Mascot จำกัดเฉพาะหน้านี้ (ดู
+   Premium.jsx) ไม่ใช้ที่หน้าอื่น
+   ═══════════════════════════════════════════════════════════════════════ */
+.dashboard-premium-hero {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr;
+  gap: 28px;
+  align-items: center;
+  background: linear-gradient(135deg, var(--dca-green) 0%, var(--dca-green-2) 100%);
+  border-radius: 20px;
+  padding: 32px;
+  margin-bottom: 20px;
+  color: #fff;
+  box-shadow: var(--dca-shadow);
+}
+
+.dashboard-premium-hero-title {
+  font-size: 28px;
+  font-weight: 800;
+  margin: 0 0 10px;
+}
+
+.dashboard-premium-hero-sub {
+  font-size: 14.5px;
+  line-height: 1.6;
+  opacity: 0.94;
+  margin: 0 0 16px;
+  max-width: 480px;
+}
+
+.dashboard-premium-hero-expiry {
+  font-size: 13px;
+  opacity: 0.92;
+  margin: 0 0 16px;
+  font-weight: 600;
+}
+
+.dashboard-premium-hero-cta {
+  background: #fff;
+  color: var(--dca-green-2);
+  border: none;
+  border-radius: 12px;
+  padding: 13px 24px;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+}
+
+.dashboard-premium-hero-right {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.dashboard-premium-mascot {
+  width: 150px;
+  height: auto;
+  filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.2));
+}
+
+.dashboard-premium-mock-card {
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 14px;
+  padding: 14px 16px;
+  width: 100%;
+  max-width: 240px;
+}
+
+.dashboard-premium-mock-title {
+  font-size: 12px;
+  font-weight: 700;
+  margin: 0 0 8px;
+  opacity: 0.95;
+}
+
+.dashboard-premium-mock-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dashboard-premium-mock-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.dashboard-premium-mock-bar-label {
+  width: 62px;
+  flex-shrink: 0;
+  opacity: 0.92;
+}
+
+.dashboard-premium-mock-bar-track {
+  flex: 1;
+  height: 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.22);
+  overflow: hidden;
+}
+
+.dashboard-premium-mock-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.dashboard-premium-mock-disclaimer {
+  font-size: 10px;
+  opacity: 0.82;
+  margin: 8px 0 0;
+  text-align: center;
+}
+
+/* ── List "Premium จะช่วยคุณ" ── */
+.dashboard-premium-benefits {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.dashboard-premium-benefit {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.dashboard-premium-benefit-ic {
+  font-size: 20px;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--dca-card-alt);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dashboard-premium-benefit-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--dca-text);
+  margin: 0 0 2px;
+}
+
+.dashboard-premium-benefit-desc {
+  font-size: 12px;
+  color: var(--dca-text-muted);
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* ── การ์ดเทียบแผน 3 คอลัมน์ ── */
+.dashboard-premium-plans {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+}
+
+.dashboard-premium-plan-card {
+  background: var(--dca-card);
+  border: 1.5px solid var(--dca-border);
+  border-radius: 16px;
+  padding: 24px 18px 18px;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.dashboard-premium-plan-card.featured {
+  border-color: var(--dca-green);
+  background: linear-gradient(180deg, rgba(6, 199, 85, 0.08), var(--dca-card) 60%);
+  box-shadow: 0 10px 28px rgba(6, 199, 85, 0.16);
+}
+
+.dashboard-premium-plan-badge {
+  position: absolute;
+  top: -12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--dca-green);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 12px;
+  border-radius: 99px;
+  white-space: nowrap;
+}
+
+.dashboard-premium-plan-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--dca-text);
+  margin: 4px 0;
+  text-align: center;
+}
+
+.dashboard-premium-plan-price {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--dca-text);
+  text-align: center;
+  margin: 0 0 4px;
+}
+
+.dashboard-premium-plan-price small {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dca-text-muted);
+}
+
+.dashboard-premium-plan-note {
+  font-size: 11.5px;
+  color: var(--dca-green-2);
+  text-align: center;
+  margin: 0 0 16px;
+  font-weight: 600;
+  min-height: 15px;
+}
+
+.dashboard-premium-plan-features {
+  list-style: none;
+  margin: 0 0 18px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  flex: 1;
+}
+
+.dashboard-premium-plan-features li {
+  font-size: 12.5px;
+  color: var(--dca-text);
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  line-height: 1.5;
+}
+
+.dashboard-premium-plan-features li.off {
+  color: var(--dca-text-muted);
+}
+
+.dashboard-premium-plan-check {
+  flex-shrink: 0;
+  font-weight: 800;
+}
+
+.dashboard-premium-plan-features li.off .dashboard-premium-plan-check {
+  opacity: 0.5;
+}
+
+.dashboard-premium-plan-btn {
+  border-radius: 11px;
+  padding: 12px;
+  font-size: 13.5px;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1.5px solid var(--dca-border);
+  background: var(--dca-card-alt);
+  color: var(--dca-text);
+}
+
+.dashboard-premium-plan-btn.primary {
+  background: linear-gradient(135deg, var(--dca-green), var(--dca-green-2));
+  color: #fff;
+  border-color: transparent;
+}
+
+.dashboard-premium-plan-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.dashboard-premium-plan-current {
+  text-align: center;
+  font-size: 12px;
+  color: var(--dca-text-muted);
+  padding: 12px 0 0;
+}
+
+/* ── Perks Strip ── */
+.dashboard-premium-perks {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+}
+
+.dashboard-premium-perk {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--dca-card-alt);
+  border: 1px solid var(--dca-border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 12px;
+  color: var(--dca-text);
+}
+
+.dashboard-premium-perk-ic {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+@media (max-width: 900px) {
+  .dashboard-premium-hero {
+    grid-template-columns: 1fr;
+    text-align: center;
+  }
+
+  .dashboard-premium-hero-sub {
+    max-width: none;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .dashboard-premium-plans {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-premium-perks {
+    grid-template-columns: 1fr;
+  }
 }
