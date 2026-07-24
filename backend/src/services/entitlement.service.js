@@ -17,9 +17,9 @@ const FREE_TIER_ASSET_LIMIT = 2;
 
 // เพดานจำนวน "แผน DCA ที่ Active พร้อมกัน" ของ Free Plan (Business Model Beta —
 // Export/DCA Planner Gate) เก็บค่ากลางไว้ที่นี่ที่เดียว (dcaReminder.service ใช้
-// ตัดสินตอนสร้างแผนใหม่ ทั้งทางเว็บและ LINE) — Consistent กับ FREE_TIER_ASSET_LIMIT:
-// DCA Planner ผูกกับ Asset โดยธรรมชาติ จำกัด 1 แผน Active สำหรับ Free
-const FREE_TIER_DCA_PLAN_LIMIT = 1;
+// ตัดสินตอนสร้างแผนใหม่ ทั้งทางเว็บและ LINE) — ตั้งให้ตรงกับ FREE_TIER_ASSET_LIMIT (2):
+// DCA Planner ผูกกับ Asset โดยธรรมชาติ Free จึงตั้งได้ 2 แผน Active เท่าจำนวนสินทรัพย์ที่ถือได้
+const FREE_TIER_DCA_PLAN_LIMIT = 2;
 
 // true เมื่อ user เป็น Premium ที่ยังไม่หมดอายุ ณ ขณะนี้
 function isPremiumActive(user) {

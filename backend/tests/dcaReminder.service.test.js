@@ -131,18 +131,30 @@ describe('createReminder — monthly', () => {
   );
 });
 
-// ── DCA Planner Gate (Business Model Beta) — Free จำกัด 1 แผน Active ──────────
+// ── DCA Planner Gate (Business Model Beta) — Free จำกัด 2 แผน Active ──────────
 // Chokepoint เดียว (createReminder) กันครบทั้งเว็บและ LINE
-describe('createReminder — DCA Planner Gate (Free จำกัด 1 แผน)', () => {
+describe('createReminder — DCA Planner Gate (Free จำกัด 2 แผน)', () => {
   const FREE_USER = { plan: 'free', planExpiresAt: null };
   const EXPIRED_PREMIUM = { plan: 'premium', planExpiresAt: '2020-01-01T00:00:00.000Z' };
 
-  test('Free มี 1 แผน Active อยู่แล้ว → สร้างแผน symbol ใหม่ถูกบล็อก PLAN_LIMIT_REACHED', async () => {
+  test('Free มี 1 แผน Active → สร้างแผนที่ 2 (symbol ใหม่) ได้ (ยังไม่ถึง Limit)', async () => {
     userRepository.findById.mockResolvedValue(FREE_USER);
     reminderRepository.findActiveByUser.mockResolvedValue([reminder({ symbol: 'BTC' })]);
 
+    await createReminder(USER_ID, { symbol: 'ETH', frequency: 'weekly', dayOfWeek: 1, amountThb: 1000 });
+
+    expect(reminderRepository.insert).toHaveBeenCalledTimes(1);
+  });
+
+  test('Free มี 2 แผน Active อยู่แล้ว → สร้างแผนที่ 3 (symbol ใหม่) ถูกบล็อก PLAN_LIMIT_REACHED', async () => {
+    userRepository.findById.mockResolvedValue(FREE_USER);
+    reminderRepository.findActiveByUser.mockResolvedValue([
+      reminder({ symbol: 'BTC' }),
+      reminder({ symbol: 'ETH' }),
+    ]);
+
     await expect(
-      createReminder(USER_ID, { symbol: 'ETH', frequency: 'weekly', dayOfWeek: 1, amountThb: 1000 })
+      createReminder(USER_ID, { symbol: 'AAPL', frequency: 'weekly', dayOfWeek: 1, amountThb: 1000 })
     ).rejects.toMatchObject({ code: 'PLAN_LIMIT_REACHED' });
 
     // ถูกกันตั้งแต่ก่อนแตะ DB — ไม่ deactivate/insert
@@ -168,12 +180,15 @@ describe('createReminder — DCA Planner Gate (Free จำกัด 1 แผน)
     expect(reminderRepository.insert).toHaveBeenCalledTimes(1);
   });
 
-  test('Premium หมดอายุ = ถือเป็น Free → ติด Limit เท่ากัน', async () => {
+  test('Premium หมดอายุ = ถือเป็น Free → ติด Limit เท่ากัน (2 แผน Active → แผนที่ 3 ถูกบล็อก)', async () => {
     userRepository.findById.mockResolvedValue(EXPIRED_PREMIUM);
-    reminderRepository.findActiveByUser.mockResolvedValue([reminder({ symbol: 'BTC' })]);
+    reminderRepository.findActiveByUser.mockResolvedValue([
+      reminder({ symbol: 'BTC' }),
+      reminder({ symbol: 'ETH' }),
+    ]);
 
     await expect(
-      createReminder(USER_ID, { symbol: 'ETH', frequency: 'weekly', dayOfWeek: 1, amountThb: 1000 })
+      createReminder(USER_ID, { symbol: 'AAPL', frequency: 'weekly', dayOfWeek: 1, amountThb: 1000 })
     ).rejects.toMatchObject({ code: 'PLAN_LIMIT_REACHED' });
   });
 

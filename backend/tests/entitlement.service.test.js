@@ -1,8 +1,10 @@
 const {
   isPremiumActive,
   getActiveAssetLimit,
+  getActiveDcaPlanLimit,
   computeRenewalExpiry,
   FREE_TIER_ASSET_LIMIT,
+  FREE_TIER_DCA_PLAN_LIMIT,
 } = require('../src/services/entitlement.service');
 
 // ค่าคงที่วันสำหรับทดสอบ (UTC ล้วน) — ใช้ Date คงที่กัน Flaky
@@ -57,6 +59,25 @@ describe('getActiveAssetLimit', () => {
   test('premium ที่หมดอายุแล้ว → 2 (ถือเป็น free)', () => {
     const past = new Date(Date.now() - DAY).toISOString();
     expect(getActiveAssetLimit({ plan: 'premium', planExpiresAt: past })).toBe(2);
+  });
+});
+
+// DCA Planner Gate (Business Model Beta) — Free จำกัด 2 แผน Active (ตรงกับ Asset Limit)
+describe('getActiveDcaPlanLimit', () => {
+  test('premium ที่ Active → null (ไม่จำกัด)', () => {
+    const future = new Date(Date.now() + 30 * DAY).toISOString();
+    expect(getActiveDcaPlanLimit({ plan: 'premium', planExpiresAt: future })).toBeNull();
+  });
+
+  test('free → 2 (ตรงกับ FREE_TIER_ASSET_LIMIT)', () => {
+    expect(getActiveDcaPlanLimit({ plan: 'free' })).toBe(2);
+    expect(getActiveDcaPlanLimit({ plan: 'free' })).toBe(FREE_TIER_DCA_PLAN_LIMIT);
+    expect(FREE_TIER_DCA_PLAN_LIMIT).toBe(FREE_TIER_ASSET_LIMIT);
+  });
+
+  test('premium ที่หมดอายุแล้ว → 2 (ถือเป็น free)', () => {
+    const past = new Date(Date.now() - DAY).toISOString();
+    expect(getActiveDcaPlanLimit({ plan: 'premium', planExpiresAt: past })).toBe(2);
   });
 });
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getToken, apiPost, apiUpload, API_BASE_URL } from '../lib/api.js';
+import { getToken, stashReturnTo, apiPost, apiUpload, API_BASE_URL } from '../lib/api.js';
 // Reuse Style Pattern เดียวกับ Dashboard/Admin (การ์ด/ปุ่ม) — ไม่ทำ CSS ใหม่
 import './Dashboard.css';
 
@@ -74,6 +74,8 @@ function Premium() {
   // ── Route Guard — ไม่มี Token → กลับ Login (เหมือน DashboardHome/Admin) ────────
   useEffect(() => {
     if (!getToken()) {
+      // จำหน้านี้ไว้ ให้ Login พากลับมา /premium หลัง Re-auth (ไม่เด้งไป /dashboard)
+      stashReturnTo(window.location.pathname + window.location.search);
       navigate('/', { replace: true });
     }
   }, [navigate]);

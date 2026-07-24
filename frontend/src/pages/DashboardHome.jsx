@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { getToken, apiGet, apiPost, clearToken } from '../lib/api.js';
+import { getToken, apiGet, apiPost, clearToken, stashReturnTo } from '../lib/api.js';
 import { getAssetSymbols } from '../lib/symbolsCache.js';
 import { undoErrorMessage } from '../lib/dcaErrors.js';
 import DcaForm from '../components/dashboard/DcaForm.jsx';
@@ -116,6 +116,8 @@ function DashboardHome() {
 
   useEffect(() => {
     if (!getToken()) {
+      // จำหน้านี้ไว้ (ปกติ /dashboard) ให้ Login พากลับหลัง Re-auth ตาม Path เดิม
+      stashReturnTo(window.location.pathname + window.location.search);
       navigate('/', { replace: true });
       return;
     }

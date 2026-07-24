@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getToken, apiGet, apiPost, API_BASE_URL } from '../lib/api.js';
+import { getToken, stashReturnTo, apiGet, apiPost, API_BASE_URL } from '../lib/api.js';
 import { getUrgencyLevel, isAutoReleased, isWithinDays } from '../lib/paymentUrgency.js';
 // Reuse Style Pattern เดียวกับ Dashboard ปกติ (การ์ด/ตาราง) — Admin เป็น Internal Tool
 // จึงไม่ทำ CSS ใหม่ ใช้คลาส dashboard-* เดิมผ่าน wrapper .dashboard-page
@@ -111,6 +111,8 @@ function Admin() {
   useEffect(() => {
     // ยังไม่ Login → กลับหน้า Login (replace: ไม่ให้กด Back กลับมาหน้านี้ค้าง)
     if (!getToken()) {
+      // จำหน้านี้ไว้ ให้ Login พากลับ /admin หลัง Re-auth (ไม่เด้งไป /dashboard)
+      stashReturnTo(window.location.pathname + window.location.search);
       navigate('/', { replace: true });
       return;
     }

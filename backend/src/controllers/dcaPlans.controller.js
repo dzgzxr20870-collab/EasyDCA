@@ -27,7 +27,7 @@ const WEB_ERROR_MESSAGES = {
   // DCA Planner Gate (Business Model Beta) — Free จำกัดจำนวนแผน Active (ชวนอัพเกรด
   // ไม่ใช่ Error ดิบ) Frontend อ่าน code นี้แล้วโชว์ปุ่มลิงก์ไปหน้าอัพเกรด Premium
   PLAN_LIMIT_REACHED:
-    'แผน DCA ฟรีจำกัด 1 แผน — อัพเกรดเป็น Premium เพื่อตั้งแผน DCA ได้ไม่จำกัด',
+    'แผน DCA ฟรีจำกัด 2 แผน — อัพเกรดเป็น Premium เพื่อตั้งแผน DCA ได้ไม่จำกัด',
   INTERNAL_ERROR: 'เกิดข้อผิดพลาดภายในระบบ กรุณาลองใหม่อีกครั้ง',
 };
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { setToken, clearToken, apiPost } from '../lib/api';
+import { setToken, clearToken, apiPost, takeReturnTo } from '../lib/api';
 import './Login.css';
 
 // LIFF ID เป็นค่า Public ฝัง Client-side ได้ปกติ (ไม่ใช่ Secret)
@@ -87,7 +87,9 @@ function Login() {
         setStatus(`เข้าสู่ระบบสำเร็จ${name ? ' — ' + name : ''}`);
         setStatusType('success');
 
-        navigate('/dashboard');
+        // Hardening: พากลับหน้าที่ผู้ใช้ตั้งใจไปก่อน Token หาย (เช่น /premium) — ไม่มี
+        // ค่าที่จำไว้จึงค่อย Fallback ไป /dashboard ตามเดิม (takeReturnTo อ่านครั้งเดียวแล้วลบ)
+        navigate(takeReturnTo() ?? '/dashboard', { replace: true });
       } catch (err) {
         setLoading(false);
         setStatus('เข้าสู่ระบบไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
@@ -108,7 +110,8 @@ function Login() {
     setConsentError(null);
     try {
       await apiPost('/api/v1/auth/pdpa-consent', {});
-      navigate('/dashboard');
+      // พากลับหน้าที่ตั้งใจไว้เช่นกัน (ปกติผู้ใช้ใหม่ไม่มีค่าจำไว้ → Fallback /dashboard)
+      navigate(takeReturnTo() ?? '/dashboard', { replace: true });
     } catch (err) {
       setConsentError('ยืนยันไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
     } finally {

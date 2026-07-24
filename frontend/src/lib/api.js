@@ -20,6 +20,55 @@ function clearToken() {
   currentToken = null;
 }
 
+// ── Return-To (Hardening) ────────────────────────────────────────────────────
+// เมื่อ Token ใน Memory หาย/ถูกปฏิเสธ (401) ระบบจะ Full-Reload กลับหน้า Login เพื่อ
+// Re-auth ผ่าน LIFF — เดิม Login เด้งไป /dashboard เสมอ ทำให้ผู้ใช้ที่กำลังอยู่หน้าอื่น
+// (เช่น /premium) "เด้งหลุดกลับ Dashboard" ทุกครั้ง เราจึงจำ Path เดิมไว้ใน
+// sessionStorage (รอด Full Reload ได้ ต่างจากตัวแปร Memory) ให้ Login พากลับหลัง Re-auth
+//
+// ⚠️ เก็บเฉพาะ Path ภายในเท่านั้น (ขึ้นต้น '/' ตัวเดียว ไม่ใช่ '//' หรือ URL เต็ม) เพื่อกัน
+// Open Redirect — และเป็นแค่ "เส้นทางในเว็บ" ไม่ใช่ข้อมูล Sensitive (ไม่ขัด SECURITY.md
+// § 1.1 ที่ห้ามเก็บ "Token" ใน Storage — นี่ไม่ใช่ Token)
+const RETURN_TO_KEY = 'easydca:returnTo';
+
+// true ถ้าเป็น Path ภายในที่ปลอดภัยจะ Redirect ไป (กัน Open Redirect + ไม่เก็บ '/' เอง
+// เพราะ '/' คือหน้า Login อยู่แล้ว ไม่มีความหมายที่จะจำ)
+function isSafeInternalPath(path) {
+  return typeof path === 'string' && path.startsWith('/') && !path.startsWith('//') && path !== '/';
+}
+
+// จำ Path ปัจจุบันไว้พากลับหลัง Re-auth — เรียกก่อน Redirect ไป Login ทุกจุด
+function stashReturnTo(path) {
+  try {
+    if (isSafeInternalPath(path)) {
+      window.sessionStorage.setItem(RETURN_TO_KEY, path);
+    }
+  } catch {
+    // sessionStorage อาจถูกปิด (Private Mode/นโยบายเบราว์เซอร์) — ข้ามไปเงียบๆ ไม่ให้พัง
+  }
+}
+
+// อ่าน Path ที่จำไว้ "ครั้งเดียว" (อ่านแล้วลบทันที กัน Redirect ค้างรอบถัดไป) — คืน null
+// ถ้าไม่มี/ไม่ปลอดภัย ให้ Caller Fallback ไป /dashboard เอง
+function takeReturnTo() {
+  try {
+    const value = window.sessionStorage.getItem(RETURN_TO_KEY);
+    if (value) window.sessionStorage.removeItem(RETURN_TO_KEY);
+    return isSafeInternalPath(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+// รวม Logic "เจอ 401 → กลับ Login" ไว้ที่เดียว: เคลียร์ Token → จำ Path เดิม → Full Reload
+// ไป '/' (Login) — Full Reload จำเป็นเพราะ api.js ไม่มี Router ในมือ แต่ตอนนี้ Path เดิม
+// ถูกจำไว้ใน sessionStorage แล้ว Login จะพากลับให้เอง
+function redirectToLoginOn401() {
+  clearToken();
+  stashReturnTo(window.location.pathname + window.location.search);
+  window.location.href = '/';
+}
+
 async function apiGet(path) {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: { Authorization: `Bearer ${getToken()}` },
@@ -27,8 +76,7 @@ async function apiGet(path) {
 
   // Token หมดอายุ/ไม่ถูกต้อง → เคลียร์แล้วบังคับ Login ใหม่ทันที
   if (response.status === 401) {
-    clearToken();
-    window.location.href = '/';
+    redirectToLoginOn401();
     throw new Error('UNAUTHORIZED');
   }
 
@@ -55,8 +103,7 @@ async function apiPost(path, body) {
 
   // Token หมดอายุ/ไม่ถูกต้อง → เคลียร์แล้วบังคับ Login ใหม่ทันที (เหมือน apiGet)
   if (response.status === 401) {
-    clearToken();
-    window.location.href = '/';
+    redirectToLoginOn401();
     throw new Error('UNAUTHORIZED');
   }
 
@@ -81,8 +128,7 @@ async function apiPatch(path, body) {
   });
 
   if (response.status === 401) {
-    clearToken();
-    window.location.href = '/';
+    redirectToLoginOn401();
     throw new Error('UNAUTHORIZED');
   }
 
@@ -103,8 +149,7 @@ async function apiDelete(path) {
   });
 
   if (response.status === 401) {
-    clearToken();
-    window.location.href = '/';
+    redirectToLoginOn401();
     throw new Error('UNAUTHORIZED');
   }
 
@@ -131,8 +176,7 @@ async function apiUpload(path, file) {
   });
 
   if (response.status === 401) {
-    clearToken();
-    window.location.href = '/';
+    redirectToLoginOn401();
     throw new Error('UNAUTHORIZED');
   }
 
@@ -153,8 +197,7 @@ async function apiDownload(path) {
   });
 
   if (response.status === 401) {
-    clearToken();
-    window.location.href = '/';
+    redirectToLoginOn401();
     throw new Error('UNAUTHORIZED');
   }
 
@@ -175,6 +218,8 @@ export {
   getToken,
   setToken,
   clearToken,
+  stashReturnTo,
+  takeReturnTo,
   apiGet,
   apiPost,
   apiPatch,

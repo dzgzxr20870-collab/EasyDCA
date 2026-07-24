@@ -85,7 +85,7 @@ describe('POST /dca-plans — createPlan', () => {
   // มีแผนครบโควตา → Controller ต้องตอบ 403 (ไม่ใช่ 400/500) + ข้อความชวนอัพเกรด
   test('service โยน PLAN_LIMIT_REACHED → 403 + ข้อความชวนอัพเกรด', async () => {
     dcaReminderService.createPlan.mockRejectedValue(
-      new MockDcaReminderError('PLAN_LIMIT_REACHED', 'limit', { limit: 1, current: 1 })
+      new MockDcaReminderError('PLAN_LIMIT_REACHED', 'limit', { limit: 2, current: 2 })
     );
     const res = mockRes();
     await createPlan(

@@ -13,8 +13,8 @@ const DCA_PLAN_ERROR_MESSAGES = {
   CURRENCY_NOT_SUPPORTED_FOR_ASSET:
     'สินทรัพย์นี้ตั้งแผนเป็นสกุล USD ไม่ได้ รองรับเฉพาะคริปโตและหุ้นสหรัฐ',
   PLAN_NOT_FOUND: 'ไม่พบแผน DCA ที่ต้องการ (อาจถูกลบไปแล้ว)',
-  // DCA Planner Gate (Business Model Beta) — Free จำกัด 1 แผน (ชวนอัพเกรด ไม่ใช่ Error ดิบ)
-  PLAN_LIMIT_REACHED: 'แผน DCA ฟรีจำกัด 1 แผน — อัพเกรดเป็น Premium เพื่อตั้งแผนได้ไม่จำกัด',
+  // DCA Planner Gate (Business Model Beta) — Free จำกัด 2 แผน (ชวนอัพเกรด ไม่ใช่ Error ดิบ)
+  PLAN_LIMIT_REACHED: 'แผน DCA ฟรีจำกัด 2 แผน — อัพเกรดเป็น Premium เพื่อตั้งแผนได้ไม่จำกัด',
   UNAUTHORIZED: 'เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่อีกครั้ง',
   INTERNAL_ERROR: 'เกิดข้อผิดพลาดภายในระบบ กรุณาลองใหม่อีกครั้ง',
 };
