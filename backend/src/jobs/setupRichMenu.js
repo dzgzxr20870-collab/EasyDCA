@@ -88,17 +88,14 @@ function buildRichMenuPayload() {
         data: 'action=start_reminder_setup',
         displayText: '⏰ ตั้งเตือน DCA',
       }),
-      // Premium — ยังเป็น Postback เดิม (แชทในตัว: เสนอแพ็กเกจ/สถานะ/QR ค้างจ่าย)
-      // รอ Confirm ก่อนว่าจะเปลี่ยนเป็น uri ลัดไปหน้า /premium เวอร์ชันใหม่แทนไหม
-      // เพราะจะทำให้ Flow ในแชทนี้ (ทั้งก้อน buildPremiumOfferMessage/
-      // buildPremiumStatusMessage/buildPaymentQrMessage) ไม่มีทางเข้าถึงจาก Rich
-      // Menu อีกต่อไป — ตอนนี้เป็นทางเข้าเดียวของ Flow นี้ (grep ยืนยันแล้วไม่มี
-      // Text Command อื่นเรียก action=premium_menu เลย)
-      cell(2, 1, {
-        type: 'postback',
-        data: 'action=premium_menu',
-        displayText: '👑 Premium',
-      }),
+      // Premium — เปลี่ยนจาก Postback (Flow เสนอแพ็กเกจ/สถานะ/QR ในแชท ผ่าน
+      // buildPremiumOfferMessage/buildPremiumStatusMessage/buildPaymentQrMessage)
+      // เป็น uri ลัดตรงไปหน้า /premium เวอร์ชันใหม่ (Hero + การ์ดเทียบแผน 3 คอลัมน์ —
+      // Commit 25ca0a0) ตามที่ Confirm แล้ว — Flow ในแชทเดิม (case 'premium_menu' ใน
+      // webhook.controller.js) ไม่มีทางเข้าถึงจาก Rich Menu อีกต่อไป (เคย Grep ยืนยัน
+      // ว่าไม่มี Text Command อื่นเรียก action นี้เลย จึงกลายเป็น Dead Code ในทาง
+      // ปฏิบัติ — โค้ด Handler เดิมยังอยู่ครบ ไม่ได้ลบ เผื่อย้อนกลับ Decision นี้ทีหลัง)
+      cell(2, 1, { type: 'uri', uri: liffUrl('/premium'), label: 'อัพเกรด Premium' }),
     ],
   };
 }
