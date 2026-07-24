@@ -361,6 +361,20 @@ function DashboardHome() {
               <small>by JaydeX</small>
             </div>
             <div className="dh-sp" />
+            {/* Logout มือถือ — ย้ายมาจากแท็บ "โปรไฟล์" ในแถบล่าง (เดิม Bottom Nav
+                ใช้ช่อง "โปรไฟล์" ผูกกับ handleLogout เป็น Logout ตัวเดียวที่มือถือ
+                กดได้ เพราะ .dh-sidebar ที่มีปุ่ม "ออกจากระบบ" จริงถูกซ่อนบนมือถือ —
+                ตอนนี้แท็บ "โปรไฟล์" เปลี่ยนไปพาไปหน้า /premium แล้ว (แก้บั๊กเมนูโปรไฟล์
+                มือถือ) จึงต้องมีทางออกจากระบบสำรองไว้ที่นี่แทน กันมือถือไม่มีปุ่ม
+                Logout เหลือเลย) */}
+            <button
+              type="button"
+              className="dh-m-logout-btn"
+              onClick={handleLogout}
+              aria-label="ออกจากระบบ"
+            >
+              🚪
+            </button>
           </div>
 
           <div className="dh-topbar">
@@ -505,9 +519,13 @@ function DashboardHome() {
         <a className="dh-bn-item" href="#dh-legacy-tabs" onClick={(e) => handleLegacyNavClick(e, 'history')}>
           <span className="dh-bn-i">🕐</span>ประวัติ
         </a>
-        <button type="button" className="dh-bn-item dh-bn-plain-btn" onClick={handleLogout}>
+        {/* เดิมผูกกับ handleLogout (บั๊ก: แท็บชื่อ "โปรไฟล์" แต่กด Logout จริง — ดูเหมือน
+            "โหลดกลับหน้าหลัก" เพราะ LIFF Auto-login คืน Session ทันทีหลัง Logout)
+            เปลี่ยนเป็น Link ไปหน้า /premium ตรงๆ (Client-side Navigate ตามกฎข้อ 12
+            ไม่ Reload ทั้งหน้า) — Logout ย้ายไปปุ่ม 🚪 ที่ Header มือถือแทนแล้ว (ดูด้านบน) */}
+        <Link className="dh-bn-item" to="/premium">
           <span className="dh-bn-i">👤</span>โปรไฟล์
-        </button>
+        </Link>
       </nav>
 
       <div className={`dh-toast${toast ? ' dh-toast-show' : ''}`}>{toast}</div>
