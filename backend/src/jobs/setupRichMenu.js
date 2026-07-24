@@ -42,6 +42,22 @@ function buildRichMenuPayload() {
   });
   const message = (text) => ({ type: 'message', text });
 
+  // LIFF Endpoint รองรับ Path ต่อท้ายตาม LIFF URL Scheme มาตรฐาน:
+  // https://liff.line.me/{liffId}/{path} → เปิด {Endpoint URL ที่ตั้งค่าไว้บน LINE
+  // Developers Console}/{path} — Endpoint URL ปัจจุบันคือ Frontend SPA ที่มี
+  // Catch-all Rewrite ทุก Path ไปที่ index.html อยู่แล้ว (frontend/public/serve.json)
+  // จึงลิงก์ตรงเข้าหน้าในแอปได้เลย (เช่น /dashboard, /premium) — ถ้า JWT ใน Memory
+  // ยังไม่มี (เพิ่งเปิด LIFF ใหม่ๆ) Route Guard ของแต่ละหน้าจะ stashReturnTo + เด้งไป
+  // Login ให้เอง แล้ว Login พากลับมาหน้าเดิมหลัง Verify เสร็จ (Return-To Pattern
+  // เดียวกับที่ใช้อยู่แล้วทั่วเว็บ ไม่ต้องเขียน Logic ใหม่) — Fallback เป็น
+  // FRONTEND_URL ตรงๆ (ไม่ผ่าน LIFF) ถ้ายังไม่ได้ตั้ง LIFF_ID เหมือน Pattern เดิม
+  // ใน webhook.controller.js (case 'open_dashboard')
+  function liffUrl(path) {
+    return config.liff.id
+      ? `https://liff.line.me/${config.liff.id}${path}`
+      : `${config.app.frontendUrl || ''}${path}`;
+  }
+
   return {
     size: { width: WIDTH, height: HEIGHT },
     selected: true,
@@ -56,17 +72,14 @@ function buildRichMenuPayload() {
         data: 'action=add_guide',
         displayText: '📝 เพิ่มรายการ',
       }),
-      cell(1, 0, message('พอต')), // พอร์ต — คำสั่งสมบูรณ์
-      cell(2, 0, message('ประวัติ')), // ประวัติ — คำสั่งสมบูรณ์
+      cell(1, 0, message('พอต')), // ดูพอร์ต (เร็ว) — message ตอบในแชททันที ไม่เปิดเว็บ
+      cell(2, 0, message('ประวัติ')), // ดูประวัติ (เร็ว) — เช่นเดียวกัน
       // ── แถวล่าง ────────────────────────────────────────────────────────
-      // Postback (ไม่ใช่ message) โดยตั้งใจ — กันข้อความหลุดไปเข้า Command Parser
-      // แล้วตก UNKNOWN โดยไม่ได้ตั้งใจ (เหมือนปัญหาเดิมของ 'ซื้อ' เปล่าๆ)
-      // routePostback จับ action เหล่านี้ตรงๆ (ดู webhook.controller)
-      cell(0, 1, {
-        type: 'postback',
-        data: 'action=open_dashboard',
-        displayText: '📊 Dashboard',
-      }),
+      // แดชบอร์ดเว็บ — เปลี่ยนจาก Postback (ตอบการ์ดในแชทแล้วต้องกดปุ่มในการ์ดซ้ำ
+      // อีกที) เป็น uri ตรงๆ ลัดไปเปิด LIFF /dashboard ทันทีในคลิกเดียว (เดิมมี Flex
+      // Message Card คั่นกลาง — buildDashboardLinkMessage ยังอยู่ในโค้ดเผื่อจุดอื่น
+      // เรียกใช้ แต่ Rich Menu ไม่ผ่านจุดนั้นแล้ว)
+      cell(0, 1, { type: 'uri', uri: liffUrl('/dashboard'), label: 'แดชบอร์ดเว็บ' }),
       // ปุ่มใหม่ — Postback (ไม่ใช่ message) เพราะเริ่ม Flow ตั้งเตือน DCA แบบ Quick
       // Reply หลายขั้นตอน webhook.controller routePostback จับ action นี้ (ไม่ผ่าน
       // Command Parser) displayText แสดงในแชทเสมือนผู้ใช้กดเลือกเอง
@@ -75,6 +88,12 @@ function buildRichMenuPayload() {
         data: 'action=start_reminder_setup',
         displayText: '⏰ ตั้งเตือน DCA',
       }),
+      // Premium — ยังเป็น Postback เดิม (แชทในตัว: เสนอแพ็กเกจ/สถานะ/QR ค้างจ่าย)
+      // รอ Confirm ก่อนว่าจะเปลี่ยนเป็น uri ลัดไปหน้า /premium เวอร์ชันใหม่แทนไหม
+      // เพราะจะทำให้ Flow ในแชทนี้ (ทั้งก้อน buildPremiumOfferMessage/
+      // buildPremiumStatusMessage/buildPaymentQrMessage) ไม่มีทางเข้าถึงจาก Rich
+      // Menu อีกต่อไป — ตอนนี้เป็นทางเข้าเดียวของ Flow นี้ (grep ยืนยันแล้วไม่มี
+      // Text Command อื่นเรียก action=premium_menu เลย)
       cell(2, 1, {
         type: 'postback',
         data: 'action=premium_menu',
