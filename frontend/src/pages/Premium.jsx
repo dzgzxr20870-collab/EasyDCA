@@ -1,8 +1,54 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getToken, stashReturnTo, apiPost, apiUpload, API_BASE_URL } from '../lib/api.js';
+import { getToken, stashReturnTo, apiGet, apiPost, apiUpload, API_BASE_URL } from '../lib/api.js';
 // Reuse Style Pattern เดียวกับ Dashboard/Admin (การ์ด/ปุ่ม) — ไม่ทำ CSS ใหม่
 import './Dashboard.css';
+
+// ชื่อเดือนไทยเต็ม — Copy Pattern เดียวกับ Dashboard.jsx/DashboardHome.jsx
+// (formatThaiDate เขียน Inline ในแต่ละหน้า ไม่มี Shared Util ข้ามหน้าในโปรเจกต์นี้)
+const THAI_MONTH_NAMES = [
+  'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
+  'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม',
+];
+
+// จัดรูปวันหมดอายุ Premium เป็นภาษาไทย/พ.ศ. ตามเขตเวลา Asia/Bangkok
+function formatThaiDate(value) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Bangkok',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(value));
+
+  const get = (type) => Number(parts.find((p) => p.type === type)?.value);
+  const year = get('year');
+  const month = get('month');
+  const day = get('day');
+
+  return `${day} ${THAI_MONTH_NAMES[month - 1]} ${year + 543}`;
+}
+
+// ตารางเทียบ Feature Free vs Premium — เพดาน "จำนวนสินทรัพย์" และ "จำนวนแผน DCA"
+// ดึงจาก assetLimit ที่ GET /api/v1/dashboard/me คืนจริง (ไม่ Hardcode เลข) เพดาน
+// แผน DCA ใช้เลขเดียวกับ Asset Limit ได้เพราะตั้งใจให้เท่ากันเสมอโดยออกแบบ (ดู
+// entitlement.service.js: FREE_TIER_DCA_PLAN_LIMIT ผูกกับ FREE_TIER_ASSET_LIMIT
+// และมี Test ยืนยัน Invariant นี้ไว้แล้ว) กันต้องเพิ่ม Field ใหม่ใน Backend ซ้ำ
+function buildFeatureRows(assetLimit) {
+  return [
+    { label: 'บันทึก DCA (พิมพ์/กดปุ่ม)', free: true, premium: true },
+    { label: 'จำนวนสินทรัพย์ที่ถือได้', free: `จำกัด ${assetLimit} ตัว`, premium: 'ไม่จำกัด' },
+    { label: 'แผน DCA อัตโนมัติ (ตั้งเตือน)', free: `จำกัด ${assetLimit} แผน`, premium: 'ไม่จำกัด' },
+    { label: 'แนบสลิปให้ AI อ่านอัตโนมัติ', free: false, premium: true },
+    { label: 'ส่งออกรายงาน PDF/Excel', free: false, premium: true },
+    { label: 'Dashboard เว็บเต็มรูปแบบ', free: true, premium: true },
+  ];
+}
+
+function featureCellText(value) {
+  if (value === true) return '✓';
+  if (value === false) return '✗';
+  return value;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Premium — หน้าอัพเกรด Premium ผ่าน PromptPay QR บนเว็บ (Business Model Beta)
@@ -57,6 +103,14 @@ function formatBaht(value) {
 function Premium() {
   const navigate = useNavigate();
 
+  // สถานะ Plan ปัจจุบัน — Default เป็น Free/assetLimit 2 (ค่าจริงตอนนี้) ระหว่างรอ
+  // /me โหลด หรือถ้าโหลดไม่สำเร็จ (Pattern เดียวกับ planInfo Fallback ใน Dashboard.jsx)
+  const [planInfo, setPlanInfo] = useState({
+    isPremiumActive: false,
+    planExpiresAt: null,
+    assetLimit: 2,
+  });
+
   const [billingPeriod, setBillingPeriod] = useState('monthly');
   const [payment, setPayment] = useState(null); // { paymentId, amountThb, expiresAt }
   const [creating, setCreating] = useState(false);
@@ -79,6 +133,16 @@ function Premium() {
       navigate('/', { replace: true });
     }
   }, [navigate]);
+
+  // โหลดสถานะ Plan จริง (isPremiumActive/planExpiresAt/assetLimit) สำหรับตาราง
+  // Feature + CTA Dynamic — ล้มเหลวเงียบๆ แล้วคง Default Free ไว้ (ไม่บล็อกหน้า)
+  useEffect(() => {
+    apiGet('/api/v1/dashboard/me')
+      .then(setPlanInfo)
+      .catch(() => {});
+  }, []);
+
+  const featureRows = buildFeatureRows(planInfo.assetLimit ?? 2);
 
   async function handleCreatePayment() {
     setCreateError(null);
@@ -147,12 +211,41 @@ function Premium() {
       </header>
 
       <div className="dashboard-container">
+        {/* ── ตารางเทียบ Feature Free vs Premium ──────────────────────────────── */}
+        {!payment && (
+          <section className="dashboard-section">
+            <h2>เทียบสิทธิ์ Free vs Premium</h2>
+            <div className="dashboard-table-wrap">
+              <table className="dashboard-table">
+                <thead>
+                  <tr>
+                    <th>ฟีเจอร์</th>
+                    <th className="dashboard-table-center">Free</th>
+                    <th className="dashboard-table-center">Premium</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {featureRows.map((row) => (
+                    <tr key={row.label}>
+                      <td>{row.label}</td>
+                      <td className="dashboard-table-center">{featureCellText(row.free)}</td>
+                      <td className="dashboard-table-center">{featureCellText(row.premium)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
         {/* ── ขั้นที่ 1: เลือกแพ็กเกจ + สร้าง QR ──────────────────────────────── */}
         {!payment && (
           <section className="dashboard-section">
-            <h2>👑 อัพเกรดเป็น Premium</h2>
+            <h2>{planInfo.isPremiumActive ? '🔄 ต่ออายุสมาชิก Premium' : '👑 อัพเกรดเป็น Premium'}</h2>
             <p className="dashboard-card-sub">
-              ปลดล็อกทุกฟีเจอร์: สินทรัพย์ไม่จำกัด, แผน DCA ไม่จำกัด และส่งออกรายงาน PDF/Excel
+              {planInfo.isPremiumActive
+                ? `สมาชิกของคุณจะหมดอายุวันที่ ${formatThaiDate(planInfo.planExpiresAt)} — ต่ออายุตอนนี้เพื่อใช้งานต่อเนื่องไม่มีสะดุด`
+                : 'ปลดล็อกทุกฟีเจอร์: สินทรัพย์ไม่จำกัด, แผน DCA ไม่จำกัด และส่งออกรายงาน PDF/Excel'}
             </p>
 
             <div className="dashboard-chip-group" style={{ marginTop: '1rem' }}>
@@ -177,7 +270,11 @@ function Premium() {
                 onClick={handleCreatePayment}
                 disabled={creating}
               >
-                {creating ? 'กำลังสร้าง QR...' : 'สร้าง QR ชำระเงิน'}
+                {creating
+                  ? 'กำลังสร้าง QR...'
+                  : planInfo.isPremiumActive
+                    ? 'สร้าง QR ต่ออายุ'
+                    : 'สร้าง QR ชำระเงิน'}
               </button>
             </div>
           </section>

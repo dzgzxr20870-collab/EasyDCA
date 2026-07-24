@@ -354,6 +354,13 @@
   font-size: 13px;
 }
 
+/* ตารางเทียบ Feature Free vs Premium (หน้า /premium) — จัดกึ่งกลางคอลัมน์ Free/Premium */
+.dashboard-table th.dashboard-table-center,
+.dashboard-table td.dashboard-table-center {
+  text-align: center;
+  white-space: normal;
+}
+
 .profit-positive {
   color: var(--dca-pos);
   font-weight: 600;
