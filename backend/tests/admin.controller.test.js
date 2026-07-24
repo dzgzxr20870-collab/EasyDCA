@@ -14,11 +14,30 @@ jest.mock('../src/services/broadcast.service', () => ({
 // เพื่อยืนยันว่า Controller เรียก isPremiumActive/bangkokYearMonth จริง ไม่คำนวณเอง
 // (Pattern เดียวกับ dashboard.controller.test ที่ใช้ entitlement ตัวจริง)
 
+// adminGrant.service — Mock ทั้งก้อน (Logic Stacking/Audit ทดสอบใน adminGrant.service.test)
+// คง AdminGrantError จริงไว้ให้ Controller ใช้ instanceof Map เป็น HTTP Status ได้
+jest.mock('../src/services/adminGrant.service', () => {
+  const actual = jest.requireActual('../src/services/adminGrant.service');
+  return {
+    AdminGrantError: actual.AdminGrantError,
+    grantPremium: jest.fn(),
+  };
+});
+
 const userRepository = require('../src/repositories/user.repository');
 const paymentRepository = require('../src/repositories/payment.repository');
 const assetRepository = require('../src/repositories/asset.repository');
 const broadcastService = require('../src/services/broadcast.service');
-const { ping, listUsers, listPayments, getStats, broadcast } = require('../src/controllers/admin.controller');
+const adminGrantService = require('../src/services/adminGrant.service');
+const { AdminGrantError } = adminGrantService;
+const {
+  ping,
+  listUsers,
+  listPayments,
+  getStats,
+  broadcast,
+  grantPremium,
+} = require('../src/controllers/admin.controller');
 
 function mockRes() {
   const res = {};
@@ -347,6 +366,77 @@ describe('broadcast', () => {
     const res = mockRes();
     await broadcast(adminReq({ targetGroup: 'all', messageType: 'news', message: 'x' }), res);
 
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith({ error: 'INTERNAL_ERROR' });
+  });
+});
+
+// ── POST /admin/users/:id/grant-premium — Grant Premium ฟรี (Business Model Beta) ──
+describe('admin.controller.grantPremium', () => {
+  function grantReq(body, id = 'target-user-1') {
+    return { params: { id }, user: { id: 'admin-1', lineUserId: 'Uadmin1', role: 'admin' }, body };
+  }
+
+  test('สำเร็จ → 200 + สถานะ granted (ส่ง grantedBy = lineUserId ของ Admin)', async () => {
+    const newExpiry = new Date('2026-08-24T00:00:00.000Z');
+    adminGrantService.grantPremium.mockResolvedValue({
+      user: { id: 'target-user-1', plan: 'premium' },
+      newExpiry,
+    });
+
+    const res = mockRes();
+    await grantPremium(grantReq({ billingPeriod: 'monthly' }), res);
+
+    expect(adminGrantService.grantPremium).toHaveBeenCalledWith('target-user-1', 'monthly', 'Uadmin1');
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({
+      status: 'granted',
+      userId: 'target-user-1',
+      plan: 'premium',
+      planExpiresAt: newExpiry.toISOString(),
+    });
+  });
+
+  test('ไม่ส่ง billingPeriod → Default monthly (Beta = 1 เดือน)', async () => {
+    adminGrantService.grantPremium.mockResolvedValue({
+      user: { id: 'target-user-1', plan: 'premium' },
+      newExpiry: new Date(),
+    });
+    const res = mockRes();
+    await grantPremium(grantReq({}), res);
+    expect(adminGrantService.grantPremium).toHaveBeenCalledWith('target-user-1', 'monthly', 'Uadmin1');
+  });
+
+  test('ไม่นับเป็นรายได้ — Grant ไม่เขียนตาราง payments เลย (revenue ไม่เพี้ยน)', async () => {
+    adminGrantService.grantPremium.mockResolvedValue({
+      user: { id: 'target-user-1', plan: 'premium' },
+      newExpiry: new Date(),
+    });
+    const res = mockRes();
+    await grantPremium(grantReq({ billingPeriod: 'yearly' }), res);
+    // ไม่มีการสร้าง/แก้ payment (getStats นับรายได้จาก payments เท่านั้น จึงไม่ได้รับผลกระทบ)
+    expect(paymentRepository.create).not.toHaveBeenCalled();
+  });
+
+  test('service โยน USER_NOT_FOUND → 404', async () => {
+    adminGrantService.grantPremium.mockRejectedValue(new AdminGrantError('USER_NOT_FOUND', 'nope'));
+    const res = mockRes();
+    await grantPremium(grantReq({ billingPeriod: 'monthly' }), res);
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith({ error: 'USER_NOT_FOUND' });
+  });
+
+  test('service โยน VALIDATION_ERROR → 400', async () => {
+    adminGrantService.grantPremium.mockRejectedValue(new AdminGrantError('VALIDATION_ERROR', 'bad'));
+    const res = mockRes();
+    await grantPremium(grantReq({ billingPeriod: 'weekly' }), res);
+    expect(res.status).toHaveBeenCalledWith(400);
+  });
+
+  test('Error ไม่คาดคิด → 500 INTERNAL_ERROR', async () => {
+    adminGrantService.grantPremium.mockRejectedValue(new Error('boom'));
+    const res = mockRes();
+    await grantPremium(grantReq({ billingPeriod: 'monthly' }), res);
     expect(res.status).toHaveBeenCalledWith(500);
     expect(res.json).toHaveBeenCalledWith({ error: 'INTERNAL_ERROR' });
   });

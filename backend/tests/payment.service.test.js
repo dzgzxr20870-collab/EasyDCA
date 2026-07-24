@@ -210,6 +210,37 @@ describe('getPendingPaymentForQr', () => {
   });
 });
 
+// Web slip upload (Feature 3) — Assert Ownership + pending ก่อนรับสลิปจากเว็บ
+describe('assertPaymentClaimableByUser', () => {
+  test('คำขอเป็นของ user เอง + pending → คืน payment', async () => {
+    const payment = { id: 'pay-1', userId: USER_ID, status: 'pending' };
+    paymentRepository.findById.mockResolvedValue(payment);
+    const result = await paymentService.assertPaymentClaimableByUser('pay-1', USER_ID);
+    expect(result).toBe(payment);
+  });
+
+  test('ไม่พบคำขอ → PAYMENT_NOT_FOUND', async () => {
+    paymentRepository.findById.mockResolvedValue(null);
+    await expect(
+      paymentService.assertPaymentClaimableByUser('pay-x', USER_ID)
+    ).rejects.toMatchObject({ code: 'PAYMENT_NOT_FOUND' });
+  });
+
+  test('คำขอเป็นของคนอื่น → PAYMENT_NOT_FOUND (กัน Enumerate)', async () => {
+    paymentRepository.findById.mockResolvedValue({ id: 'pay-1', userId: 'someone-else', status: 'pending' });
+    await expect(
+      paymentService.assertPaymentClaimableByUser('pay-1', USER_ID)
+    ).rejects.toMatchObject({ code: 'PAYMENT_NOT_FOUND' });
+  });
+
+  test('คำขอ Resolve ไปแล้ว (ไม่ pending) → PAYMENT_NOT_PENDING', async () => {
+    paymentRepository.findById.mockResolvedValue({ id: 'pay-1', userId: USER_ID, status: 'confirmed' });
+    await expect(
+      paymentService.assertPaymentClaimableByUser('pay-1', USER_ID)
+    ).rejects.toMatchObject({ code: 'PAYMENT_NOT_PENDING' });
+  });
+});
+
 describe('notifyPaymentSubmitted', () => {
   test('คำขอมีจริง เป็นของ user เอง, pending และมีสลิปแนบแล้ว → คืน payment', async () => {
     const payment = {

@@ -1,6 +1,8 @@
 jest.mock('../src/repositories/dcaReminder.repository');
+jest.mock('../src/repositories/user.repository');
 
 const reminderRepository = require('../src/repositories/dcaReminder.repository');
+const userRepository = require('../src/repositories/user.repository');
 const {
   createReminder,
   listReminders,
@@ -12,6 +14,10 @@ const {
 } = require('../src/services/dcaReminder.service');
 
 const USER_ID = 'user-uuid-1';
+
+// วันหมดอายุอนาคตไกลๆ — Default ให้ทุกเทสต์เดิมเป็น "Premium Active" (ไม่ติด DCA Planner
+// Gate) เทสต์ที่ทดสอบ Gate จริงจะ Override เป็น Free/หมดอายุเอง
+const FAR_FUTURE = '2099-01-01T00:00:00.000Z';
 
 // สร้าง Reminder record จำลอง (โครงเดียวกับ dcaReminder.repository.toReminder)
 function reminder(overrides = {}) {
@@ -36,6 +42,9 @@ beforeEach(() => {
   jest.clearAllMocks();
   reminderRepository.deactivateActive.mockResolvedValue(0);
   reminderRepository.insert.mockImplementation(async (data) => reminder(data));
+  // Default: user เป็น Premium Active → DCA Planner Gate ไม่บล็อก (พฤติกรรมเดิมทุกเทสต์)
+  userRepository.findById.mockResolvedValue({ plan: 'premium', planExpiresAt: FAR_FUTURE });
+  reminderRepository.findActiveByUser.mockResolvedValue([]);
 });
 
 describe('createReminder — weekly', () => {
@@ -120,6 +129,67 @@ describe('createReminder — monthly', () => {
       expect(reminderRepository.insert).not.toHaveBeenCalled();
     }
   );
+});
+
+// ── DCA Planner Gate (Business Model Beta) — Free จำกัด 1 แผน Active ──────────
+// Chokepoint เดียว (createReminder) กันครบทั้งเว็บและ LINE
+describe('createReminder — DCA Planner Gate (Free จำกัด 1 แผน)', () => {
+  const FREE_USER = { plan: 'free', planExpiresAt: null };
+  const EXPIRED_PREMIUM = { plan: 'premium', planExpiresAt: '2020-01-01T00:00:00.000Z' };
+
+  test('Free มี 1 แผน Active อยู่แล้ว → สร้างแผน symbol ใหม่ถูกบล็อก PLAN_LIMIT_REACHED', async () => {
+    userRepository.findById.mockResolvedValue(FREE_USER);
+    reminderRepository.findActiveByUser.mockResolvedValue([reminder({ symbol: 'BTC' })]);
+
+    await expect(
+      createReminder(USER_ID, { symbol: 'ETH', frequency: 'weekly', dayOfWeek: 1, amountThb: 1000 })
+    ).rejects.toMatchObject({ code: 'PLAN_LIMIT_REACHED' });
+
+    // ถูกกันตั้งแต่ก่อนแตะ DB — ไม่ deactivate/insert
+    expect(reminderRepository.deactivateActive).not.toHaveBeenCalled();
+    expect(reminderRepository.insert).not.toHaveBeenCalled();
+  });
+
+  test('Free ตั้งทับ symbol เดิมที่ Active อยู่ (แก้ไข) → อนุญาต (ไม่นับเป็นแผนใหม่)', async () => {
+    userRepository.findById.mockResolvedValue(FREE_USER);
+    reminderRepository.findActiveByUser.mockResolvedValue([reminder({ symbol: 'BTC' })]);
+
+    await createReminder(USER_ID, { symbol: 'BTC', frequency: 'weekly', dayOfWeek: 3, amountThb: 2000 });
+
+    expect(reminderRepository.insert).toHaveBeenCalledTimes(1);
+  });
+
+  test('Free ยังไม่มีแผน Active → สร้างแผนแรกได้', async () => {
+    userRepository.findById.mockResolvedValue(FREE_USER);
+    reminderRepository.findActiveByUser.mockResolvedValue([]);
+
+    await createReminder(USER_ID, { symbol: 'BTC', frequency: 'weekly', dayOfWeek: 1, amountThb: 1000 });
+
+    expect(reminderRepository.insert).toHaveBeenCalledTimes(1);
+  });
+
+  test('Premium หมดอายุ = ถือเป็น Free → ติด Limit เท่ากัน', async () => {
+    userRepository.findById.mockResolvedValue(EXPIRED_PREMIUM);
+    reminderRepository.findActiveByUser.mockResolvedValue([reminder({ symbol: 'BTC' })]);
+
+    await expect(
+      createReminder(USER_ID, { symbol: 'ETH', frequency: 'weekly', dayOfWeek: 1, amountThb: 1000 })
+    ).rejects.toMatchObject({ code: 'PLAN_LIMIT_REACHED' });
+  });
+
+  test('Premium Active → ไม่จำกัด (มีแผนอยู่แล้วก็สร้าง symbol ใหม่ได้)', async () => {
+    userRepository.findById.mockResolvedValue({ plan: 'premium', planExpiresAt: FAR_FUTURE });
+    reminderRepository.findActiveByUser.mockResolvedValue([
+      reminder({ symbol: 'BTC' }),
+      reminder({ symbol: 'ETH' }),
+    ]);
+
+    await createReminder(USER_ID, { symbol: 'AAPL', frequency: 'weekly', dayOfWeek: 1, amountThb: 1000 });
+
+    expect(reminderRepository.insert).toHaveBeenCalledTimes(1);
+    // Premium ข้ามการนับ — ไม่ต้อง Query รายการ Active เลย
+    expect(reminderRepository.findActiveByUser).not.toHaveBeenCalled();
+  });
 });
 
 describe('createReminder — validation ทั่วไป', () => {

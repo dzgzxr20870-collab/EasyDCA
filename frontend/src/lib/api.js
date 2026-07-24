@@ -116,6 +116,34 @@ async function apiDelete(path) {
   return response.json();
 }
 
+// อัปโหลดไฟล์ Binary (เช่น รูปสลิปโอนเงินในหน้า Premium) — ส่ง File/Blob ดิบเป็น Body
+// พร้อม Content-Type = ชนิดไฟล์จริง (Backend ใช้ express.raw รับเป็น Buffer) คง Logic
+// แนบ Token/จัดการ 401 แบบเดียวกับ apiPost — โยน Error(code) ให้ Caller แสดงผลเอง
+async function apiUpload(path, file) {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: 'POST',
+    headers: {
+      // ชนิดไฟล์จริง (image/jpeg ฯลฯ) — Backend ตรวจ Allowlist จาก header นี้
+      'Content-Type': file.type || 'application/octet-stream',
+      Authorization: `Bearer ${getToken()}`,
+    },
+    body: file,
+  });
+
+  if (response.status === 401) {
+    clearToken();
+    window.location.href = '/';
+    throw new Error('UNAUTHORIZED');
+  }
+
+  if (!response.ok) {
+    const errBody = await response.json().catch(() => null);
+    throw new Error(errBody?.error || `Request failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
 // ดาวน์โหลดไฟล์ Binary (เช่น รายงาน PDF/Excel) — แยกจาก apiGet เพราะ Response เป็น
 // Blob ไม่ใช่ JSON (Round 8) คง Logic แนบ Token/จัดการ 401 แบบเดียวกัน คืน
 // { blob, filename } (filename ดึงจาก Content-Disposition ที่ Backend ตั้งมา)
@@ -143,4 +171,15 @@ async function apiDownload(path) {
   return { blob, filename };
 }
 
-export { getToken, setToken, clearToken, apiGet, apiPost, apiPatch, apiDelete, apiDownload, API_BASE_URL };
+export {
+  getToken,
+  setToken,
+  clearToken,
+  apiGet,
+  apiPost,
+  apiPatch,
+  apiDelete,
+  apiUpload,
+  apiDownload,
+  API_BASE_URL,
+};

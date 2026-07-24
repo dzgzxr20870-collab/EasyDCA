@@ -24,6 +24,10 @@ const WEB_ERROR_MESSAGES = {
   CURRENCY_NOT_SUPPORTED_FOR_ASSET:
     'สินทรัพย์นี้ตั้งแผนเป็นสกุล USD ไม่ได้ รองรับเฉพาะคริปโตและหุ้นสหรัฐ',
   PLAN_NOT_FOUND: 'ไม่พบแผน DCA ที่ต้องการ (อาจถูกลบไปแล้ว)',
+  // DCA Planner Gate (Business Model Beta) — Free จำกัดจำนวนแผน Active (ชวนอัพเกรด
+  // ไม่ใช่ Error ดิบ) Frontend อ่าน code นี้แล้วโชว์ปุ่มลิงก์ไปหน้าอัพเกรด Premium
+  PLAN_LIMIT_REACHED:
+    'แผน DCA ฟรีจำกัด 1 แผน — อัพเกรดเป็น Premium เพื่อตั้งแผน DCA ได้ไม่จำกัด',
   INTERNAL_ERROR: 'เกิดข้อผิดพลาดภายในระบบ กรุณาลองใหม่อีกครั้ง',
 };
 
@@ -34,6 +38,8 @@ const ERROR_STATUS = {
   INVALID_FREQUENCY_VALUE: 400,
   CURRENCY_NOT_SUPPORTED_FOR_ASSET: 400,
   PLAN_NOT_FOUND: 404,
+  // 403 = สิทธิ์ไม่พอ (ต้อง Premium) — Frontend แยกจาก 400 (ข้อมูลผิด) เพื่อโชว์ CTA
+  PLAN_LIMIT_REACHED: 403,
 };
 
 function fail(res, code, details = {}) {

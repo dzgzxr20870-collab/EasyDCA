@@ -384,7 +384,16 @@ function DashboardHome() {
                 <p>👑 คุณเป็นสมาชิก Premium (หมดอายุ {formatThaiDate(planInfo.planExpiresAt)})</p>
               ) : (
                 <p>
-                  คุณใช้แผน Free (จำกัด {planInfo.assetLimit} สินทรัพย์) — อัพเกรดเป็น Premium เพื่อไม่จำกัดจำนวนสินทรัพย์
+                  คุณใช้แผน Free (จำกัด {planInfo.assetLimit} สินทรัพย์) — อัพเกรดเป็น Premium เพื่อปลดล็อกสินทรัพย์
+                  ไม่จำกัด แผน DCA ไม่จำกัด และส่งออกรายงาน{' '}
+                  <button
+                    type="button"
+                    className="dh-btn-main"
+                    style={{ marginLeft: 8 }}
+                    onClick={() => navigate('/premium')}
+                  >
+                    👑 อัพเกรด Premium
+                  </button>
                 </p>
               )}
             </section>
@@ -434,6 +443,7 @@ function DashboardHome() {
               loadError={null}
               onChanged={refetchDcaPlansAndOverview}
               showToast={showToast}
+              onUpgrade={() => navigate('/premium')}
             />
           </section>
 
@@ -458,6 +468,7 @@ function DashboardHome() {
             loadError={legacyLoadError}
             activeTab={legacyActiveTab}
             onTabChange={setLegacyActiveTab}
+            onUpgrade={() => navigate('/premium')}
           />
 
           <p className="dh-disclaimer-bottom">

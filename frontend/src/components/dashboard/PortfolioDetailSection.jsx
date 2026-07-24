@@ -52,7 +52,7 @@ function formatMoneyCur(value, currency, decimals) {
 //     หน้าใหม่หลัก — ไม่บล็อกฟอร์มบันทึก DCA/สถิติด้านบนที่ไม่พึ่งข้อมูลชุดนี้เลย)
 //   activeTab / onTabChange: Lift State ขึ้นไปที่ DashboardHome เพื่อให้ Sidebar/
 //     Bottom-nav "พอร์ตของฉัน"/"ประวัติรายการ" สลับแท็บ + Scroll มาที่นี่ได้พร้อมกัน
-function PortfolioDetailSection({ portfolio, profitBySymbol, transactions, loadError, activeTab, onTabChange }) {
+function PortfolioDetailSection({ portfolio, profitBySymbol, transactions, loadError, activeTab, onTabChange, onUpgrade }) {
   const [symbolFilter, setSymbolFilter] = useState('all');
 
   // Export (Round 8 เดิม) + Preview ก่อนยืนยัน (Requirement ใหม่รอบนี้)
@@ -62,6 +62,9 @@ function PortfolioDetailSection({ portfolio, profitBySymbol, transactions, loadE
   const [exportTo, setExportTo] = useState('');
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState(null);
+  // Export Gate — เมื่อ Backend ตอบ EXPORT_PREMIUM_REQUIRED (403) โชว์ปุ่มลิงก์ไปหน้า
+  // อัพเกรด Premium บนเว็บ (/premium) แทนที่จะบอกให้ไปทำใน LINE
+  const [exportUpgrade, setExportUpgrade] = useState(false);
   // exportStep: 'choose' (เลือกช่วง+รูปแบบ) → 'preview' (สรุป Read-only ก่อนยืนยัน)
   // ผู้ใช้แก้ไขข้อมูลใน Preview ไม่ได้ (ไม่ใช่ฟอร์ม) กด "← แก้ไข" เพื่อกลับไปเลือกใหม่
   const [exportStep, setExportStep] = useState('choose');
@@ -134,6 +137,7 @@ function PortfolioDetailSection({ portfolio, profitBySymbol, transactions, loadE
   async function confirmExport() {
     const format = pendingFormat;
     setExportError(null);
+    setExportUpgrade(false);
     setExporting(true);
     try {
       const params = new URLSearchParams({ format, range: exportRange });
@@ -154,7 +158,8 @@ function PortfolioDetailSection({ portfolio, profitBySymbol, transactions, loadE
       setShowExport(false);
     } catch (err) {
       if (err.message === 'EXPORT_PREMIUM_REQUIRED') {
-        setExportError('การส่งออกรายงานเป็นฟีเจอร์สำหรับสมาชิก Premium — กรุณาอัพเกรดผ่านเมนู Premium ใน LINE');
+        setExportError('การส่งออกรายงานเป็นฟีเจอร์สำหรับสมาชิก Premium — อัพเกรดเพื่อปลดล็อกการส่งออก PDF/Excel');
+        setExportUpgrade(true);
       } else if (err.message === 'EXPORT_INVALID_RANGE') {
         setExportError('ช่วงเวลาที่เลือกไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง');
       } else {
@@ -513,7 +518,18 @@ function PortfolioDetailSection({ portfolio, profitBySymbol, transactions, loadE
                     * สรุปพอร์ตปัจจุบันจะแสดงมูลค่า ณ ตอนนี้เสมอ — ช่วงเวลานี้ใช้กรองเฉพาะประวัติธุรกรรม
                   </p>
 
-                  {exportError && <p className="dh-modal-error">{exportError}</p>}
+                  {exportError && (
+                    <div className="dh-modal-error">
+                      {exportError}
+                      {exportUpgrade && onUpgrade && (
+                        <div style={{ marginTop: 8 }}>
+                          <button type="button" className="dh-btn-main" onClick={onUpgrade}>
+                            👑 อัพเกรด Premium
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   <p className="dh-form-note" style={{ fontWeight: 700, color: 'var(--ink2)', marginTop: 14 }}>
                     รูปแบบไฟล์

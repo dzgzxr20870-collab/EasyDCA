@@ -169,6 +169,31 @@ async function notifyPaymentSubmitted(paymentId, userId) {
   return payment;
 }
 
+// เว็บอัปโหลดสลิป (Feature 3) — ตรวจว่าคำขอเป็นของผู้ใช้คนนี้จริงและยัง pending ก่อน
+// รับสลิป (LINE Path ไม่ต้องตรวจ Ownership แยกเพราะดึง pending ผ่าน Session ของ user
+// คนนั้นอยู่แล้ว แต่เว็บรับ paymentId จาก Client ตรงๆ จึงต้อง Assert Ownership ที่นี่)
+// ตอบ PAYMENT_NOT_FOUND เหมือนกันทั้งกรณีไม่มีจริงและไม่ใช่เจ้าของ (กัน Enumerate —
+// Pattern เดียวกับ notifyPaymentSubmitted) — คืน payment ให้ Controller ทำงานต่อ
+async function assertPaymentClaimableByUser(paymentId, userId) {
+  const payment = await paymentRepository.findById(paymentId);
+
+  if (!payment || payment.userId !== userId) {
+    throw new PaymentServiceError('PAYMENT_NOT_FOUND', `Payment ${paymentId} not found`, {
+      paymentId,
+    });
+  }
+
+  if (payment.status !== 'pending') {
+    throw new PaymentServiceError(
+      'PAYMENT_NOT_PENDING',
+      `Payment ${paymentId} is ${payment.status}, not pending`,
+      { paymentId, status: payment.status }
+    );
+  }
+
+  return payment;
+}
+
 // ดึงคำขอที่ยัง pending ล่าสุดของผู้ใช้ (หรือ null) — ปุ่ม "Premium" ใช้ตัดสินว่า
 // มีคำขอค้างอยู่ไหม (จะได้ไม่สร้างซ้อน) ทำเป็น Wrapper บาง ๆ ให้ Controller เรียก
 // ผ่าน Service Layer แทนแตะ Repository ตรง (Layering เดียวกับ requestPayment)
@@ -369,6 +394,7 @@ module.exports = {
   allocateSatangTag,
   requestPayment,
   findPendingByUserId,
+  assertPaymentClaimableByUser,
   attachSlipImage,
   hashSlipImage,
   assertSlipNotReused,

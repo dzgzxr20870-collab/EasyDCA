@@ -1,4 +1,6 @@
 const reminderRepository = require('../repositories/dcaReminder.repository');
+const userRepository = require('../repositories/user.repository');
+const entitlement = require('./entitlement.service');
 const symbolRegistry = require('./symbolRegistry.service');
 const {
   dayOfWeekOf,
@@ -122,8 +124,44 @@ function validateCreateParams(params) {
 // สร้าง Reminder ใหม่ — ถ้า Symbol เดิมมี Reminder Active อยู่แล้วให้ปิดตัวเก่า
 // (active=false) ก่อน แล้วค่อยสร้างใหม่ เพื่อไม่ให้มีหลายอัน Active ต่อ Symbol
 // เดียว (สอดคล้อง Unique Partial Index idx_dca_reminders_one_active)
+// ── DCA Planner Gate (Business Model Beta) ──────────────────────────────────
+// Free จำกัดจำนวน "แผน Active พร้อมกัน" (entitlement.FREE_TIER_DCA_PLAN_LIMIT) —
+// ตรวจ "ที่นี่ที่เดียว" เพราะ createReminder เป็น Chokepoint ร่วมของทุกทางเข้า
+// (เว็บ createPlan, LINE คำสั่งพิมพ์ SET_REMINDER, LINE Guided reminderSetupFlow)
+// จึงกันครบทั้งเว็บและ LINE ด้วยจุดแก้จุดเดียว (ไม่มีช่องโหว่ทางใดทางหนึ่งหลุด)
+//
+// นับเฉพาะ "symbol ที่ต่างกัน" ของแผน Active — การตั้งแผนของ symbol เดิมซ้ำถือเป็น
+// "แก้ไขทับ" (createReminder deactivate ตัวเก่าแล้ว insert ใหม่ จำนวน Active สุทธิ
+// ไม่เพิ่ม) จึงอนุญาตเสมอ ไม่ให้ Free ที่มีแผน BTC อยู่แล้วแก้ยอด BTC ไม่ได้
+//
+// Premium (isPremiumActive) → ไม่จำกัด (getActiveDcaPlanLimit คืน null) ข้ามการนับ
+// throw PLAN_LIMIT_REACHED ให้ Caller Map เป็นข้อความไทยชวนอัพเกรด (Controller เว็บ
+// → 403 / flexMessage.ERROR_MESSAGES → การ์ด LINE) — ไม่ปล่อย Error ดิบถึงผู้ใช้
+async function assertWithinPlanLimit(userId, symbol) {
+  const user = await userRepository.findById(userId);
+  const limit = entitlement.getActiveDcaPlanLimit(user);
+  if (limit === null) return; // Premium Active — ไม่จำกัด
+
+  const active = await reminderRepository.findActiveByUser(userId);
+  const activeSymbols = new Set((active ?? []).map((r) => r.symbol));
+
+  // ตั้งทับ symbol เดิมที่ Active อยู่แล้ว = แก้ไข ไม่ใช่เพิ่มแผนใหม่ → อนุญาต
+  if (activeSymbols.has(symbol)) return;
+
+  if (activeSymbols.size >= limit) {
+    throw new DcaReminderError(
+      'PLAN_LIMIT_REACHED',
+      `Free plan allows at most ${limit} active DCA plan(s); user already has ${activeSymbols.size}`,
+      { limit, current: activeSymbols.size }
+    );
+  }
+}
+
 async function createReminder(userId, params) {
   validateCreateParams(params);
+
+  // Gate ก่อนแตะ DB ใดๆ (Free จำกัดจำนวนแผน Active) — ทุกทางเข้าผ่านจุดนี้
+  await assertWithinPlanLimit(userId, params.symbol);
 
   // ปิดของเก่าก่อนเสมอ — กันชน Unique Index และเป็นพฤติกรรม "ตั้งใหม่ทับของเดิม"
   await reminderRepository.deactivateActive(userId, params.symbol);

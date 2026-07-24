@@ -81,6 +81,22 @@ describe('POST /dca-plans — createPlan', () => {
     );
   });
 
+  // DCA Planner Gate (Business Model Beta) — service โยน PLAN_LIMIT_REACHED เมื่อ Free
+  // มีแผนครบโควตา → Controller ต้องตอบ 403 (ไม่ใช่ 400/500) + ข้อความชวนอัพเกรด
+  test('service โยน PLAN_LIMIT_REACHED → 403 + ข้อความชวนอัพเกรด', async () => {
+    dcaReminderService.createPlan.mockRejectedValue(
+      new MockDcaReminderError('PLAN_LIMIT_REACHED', 'limit', { limit: 1, current: 1 })
+    );
+    const res = mockRes();
+    await createPlan(
+      mockReq({ body: { symbol: 'BTC', amountTotal: 1000, frequency: 'weekly', frequencyValue: 4 } }),
+      res
+    );
+    expect(statusOf(res)).toBe(403);
+    expect(jsonOf(res).error).toBe('PLAN_LIMIT_REACHED');
+    expect(jsonOf(res).message).toMatch(/Premium/);
+  });
+
   test('symbol นอก registry → 400 SYMBOL_NOT_SUPPORTED', async () => {
     const res = mockRes();
     await createPlan(mockReq({ body: { symbol: 'NOTREAL', amountTotal: 1000, frequency: 'weekly', frequencyValue: 4 } }), res);

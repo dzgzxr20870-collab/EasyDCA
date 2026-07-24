@@ -15,6 +15,12 @@
 // Compat) ไม่ Hardcode เลข 2 ซ้ำหลายที่
 const FREE_TIER_ASSET_LIMIT = 2;
 
+// เพดานจำนวน "แผน DCA ที่ Active พร้อมกัน" ของ Free Plan (Business Model Beta —
+// Export/DCA Planner Gate) เก็บค่ากลางไว้ที่นี่ที่เดียว (dcaReminder.service ใช้
+// ตัดสินตอนสร้างแผนใหม่ ทั้งทางเว็บและ LINE) — Consistent กับ FREE_TIER_ASSET_LIMIT:
+// DCA Planner ผูกกับ Asset โดยธรรมชาติ จำกัด 1 แผน Active สำหรับ Free
+const FREE_TIER_DCA_PLAN_LIMIT = 1;
+
 // true เมื่อ user เป็น Premium ที่ยังไม่หมดอายุ ณ ขณะนี้
 function isPremiumActive(user) {
   if (!user) return false;
@@ -27,6 +33,11 @@ function isPremiumActive(user) {
 // เพดานสินทรัพย์ Active ที่ user ทำได้ — null = ไม่จำกัด (Premium Active) / เลข = Free
 function getActiveAssetLimit(user) {
   return isPremiumActive(user) ? null : FREE_TIER_ASSET_LIMIT;
+}
+
+// เพดานจำนวนแผน DCA Active ที่ user ทำได้ — null = ไม่จำกัด (Premium) / เลข = Free
+function getActiveDcaPlanLimit(user) {
+  return isPremiumActive(user) ? null : FREE_TIER_DCA_PLAN_LIMIT;
 }
 
 // คำนวณวันหมดอายุใหม่หลังต่ออายุ ตามกติกา Stacking:
@@ -61,7 +72,9 @@ function computeRenewalExpiry(currentExpiresAt, billingPeriod, now = new Date())
 
 module.exports = {
   FREE_TIER_ASSET_LIMIT,
+  FREE_TIER_DCA_PLAN_LIMIT,
   isPremiumActive,
   getActiveAssetLimit,
+  getActiveDcaPlanLimit,
   computeRenewalExpiry,
 };

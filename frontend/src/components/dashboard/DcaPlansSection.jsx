@@ -2,7 +2,7 @@ import { useState } from 'react';
 import AssetPicker from './AssetPicker.jsx';
 import { typeMeta } from '../../lib/assetTypeMeta.js';
 import { apiPost, apiPatch, apiDelete } from '../../lib/api.js';
-import { dcaPlanErrorMessage } from '../../lib/dcaPlansErrors.js';
+import { dcaPlanErrorMessage, isUpgradeRequiredError } from '../../lib/dcaPlansErrors.js';
 import { isCurrencySupportedForSymbol } from '../../lib/dcaPlanCurrency.js';
 
 const WEEKDAY_OPTIONS = [
@@ -42,7 +42,7 @@ function parseAmount(raw) {
 //     listPlans และ overview (todayDuePlans อาจเปลี่ยนถ้าแผนที่แก้ตรงกับวันนี้พอดี)
 //   showToast(message): แสดง Toast แจ้งผลสำเร็จ (Component เดียวกับที่ DashboardHome
 //     ใช้อยู่แล้วสำหรับบันทึก DCA)
-function DcaPlansSection({ plans, symbols, loadError, onChanged, showToast }) {
+function DcaPlansSection({ plans, symbols, loadError, onChanged, showToast, onUpgrade }) {
   const [picked, setPicked] = useState(null);
   const [amountInput, setAmountInput] = useState('');
   const [currency, setCurrency] = useState('THB');
@@ -50,6 +50,9 @@ function DcaPlansSection({ plans, symbols, loadError, onChanged, showToast }) {
   const [frequencyValue, setFrequencyValue] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState(null);
+  // DCA Planner Gate — เมื่อ Backend ตอบ PLAN_LIMIT_REACHED (403) โชว์ปุ่มลิงก์อัพเกรด
+  // แทนข้อความ Error เฉยๆ (ต่างจาก Error กรอกข้อมูลผิดที่แก้ที่ฟอร์มได้เอง)
+  const [formUpgrade, setFormUpgrade] = useState(false);
   const [busyPlanId, setBusyPlanId] = useState(null);
   const [actionError, setActionError] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
@@ -112,6 +115,7 @@ function DcaPlansSection({ plans, symbols, loadError, onChanged, showToast }) {
     }
 
     setSubmitting(true);
+    setFormUpgrade(false);
     try {
       await apiPost('/api/v1/dca-plans', {
         symbol: picked.symbol,
@@ -125,6 +129,7 @@ function DcaPlansSection({ plans, symbols, loadError, onChanged, showToast }) {
       showToast('✅ ตั้งแผน DCA สำเร็จ');
     } catch (err) {
       setFormError(dcaPlanErrorMessage(err.message));
+      setFormUpgrade(isUpgradeRequiredError(err.message));
     } finally {
       setSubmitting(false);
     }
@@ -316,7 +321,18 @@ function DcaPlansSection({ plans, symbols, loadError, onChanged, showToast }) {
           </div>
         </div>
 
-        {formError && <div className="dh-form-error">{formError}</div>}
+        {formError && (
+          <div className="dh-form-error">
+            {formError}
+            {formUpgrade && onUpgrade && (
+              <div style={{ marginTop: 8 }}>
+                <button type="button" className="dh-btn-main" onClick={onUpgrade}>
+                  👑 อัพเกรด Premium
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         <button className="dh-btn-main" type="submit" disabled={submitting}>
           {submitting ? 'กำลังสร้างแผน...' : '+ สร้างแผน DCA ใหม่'}

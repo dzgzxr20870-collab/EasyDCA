@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './pages/Login.jsx';
 import DashboardHome from './pages/DashboardHome.jsx';
 import Admin from './pages/Admin.jsx';
+import Premium from './pages/Premium.jsx';
 
 function App() {
   return (
@@ -19,6 +20,9 @@ function App() {
             เหมือนเดิม" (ไม่ได้ลบ) เผื่อต้องย้อนดู Logic อ้างอิงภายหลัง เพียงแต่ไม่มี
             Route ไหน Import มา Render อีกแล้ว */}
         <Route path="/dashboard/classic" element={<Navigate to="/dashboard" replace />} />
+        {/* Business Model Beta — หน้าอัพเกรด Premium ผ่าน PromptPay QR บนเว็บ
+            (เป้าหมายของปุ่มอัพเกรดจาก Export Gate + DCA Planner Gate + Banner Free) */}
+        <Route path="/premium" element={<Premium />} />
         <Route path="/admin" element={<Admin />} />
       </Routes>
     </BrowserRouter>

@@ -7,8 +7,14 @@ jest.mock('../src/services/payment.service', () => {
     notifyPaymentSubmitted: jest.fn(),
     getPendingPaymentForQr: jest.fn(),
     buildQrImageUrl: jest.fn(() => 'https://api.test/api/v1/payment/pay-1/qr.png'),
+    // Web slip upload (Feature 3)
+    assertPaymentClaimableByUser: jest.fn(),
+    hashSlipImage: jest.fn(() => 'deadbeef'),
+    assertSlipNotReused: jest.fn(),
+    attachSlipImage: jest.fn(),
   };
 });
+jest.mock('../src/services/storage.service');
 // promptpayQr + qrImage ใช้ของจริง (Pure) — เพื่อทดสอบว่า Endpoint qr.png คืน PNG
 // จริง และตรวจว่ายอดที่ใช้สร้าง Payload มาจาก DB ไม่ใช่ Query Param
 jest.mock('../src/repositories/user.repository');
@@ -30,8 +36,29 @@ const paymentService = require('../src/services/payment.service');
 const promptpayQrService = require('../src/services/promptpayQr.service');
 const userRepository = require('../src/repositories/user.repository');
 const lineService = require('../src/services/line.service');
+const storageService = require('../src/services/storage.service');
 const paymentController = require('../src/controllers/payment.controller');
 const { PaymentServiceError } = paymentService;
+
+// StorageServiceError จริง (automock ไม่คง class) — ให้ handlePaymentError Map ผ่าน
+// err.name ได้ (INVALID_SLIP_CONTENT_TYPE/SLIP_TOO_LARGE)
+class StorageServiceError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = 'StorageServiceError';
+    this.code = code;
+  }
+}
+
+// req จำลองสำหรับ uploadSlip — body เป็น Buffer, header content-type ผ่าน req.get
+function uploadReq({ id = 'pay-1', userId = 'user-1', buffer = Buffer.from('img'), contentType = 'image/jpeg' } = {}) {
+  return {
+    params: { id },
+    user: { id: userId },
+    body: buffer,
+    get: (h) => (h.toLowerCase() === 'content-type' ? contentType : undefined),
+  };
+}
 
 function mockRes() {
   return {
@@ -254,5 +281,69 @@ describe('GET /payment/:id/qr.png (ไม่ต้อง Auth)', () => {
     } finally {
       config.payment.promptpayId = original;
     }
+  });
+});
+
+// ── POST /payment/:id/slip — Web slip upload (Feature 3) ─────────────────────
+describe('POST /payment/:id/slip — uploadSlip', () => {
+  test('สำเร็จ → 200 + slur_attached (มิเรอร์ LINE: ownership→hash→reuse→upload→attach)', async () => {
+    paymentService.assertPaymentClaimableByUser.mockResolvedValue({ id: 'pay-1', userId: 'user-1', status: 'pending' });
+    paymentService.assertSlipNotReused.mockResolvedValue(undefined);
+    storageService.uploadPaymentSlip.mockResolvedValue('https://cdn.test/pay-1.jpg');
+    paymentService.attachSlipImage.mockResolvedValue(undefined);
+
+    const res = mockRes();
+    await paymentController.uploadSlip(uploadReq(), res);
+
+    expect(paymentService.assertPaymentClaimableByUser).toHaveBeenCalledWith('pay-1', 'user-1');
+    expect(storageService.uploadPaymentSlip).toHaveBeenCalledWith('pay-1', expect.any(Buffer), 'image/jpeg');
+    expect(paymentService.attachSlipImage).toHaveBeenCalledWith('pay-1', 'https://cdn.test/pay-1.jpg', 'deadbeef');
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({ status: 'slip_attached', slipImageUrl: 'https://cdn.test/pay-1.jpg' });
+  });
+
+  test('Body ว่าง → 400 EMPTY_BODY (ไม่แตะ service/storage)', async () => {
+    const res = mockRes();
+    await paymentController.uploadSlip(uploadReq({ buffer: Buffer.alloc(0) }), res);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({ error: 'EMPTY_BODY' });
+    expect(paymentService.assertPaymentClaimableByUser).not.toHaveBeenCalled();
+    expect(storageService.uploadPaymentSlip).not.toHaveBeenCalled();
+  });
+
+  test('ไม่ใช่เจ้าของ/ไม่พบคำขอ → 404 PAYMENT_NOT_FOUND (ไม่อัปโหลด)', async () => {
+    paymentService.assertPaymentClaimableByUser.mockRejectedValue(
+      new PaymentServiceError('PAYMENT_NOT_FOUND', 'nope')
+    );
+    const res = mockRes();
+    await paymentController.uploadSlip(uploadReq({ userId: 'attacker' }), res);
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith({ error: 'PAYMENT_NOT_FOUND' });
+    expect(storageService.uploadPaymentSlip).not.toHaveBeenCalled();
+  });
+
+  test('สลิปซ้ำ (SLIP_ALREADY_USED) → 409 (ไม่อัปโหลด)', async () => {
+    paymentService.assertPaymentClaimableByUser.mockResolvedValue({ id: 'pay-1', userId: 'user-1', status: 'pending' });
+    paymentService.assertSlipNotReused.mockRejectedValue(
+      new PaymentServiceError('SLIP_ALREADY_USED', 'dup')
+    );
+    const res = mockRes();
+    await paymentController.uploadSlip(uploadReq(), res);
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith({ error: 'SLIP_ALREADY_USED' });
+    expect(storageService.uploadPaymentSlip).not.toHaveBeenCalled();
+  });
+
+  test('ชนิดไฟล์ไม่ใช่รูป (StorageServiceError) → 415 INVALID_SLIP_CONTENT_TYPE', async () => {
+    paymentService.assertPaymentClaimableByUser.mockResolvedValue({ id: 'pay-1', userId: 'user-1', status: 'pending' });
+    paymentService.assertSlipNotReused.mockResolvedValue(undefined);
+    storageService.uploadPaymentSlip.mockRejectedValue(
+      new StorageServiceError('INVALID_SLIP_CONTENT_TYPE', 'bad type')
+    );
+    const res = mockRes();
+    await paymentController.uploadSlip(uploadReq({ contentType: 'application/pdf' }), res);
+    expect(res.status).toHaveBeenCalledWith(415);
+    expect(res.json).toHaveBeenCalledWith({ error: 'INVALID_SLIP_CONTENT_TYPE' });
+    expect(paymentService.attachSlipImage).not.toHaveBeenCalled();
   });
 });

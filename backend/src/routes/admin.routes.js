@@ -23,4 +23,8 @@ router.get('/stats', adminController.getStats);
 // Validate + 2-Step Confirm ฝั่ง Frontend + Validate ซ้ำใน Controller ก่อนส่งจริง
 router.post('/broadcast', adminController.broadcast);
 
+// Grant Premium ฟรี (Business Model Beta) — Admin ให้ Premium ทีละคนสำหรับ Beta Wave 1
+// Update users.plan ตรงๆ (ไม่ผ่าน payments/ไม่นับรายได้) + บันทึก premium_grant_logs
+router.post('/users/:id/grant-premium', adminController.grantPremium);
+
 module.exports = router;

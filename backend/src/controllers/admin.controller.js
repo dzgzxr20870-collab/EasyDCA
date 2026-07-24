@@ -3,6 +3,7 @@ const paymentRepository = require('../repositories/payment.repository');
 const assetRepository = require('../repositories/asset.repository');
 const entitlementService = require('../services/entitlement.service');
 const broadcastService = require('../services/broadcast.service');
+const adminGrantService = require('../services/adminGrant.service');
 const { bangkokYearMonth } = require('../utils/thaiDate.util');
 
 // สถานะ Payment ที่รับได้เป็น Query Param (ค่าจริงใน DB — "อนุมัติแล้ว" = 'confirmed'
@@ -163,4 +164,43 @@ async function broadcast(req, res) {
   }
 }
 
-module.exports = { ping, listUsers, listPayments, getStats, broadcast };
+// POST /api/v1/admin/users/:id/grant-premium — Admin ให้ Premium ฟรี (Beta Wave 1)
+// Body: { billingPeriod: 'monthly' | 'yearly' } (Default 'monthly' ถ้าไม่ส่ง)
+// ⚠️ ไม่ผ่าน payments (ไม่นับเป็นรายได้ใน getStats) — Update users.plan ตรงๆ + Audit Log
+// (ดู adminGrant.service) Stacking เดียวกับ payment จริงผ่าน computeRenewalExpiry
+const GRANT_STATUS_BY_CODE = {
+  VALIDATION_ERROR: 400,
+  USER_NOT_FOUND: 404,
+};
+
+async function grantPremium(req, res) {
+  // Default 'monthly' ตาม Requirement (Beta = 1 เดือน) แต่ยืดหยุ่นให้ Admin เลือกรายปีได้
+  const billingPeriod = req.body?.billingPeriod ?? 'monthly';
+
+  try {
+    const { user, newExpiry } = await adminGrantService.grantPremium(
+      req.params.id,
+      billingPeriod,
+      // grantedBy = LINE User ID ของ Admin ที่กด (req.user.lineUserId จาก requireAuth)
+      req.user.lineUserId
+    );
+
+    return res.status(200).json({
+      status: 'granted',
+      userId: user.id,
+      plan: user.plan,
+      planExpiresAt: newExpiry.toISOString(),
+    });
+  } catch (err) {
+    if (err instanceof adminGrantService.AdminGrantError) {
+      const status = GRANT_STATUS_BY_CODE[err.code];
+      if (status) {
+        return res.status(status).json({ error: err.code });
+      }
+    }
+    console.error(`[admin] grantPremium failed: ${err.message}`);
+    return res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+}
+
+module.exports = { ping, listUsers, listPayments, getStats, broadcast, grantPremium };

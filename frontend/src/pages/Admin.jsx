@@ -100,6 +100,13 @@ function Admin() {
   const [showAutoReleasedOnly, setShowAutoReleasedOnly] = useState(false);
   const [loadError, setLoadError] = useState(null);
 
+  // ── Grant Premium ฟรี (Business Model Beta) ──────────────────────────────
+  // grantPeriod: รอบบิลที่จะให้แต่ละ User (Default 'monthly' = Beta 1 เดือน)
+  const [grantPeriod, setGrantPeriod] = useState({});
+  const [grantBusyId, setGrantBusyId] = useState(null);
+  const [grantError, setGrantError] = useState(null);
+  const [grantResult, setGrantResult] = useState(null);
+
   // ── Route Guard (เหมือน Round 4a ทุกประการ) ──────────────────────────────
   useEffect(() => {
     // ยังไม่ Login → กลับหน้า Login (replace: ไม่ให้กด Back กลับมาหน้านี้ค้าง)
@@ -238,6 +245,46 @@ function Admin() {
     }
   }
 
+  // Reload users + stats หลัง Grant (stats ต้องรีเฟรชด้วยเพื่อยืนยันว่ารายได้ "ไม่เพิ่ม"
+  // และ premiumUsers เพิ่มขึ้นถูกต้อง)
+  async function reloadUsersAndStats() {
+    const [statsData, usersData] = await Promise.all([
+      apiGet('/api/v1/admin/stats'),
+      apiGet('/api/v1/admin/users'),
+    ]);
+    setStats(statsData);
+    setUsers(usersData.users);
+  }
+
+  // Grant Premium ฟรีให้ User 1 คน — Confirm ก่อนยิงจริง (Pattern เดียวกับ Broadcast)
+  async function handleGrantPremium(u) {
+    const period = grantPeriod[u.id] ?? 'monthly';
+    const periodLabel = period === 'yearly' ? '1 ปี' : '1 เดือน';
+    const ok = window.confirm(
+      `ยืนยันให้ Premium ฟรี ${periodLabel} แก่ "${u.displayName}"?\n` +
+        `• ไม่นับเป็นรายได้ (ไม่ผ่านระบบชำระเงิน)\n` +
+        `• ต่ออายุจากวันหมดอายุเดิมถ้ายังไม่หมด`
+    );
+    if (!ok) return;
+
+    setGrantBusyId(u.id);
+    setGrantError(null);
+    setGrantResult(null);
+    try {
+      const res = await apiPost(`/api/v1/admin/users/${u.id}/grant-premium`, {
+        billingPeriod: period,
+      });
+      await reloadUsersAndStats();
+      setGrantResult(
+        `✅ ให้ Premium ${periodLabel} แก่ "${u.displayName}" แล้ว (หมดอายุ ${formatDate(res.planExpiresAt)})`
+      );
+    } catch (err) {
+      setGrantError(`ให้ Premium ไม่สำเร็จ: ${err.message}`);
+    } finally {
+      setGrantBusyId(null);
+    }
+  }
+
   if (!ready) {
     return (
       <div className="dashboard-page">
@@ -293,6 +340,10 @@ function Admin() {
         {/* ตาราง User */}
         <section className="dashboard-section">
           <h2>ผู้ใช้ทั้งหมด ({users.length})</h2>
+
+          {grantError && <p className="dashboard-message error">{grantError}</p>}
+          {grantResult && <p className="dashboard-message">{grantResult}</p>}
+
           {users.length === 0 ? (
             <p className="dashboard-message">ยังไม่มีผู้ใช้</p>
           ) : (
@@ -305,6 +356,7 @@ function Admin() {
                     <th>วันหมดอายุ</th>
                     <th>จำนวนสินทรัพย์</th>
                     <th>วันที่สมัคร</th>
+                    <th>ให้ Premium ฟรี</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -315,6 +367,29 @@ function Admin() {
                       <td>{u.isPremiumActive ? formatDate(u.planExpiresAt) : '-'}</td>
                       <td>{u.assetCount}</td>
                       <td>{formatDate(u.createdAt)}</td>
+                      <td>
+                        {/* Grant Premium ฟรี (Beta) — เลือกระยะเวลา + กดให้ (มี Confirm) */}
+                        <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
+                          <select
+                            value={grantPeriod[u.id] ?? 'monthly'}
+                            onChange={(e) =>
+                              setGrantPeriod((prev) => ({ ...prev, [u.id]: e.target.value }))
+                            }
+                            disabled={grantBusyId === u.id}
+                          >
+                            <option value="monthly">1 เดือน</option>
+                            <option value="yearly">1 ปี</option>
+                          </select>
+                          <button
+                            type="button"
+                            className="dashboard-chip"
+                            onClick={() => handleGrantPremium(u)}
+                            disabled={grantBusyId === u.id}
+                          >
+                            {grantBusyId === u.id ? 'กำลังให้...' : '👑 ให้ฟรี'}
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

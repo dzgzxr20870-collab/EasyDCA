@@ -1,6 +1,8 @@
 jest.mock('../src/repositories/dcaReminder.repository');
+jest.mock('../src/repositories/user.repository');
 
 const reminderRepository = require('../src/repositories/dcaReminder.repository');
+const userRepository = require('../src/repositories/user.repository');
 const {
   createPlan,
   listPlans,
@@ -36,6 +38,9 @@ function reminder(overrides = {}) {
 beforeEach(() => {
   jest.clearAllMocks();
   reminderRepository.deactivateActive.mockResolvedValue(0);
+  // Default: Premium Active → createPlan ไม่ติด DCA Planner Gate (พฤติกรรมเดิมทุกเทสต์)
+  userRepository.findById.mockResolvedValue({ plan: 'premium', planExpiresAt: '2099-01-01T00:00:00.000Z' });
+  reminderRepository.findActiveByUser.mockResolvedValue([]);
 });
 
 describe('isCurrencySupportedForSymbol', () => {
