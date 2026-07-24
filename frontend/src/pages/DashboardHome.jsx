@@ -313,13 +313,15 @@ function DashboardHome() {
                 <span className="dh-ic">🔔</span> ตั้งเตือน DCA
               </a>
               <div className="dh-nav-sep" />
-              {/* "โปรไฟล์ / Premium" เดิมชี้ไป /dashboard/classic เช่นกัน — แต่หน้านั้น
-                  ไม่มี Section "โปรไฟล์" แยกจริง มีแค่ Banner สถานะ Plan (ย้ายมาไว้ที่
-                  Topbar ด้านบนแล้ว #dh-plan-banner) จึงเปลี่ยนเป็น Anchor + Scroll ไปที่
-                  Banner นั้นแทนวนไปหน้าเดิมที่ตอนนี้ Redirect กลับมาที่นี่อยู่ดี */}
-              <a className="dh-nav-item" href="#dh-plan-banner">
+              {/* "โปรไฟล์ / Premium" — เดิมเป็น Anchor Scroll ไปที่ Banner ในหน้านี้ (#dh-plan-banner)
+                  เพราะตอนนั้น /premium ยังไม่มีเนื้อหาจริง ตอนนี้ Premium.jsx มีตารางเทียบ Feature +
+                  CTA ต่ออายุแล้ว (TODO #5) จึงเปลี่ยนเป็น <Link to="/premium"> ให้ไปหน้าจริงเสมอ
+                  ไม่ว่า Free หรือ Premium (บั๊กเดิม: Premium user ไม่มีปุ่มให้กดต่อในบั๊กเดิม เพราะ
+                  Path เดียวที่เคย navigate('/premium') ได้อยู่ใน Banner Free-only branch) — Pattern
+                  เดียวกับ "แดชบอร์ด" ด้านบน (Client-side Navigate, ไม่ Reload ทั้งหน้า) */}
+              <Link className="dh-nav-item" to="/premium">
                 <span className="dh-ic">👤</span> โปรไฟล์ / Premium
-              </a>
+              </Link>
               {/* เฉพาะ Admin (role มาจาก GET /dashboard/me — Fetch ไว้แล้วตอน load())
                   — ใช้ onClick={() => navigate('/admin')} ตรงตาม Pattern เดิมของ
                   Dashboard.jsx (บรรทัด 393-405 ที่นั่น) ไม่ใช้ <Link> แม้จุดอื่นในไฟล์
