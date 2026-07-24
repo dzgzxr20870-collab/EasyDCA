@@ -43,7 +43,10 @@ async function uploadBackup(key, buffer) {
       Bucket: config.backup.r2Bucket,
       Key: key,
       Body: buffer,
-      ContentType: 'application/gzip',
+      // ไฟล์เข้ารหัสแล้วเสมอ (AES-256-GCM — ดู backupEncryption.util.js) ไม่ใช่
+      // gzip ตรงๆ อีกต่อไป — octet-stream กันเครื่องมือ/เบราว์เซอร์พยายาม gunzip
+      // ตรงๆ แล้วพัง (ต้องผ่าน scripts/decryptBackup.js ก่อนเสมอ)
+      ContentType: 'application/octet-stream',
     })
   );
 }

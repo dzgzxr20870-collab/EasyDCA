@@ -130,5 +130,14 @@ module.exports = {
     // จำนวนวันที่เก็บ Backup ย้อนหลัง — Override ได้ถ้าต้องการ (Default 14 วัน
     // อยู่กึ่งกลางช่วงแนะนำ 7-30 วันใน BACKUP_AND_RECOVERY.md § 1.4)
     retentionDays: Number(process.env.BACKUP_RETENTION_DAYS || 14),
+    // ⚠️ Client-side Encryption Key (AES-256-GCM — ดู backupEncryption.util.js) —
+    // Hex String 64 ตัวอักษร (32 Bytes) Generate ด้วย:
+    //   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+    // ถ้า Key นี้หาย = กู้คืน Backup เก่าทั้งหมดที่เข้ารหัสไว้ "ไม่ได้เลย" (Brute-force
+    // AES-256 ไม่มีทางทำได้จริง) — ต้องสำรอง Key ไว้อย่างน้อย 2 ที่แยกจากกัน (Railway
+    // Variable + Password Manager ส่วนตัว เป็นต้น) ไม่ใช่แค่ในไฟล์นี้/Repo เดียว และ
+    // "ห้าม Rotate เอง" โดยไม่แจ้งผู้ใช้ก่อน เพราะ Backup เก่าจะกู้คืนไม่ได้ถ้า Key
+    // เปลี่ยนแล้วไม่เก็บ Key เดิมไว้ด้วย (ดู ENV_VARIABLES.md § Nightly Backup)
+    encryptionKey: process.env.BACKUP_ENCRYPTION_KEY || null,
   },
 };

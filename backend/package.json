@@ -13,7 +13,8 @@
     "worker": "node src/worker.js",
     "test": "jest",
     "lint": "eslint .",
-    "setup-richmenu": "node src/jobs/setupRichMenu.js"
+    "setup-richmenu": "node src/jobs/setupRichMenu.js",
+    "decrypt-backup": "node scripts/decryptBackup.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1094.0",

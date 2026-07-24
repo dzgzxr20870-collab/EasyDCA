@@ -88,10 +88,40 @@ cp .env.example .env
 | `R2_SECRET_ACCESS_KEY` | ❌* | Secret Access Key คู่กับ Access Key ID ด้านบน (แสดงครั้งเดียวตอนสร้าง Token — เก็บไว้ทันที) |
 | `R2_BUCKET_NAME` | ❌* | ชื่อ Bucket ที่สร้างไว้เก็บ Backup โดยเฉพาะ (แนะนำแยก Bucket จากการใช้งานอื่น) |
 | `BACKUP_RETENTION_DAYS` | ❌ | จำนวนวันเก็บ Backup ย้อนหลังก่อนลบทิ้งอัตโนมัติ (Default: `14`) |
+| `BACKUP_ENCRYPTION_KEY` | ✅** | Key สำหรับเข้ารหัสไฟล์ Backup แบบ Client-side (AES-256-GCM) ก่อนอัปโหลดขึ้น R2 — **Hex 64 ตัวอักษรเป๊ะ** (32 Bytes) เว้นวรรค/ขึ้นบรรทัดใหม่หน้า-หลังถูกตัดทิ้งให้อัตโนมัติ |
 
 \* ทั้ง 4 ตัวต้องตั้งค่าครบพร้อมกันถึงจะเริ่ม Backup ได้จริง (Job เช็ค `isConfigured()`
 ก่อนทุกครั้ง) — `DATABASE_URL` (ในหมวด Supabase ด้านบน) ก็ต้องมีค่าด้วยเช่นกัน
 เพราะเป็น Connection String ที่ `pg_dump` ใช้เชื่อมต่อจริง
+
+\*\* `BACKUP_ENCRYPTION_KEY` **บังคับ** สำหรับ Service `easydca-worker`: ถ้าไม่ตั้ง
+(หรือ Format ผิด) Job จะข้ามรอบนั้นทั้งรอบพร้อม Push แจ้ง Admin — **ไม่มี Fallback
+ไปอัปโหลดไฟล์ที่ไม่เข้ารหัสเด็ดขาด** เพราะไฟล์ Backup มีข้อมูลส่วนบุคคลของผู้ใช้อยู่
+ข้างใน (Validate ตั้งแต่ก่อนเรียก `pg_dump` เพื่อไม่ให้ Dump ทั้งก้อนเสียเปล่า)
+
+### สร้าง `BACKUP_ENCRYPTION_KEY`
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+> ### ⚠️ อ่านก่อนตั้งค่า — Key นี้หาย = กู้ Backup ไม่ได้ตลอดกาล
+>
+> ไฟล์ที่เข้ารหัสด้วย AES-256 แล้ว **ไม่มีทางถอดได้เลยถ้าไม่มี Key** (Brute-force
+> ไม่ใช่ทางเลือกที่ทำได้จริงในทางปฏิบัติ) ไม่มี Backdoor ไม่มีวิธีกู้ ไม่มีใคร
+> ช่วยได้ รวมถึง Cloudflare — ดังนั้น:
+>
+> 1. **เก็บ Key ทันทีที่ Generate เสร็จ** ก่อนวางลง Railway ด้วยซ้ำ (อย่ารัน
+>    คำสั่งแล้วปิด Terminal ทิ้งโดยยังไม่ได้ Copy ไปเก็บ)
+> 2. **สำรองไว้อย่างน้อย 2 ที่ที่แยกจากกันจริง** เช่น Railway Variables +
+>    Password Manager ส่วนตัว (1Password/Bitwarden ฯลฯ) — "ที่แยกจากกัน" หมายถึง
+>    ถ้าที่หนึ่งหายไปทั้งหมด อีกที่ยังอยู่ ไม่ใช่เก็บ 2 ที่ในบัญชีเดียวกัน
+> 3. **ห้าม Commit ค่าจริงลง Repo เด็ดขาด** — ใน `.env.example` มีแค่ Placeholder
+> 4. **ห้ามเปลี่ยน (Rotate) Key เองโดยไม่วางแผน** — Backup เก่าที่เข้ารหัสด้วย
+>    Key เดิมจะกู้ไม่ได้ทันทีถ้าไม่เก็บ Key เดิมไว้ด้วย ถ้าจำเป็นต้องเปลี่ยนจริง
+>    ต้องเก็บ Key เดิมไว้จนกว่า Backup ยุคเก่าจะถูก Purge ครบตาม
+>    `BACKUP_RETENTION_DAYS` (Default 14 วัน) ดู
+>    [BACKUP_AND_RECOVERY.md § 2.3](./BACKUP_AND_RECOVERY.md)
 
 ⚠️ **ต้องมี Binary `pg_dump` บน Railway ด้วย** — ทั้ง Service `backend` และ
 `easydca-worker` ใช้ `backend/nixpacks.toml` ร่วมกัน (Root Directory เดียวกัน)
@@ -143,6 +173,8 @@ PORT=3000
 # R2_SECRET_ACCESS_KEY=your_r2_secret_access_key_here
 # R2_BUCKET_NAME=easydca-db-backups
 # BACKUP_RETENTION_DAYS=14
+# ⚠️ Key หาย = กู้ Backup เก่าไม่ได้ตลอดกาล — สำรองไว้ 2 ที่แยกกันเสมอ (ดูหัวข้อด้านบน)
+# BACKUP_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 ```
 
 ---
