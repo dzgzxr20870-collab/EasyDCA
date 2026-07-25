@@ -273,6 +273,18 @@ async function createTransactionSlipSignedUrl(path) {
   return data.signedUrl;
 }
 
+// ลบรูปสลิปธุรกรรม "ไฟล์เดียว" ออกจาก Bucket transaction-slips (Compensating Delete)
+// — ใช้ตอน "อัปโหลดสำเร็จแล้วแต่แนบ path เข้าธุรกรรมไม่สำเร็จ" เพื่อไม่ให้เหลือไฟล์
+// Orphan ที่ไม่มีแถวไหนอ้างถึง (ต่างจาก deleteAllTransactionSlipsForUser ที่กวาดทั้ง User
+// ตอน PDPA Erasure) — throw ถ้า Storage คืน error ให้ Caller ตัดสินใจ (Log path ค้างไว้)
+async function deleteTransactionSlip(path) {
+  if (!path) return;
+  const { error } = await supabaseAdmin.storage.from(TRANSACTION_SLIP_BUCKET).remove([path]);
+  if (error) {
+    throw new Error(`Failed to delete transaction slip ${path}: ${error.message}`);
+  }
+}
+
 // PDPA Erasure (userErasure.service) — ลบรูปสลิปธุรกรรมทั้งหมดของ User คนหนึ่งออกจาก
 // Bucket transaction-slips จริง (Hard Delete — เหตุผลเดียวกับ deleteAllSlipsForUser ของ
 // payment-slips: สลิปคือข้อมูลระบุตัวตนชัดเจนที่สุด ไม่มีประโยชน์เมื่อไม่มี User ผูกอยู่
@@ -336,5 +348,6 @@ module.exports = {
   uploadTransactionSlip,
   buildTransactionSlipPath,
   createTransactionSlipSignedUrl,
+  deleteTransactionSlip,
   deleteAllTransactionSlipsForUser,
 };

@@ -39,6 +39,8 @@ const SLIP_UPLOAD_ERROR_MESSAGES = {
   TRANSACTION_SLIP_PREMIUM_REQUIRED:
     'การแนบสลิปเป็นหลักฐานใช้ได้เฉพาะสมาชิก Premium',
   TRANSACTION_NOT_FOUND: 'ไม่พบรายการที่ต้องการแนบสลิป',
+  SLIP_ALREADY_ATTACHED: 'รายการนี้มีสลิปแนบอยู่แล้ว ไม่สามารถแนบทับได้',
+  CANNOT_ATTACH_TO_REVERSAL: 'แนบสลิปให้รายการย้อน (ยกเลิก) ไม่ได้',
   INVALID_SLIP_CONTENT_TYPE: 'ไฟล์ต้องเป็นรูปภาพ (JPG, PNG, WebP หรือ GIF) เท่านั้น',
   SLIP_TOO_LARGE: 'ไฟล์รูปใหญ่เกินไป (สูงสุด 10 MB)',
   EMPTY_BODY: 'ไม่พบไฟล์รูป กรุณาเลือกรูปสลิปใหม่',

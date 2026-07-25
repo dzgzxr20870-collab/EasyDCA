@@ -27,9 +27,12 @@ function mockReq(body = {}, userRecord = USER_RECORD) {
   return { user: { id: USER_ID }, userRecord, body };
 }
 
+// UUID ถูกต้อง (transactions.id เป็น uuid column) — Controller Validate รูปแบบก่อน Query
+const TXN_UUID = '11111111-1111-4111-8111-111111111111';
+
 // req สำหรับ Route แนบสลิป (Body เป็น Buffer, มี params.id + get('content-type'))
 function mockSlipReq({
-  id = 'txn-1',
+  id = TXN_UUID,
   body = Buffer.from('fake-image-bytes'),
   contentType = 'image/jpeg',
   userRecord = USER_RECORD,
@@ -405,13 +408,20 @@ describe('Contract กับ transaction.service (กันการ Refactor �
 // ═══════════════════════════════════════════════════════════════════════════
 describe('POST /transactions/:id/slip — แนบสลิปหลักฐาน (Premium Gate)', () => {
   beforeEach(() => {
-    // Default: เป็นเจ้าของรายการ + Upload สำเร็จ (แต่ละ test Override เฉพาะที่ต้องการ)
-    transactionRepository.findByIdForUser.mockResolvedValue({ id: 'txn-1', userId: USER_ID });
+    // Default: เป็นเจ้าของรายการ + ยังไม่มีสลิป + ไม่ใช่ Reversal + Upload สำเร็จ
+    // (แต่ละ test Override เฉพาะที่ต้องการ) — slipImagePath: null สำคัญต่อ Guard กันแนบทับ
+    transactionRepository.findByIdForUser.mockResolvedValue({
+      id: TXN_UUID,
+      userId: USER_ID,
+      slipImagePath: null,
+      note: null,
+    });
     storageService.uploadTransactionSlip.mockResolvedValue({
       path: `${USER_ID}-1752730000000.jpg`,
       token: '1752730000000.jpg',
     });
-    transactionRepository.attachSlipImagePath.mockResolvedValue({ id: 'txn-1' });
+    transactionRepository.attachSlipImagePath.mockResolvedValue({ id: TXN_UUID });
+    storageService.deleteTransactionSlip.mockResolvedValue(undefined);
   });
 
   // ── Unit: Entitlement Gate ──────────────────────────────────────────────
@@ -442,17 +452,17 @@ describe('POST /transactions/:id/slip — แนบสลิปหลักฐ�
   test('Premium + รายการเป็นของตัวเอง + ไฟล์ถูกต้อง → 200 + แนบ path เข้าธุรกรรม', async () => {
     const res = mockRes();
     const buffer = Buffer.from('fake-image-bytes');
-    await uploadTransactionSlip(mockSlipReq({ id: 'txn-1', body: buffer }), res);
+    await uploadTransactionSlip(mockSlipReq({ id: TXN_UUID, body: buffer }), res);
 
     expect(statusOf(res)).toBe(200);
     expect(jsonOf(res).status).toBe('slip_attached');
     // ตรวจ Ownership ที่ชั้น Query (กรอง user_id พร้อมกัน)
-    expect(transactionRepository.findByIdForUser).toHaveBeenCalledWith('txn-1', USER_ID);
+    expect(transactionRepository.findByIdForUser).toHaveBeenCalledWith(TXN_UUID, USER_ID);
     // Upload ด้วย userId ที่ Authenticate แล้ว (ไม่ใช่ค่าจาก Client) + buffer + content-type จริง
     expect(storageService.uploadTransactionSlip).toHaveBeenCalledWith(USER_ID, buffer, 'image/jpeg');
     // แนบ path ที่ Storage คืนมาเข้าธุรกรรม (slip_image_path — migration 021)
     expect(transactionRepository.attachSlipImagePath).toHaveBeenCalledWith(
-      'txn-1',
+      TXN_UUID,
       `${USER_ID}-1752730000000.jpg`
     );
   });
@@ -462,12 +472,92 @@ describe('POST /transactions/:id/slip — แนบสลิปหลักฐ�
     transactionRepository.findByIdForUser.mockResolvedValue(null);
 
     const res = mockRes();
-    await uploadTransactionSlip(mockSlipReq({ id: 'someone-elses-txn' }), res);
+    // id เป็น UUID ถูกต้อง (ผ่าน Format Guard) แต่ไม่ใช่ของ User → findByIdForUser คืน null
+    await uploadTransactionSlip(mockSlipReq({ id: '22222222-2222-4222-8222-222222222222' }), res);
 
     expect(statusOf(res)).toBe(404);
     expect(jsonOf(res).error).toBe('TRANSACTION_NOT_FOUND');
     expect(storageService.uploadTransactionSlip).not.toHaveBeenCalled();
     expect(transactionRepository.attachSlipImagePath).not.toHaveBeenCalled();
+  });
+
+  // ── P2-4: id รูปแบบผิด (ไม่ใช่ UUID) → 404 ก่อนแตะ DB (ไม่ใช่ 500 จาก Postgres 22P02) ──
+  test('id ไม่ใช่ UUID → 404 TRANSACTION_NOT_FOUND (ไม่เรียก findByIdForUser)', async () => {
+    const res = mockRes();
+    await uploadTransactionSlip(mockSlipReq({ id: 'not-a-uuid' }), res);
+
+    expect(statusOf(res)).toBe(404);
+    expect(jsonOf(res).error).toBe('TRANSACTION_NOT_FOUND');
+    expect(transactionRepository.findByIdForUser).not.toHaveBeenCalled();
+    expect(storageService.uploadTransactionSlip).not.toHaveBeenCalled();
+  });
+
+  // ── P1-2: กันแนบทับหลักฐานเดิม (โดยเฉพาะรายการจาก LINE OCR ที่มีสลิปแล้ว) ──────
+  test('รายการมี slip_image_path อยู่แล้ว → 409 SLIP_ALREADY_ATTACHED (ไม่ Upload/ไม่ทับ)', async () => {
+    transactionRepository.findByIdForUser.mockResolvedValue({
+      id: TXN_UUID,
+      userId: USER_ID,
+      slipImagePath: `${USER_ID}-1700000000000.jpg`, // มาจาก LINE OCR เดิม
+      note: null,
+    });
+
+    const res = mockRes();
+    await uploadTransactionSlip(mockSlipReq(), res);
+
+    expect(statusOf(res)).toBe(409);
+    expect(jsonOf(res).error).toBe('SLIP_ALREADY_ATTACHED');
+    // สำคัญ: ต้องไม่อัปโหลดไฟล์ใหม่ (ไม่ทับ path เดิม = หลักฐานเดิมไม่หาย, ไม่เกิด Orphan)
+    expect(storageService.uploadTransactionSlip).not.toHaveBeenCalled();
+    expect(transactionRepository.attachSlipImagePath).not.toHaveBeenCalled();
+  });
+
+  // ── P2-5: ไม่แนบให้รายการย้อน (Reversal — note ขึ้นต้น UNDO_OF:) ─────────────
+  test('รายการเป็น Reversal (note = UNDO_OF:...) → 409 CANNOT_ATTACH_TO_REVERSAL (ไม่ Upload)', async () => {
+    transactionRepository.findByIdForUser.mockResolvedValue({
+      id: TXN_UUID,
+      userId: USER_ID,
+      slipImagePath: null,
+      note: 'UNDO_OF:99999999-9999-4999-8999-999999999999',
+    });
+
+    const res = mockRes();
+    await uploadTransactionSlip(mockSlipReq(), res);
+
+    expect(statusOf(res)).toBe(409);
+    expect(jsonOf(res).error).toBe('CANNOT_ATTACH_TO_REVERSAL');
+    expect(storageService.uploadTransactionSlip).not.toHaveBeenCalled();
+  });
+
+  // ── P1-3: attach ล้มเหลว "หลัง" upload สำเร็จ → ลบไฟล์ที่เพิ่งอัปโหลด (กัน Orphan) ──
+  test('attachSlipImagePath throw หลัง upload สำเร็จ → 500 + ลบไฟล์ที่อัปโหลด (Compensating)', async () => {
+    transactionRepository.attachSlipImagePath.mockRejectedValue(new Error('DB down'));
+
+    const res = mockRes();
+    await uploadTransactionSlip(mockSlipReq(), res);
+
+    expect(statusOf(res)).toBe(500);
+    expect(jsonOf(res).error).toBe('INTERNAL_ERROR');
+    // ไฟล์ที่ uploadTransactionSlip คืน path มาแล้ว ต้องถูกลบทิ้ง (ไม่ปล่อย Orphan)
+    expect(storageService.deleteTransactionSlip).toHaveBeenCalledWith(
+      `${USER_ID}-1752730000000.jpg`
+    );
+  });
+
+  test('attach ล้มเหลว "และ" ลบไฟล์ก็ล้มเหลว → ยัง 500 + Log path Orphan ไว้ตามเก็บ', async () => {
+    transactionRepository.attachSlipImagePath.mockRejectedValue(new Error('DB down'));
+    storageService.deleteTransactionSlip.mockRejectedValue(new Error('storage down'));
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const res = mockRes();
+    await uploadTransactionSlip(mockSlipReq(), res);
+
+    expect(statusOf(res)).toBe(500);
+    // ต้อง Log path ที่ค้าง (ORPHAN) ให้ตามเก็บได้ — ห้ามหายเงียบ
+    const loggedOrphan = errSpy.mock.calls.some(
+      (c) => String(c[0]).includes('ORPHAN') && String(c[0]).includes(`${USER_ID}-1752730000000.jpg`)
+    );
+    expect(loggedOrphan).toBe(true);
+    errSpy.mockRestore();
   });
 
   // ── Unit: Body ว่าง / ชนิดไฟล์ผิด / ใหญ่เกิน ─────────────────────────────

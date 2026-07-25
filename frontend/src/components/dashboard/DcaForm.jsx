@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import AssetPicker from './AssetPicker.jsx';
 import { apiPost, apiUpload } from '../../lib/api.js';
 import { transactionErrorMessage, slipUploadErrorMessage } from '../../lib/dcaErrors.js';
@@ -55,6 +56,11 @@ function DcaForm({
   isPremiumActive = false,
   onUpgrade,
 }) {
+  const navigate = useNavigate();
+  // Default กันปุ่ม "อัพเกรด" ตายถ้า Parent ลืมส่ง onUpgrade (P0-1) — พาไป /premium
+  // ผ่าน React Router (กฎข้อ 12 ห้าม <a href>/window.location ที่ทำ JWT ใน Memory หาย)
+  const handleUpgrade = onUpgrade ?? (() => navigate('/premium'));
+
   const [date, setDate] = useState(todayBangkokIso());
   const [picked, setPicked] = useState(null);
   const [amountInput, setAmountInput] = useState('');
@@ -229,6 +235,12 @@ function DcaForm({
         } catch (err) {
           slipWarning = `บันทึก DCA สำเร็จ แต่แนบรูปสลิปไม่สำเร็จ (${slipUploadErrorMessage(err.message)})`;
         }
+      } else if (slipFile) {
+        // P2-6: มีไฟล์เลือกไว้แต่ isPremiumActive กลายเป็น false (สิทธิ์หมดอายุ/เพี้ยนกลางคัน)
+        // → ไฟล์ "ไม่ถูกแนบ" ต้องบอกให้ชัด ห้ามทิ้งเงียบให้ผู้ใช้เข้าใจผิดว่าแนบสำเร็จ
+        // (หลักฐานภาษีหายเงียบ = ร้ายแรงกว่าแนบไม่ได้)
+        slipWarning =
+          'บันทึก DCA สำเร็จ แต่รูปสลิปไม่ได้ถูกแนบ (การแนบสลิปใช้ได้เฉพาะสมาชิก Premium)';
       }
 
       setConfirmed(response.transaction);
@@ -429,11 +441,11 @@ function DcaForm({
                 <p className="dh-slip-lock-title">แนบสลิปเป็นหลักฐานสำหรับสมาชิก Premium</p>
                 <p className="dh-form-note">อัพเกรดเพื่อแนบรูปสลิปซื้อขายเก็บไว้ประกอบแต่ละรายการ</p>
               </div>
-              {onUpgrade && (
-                <button type="button" className="dh-btn-ghost dh-slip-upgrade" onClick={onUpgrade}>
-                  👑 อัพเกรด
-                </button>
-              )}
+              {/* แสดงปุ่มเสมอ (P0-1) — handleUpgrade มี Default พาไป /premium อยู่แล้วถ้า
+                  Parent ไม่ส่ง onUpgrade จึงไม่มีทางเป็นปุ่มตาย */}
+              <button type="button" className="dh-btn-ghost dh-slip-upgrade" onClick={handleUpgrade}>
+                👑 อัพเกรด
+              </button>
             </div>
           )}
 

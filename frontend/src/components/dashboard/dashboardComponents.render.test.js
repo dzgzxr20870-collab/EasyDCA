@@ -11,6 +11,13 @@
 import { describe, test, expect } from 'vitest';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+// DcaForm ใช้ useNavigate (Default onUpgrade) → ต้อง Render ใต้ Router Context
+import { MemoryRouter } from 'react-router-dom';
+
+// ห่อ Element ด้วย MemoryRouter (ให้ useNavigate ใน DcaForm ทำงานได้ใน Render Test)
+function withRouter(element) {
+  return React.createElement(MemoryRouter, null, element);
+}
 
 import StatCards from './StatCards.jsx';
 import AllocationCard from './AllocationCard.jsx';
@@ -277,14 +284,52 @@ describe('Render smoke test (renderToStaticMarkup — no crash given realistic A
   test('DcaForm — Render เริ่มต้นไม่ Crash (symbols จริง 224 ตัวจำลอง)', () => {
     expect(() =>
       renderToStaticMarkup(
+        withRouter(
+          React.createElement(DcaForm, {
+            symbols: SYMBOLS,
+            pickerOpenSignal: 0,
+            onRecorded: () => {},
+            onRequestUndo: () => {},
+          })
+        )
+      )
+    ).not.toThrow();
+  });
+
+  // P0-1 (Code Review) — Regression: DcaForm ต้องแสดง "ช่องเลือกไฟล์" เมื่อ isPremiumActive
+  // = true (ไม่ใช่กล่อง Locked) — จับบั๊กที่ Premium User แนบสลิปไม่ได้เพราะ Component
+  // Render ผิดสถานะ (เดิมบั๊กจริงคือ Parent ไม่ส่ง prop → Default false → Locked ตลอด)
+  test('DcaForm — Premium เห็นช่องเลือกรูปสลิป (ไม่ใช่กล่อง Locked)', () => {
+    const html = renderToStaticMarkup(
+      withRouter(
         React.createElement(DcaForm, {
           symbols: SYMBOLS,
           pickerOpenSignal: 0,
           onRecorded: () => {},
           onRequestUndo: () => {},
+          isPremiumActive: true,
         })
       )
-    ).not.toThrow();
+    );
+    expect(html).toContain('เลือกรูปสลิป'); // ปุ่มเลือกไฟล์ของ Premium
+    expect(html).not.toContain('สำหรับสมาชิก Premium'); // ต้องไม่ใช่กล่อง Locked
+  });
+
+  test('DcaForm — Free เห็นกล่อง Locked + ปุ่มอัพเกรด (แม้ Parent ไม่ส่ง onUpgrade)', () => {
+    // จงใจไม่ส่ง onUpgrade — ปุ่มต้องยังอยู่ (Default พาไป /premium) ไม่หายไป/ไม่ตาย
+    const html = renderToStaticMarkup(
+      withRouter(
+        React.createElement(DcaForm, {
+          symbols: SYMBOLS,
+          pickerOpenSignal: 0,
+          onRecorded: () => {},
+          onRequestUndo: () => {},
+          isPremiumActive: false,
+        })
+      )
+    );
+    expect(html).toContain('สำหรับสมาชิก Premium'); // กล่อง Locked
+    expect(html).toContain('อัพเกรด'); // ปุ่มอัพเกรดยังแสดงเสมอ (P0-1 default)
   });
 
   // S8 R3 รอบ 3 — prefillSignal prop ใหม่ (Render ไม่ Throw เท่านั้น: useEffect ที่
@@ -293,13 +338,15 @@ describe('Render smoke test (renderToStaticMarkup — no crash given realistic A
   test('DcaForm — รับ prefillSignal ไม่ Crash', () => {
     expect(() =>
       renderToStaticMarkup(
-        React.createElement(DcaForm, {
-          symbols: SYMBOLS,
-          pickerOpenSignal: 0,
-          onRecorded: () => {},
-          onRequestUndo: () => {},
-          prefillSignal: { symbol: 'BTC', amountTotal: 1000, currency: 'THB', nonce: 1 },
-        })
+        withRouter(
+          React.createElement(DcaForm, {
+            symbols: SYMBOLS,
+            pickerOpenSignal: 0,
+            onRecorded: () => {},
+            onRequestUndo: () => {},
+            prefillSignal: { symbol: 'BTC', amountTotal: 1000, currency: 'THB', nonce: 1 },
+          })
+        )
       )
     ).not.toThrow();
   });

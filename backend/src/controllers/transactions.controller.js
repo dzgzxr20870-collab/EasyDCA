@@ -70,6 +70,11 @@ const WEB_ERROR_MESSAGES = {
   TRANSACTION_SLIP_PREMIUM_REQUIRED:
     'การแนบสลิปเป็นหลักฐานเป็นฟีเจอร์สำหรับสมาชิก Premium — อัพเกรดเพื่อแนบรูปสลิปประกอบรายการ',
   TRANSACTION_NOT_FOUND: 'ไม่พบรายการที่ต้องการแนบสลิป (อาจถูกลบไปแล้ว)',
+  // กันแนบทับหลักฐานเดิม (หลักฐานภาษีหายเงียบ = ร้ายแรงกว่าแนบไม่ได้) — โดยเฉพาะรายการ
+  // ที่มาจาก LINE OCR ซึ่งมีสลิปแนบอยู่แล้ว
+  SLIP_ALREADY_ATTACHED: 'รายการนี้มีสลิปแนบอยู่แล้ว ไม่สามารถแนบทับได้ (กันหลักฐานเดิมหาย)',
+  // ไม่แนบให้ "รายการย้อน (Reversal)" ที่ระบบสร้างตอนกดยกเลิก — ไม่ใช่การซื้อ/ขายจริง
+  CANNOT_ATTACH_TO_REVERSAL: 'แนบสลิปให้รายการย้อน (ยกเลิก) ไม่ได้ — แนบได้เฉพาะรายการซื้อ/ขายจริง',
   EMPTY_BODY: 'ไม่พบไฟล์รูป กรุณาเลือกรูปสลิปใหม่',
   INVALID_SLIP_CONTENT_TYPE: 'ไฟล์ต้องเป็นรูปภาพ (JPG, PNG, WebP หรือ GIF) เท่านั้น',
   SLIP_TOO_LARGE: 'ไฟล์รูปใหญ่เกินไป (สูงสุด 10 MB)',
@@ -98,10 +103,17 @@ const ERROR_STATUS = {
   // แนบสลิปหลักฐาน (Premium) — Status ตรงกับ payment.controller (415 ชนิดไฟล์ผิด, 413 ใหญ่เกิน)
   TRANSACTION_SLIP_PREMIUM_REQUIRED: 403,
   TRANSACTION_NOT_FOUND: 404,
+  SLIP_ALREADY_ATTACHED: 409,
+  CANNOT_ATTACH_TO_REVERSAL: 409,
   EMPTY_BODY: 400,
   INVALID_SLIP_CONTENT_TYPE: 415,
   SLIP_TOO_LARGE: 413,
 };
+
+// UUID v4-ish รูปแบบ (Postgres uuid column) — Validate ก่อน Query กัน id ผิดรูปทำ Postgres
+// throw 22P02 แล้วตกไป 500 (ควรเป็น 404 "ไม่พบรายการ" ตามความหมายจริง) Pattern เดียวกับ
+// findByIdForUser ที่ตอบ null ทั้งกรณีไม่มีจริง/ไม่ใช่ของเรา
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Error Response ของเว็บ: คง Field `error` = Error Code แบบ Flat ให้ตรงกับทุก
 // Endpoint เดิมของฝั่งเว็บ (dashboard/payment/auth) ที่ Frontend อ่าน `body.error`
@@ -357,7 +369,8 @@ async function undoLast(req, res) {
 //   2) Ownership — findByIdForUser กรอง user_id ในตัว (กันเดา id แนบเข้าธุรกรรมคนอื่น)
 //   3) Upload (Validate MIME/ขนาดในตัว) → attachSlipImagePath (คอลัมน์ slip_image_path
 //      เดิมจาก migration 021 — Reuse ได้เพราะทั้ง OCR และหลักฐานเว็บคือ "รูปสลิปของ
-//      ธุรกรรมนี้" เหมือนกัน ธุรกรรมหนึ่งมาจากช่องทางเดียวเท่านั้น ไม่เขียนทับกัน)
+//      ธุรกรรมนี้" เหมือนกัน) — บังคับจริงด้วยโค้ด: ถ้ารายการมีสลิปอยู่แล้ว (รวมรายการ
+//      จาก LINE OCR) จะ Reject SLIP_ALREADY_ATTACHED ไม่ทับเงียบ (กันหลักฐานภาษีหาย)
 //
 // PDPA: ไฟล์ถูกตั้งชื่อ "{userId}-{token}" เหมือน OCR → userErasure.eraseUserData ที่
 // เรียก deleteAllTransactionSlipsForUser(userId) กวาดลบให้อยู่แล้วโดยอัตโนมัติ (ไม่ต้องแก้)
@@ -373,23 +386,65 @@ async function uploadTransactionSlip(req, res) {
   }
   const contentType = req.get('content-type');
 
+  // 2) Validate รูปแบบ id ก่อนแตะ DB (P2-4) — id ที่ไม่ใช่ UUID จะทำให้ Postgres throw
+  // 22P02 ตกไป 500; ตอบ 404 ที่นี่แทน (ความหมายจริง = "ไม่พบรายการ")
+  if (!UUID_RE.test(String(req.params.id))) {
+    return fail(res, 'TRANSACTION_NOT_FOUND');
+  }
+
+  // uploadedPath: เก็บ path ที่อัปโหลดสำเร็จไว้ เผื่อขั้น attach ล้มเหลว จะได้ลบทิ้ง
+  // (Compensating Delete — กัน Orphan File) — ยังเป็น null ระหว่างที่ยังไม่อัปโหลด
+  let uploadedPath = null;
   try {
-    // 2) Ownership — คืน null ทั้งกรณี "ไม่มีจริง" และ "ไม่ใช่ของเรา" (ไม่บอกใบ้ว่า id มีอยู่)
+    // 3) Ownership — คืน null ทั้งกรณี "ไม่มีจริง" และ "ไม่ใช่ของเรา" (ไม่บอกใบ้ว่า id มีอยู่)
     const tx = await transactionRepository.findByIdForUser(req.params.id, req.user.id);
     if (!tx) {
       return fail(res, 'TRANSACTION_NOT_FOUND');
     }
 
-    // 3) Upload (throw StorageServiceError ถ้าชนิด/ขนาดไม่ผ่าน) → แนบ path เข้าธุรกรรม
+    // 4) ไม่แนบให้ "รายการย้อน (Reversal)" (P2-5) — แถวที่ระบบสร้างตอน Undo (note ขึ้นต้น
+    // ด้วย UNDO_OF:) ไม่ใช่การซื้อ/ขายจริงของผู้ใช้ จึงไม่ควรมีสลิปหลักฐานภาษี Reuse
+    // Marker เดียวกับ undoTransaction.service (Single Source ไม่ Hardcode สตริงซ้ำ)
+    if (
+      typeof tx.note === 'string' &&
+      tx.note.trim().toUpperCase().startsWith(`${undoTransactionService.UNDO_MARKER}:`)
+    ) {
+      return fail(res, 'CANNOT_ATTACH_TO_REVERSAL');
+    }
+
+    // 5) กันแนบทับหลักฐานเดิม (P1-2) — ถ้ารายการมี slip_image_path อยู่แล้ว (เช่นมาจาก
+    // LINE OCR) Reject ทันที ไม่ทับ/ไม่อัปโหลดซ้ำ (หลักฐานภาษีหายเงียบ = ร้ายแรงกว่า
+    // แนบไม่ได้) — ผู้ใช้ที่ต้องเปลี่ยนรูปจริงๆ ต้องผ่านช่องทางอื่นที่ตั้งใจ ไม่ใช่ทับเงียบ
+    if (tx.slipImagePath) {
+      return fail(res, 'SLIP_ALREADY_ATTACHED');
+    }
+
+    // 6) Upload (throw StorageServiceError ถ้าชนิด/ขนาดไม่ผ่าน) → แนบ path เข้าธุรกรรม
     const { path } = await storageService.uploadTransactionSlip(req.user.id, buffer, contentType);
+    uploadedPath = path;
     await transactionRepository.attachSlipImagePath(tx.id, path);
 
     return res.status(200).json({ status: 'slip_attached' });
   } catch (err) {
     // StorageServiceError (INVALID_SLIP_CONTENT_TYPE / SLIP_TOO_LARGE) → Map ผ่าน code เดิม
+    // (เกิดตอน uploadTransactionSlip ซึ่งยังไม่ตั้ง uploadedPath — ไม่มีไฟล์ค้าง)
     if (err && err.name === 'StorageServiceError') {
       return fail(res, err.code);
     }
+
+    // P1-3: ถ้า attach ล้มเหลว "หลัง" upload สำเร็จ (uploadedPath ถูกตั้งแล้ว) → ไฟล์กลาย
+    // เป็น Orphan ถ้าไม่ลบทิ้ง ทำ Compensating Delete แบบ Best-effort — ถ้าลบไม่สำเร็จด้วย
+    // ต้อง Log path ให้ตามเก็บได้ (ห้ามหายเงียบ)
+    if (uploadedPath) {
+      try {
+        await storageService.deleteTransactionSlip(uploadedPath);
+      } catch (cleanupErr) {
+        console.error(
+          `[transactions] ORPHAN transaction slip — attach failed and cleanup failed too: path=${uploadedPath} cleanupError=${cleanupErr.message}`
+        );
+      }
+    }
+
     console.error(`[transactions] uploadTransactionSlip failed: ${err.message}`);
     return fail(res, 'INTERNAL_ERROR');
   }
