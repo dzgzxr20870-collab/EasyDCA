@@ -2217,6 +2217,49 @@ describe('handleEvent — AI Slip OCR Postback (Round 9)', () => {
     expect(lastReplyText()).toContain('Premium');
   });
 
+  // ── Bug Fix: สลิป "ขาย" ถูกบันทึกเป็น "ซื้อ" ────────────────────────────
+  test('ocr_confirm side=sell → Route เป็นคำสั่ง SELL (ไม่ใช่ BUY)', async () => {
+    entitlement.isPremiumActive.mockReturnValue(true);
+    pendingService.createPending.mockResolvedValue({
+      id: 'p-sell', commandType: 'sell', assetSymbol: 'BTC',
+      quantity: 0.5, pricePerUnit: 1500000, amountThb: 750000, priceSource: 'user',
+    });
+
+    await handleEvent(
+      postbackEvent('action=ocr_confirm&sym=BTC&side=sell&qty=0.5&price=1500000')
+    );
+
+    expect(pendingService.createPending).toHaveBeenCalledWith(
+      FREE_USER.id,
+      expect.objectContaining({ command: 'SELL' }),
+      expect.anything()
+    );
+  });
+
+  // Postback เก่าที่ค้างในแชท / ถูกแก้ค่ามา → ห้ามเดาเป็น BUY แล้วบันทึกลง Ledger
+  test('ocr_confirm ไม่มี side → ไม่บันทึก แต่ให้ผู้ใช้ระบุทิศทางใหม่ (ห้าม Default BUY)', async () => {
+    entitlement.isPremiumActive.mockReturnValue(true);
+
+    await handleEvent(postbackEvent('action=ocr_confirm&sym=BTC&qty=0.5&price=1500000'));
+
+    expect(pendingService.createPending).not.toHaveBeenCalled();
+    expect(lastReplyText()).toContain('ซื้อ');
+    expect(lastReplyText()).toContain('ขาย');
+  });
+
+  test('ocr_confirm side ค่าเพี้ยน (side=Sell) → ไม่บันทึกเงียบๆ เป็น BUY', async () => {
+    entitlement.isPremiumActive.mockReturnValue(true);
+
+    await handleEvent(postbackEvent('action=ocr_confirm&sym=BTC&side=Sell&qty=0.5&price=1500000'));
+
+    expect(pendingService.createPending).not.toHaveBeenCalled();
+  });
+
+  test('ocr_edit ไม่มี side (AI อ่านไม่ชัด) → Prefill <ซื้อ/ขาย> ให้ผู้ใช้เลือกเอง', async () => {
+    await handleEvent(postbackEvent('action=ocr_edit&sym=BTC&qty=0.5&price=1500000'));
+    expect(lastReplyText()).toContain('<ซื้อ/ขาย>');
+  });
+
   test('ocr_edit → ตอบข้อความ Prefill คำสั่งซื้อให้ Copy แก้ (เข้า Parser เดิม)', async () => {
     await handleEvent(postbackEvent('action=ocr_edit&sym=BTC&side=buy&qty=0.5&price=1500000'));
     expect(lastReplyText()).toContain('ซื้อ BTC 0.5 หุ้น ราคา 1500000');

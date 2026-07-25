@@ -68,11 +68,54 @@ describe('extractSlip — สำเร็จ', () => {
     expect(result.quotaLimit).toBe(50);
   });
 
-  test('side ไม่ชัด (null) → Default เป็น buy', async () => {
+  // ⚠️ พฤติกรรมเปลี่ยนโดยตั้งใจ (Bug Fix: สลิป "ขาย" ถูกบันทึกเป็น "ซื้อ")
+  // Test เดิมชื่อ 'side ไม่ชัด (null) → Default เป็น buy' ยืนยันว่า null ต้องได้ 'buy'
+  // ซึ่งเป็นการ "ล็อกบั๊กไว้เป็นสเปก" — โค้ดเดิมเทียบ `raw.side === 'sell'` แบบ strict +
+  // case-sensitive แล้ว Default ที่เหลือทั้งหมดเป็น buy ทำให้ "Sell"/"SELL"/"ขาย"/
+  // " sell "/null กลายเป็นซื้อหมด (5 ใน 6 รูปแบบที่ LLM ตอบจริง) → P&L/จำนวนหน่วย
+  // ถือครองกลับด้านบน Immutable Ledger
+  // สเปกใหม่: อ่านไม่ชัด = null เท่านั้น ห้ามเดาเป็น buy แล้วให้ผู้ใช้เลือกเองบนการ์ด Preview
+  test('side ไม่ชัด (null) → คืน null (ห้าม Default เป็น buy)', async () => {
     global.fetch.mockResolvedValue(claudeOk({ ...VALID_SLIP, side: null }));
+    const result = await slipOcr.extractSlip(USER_ID, BUFFER, 'image/jpeg', NOW);
+    expect(result.side).toBeNull();
+  });
+
+  // ── Regression: สลิป "ขาย" ต้องไม่กลายเป็น "ซื้อ" ────────────────────────
+  // Red-Green: เคสเหล่านี้ Fail บนโค้ดเก่า (ได้ 'buy') / Pass บนโค้ดใหม่
+  test.each([
+    ['sell', 'sell'],
+    ['Sell', 'Sell'],
+    ['SELL', 'SELL'],
+    ['ขาย', 'ขาย'],
+    ['" sell " (มีช่องว่างติดมา)', ' sell '],
+  ])('สลิปขาย: AI ตอบ side=%s → ต้องได้ sell', async (_label, sideValue) => {
+    global.fetch.mockResolvedValue(claudeOk({ ...VALID_SLIP, side: sideValue }));
+    const result = await slipOcr.extractSlip(USER_ID, BUFFER, 'image/jpeg', NOW);
+    expect(result.side).toBe('sell');
+  });
+
+  // Regression ทางกลับ: Use Case หลักเดิม (ซื้อ) ต้องไม่พัง
+  test.each([
+    ['buy', 'buy'],
+    ['Buy', 'Buy'],
+    ['BUY', 'BUY'],
+    ['ซื้อ', 'ซื้อ'],
+  ])('สลิปซื้อ: AI ตอบ side=%s → ต้องได้ buy', async (_label, sideValue) => {
+    global.fetch.mockResolvedValue(claudeOk({ ...VALID_SLIP, side: sideValue }));
     const result = await slipOcr.extractSlip(USER_ID, BUFFER, 'image/jpeg', NOW);
     expect(result.side).toBe('buy');
   });
+
+  // ค่าที่ตีความไม่ได้เลย → null (ไม่เดาไปทางใดทางหนึ่ง)
+  test.each([['transfer'], ['ฝากเงิน'], ['']])(
+    'side ที่ตีความไม่ได้ (%s) → คืน null',
+    async (sideValue) => {
+      global.fetch.mockResolvedValue(claudeOk({ ...VALID_SLIP, side: sideValue }));
+      const result = await slipOcr.extractSlip(USER_ID, BUFFER, 'image/jpeg', NOW);
+      expect(result.side).toBeNull();
+    }
+  );
 
   // ── Multi-Currency (Round 10) ────────────────────────────────────────────
   test('สลิปปกติไม่มี currency → Default เป็น THB (Backward Compat)', async () => {

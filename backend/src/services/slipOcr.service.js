@@ -71,7 +71,14 @@ const SYSTEM_PROMPT = [
   '- ถ้ารูปไม่ใช่สลิปการซื้อ/ขายสินทรัพย์ (เช่น รูปคน วิว มีม เอกสารทั่วไป) ให้ is_slip = false',
   '- ถ้าในรูปมีมากกว่า 1 รายการธุรกรรม (เช่น Statement เต็มหน้า หลายแถว) ให้ multiple_items = true',
   '- symbol ให้เป็นชื่อย่อสินทรัพย์เป็นตัวพิมพ์ใหญ่ (เช่น BTC, PTT, AAPL) ถ้าอ่านไม่ได้ให้ null',
-  '- side = "buy" (ซื้อ) หรือ "sell" (ขาย) ถ้าไม่ชัดเจนให้ null',
+  // ⚠️ ทิศทางรายการเป็น Field ที่ผิดแล้วกระทบเงินผู้ใช้โดยตรง (P&L/จำนวนหน่วยถือครอง
+  // กลับด้าน) จึงอธิบายละเอียดกว่า Field อื่น + ย้ำ lowercase เป็น Defense-in-depth
+  // ควบคู่กับ normalizeSide() ที่ Normalize ซ้ำอีกชั้นฝั่งโค้ด (ห้ามพึ่ง Prompt อย่างเดียว)
+  '- side = ทิศทางของรายการ ต้องเป็น "buy" หรือ "sell" ตัวพิมพ์เล็กเท่านั้น',
+  '  ให้ "sell" เมื่อเห็นคำบ่งชี้การขาย เช่น ขาย, ขายออก, จำหน่าย, Sell, Sold, SELL,',
+  '  หรือรายการที่เงินเข้าบัญชีจากการลดสถานะถือครอง',
+  '  ให้ "buy" เมื่อเห็นคำบ่งชี้การซื้อ เช่น ซื้อ, Buy, Bought, BUY',
+  '  ⚠️ ห้ามเดาว่าเป็น "buy" เมื่อไม่เห็นคำบ่งชี้ชัดเจน — กรณีกำกวมให้ null เท่านั้น',
   '- date รูปแบบ DD/MM/YYYY (ปี ค.ศ. หรือ พ.ศ. ตามที่เห็นในสลิป) ถ้าไม่มีให้ null',
   '- quantity = จำนวนหน่วย (เช่น จำนวนหุ้น/เหรียญ), price_per_unit = ราคาต่อหน่วย,',
   '  amount = ยอดเงินรวมของรายการ (ตัวเลขล้วน ไม่มี comma)',
@@ -166,6 +173,33 @@ function positiveNumberOrNull(value) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+// ── ทิศทางรายการ (buy/sell) ──────────────────────────────────────────────
+// ⚠️ เคยเป็นบั๊กความถูกต้องทางการเงิน: โค้ดเดิมเขียน `raw.side === 'sell' ? 'sell' : 'buy'`
+// ซึ่งเทียบแบบ strict + case-sensitive แล้ว "Default เป็น buy เงียบๆ" ทุกกรณีที่ไม่ตรงเป๊ะ
+// → สลิป "ขาย" ถูกบันทึกเป็น "ซื้อ" (P&L/จำนวนหน่วยถือครองผิดทันที และเป็น Immutable
+// Ledger ที่แก้ทีหลังต้องใช้ Reversal) รูปแบบที่ LLM ตอบจริงแล้วหลุด: "Sell" / "SELL" /
+// "ขาย" / " sell " (มีช่องว่าง) / null — 5 ใน 6 แบบกลายเป็น buy หมด
+//
+// กติกาใหม่: normalize ก่อนเทียบเสมอ และ "ห้าม Default เป็น buy" — ถ้าตีความไม่ได้ให้
+// คืน null แล้วให้ผู้ใช้เลือกเองบนการ์ด Preview (ดู flexMessage.buildOcrPreviewMessage)
+// เดาผิดทางการเงินแย่กว่าถามผู้ใช้เพิ่ม 1 คลิก
+const SIDE_ALIASES = new Map([
+  ['buy', 'buy'],
+  ['ซื้อ', 'buy'],
+  ['sell', 'sell'],
+  ['ขาย', 'sell'],
+  ['จำหน่าย', 'sell'],
+  ['ขายออก', 'sell'],
+]);
+
+// คืน 'buy' | 'sell' | null (null = อ่านไม่ชัด ต้องให้ผู้ใช้ยืนยันทิศทางเอง)
+function normalizeSide(value) {
+  const normalized = String(value ?? '')
+    .trim()
+    .toLowerCase();
+  return SIDE_ALIASES.get(normalized) ?? null;
+}
+
 // ── Entry point ──────────────────────────────────────────────────────────
 // extractSlip(userId, buffer, contentType) → Object ข้อมูลที่อ่านได้ + โควตาคงเหลือ
 // ลำดับ: Rate Limit → Quota Check (ก่อนเรียก Claude) → Claude Vision → Validate →
@@ -230,7 +264,8 @@ async function extractSlip(userId, buffer, contentType, now = new Date()) {
 
   return {
     symbol,
-    side: raw.side === 'sell' ? 'sell' : 'buy', // Default "buy" (Use Case หลัก = บันทึกการซื้อ DCA)
+    // 'buy' | 'sell' | null — null = อ่านไม่ชัด (ห้าม Default เป็น buy ดู normalizeSide)
+    side: normalizeSide(raw.side),
     quantity: positiveNumberOrNull(raw.quantity),
     pricePerUnit: positiveNumberOrNull(raw.price_per_unit),
     // ยอดเงินรวม: อ่าน field ใหม่ 'amount' ก่อน (รองรับ 'amount_thb' เดิมเผื่อ Model

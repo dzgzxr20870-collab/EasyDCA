@@ -2477,11 +2477,18 @@ function buildExportFormatHelpMessage() {
 // Postback data ของปุ่ม [ยืนยัน]/[แก้ไข] บนการ์ด OCR — พกค่าที่ AI อ่านได้ (Symbol/
 // ทิศทาง/จำนวน+ราคา หรือ ยอดรวม/วันที่ ISO) เพื่อให้ Handler สร้าง Pending ได้โดยไม่
 // ต้องเก็บ Session (LINE Postback ≤ 300 ตัวอักษร พอสำหรับข้อมูล 1 รายการ)
-function ocrPostback(action, ocr) {
+// sideOverride = ทิศทางที่ "ผู้ใช้เลือกเอง" บนการ์ดกรณี AI อ่านไม่ชัด (ocr.side === null)
+// — ปุ่มยืนยันจะส่งค่านี้มาแทน ไม่ใช่ให้ระบบเดา
+function ocrPostback(action, ocr, sideOverride = null) {
   const p = new URLSearchParams();
   p.set('action', action);
   p.set('sym', ocr.symbol);
-  p.set('side', ocr.side === 'sell' ? 'sell' : 'buy');
+  // ⚠️ ห้าม Default เป็น 'buy' เมื่อ side เป็น null (บั๊กสลิปขายถูกบันทึกเป็นซื้อ) —
+  // กรณีอ่านไม่ชัดให้ "ไม่ส่ง side" ไปเลย แล้วให้ปลายทางบังคับผู้ใช้เลือก:
+  // ocr_confirm จะมีปุ่มแยก 2 ทาง (ส่ง sideOverride) ส่วน ocr_edit จะ Prefill เป็น
+  // <ซื้อ/ขาย> ให้ผู้ใช้พิมพ์เลือกเอง (ดู webhook.controller case 'ocr_edit')
+  const side = sideOverride ?? ocr.side;
+  if (side === 'buy' || side === 'sell') p.set('side', side);
   if (ocr.quantity !== null && ocr.pricePerUnit !== null) {
     p.set('qty', String(ocr.quantity));
     p.set('price', String(ocr.pricePerUnit));
@@ -2506,8 +2513,13 @@ function ocrPostback(action, ocr) {
 // [ยืนยันบันทึก] (เฉพาะเมื่อข้อมูลครบพอสร้างธุรกรรม) และ [แก้ไข] เสมอ พร้อม Disclaimer
 // ว่าเป็นการอ่านข้อมูลด้วย AI ไม่ใช่คำแนะนำการลงทุน (กฎเหล็ก PROJECT_BRIEF)
 function buildOcrPreviewMessage(ocr) {
-  const isBuy = ocr.side !== 'sell';
-  const sideLabel = isBuy ? 'ซื้อ' : 'ขาย';
+  // ทิศทางรายการมี 3 สถานะจริง: 'buy' / 'sell' / null (AI อ่านไม่ชัด)
+  // ⚠️ เดิมใช้ `ocr.side !== 'sell'` ซึ่งยุบ null รวมกับ buy → การ์ดขึ้น "🟢 ซื้อ" อย่าง
+  // มั่นใจทั้งที่อ่านไม่ชัด ผู้ใช้กดยืนยันแล้วได้ Ledger ผิด (Preview เลยไม่ได้ทำหน้าที่
+  // Safety Net เลย) ตอนนี้แยก null ออกมาเป็นสถานะ "ต้องให้ผู้ใช้เลือกก่อน" ชัดเจน
+  const isUnknownSide = ocr.side !== 'buy' && ocr.side !== 'sell';
+  const isBuy = ocr.side === 'buy';
+  const sideLabel = isUnknownSide ? 'ซื้อ/ขาย?' : isBuy ? 'ซื้อ' : 'ขาย';
   const naText = 'อ่านไม่ได้ (กรุณากรอกเอง)';
 
   // สร้างธุรกรรมได้เมื่อมี Symbol + (จำนวน&ราคา) หรือ (ยอดรวมบาท) อย่างใดอย่างหนึ่ง
@@ -2526,11 +2538,23 @@ function buildOcrPreviewMessage(ocr) {
   const unit = ocr.currency === 'USD' ? 'USD' : 'บาท';
 
   const body = [
-    textLine(`${isBuy ? '🟢' : '🔴'} ${sideLabel} ${ocr.symbol}`, {
+    textLine(`${isUnknownSide ? '⚠️' : isBuy ? '🟢' : '🔴'} ${sideLabel} ${ocr.symbol}`, {
       size: 'lg',
       weight: 'bold',
-      color: COLOR.textPrimary,
+      color: isUnknownSide ? COLOR.warning : COLOR.textPrimary,
     }),
+  ];
+  // อ่านทิศทางไม่ชัด → บอกตรงๆ ว่าระบบไม่รู้ และต้องให้ผู้ใช้เลือกเอง (ห้ามเดาให้)
+  if (isUnknownSide) {
+    body.push(
+      textLine('ระบบอ่านไม่ชัดว่าเป็นรายการ "ซื้อ" หรือ "ขาย" กรุณาเลือกให้ถูกต้องก่อนบันทึก', {
+        size: 'sm',
+        color: COLOR.warning,
+        wrap: true,
+      })
+    );
+  }
+  body.push(
     textLine(
       `จำนวน: ${ocr.quantity !== null ? `${formatNumber(ocr.quantity)} ${ocr.symbol}` : naText}`,
       { size: 'sm', color: ocr.quantity !== null ? COLOR.textSecondary : COLOR.warning }
@@ -2538,8 +2562,8 @@ function buildOcrPreviewMessage(ocr) {
     textLine(
       `ราคาต่อหน่วย: ${ocr.pricePerUnit !== null ? `${formatNumber(ocr.pricePerUnit)} ${unit}` : naText}`,
       { size: 'sm', color: ocr.pricePerUnit !== null ? COLOR.textSecondary : COLOR.warning }
-    ),
-  ];
+    )
+  );
   if (ocr.amountThb !== null) {
     body.push(
       textLine(`ยอดรวม: ${formatNumber(ocr.amountThb)} ${unit}`, { size: 'sm', color: COLOR.textSecondary })
@@ -2571,17 +2595,46 @@ function buildOcrPreviewMessage(ocr) {
 
   const footerButtons = [];
   if (confirmable) {
-    footerButtons.push({
-      type: 'button',
-      style: 'primary',
-      color: isBuy ? COLOR.profit : COLOR.loss,
-      action: {
-        type: 'postback',
-        label: '✅ ยืนยันบันทึก',
-        data: ocrPostback('ocr_confirm', ocr),
-        displayText: 'ยืนยันบันทึกรายการจากสลิป',
-      },
-    });
+    if (isUnknownSide) {
+      // AI อ่านทิศทางไม่ชัด → ไม่มีปุ่ม "ยืนยันบันทึก" เดี่ยวๆ ให้กดพลาด แต่บังคับให้
+      // ผู้ใช้ระบุทิศทางเองผ่านปุ่มแยก 2 ทาง (ค่าที่ส่งมาจากผู้ใช้ ไม่ใช่ระบบเดา)
+      footerButtons.push(
+        {
+          type: 'button',
+          style: 'primary',
+          color: COLOR.profit,
+          action: {
+            type: 'postback',
+            label: '🟢 ยืนยันเป็น "ซื้อ"',
+            data: ocrPostback('ocr_confirm', ocr, 'buy'),
+            displayText: 'ยืนยันบันทึกเป็นรายการซื้อ',
+          },
+        },
+        {
+          type: 'button',
+          style: 'primary',
+          color: COLOR.loss,
+          action: {
+            type: 'postback',
+            label: '🔴 ยืนยันเป็น "ขาย"',
+            data: ocrPostback('ocr_confirm', ocr, 'sell'),
+            displayText: 'ยืนยันบันทึกเป็นรายการขาย',
+          },
+        }
+      );
+    } else {
+      footerButtons.push({
+        type: 'button',
+        style: 'primary',
+        color: isBuy ? COLOR.profit : COLOR.loss,
+        action: {
+          type: 'postback',
+          label: '✅ ยืนยันบันทึก',
+          data: ocrPostback('ocr_confirm', ocr),
+          displayText: 'ยืนยันบันทึกรายการจากสลิป',
+        },
+      });
+    }
   }
   footerButtons.push({
     type: 'button',
@@ -2628,6 +2681,37 @@ function buildOcrEditPrefillMessage(prefillText) {
       }),
       textLine(prefillText, { size: 'md', weight: 'bold', color: COLOR.textPrimary }),
       textLine('* ส่วนที่เป็น <...> คือค่าที่ AI อ่านไม่ได้ กรุณากรอกแทนที่ก่อนส่ง', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
+}
+
+// ทิศทางรายการ (ซื้อ/ขาย) หายไปจาก Postback ตอนกดยืนยัน — เกิดได้จากการ์ดเก่าที่ค้าง
+// อยู่ในแชท หรือ Postback ที่ถูกแก้ค่ามา ⚠️ ห้ามเดาเป็น "ซื้อ" แล้วบันทึกต่อ เพราะถ้าจริงๆ
+// เป็นรายการขายจะได้ Ledger ที่กลับด้าน (P&L/จำนวนหน่วยถือครองผิด) และเป็น Immutable
+// Ledger ที่ต้องแก้ด้วย Reversal — ให้ผู้ใช้ส่งสลิปใหม่/พิมพ์คำสั่งเองแทน
+function buildOcrSideRequiredMessage() {
+  return bubble({
+    headerText: '⚠️ ไม่ทราบว่าเป็นการซื้อหรือขาย',
+    headerColor: COLOR.warning,
+    headerBg: COLOR.lossBg,
+    bodyContents: [
+      textLine('ระบบไม่ได้รับข้อมูลว่ารายการนี้เป็น "ซื้อ" หรือ "ขาย" จึงยังไม่บันทึกให้', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      textLine('กรุณาส่งรูปสลิปใหม่อีกครั้ง แล้วเลือกทิศทางรายการบนการ์ด หรือพิมพ์คำสั่งเอง เช่น', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      textLine('ขาย PTT 100 หุ้น ราคา 35', {
+        size: 'md',
+        weight: 'bold',
+        color: COLOR.textPrimary,
+      }),
+      textLine('* ระบบจะไม่เดาทิศทางรายการให้ เพราะหากบันทึกผิดด้านจะทำให้กำไร/ขาดทุนคำนวณผิด', {
         size: 'xs',
         color: COLOR.textSecondary,
       }),
@@ -2762,6 +2846,7 @@ module.exports = {
   buildOcrPreviewMessage,
   buildOcrEditPrefillMessage,
   buildOcrManualQuantityMessage,
+  buildOcrSideRequiredMessage,
   buildOcrPremiumRequiredMessage,
   buildOcrErrorMessage,
   buildExportFormatQuickReply,

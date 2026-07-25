@@ -830,7 +830,14 @@ async function routePostback(user, data) {
         return flexMessage.buildOcrPremiumRequiredMessage();
       }
 
-      const side = params.get('side') === 'sell' ? 'sell' : 'buy';
+      // ⚠️ ห้าม Default เป็น 'buy' เมื่อ side หายไป/ไม่ถูกต้อง (บั๊กสลิปขายถูกบันทึกเป็นซื้อ)
+      // การ์ด Preview ส่ง side มาเสมอเมื่อทิศทางชัด และส่งค่าที่ "ผู้ใช้เลือกเอง" เมื่อไม่ชัด
+      // ดังนั้นการที่ไม่มี side = Postback เก่า/ถูกแก้มา → ให้ผู้ใช้ยืนยันทิศทางใหม่ ดีกว่าเดา
+      const sideParam = params.get('side');
+      if (sideParam !== 'buy' && sideParam !== 'sell') {
+        return flexMessage.buildOcrSideRequiredMessage();
+      }
+      const side = sideParam;
       const command = side === 'sell' ? COMMANDS.SELL : COMMANDS.BUY;
 
       const commandParams = { symbol: String(params.get('sym') ?? '').toUpperCase() };
@@ -876,7 +883,10 @@ async function routePostback(user, data) {
     // ประกอบรูปแบบคำสั่งซื้อ/ขายเดิม (Reuse Command Parser เดิม ไม่เขียนใหม่) ค่าที่ AI
     // อ่านไม่ได้ (qty/price ไม่มีใน Postback) แทนด้วย <...> ให้ผู้ใช้กรอกแล้วส่งกลับมา
     case 'ocr_edit': {
-      const sideLabel = params.get('side') === 'sell' ? 'ขาย' : 'ซื้อ';
+      // ทิศทางไม่ชัด (การ์ดไม่ส่ง side มา) → Prefill เป็น <ซื้อ/ขาย> ให้ผู้ใช้พิมพ์เลือกเอง
+      // ไม่เติม "ซื้อ" ให้อัตโนมัติ (Command Parser จะไม่ผ่านจนกว่าผู้ใช้จะแทนที่ Placeholder)
+      const sideParam = params.get('side');
+      const sideLabel = sideParam === 'sell' ? 'ขาย' : sideParam === 'buy' ? 'ซื้อ' : '<ซื้อ/ขาย>';
       const sym = String(params.get('sym') ?? '').toUpperCase();
       const amt = params.get('amt');
       // Multi-Currency (Round 10) — ต่อท้ายหน่วย USD ให้ Command Parser อ่านสกุลถูก

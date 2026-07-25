@@ -70,6 +70,51 @@ describe('buildOcrPreviewMessage', () => {
   });
 });
 
+// ── ทิศทางรายการ 3 สถานะ: buy / sell / null (Bug Fix: สลิปขายถูกบันทึกเป็นซื้อ) ──
+// เดิมการ์ดใช้ `ocr.side !== 'sell'` ซึ่งยุบ null รวมกับ buy → ขึ้น "🟢 ซื้อ" อย่างมั่นใจ
+// ทั้งที่อ่านไม่ชัด ผู้ใช้กดยืนยันแล้วได้ Ledger กลับด้าน (Preview ไม่ได้เป็น Safety Net จริง)
+describe('buildOcrPreviewMessage — ทิศทางรายการ (buy/sell/null)', () => {
+  test('side=sell → การ์ดแสดง "ขาย" + confirm พก side=sell', () => {
+    const msg = flex.buildOcrPreviewMessage({ ...CONFIRMABLE, side: 'sell' });
+    const text = JSON.stringify(msg);
+    expect(text).toContain('🔴 ขาย BTC');
+    expect(text).not.toContain('🟢 ซื้อ BTC');
+    const confirm = footerDatas(msg).find((d) => d.startsWith('action=ocr_confirm'));
+    expect(confirm).toContain('side=sell');
+  });
+
+  test('side=buy → การ์ดแสดง "ซื้อ" + confirm พก side=buy (Regression)', () => {
+    const msg = flex.buildOcrPreviewMessage(CONFIRMABLE);
+    expect(JSON.stringify(msg)).toContain('🟢 ซื้อ BTC');
+    const confirm = footerDatas(msg).find((d) => d.startsWith('action=ocr_confirm'));
+    expect(confirm).toContain('side=buy');
+  });
+
+  test('side=null → ไม่แสดง "ซื้อ" ลอยๆ แต่เตือนว่าอ่านไม่ชัด', () => {
+    const msg = flex.buildOcrPreviewMessage({ ...CONFIRMABLE, side: null });
+    const text = JSON.stringify(msg);
+    expect(text).not.toContain('🟢 ซื้อ BTC');
+    expect(text).toContain('⚠️');
+    expect(text).toContain('ระบบอ่านไม่ชัดว่าเป็นรายการ');
+  });
+
+  test('side=null → มีปุ่มให้ผู้ใช้เลือก 2 ทาง (ซื้อ/ขาย) แทนปุ่มยืนยันเดียว', () => {
+    const msg = flex.buildOcrPreviewMessage({ ...CONFIRMABLE, side: null });
+    const confirms = footerDatas(msg).filter((d) => d.startsWith('action=ocr_confirm'));
+    expect(confirms).toHaveLength(2);
+    expect(confirms.some((d) => d.includes('side=buy'))).toBe(true);
+    expect(confirms.some((d) => d.includes('side=sell'))).toBe(true);
+    // ต้องไม่มีปุ่มยืนยันที่ไม่ระบุทิศทาง (กันกดพลาดแล้วระบบเดาให้)
+    expect(confirms.every((d) => d.includes('side='))).toBe(true);
+  });
+
+  test('side=null → ปุ่มแก้ไขไม่พก side ไปเลย (ไม่ Bias เป็นซื้อ)', () => {
+    const msg = flex.buildOcrPreviewMessage({ ...CONFIRMABLE, side: null });
+    const edit = footerDatas(msg).find((d) => d.startsWith('action=ocr_edit'));
+    expect(edit).not.toContain('side=');
+  });
+});
+
 describe('buildOcrPreviewMessage — Manual Quantity Fallback (Round 10-B)', () => {
   const AMOUNT_ONLY = {
     ...CONFIRMABLE,
