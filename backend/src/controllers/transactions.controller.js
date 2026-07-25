@@ -3,6 +3,8 @@ const undoTransactionService = require('../services/undoTransaction.service');
 const symbolRegistry = require('../services/symbolRegistry.service');
 const dcaStatsService = require('../services/dcaStats.service');
 const transactionRepository = require('../repositories/transaction.repository');
+const entitlementService = require('../services/entitlement.service');
+const storageService = require('../services/storage.service');
 
 // ═══════════════════════════════════════════════════════════════════════════
 // transactions.controller — บันทึก DCA จากเว็บ (S8 Round 1a)
@@ -64,6 +66,13 @@ const WEB_ERROR_MESSAGES = {
   ALREADY_UNDONE: 'รายการล่าสุดถูกยกเลิกไปแล้ว',
   CANNOT_UNDO_QUANTITY_MISMATCH:
     'ยกเลิกรายการนี้ไม่ได้ เพราะยอดคงเหลือปัจจุบันน้อยกว่าจำนวนที่ซื้อไว้ (มีการขายเกิดขึ้นหลังจากนั้น)',
+  // แนบสลิปหลักฐาน (Premium) — เก็บรูปประกอบรายการเฉยๆ ไม่มี AI อ่าน (ต่างจาก OCR ทาง LINE)
+  TRANSACTION_SLIP_PREMIUM_REQUIRED:
+    'การแนบสลิปเป็นหลักฐานเป็นฟีเจอร์สำหรับสมาชิก Premium — อัพเกรดเพื่อแนบรูปสลิปประกอบรายการ',
+  TRANSACTION_NOT_FOUND: 'ไม่พบรายการที่ต้องการแนบสลิป (อาจถูกลบไปแล้ว)',
+  EMPTY_BODY: 'ไม่พบไฟล์รูป กรุณาเลือกรูปสลิปใหม่',
+  INVALID_SLIP_CONTENT_TYPE: 'ไฟล์ต้องเป็นรูปภาพ (JPG, PNG, WebP หรือ GIF) เท่านั้น',
+  SLIP_TOO_LARGE: 'ไฟล์รูปใหญ่เกินไป (สูงสุด 10 MB)',
   INTERNAL_ERROR: 'เกิดข้อผิดพลาดภายในระบบ กรุณาลองใหม่อีกครั้ง',
 };
 
@@ -86,6 +95,12 @@ const ERROR_STATUS = {
   GOLD_PRICE_UNAVAILABLE: 503,
   SEC_NOT_CONFIGURED: 503,
   MUTUAL_FUND_NAV_UNAVAILABLE: 503,
+  // แนบสลิปหลักฐาน (Premium) — Status ตรงกับ payment.controller (415 ชนิดไฟล์ผิด, 413 ใหญ่เกิน)
+  TRANSACTION_SLIP_PREMIUM_REQUIRED: 403,
+  TRANSACTION_NOT_FOUND: 404,
+  EMPTY_BODY: 400,
+  INVALID_SLIP_CONTENT_TYPE: 415,
+  SLIP_TOO_LARGE: 413,
 };
 
 // Error Response ของเว็บ: คง Field `error` = Error Code แบบ Flat ให้ตรงกับทุก
@@ -330,4 +345,54 @@ async function undoLast(req, res) {
   }
 }
 
-module.exports = { createTransaction, undoLast };
+// POST /api/v1/transactions/:id/slip — แนบรูปสลิป "เป็นหลักฐาน" ให้รายการที่บันทึกแล้ว
+// (Premium เท่านั้น) — เก็บรูปเฉยๆ ไม่มี AI อ่าน/ไม่ Auto-fill ใดๆ (คนละเรื่องกับ
+// AI Slip OCR ทาง LINE ที่ตีความตัวเลขจากรูป) ผู้ใช้กรอกเงิน/สินทรัพย์/วันที่เองครบแล้ว
+//
+// Body เป็น Binary รูปภาพดิบ (express.raw ที่ Route — req.body เป็น Buffer, Content-Type
+// ของ Request = ชนิดรูปจริง) มิเรอร์ payment.controller.uploadSlip ทุกขั้น โดย Reuse
+// Storage/Repository/Entitlement เดิมทั้งหมด (ไม่มี Logic คู่ขนานใหม่):
+//   1) Premium Gate — entitlement.isPremiumActive (Single Source เดียวกับ Export Gate)
+//      เป็น Security Boundary จริงฝั่ง Backend (Frontend ซ่อนช่องแค่ UX ไม่ใช่ Gate)
+//   2) Ownership — findByIdForUser กรอง user_id ในตัว (กันเดา id แนบเข้าธุรกรรมคนอื่น)
+//   3) Upload (Validate MIME/ขนาดในตัว) → attachSlipImagePath (คอลัมน์ slip_image_path
+//      เดิมจาก migration 021 — Reuse ได้เพราะทั้ง OCR และหลักฐานเว็บคือ "รูปสลิปของ
+//      ธุรกรรมนี้" เหมือนกัน ธุรกรรมหนึ่งมาจากช่องทางเดียวเท่านั้น ไม่เขียนทับกัน)
+//
+// PDPA: ไฟล์ถูกตั้งชื่อ "{userId}-{token}" เหมือน OCR → userErasure.eraseUserData ที่
+// เรียก deleteAllTransactionSlipsForUser(userId) กวาดลบให้อยู่แล้วโดยอัตโนมัติ (ไม่ต้องแก้)
+async function uploadTransactionSlip(req, res) {
+  // 1) Premium Gate ก่อนแตะ Body — ไม่ประมวลผลไฟล์ให้ผู้ใช้ที่ไม่มีสิทธิ์เลย
+  if (!entitlementService.isPremiumActive(req.userRecord)) {
+    return fail(res, 'TRANSACTION_SLIP_PREMIUM_REQUIRED');
+  }
+
+  const buffer = req.body;
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
+    return fail(res, 'EMPTY_BODY');
+  }
+  const contentType = req.get('content-type');
+
+  try {
+    // 2) Ownership — คืน null ทั้งกรณี "ไม่มีจริง" และ "ไม่ใช่ของเรา" (ไม่บอกใบ้ว่า id มีอยู่)
+    const tx = await transactionRepository.findByIdForUser(req.params.id, req.user.id);
+    if (!tx) {
+      return fail(res, 'TRANSACTION_NOT_FOUND');
+    }
+
+    // 3) Upload (throw StorageServiceError ถ้าชนิด/ขนาดไม่ผ่าน) → แนบ path เข้าธุรกรรม
+    const { path } = await storageService.uploadTransactionSlip(req.user.id, buffer, contentType);
+    await transactionRepository.attachSlipImagePath(tx.id, path);
+
+    return res.status(200).json({ status: 'slip_attached' });
+  } catch (err) {
+    // StorageServiceError (INVALID_SLIP_CONTENT_TYPE / SLIP_TOO_LARGE) → Map ผ่าน code เดิม
+    if (err && err.name === 'StorageServiceError') {
+      return fail(res, err.code);
+    }
+    console.error(`[transactions] uploadTransactionSlip failed: ${err.message}`);
+    return fail(res, 'INTERNAL_ERROR');
+  }
+}
+
+module.exports = { createTransaction, undoLast, uploadTransactionSlip };

@@ -33,6 +33,19 @@ const TRANSACTION_ERROR_MESSAGES = {
   INTERNAL_ERROR: 'เกิดข้อผิดพลาดภายในระบบ กรุณาลองใหม่อีกครั้ง',
 };
 
+// แนบสลิปหลักฐาน (Premium) — Error Code จาก POST /transactions/:id/slip
+// (transactions.controller WEB_ERROR_MESSAGES) แยกตารางเพราะเป็นคนละ Endpoint/ชุด code
+const SLIP_UPLOAD_ERROR_MESSAGES = {
+  TRANSACTION_SLIP_PREMIUM_REQUIRED:
+    'การแนบสลิปเป็นหลักฐานใช้ได้เฉพาะสมาชิก Premium',
+  TRANSACTION_NOT_FOUND: 'ไม่พบรายการที่ต้องการแนบสลิป',
+  INVALID_SLIP_CONTENT_TYPE: 'ไฟล์ต้องเป็นรูปภาพ (JPG, PNG, WebP หรือ GIF) เท่านั้น',
+  SLIP_TOO_LARGE: 'ไฟล์รูปใหญ่เกินไป (สูงสุด 10 MB)',
+  EMPTY_BODY: 'ไม่พบไฟล์รูป กรุณาเลือกรูปสลิปใหม่',
+  UNAUTHORIZED: 'เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่อีกครั้ง',
+  INTERNAL_ERROR: 'แนบรูปสลิปไม่สำเร็จ กรุณาลองใหม่อีกครั้ง',
+};
+
 const UNDO_ERROR_MESSAGES = {
   NO_TRANSACTION_TO_UNDO: 'ไม่มีรายการให้ยกเลิก',
   ALREADY_UNDONE: 'รายการล่าสุดถูกยกเลิกไปแล้ว',
@@ -50,4 +63,8 @@ export function transactionErrorMessage(code) {
 
 export function undoErrorMessage(code) {
   return UNDO_ERROR_MESSAGES[code] ?? UNDO_ERROR_MESSAGES.INTERNAL_ERROR;
+}
+
+export function slipUploadErrorMessage(code) {
+  return SLIP_UPLOAD_ERROR_MESSAGES[code] ?? SLIP_UPLOAD_ERROR_MESSAGES.INTERNAL_ERROR;
 }

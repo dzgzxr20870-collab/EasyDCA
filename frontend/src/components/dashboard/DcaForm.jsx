@@ -1,11 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import AssetPicker from './AssetPicker.jsx';
-import { apiPost } from '../../lib/api.js';
-import { transactionErrorMessage } from '../../lib/dcaErrors.js';
+import { apiPost, apiUpload } from '../../lib/api.js';
+import { transactionErrorMessage, slipUploadErrorMessage } from '../../lib/dcaErrors.js';
 import { todayBangkokIso } from '../../lib/dateBangkok.js';
 import { resolvePrefillState } from '../../lib/dcaPlanPrefill.js';
 
 const AMOUNT_CHIPS = [500, 1000, 3000, 5000, 10000];
+
+// แนบสลิปหลักฐาน (Premium) — ชนิด/ขนาดที่รับ ตรงกับ storage.service ฝั่ง Backend
+// (ALLOWED_SLIP_CONTENT_TYPES + MAX_SLIP_SIZE_BYTES) — Frontend เช็คก่อนเพื่อ UX ที่ดี
+// (เตือนทันทีไม่ต้องรอ Round-trip) แต่ "Backend คือด่านตัดสินจริง" ไม่ใช่ชั้นนี้
+const SLIP_ACCEPT_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+const SLIP_ACCEPT_ATTR = SLIP_ACCEPT_TYPES.join(',');
+const SLIP_MAX_BYTES = 10 * 1024 * 1024;
 // USD Toggle เปิดเฉพาะ stock_us ตามที่ Mockup ทำจริง (t==="us" ? "THB⇄USD" : "THB")
 // และตาม Requirement งานที่ 2 ("สลับ THB⇄USD เฉพาะสินทรัพย์ที่รองรับ USD (หุ้น US)")
 // — Backend (API.md §15.2) เทคนิคแล้วรองรับ USD สำหรับ crypto ด้วย (Round 10) แต่
@@ -36,7 +43,18 @@ function fmtAmountInput(n) {
 //   prefillSignal (S8 R3 รอบ 3): { symbol, amountTotal, currency, nonce } | null —
 //     Parent ตั้งค่าใหม่ (Object ใหม่ทุกครั้ง) เมื่อกด "บันทึกเลย" บนการ์ดแผนที่ถึง
 //     รอบวันนี้ (SidePanels) เพื่อ Prefill ฟอร์มนี้ให้เอง
-function DcaForm({ symbols, pickerOpenSignal, onRecorded, onRequestUndo, prefillSignal = null }) {
+function DcaForm({
+  symbols,
+  pickerOpenSignal,
+  onRecorded,
+  onRequestUndo,
+  prefillSignal = null,
+  // แนบสลิปหลักฐาน (Premium) — isPremiumActive มาจาก planInfo ของ DashboardHome
+  // (GET /dashboard/me) / onUpgrade พาไป /premium ทั้งคู่เป็น Presentation Gate เฉยๆ
+  // Backend ยัง Gate ซ้ำเองที่ POST /transactions/:id/slip (Security Boundary จริง)
+  isPremiumActive = false,
+  onUpgrade,
+}) {
   const [date, setDate] = useState(todayBangkokIso());
   const [picked, setPicked] = useState(null);
   const [amountInput, setAmountInput] = useState('');
@@ -48,6 +66,25 @@ function DcaForm({ symbols, pickerOpenSignal, onRecorded, onRequestUndo, prefill
   const [formError, setFormError] = useState(null);
   const [amountFieldError, setAmountFieldError] = useState(false);
   const [confirmed, setConfirmed] = useState(null); // response.transaction ล่าสุดที่บันทึกสำเร็จ
+
+  // แนบสลิปหลักฐาน (Premium) — slipFile = ไฟล์ที่จะแนบหลังบันทึกสำเร็จ,
+  // slipPreviewUrl = Object URL สำหรับ Thumbnail, slipNotice = ข้อความใต้ช่อง
+  // (Validation เตือน หรือ Warning "บันทึกสำเร็จแต่แนบรูปไม่สำเร็จ")
+  const [slipFile, setSlipFile] = useState(null);
+  const [slipPreviewUrl, setSlipPreviewUrl] = useState(null);
+  const [slipNotice, setSlipNotice] = useState(null);
+
+  // Revoke Object URL ล่าสุด "ตอน Unmount เท่านั้น" (กัน Memory leak) — ใช้ ref กัน
+  // ไม่ให้ revoke ทุกครั้งที่ URL เปลี่ยน (การเปลี่ยน/ลบ revoke เองอยู่แล้วในแต่ละ Handler)
+  const slipPreviewRef = useRef(null);
+  useEffect(() => {
+    slipPreviewRef.current = slipPreviewUrl;
+  }, [slipPreviewUrl]);
+  useEffect(() => {
+    return () => {
+      if (slipPreviewRef.current) URL.revokeObjectURL(slipPreviewRef.current);
+    };
+  }, []);
 
   const today = todayBangkokIso();
   const needsManualPrice = picked?.type === 'stock_th';
@@ -89,6 +126,42 @@ function DcaForm({ symbols, pickerOpenSignal, onRecorded, onRequestUndo, prefill
     setFormError(null);
   }
 
+  // ล้างสลิปที่เลือกไว้ + revoke Preview URL (เรียกทั้งตอนกด "ลบรูป" และหลังบันทึกสำเร็จ)
+  function clearSlip() {
+    if (slipPreviewUrl) URL.revokeObjectURL(slipPreviewUrl);
+    setSlipFile(null);
+    setSlipPreviewUrl(null);
+  }
+
+  function handleSlipChange(e) {
+    const file = e.target.files?.[0] ?? null;
+    if (slipPreviewUrl) URL.revokeObjectURL(slipPreviewUrl);
+    setSlipNotice(null);
+    if (!file) {
+      setSlipFile(null);
+      setSlipPreviewUrl(null);
+      return;
+    }
+    // Validate ฝั่ง Client ก่อน (Backend ตรวจซ้ำ) — Reject แล้วไม่เก็บไฟล์ + เคลียร์ input
+    // ให้เลือกใหม่ได้ (ไม่ค้างชื่อไฟล์เดิมใน input)
+    if (!SLIP_ACCEPT_TYPES.includes(file.type)) {
+      setSlipFile(null);
+      setSlipPreviewUrl(null);
+      setSlipNotice('ไฟล์ต้องเป็นรูปภาพ (JPG, PNG, WebP หรือ GIF) เท่านั้น');
+      e.target.value = '';
+      return;
+    }
+    if (file.size > SLIP_MAX_BYTES) {
+      setSlipFile(null);
+      setSlipPreviewUrl(null);
+      setSlipNotice('ไฟล์รูปใหญ่เกินไป (สูงสุด 10 MB)');
+      e.target.value = '';
+      return;
+    }
+    setSlipFile(file);
+    setSlipPreviewUrl(URL.createObjectURL(file));
+  }
+
   function resetFormAfterSuccess() {
     setPicked(null);
     setAmountInput('');
@@ -97,6 +170,7 @@ function DcaForm({ symbols, pickerOpenSignal, onRecorded, onRequestUndo, prefill
     setPricePerUnit('');
     setNote('');
     setDate(todayBangkokIso());
+    clearSlip();
   }
 
   async function handleSubmit(e) {
@@ -140,11 +214,29 @@ function DcaForm({ symbols, pickerOpenSignal, onRecorded, onRequestUndo, prefill
     };
 
     setSubmitting(true);
+    setSlipNotice(null);
     try {
       const response = await apiPost('/api/v1/transactions', payload);
+
+      // แนบสลิปหลักฐาน (ถ้าเลือกไว้ — Premium เท่านั้น) เป็นขั้นแยกหลังธุรกรรมถูกสร้าง
+      // แล้ว (Endpoint รับ transaction id) — Best-effort: ธุรกรรม "บันทึกสำเร็จแล้วจริง"
+      // ต่อให้แนบรูปพลาด ต้องไม่ทำให้ผู้ใช้เข้าใจว่าบันทึก DCA ไม่สำเร็จ → ไม่ throw
+      // แค่แสดง Warning แยก (รายการยังอยู่ครบ แค่ไม่มีรูปแนบ) Backend Gate Premium ซ้ำเอง
+      let slipWarning = null;
+      if (slipFile && isPremiumActive) {
+        try {
+          await apiUpload(`/api/v1/transactions/${response.transaction.id}/slip`, slipFile);
+        } catch (err) {
+          slipWarning = `บันทึก DCA สำเร็จ แต่แนบรูปสลิปไม่สำเร็จ (${slipUploadErrorMessage(err.message)})`;
+        }
+      }
+
       setConfirmed(response.transaction);
       resetFormAfterSuccess();
       onRecorded(response);
+      // ตั้ง Warning "หลัง" reset (resetFormAfterSuccess ไม่แตะ slipNotice แล้ว — ตั้งตรงนี้
+      // เพื่อให้ข้อความค้างให้ผู้ใช้เห็นว่ารูปไม่ได้แนบ ทั้งที่รายการบันทึกสำเร็จ)
+      if (slipWarning) setSlipNotice(slipWarning);
     } catch (err) {
       setFormError(transactionErrorMessage(err.message));
     } finally {
@@ -297,6 +389,56 @@ function DcaForm({ symbols, pickerOpenSignal, onRecorded, onRequestUndo, prefill
             />
           </div>
         )}
+
+        {/* ── แนบสลิปซื้อหุ้นเป็นหลักฐาน (Premium เท่านั้น — เก็บรูปเฉยๆ ไม่มี AI อ่าน) ── */}
+        <div className="dh-slip-field">
+          <label className="dh-fl">
+            แนบสลิปซื้อหุ้นเป็นหลักฐาน <span className="dh-fl-opt">(ไม่บังคับ)</span>
+          </label>
+
+          {isPremiumActive ? (
+            slipPreviewUrl ? (
+              <div className="dh-slip-preview">
+                <img src={slipPreviewUrl} alt="ตัวอย่างรูปสลิปที่จะแนบ" className="dh-slip-thumb" />
+                <div className="dh-slip-preview-info">
+                  <span className="dh-slip-filename">{slipFile?.name}</span>
+                  <button type="button" className="dh-btn-ghost dh-slip-clear" onClick={clearSlip}>
+                    ลบรูป
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <label className="dh-slip-picker">
+                <input
+                  type="file"
+                  accept={SLIP_ACCEPT_ATTR}
+                  onChange={handleSlipChange}
+                  style={{ display: 'none' }}
+                />
+                <span className="dh-slip-picker-btn">📎 เลือกรูปสลิป</span>
+                <span className="dh-form-note">
+                  JPG, PNG, WebP หรือ GIF · สูงสุด 10 MB — เก็บเป็นหลักฐานประกอบเท่านั้น
+                  ไม่มีการอ่านตัวเลขจากรูป (ยังต้องกรอกจำนวนเงินเอง)
+                </span>
+              </label>
+            )
+          ) : (
+            <div className="dh-slip-locked">
+              <span className="dh-slip-lock-ic">🔒</span>
+              <div className="dh-slip-lock-body">
+                <p className="dh-slip-lock-title">แนบสลิปเป็นหลักฐานสำหรับสมาชิก Premium</p>
+                <p className="dh-form-note">อัพเกรดเพื่อแนบรูปสลิปซื้อขายเก็บไว้ประกอบแต่ละรายการ</p>
+              </div>
+              {onUpgrade && (
+                <button type="button" className="dh-btn-ghost dh-slip-upgrade" onClick={onUpgrade}>
+                  👑 อัพเกรด
+                </button>
+              )}
+            </div>
+          )}
+
+          {slipNotice && <div className="dh-form-note dh-slip-notice">{slipNotice}</div>}
+        </div>
 
         {formError && <div className="dh-form-error">{formError}</div>}
 

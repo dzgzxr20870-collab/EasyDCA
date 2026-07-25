@@ -2,19 +2,45 @@ jest.mock('../src/repositories/transaction.repository');
 jest.mock('../src/repositories/asset.repository');
 jest.mock('../src/services/priceFeed.service');
 jest.mock('../src/services/fxRate.service');
+// storage.service ถูก Mock เพื่อทดสอบ uploadTransactionSlip โดยไม่ยิง Supabase จริง —
+// entitlement.service จงใจ "ไม่" Mock (เป็น Pure Logic อยากทดสอบ Gate จริง)
+jest.mock('../src/services/storage.service');
 
 const transactionRepository = require('../src/repositories/transaction.repository');
 const assetRepository = require('../src/repositories/asset.repository');
 const priceFeedService = require('../src/services/priceFeed.service');
 const fxRateService = require('../src/services/fxRate.service');
+const storageService = require('../src/services/storage.service');
 const transactionService = require('../src/services/transaction.service');
-const { createTransaction, undoLast } = require('../src/controllers/transactions.controller');
+const {
+  createTransaction,
+  undoLast,
+  uploadTransactionSlip,
+} = require('../src/controllers/transactions.controller');
 
 const USER_ID = 'user-uuid-1';
 const USER_RECORD = { id: USER_ID, plan: 'premium', planExpiresAt: '2099-01-01T00:00:00.000Z' };
+// Free (ไม่มีวันหมดอายุ) — entitlement.isPremiumActive() คืน false → โดน Gate
+const FREE_RECORD = { id: USER_ID, plan: 'free', planExpiresAt: null };
 
 function mockReq(body = {}, userRecord = USER_RECORD) {
   return { user: { id: USER_ID }, userRecord, body };
+}
+
+// req สำหรับ Route แนบสลิป (Body เป็น Buffer, มี params.id + get('content-type'))
+function mockSlipReq({
+  id = 'txn-1',
+  body = Buffer.from('fake-image-bytes'),
+  contentType = 'image/jpeg',
+  userRecord = USER_RECORD,
+} = {}) {
+  return {
+    user: { id: USER_ID },
+    userRecord,
+    params: { id },
+    body,
+    get: (header) => (header.toLowerCase() === 'content-type' ? contentType : undefined),
+  };
 }
 
 function mockRes() {
@@ -371,5 +397,128 @@ describe('Contract กับ transaction.service (กันการ Refactor �
   test('deriveQuantityFromAmount ใช้กฎปัดเศษ 8 ตำแหน่งเดียวกับ Service', () => {
     expect(transactionService.deriveQuantityFromAmount(1000, 190.5)).toBe(5.24934383);
     expect(transactionService.deriveQuantityFromAmount(1700, 34)).toBe(50);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// POST /transactions/:id/slip — แนบสลิปหลักฐาน (Premium เท่านั้น, เก็บรูปเฉยๆ ไม่ OCR)
+// ═══════════════════════════════════════════════════════════════════════════
+describe('POST /transactions/:id/slip — แนบสลิปหลักฐาน (Premium Gate)', () => {
+  beforeEach(() => {
+    // Default: เป็นเจ้าของรายการ + Upload สำเร็จ (แต่ละ test Override เฉพาะที่ต้องการ)
+    transactionRepository.findByIdForUser.mockResolvedValue({ id: 'txn-1', userId: USER_ID });
+    storageService.uploadTransactionSlip.mockResolvedValue({
+      path: `${USER_ID}-1752730000000.jpg`,
+      token: '1752730000000.jpg',
+    });
+    transactionRepository.attachSlipImagePath.mockResolvedValue({ id: 'txn-1' });
+  });
+
+  // ── Unit: Entitlement Gate ──────────────────────────────────────────────
+  test('Free User → 403 TRANSACTION_SLIP_PREMIUM_REQUIRED (ไม่แตะ Storage/DB เลย)', async () => {
+    const res = mockRes();
+    await uploadTransactionSlip(mockSlipReq({ userRecord: FREE_RECORD }), res);
+
+    expect(statusOf(res)).toBe(403);
+    expect(jsonOf(res).error).toBe('TRANSACTION_SLIP_PREMIUM_REQUIRED');
+    expect(jsonOf(res).message).toMatch(/Premium/);
+    // Gate ต้องตัดก่อน "ทุกอย่าง" — ไม่ยิง Storage และไม่แตะ DB (Security Boundary จริง)
+    expect(storageService.uploadTransactionSlip).not.toHaveBeenCalled();
+    expect(transactionRepository.findByIdForUser).not.toHaveBeenCalled();
+    expect(transactionRepository.attachSlipImagePath).not.toHaveBeenCalled();
+  });
+
+  test('Premium (plan=premium แต่ planExpiresAt หมดอายุแล้ว) → ยังโดน Gate 403', async () => {
+    const res = mockRes();
+    const expired = { id: USER_ID, plan: 'premium', planExpiresAt: '2000-01-01T00:00:00.000Z' };
+    await uploadTransactionSlip(mockSlipReq({ userRecord: expired }), res);
+
+    expect(statusOf(res)).toBe(403);
+    expect(jsonOf(res).error).toBe('TRANSACTION_SLIP_PREMIUM_REQUIRED');
+    expect(storageService.uploadTransactionSlip).not.toHaveBeenCalled();
+  });
+
+  // ── Integration: Premium แนบสำเร็จ ──────────────────────────────────────
+  test('Premium + รายการเป็นของตัวเอง + ไฟล์ถูกต้อง → 200 + แนบ path เข้าธุรกรรม', async () => {
+    const res = mockRes();
+    const buffer = Buffer.from('fake-image-bytes');
+    await uploadTransactionSlip(mockSlipReq({ id: 'txn-1', body: buffer }), res);
+
+    expect(statusOf(res)).toBe(200);
+    expect(jsonOf(res).status).toBe('slip_attached');
+    // ตรวจ Ownership ที่ชั้น Query (กรอง user_id พร้อมกัน)
+    expect(transactionRepository.findByIdForUser).toHaveBeenCalledWith('txn-1', USER_ID);
+    // Upload ด้วย userId ที่ Authenticate แล้ว (ไม่ใช่ค่าจาก Client) + buffer + content-type จริง
+    expect(storageService.uploadTransactionSlip).toHaveBeenCalledWith(USER_ID, buffer, 'image/jpeg');
+    // แนบ path ที่ Storage คืนมาเข้าธุรกรรม (slip_image_path — migration 021)
+    expect(transactionRepository.attachSlipImagePath).toHaveBeenCalledWith(
+      'txn-1',
+      `${USER_ID}-1752730000000.jpg`
+    );
+  });
+
+  // ── Integration: ไม่ใช่เจ้าของ → กันแนบสลิปเข้าธุรกรรมคนอื่นด้วยการเดา id ──────
+  test('Premium แต่ id ไม่ใช่ของตัวเอง (findByIdForUser → null) → 404 (ไม่ Upload)', async () => {
+    transactionRepository.findByIdForUser.mockResolvedValue(null);
+
+    const res = mockRes();
+    await uploadTransactionSlip(mockSlipReq({ id: 'someone-elses-txn' }), res);
+
+    expect(statusOf(res)).toBe(404);
+    expect(jsonOf(res).error).toBe('TRANSACTION_NOT_FOUND');
+    expect(storageService.uploadTransactionSlip).not.toHaveBeenCalled();
+    expect(transactionRepository.attachSlipImagePath).not.toHaveBeenCalled();
+  });
+
+  // ── Unit: Body ว่าง / ชนิดไฟล์ผิด / ใหญ่เกิน ─────────────────────────────
+  test('Body ว่าง (ไม่มีไฟล์) → 400 EMPTY_BODY (ไม่แตะ DB/Storage)', async () => {
+    const res = mockRes();
+    await uploadTransactionSlip(mockSlipReq({ body: Buffer.alloc(0) }), res);
+
+    expect(statusOf(res)).toBe(400);
+    expect(jsonOf(res).error).toBe('EMPTY_BODY');
+    expect(transactionRepository.findByIdForUser).not.toHaveBeenCalled();
+    expect(storageService.uploadTransactionSlip).not.toHaveBeenCalled();
+  });
+
+  test('ชนิดไฟล์ไม่ใช่รูป (StorageServiceError) → 415 INVALID_SLIP_CONTENT_TYPE (ไม่แนบ path)', async () => {
+    const err = new Error('bad type');
+    err.name = 'StorageServiceError';
+    err.code = 'INVALID_SLIP_CONTENT_TYPE';
+    storageService.uploadTransactionSlip.mockRejectedValue(err);
+
+    const res = mockRes();
+    await uploadTransactionSlip(mockSlipReq({ contentType: 'application/pdf' }), res);
+
+    expect(statusOf(res)).toBe(415);
+    expect(jsonOf(res).error).toBe('INVALID_SLIP_CONTENT_TYPE');
+    expect(transactionRepository.attachSlipImagePath).not.toHaveBeenCalled();
+  });
+
+  test('ไฟล์ใหญ่เกิน 10MB (StorageServiceError) → 413 SLIP_TOO_LARGE (ไม่แนบ path)', async () => {
+    const err = new Error('too large');
+    err.name = 'StorageServiceError';
+    err.code = 'SLIP_TOO_LARGE';
+    storageService.uploadTransactionSlip.mockRejectedValue(err);
+
+    const res = mockRes();
+    await uploadTransactionSlip(mockSlipReq(), res);
+
+    expect(statusOf(res)).toBe(413);
+    expect(jsonOf(res).error).toBe('SLIP_TOO_LARGE');
+    expect(transactionRepository.attachSlipImagePath).not.toHaveBeenCalled();
+  });
+});
+
+// ── Regression (Red-Green): การแนบสลิปเป็น "Optional" — ต้องไม่ทำ Flow เดิมพัง ──────
+describe('Regression — บันทึก DCA โดยไม่แนบสลิป (Use Case เดิม) ยังทำงานปกติ', () => {
+  test('createTransaction ไม่แตะ Logic สลิปเลย (ไม่เรียก uploadTransactionSlip/attachSlipImagePath)', async () => {
+    const res = mockRes();
+    await createTransaction(mockReq({ symbol: 'AAPL', amountTotal: 1000 }), res);
+
+    expect(statusOf(res)).toBe(201);
+    // เส้นทางบันทึกปกติต้องไม่ยุ่งกับสลิปใดๆ — แนบสลิปเป็นขั้นแยกที่ผู้ใช้เลือกทำหรือไม่ก็ได้
+    expect(storageService.uploadTransactionSlip).not.toHaveBeenCalled();
+    expect(transactionRepository.attachSlipImagePath).not.toHaveBeenCalled();
   });
 });

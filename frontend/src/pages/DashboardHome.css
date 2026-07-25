@@ -133,6 +133,24 @@ label.dh-fl .dh-fl-opt { color: var(--muted); font-weight: 500; }
 .dh-form-note { font-size: 11.5px; color: var(--muted); }
 .dh-form-error { font-size: 12.5px; font-weight: 600; color: var(--red); background: var(--red-soft); border-radius: 10px; padding: 8px 12px; }
 
+/* แนบสลิปหลักฐาน (Premium) — ปุ่มต่างๆ ที่มี Base .dh-btn-ghost ถูก Prefix .dh-app แล้ว
+   (ชนะ Reset .dh-app button) ส่วน .dh-slip-picker-btn เป็น <span> ไม่โดน Reset button */
+.dh-slip-field { display: flex; flex-direction: column; gap: 8px; }
+.dh-slip-picker { display: flex; flex-direction: column; gap: 6px; cursor: pointer; }
+.dh-slip-picker-btn { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; border: 1.5px dashed var(--line2); border-radius: 11px; padding: 9px 15px; font-size: 12.5px; font-weight: 700; color: var(--ink2); background: #FBFAF6; transition: border .15s, background .15s; }
+.dh-slip-picker:hover .dh-slip-picker-btn { border-color: var(--green); background: var(--green-soft2); }
+.dh-slip-preview { display: flex; align-items: center; gap: 12px; border: 1.5px solid var(--line2); border-radius: 12px; padding: 10px 12px; background: #FBFAF6; }
+.dh-slip-thumb { width: 54px; height: 54px; object-fit: cover; border-radius: 9px; border: 1px solid var(--line); flex: none; }
+.dh-slip-preview-info { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+.dh-slip-filename { font-size: 12px; font-weight: 600; color: var(--ink2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.dh-app .dh-slip-clear { flex: none; color: var(--red); border-color: #F0C9C9; }
+.dh-slip-locked { display: flex; align-items: center; gap: 12px; border: 1.5px solid #F0DDA8; border-radius: 12px; padding: 12px 14px; background: var(--amber-soft); }
+.dh-slip-lock-ic { font-size: 20px; flex: none; }
+.dh-slip-lock-body { flex: 1; min-width: 0; }
+.dh-slip-lock-title { font-size: 12.5px; font-weight: 700; color: #8A6D1F; margin: 0 0 2px; }
+.dh-app .dh-slip-upgrade { flex: none; background: var(--green); color: #fff; border-color: transparent; }
+.dh-slip-notice { color: #8A6D1F; }
+
 /* asset picker */
 .dh-picker { position: relative; }
 .dh-picker-input { display: flex; align-items: center; gap: 10px; background: #FBFAF6; border: 1.5px solid var(--line2); border-radius: 12px; padding: 9px 13px; cursor: pointer; transition: border .15s; }

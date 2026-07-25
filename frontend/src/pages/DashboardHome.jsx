@@ -445,6 +445,10 @@ function DashboardHome() {
               onRecorded={handleRecorded}
               onRequestUndo={setUndoTarget}
               prefillSignal={prefillSignal}
+              // แนบสลิปหลักฐาน (Premium) — planInfo มาจาก GET /dashboard/me (Fetch แล้ว
+              // ตอน load()) / onUpgrade พาไป /premium เหมือนปุ่มอัพเกรดจุดอื่นในหน้านี้
+              isPremiumActive={planInfo?.isPremiumActive ?? false}
+              onUpgrade={() => navigate('/premium')}
             />
           </section>
 
