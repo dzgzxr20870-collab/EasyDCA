@@ -1329,9 +1329,16 @@ function buildGuidedBuySymbolQuickReply(symbols) {
 }
 
 // ผู้ใช้กด "พิมพ์ชื่อเอง" — ชวนพิมพ์ชื่อย่อ (ยังอยู่ขั้น AWAITING_SYMBOL)
+//
+// ⚠️ ตัดตัวอย่าง "K-SELECT" (กองทุนรวม) ออกจากตัวอย่างชั่วคราว — ฟีเจอร์ค้นกองทุน
+// ด้วยชื่อ (Round 7) ยังใช้งานจริงไม่ได้เลยตั้งแต่สร้างระบบ เพราะไม่เคย Config
+// SEC_API_SUBSCRIPTION_KEY บน Production (ดู tryResolveFundBuy ใน
+// webhook.controller.js) การแนะนำตัวอย่างนี้ให้ User โดยตรงจะยิ่งพา User ไปเจอ
+// Error "ระบบยังไม่พร้อมใช้งาน" ทั้งที่ไม่ได้พิมพ์ผิดเลย — เอากลับมาใส่ได้เมื่อสมัคร
+// SEC API สำเร็จแล้ว (แยกงานคนละชุด)
 function buildGuidedBuyAskSymbolMessage() {
   return guidedBuyTextWithQuickReply(
-    'พิมพ์ชื่อย่อสินทรัพย์ที่ต้องการบันทึกมาได้เลยครับ (เช่น BTC, PTT, AAPL, K-SELECT)'
+    'พิมพ์ชื่อย่อสินทรัพย์ที่ต้องการบันทึกมาได้เลยครับ (เช่น BTC, PTT, AAPL)'
   );
 }
 

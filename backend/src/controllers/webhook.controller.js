@@ -196,12 +196,40 @@ async function tryResolveFundBuy(user, parsed) {
     return null;
   }
 
-  // 2) Symbol ใหม่ — ลองค้น SEC Master List (SEC ไม่ config/ล่ม → ปล่อยผ่านเงียบๆ
-  //    ไม่ให้กระทบ Flow ซื้อสินทรัพย์อื่น — Fail Isolated)
+  // 2) Symbol ใหม่ — ลองค้น SEC Master List
+  //
+  // ⚠️ เดิมจุดนี้ดัก Error "ทุกแบบ" แล้ว return null เหมือนกันหมด (Fail Isolated
+  // ทื่อๆ) ทำให้ตกไปที่ VALIDATION_ERROR "ไม่รู้จักสินทรัพย์นี้" ไม่ว่าสาเหตุจริงจะ
+  // เป็นอะไร — User ที่พิมพ์ชื่อกองทุนถูกต้อง (เช่น K-SELECT) เจอข้อความเดียวกับ
+  // พิมพ์ผิด/กองทุนไม่มีจริง ทั้งที่สาเหตุจริงคือ SEC_API_SUBSCRIPTION_KEY ยังไม่ได้
+  // ตั้งค่าบน Production เลย (ไม่เคยสมัคร SEC Open Data API) ไม่ใช่ความผิดของ User
+  //
+  // แยก 2 กรณีที่ "ระบบ" เป็นต้นเหตุ (ไม่ใช่ User พิมพ์ผิด) ออกมา Re-throw แทน:
+  //   - SEC_NOT_CONFIGURED: Credentials ขาดทั้งชุด (ไม่เคย Config เลย)
+  //   - MUTUAL_FUND_LIST_UNAVAILABLE: Config ครบแต่ยิง SEC API แล้วพัง/Timeout
+  // ทั้งคู่มีข้อความไทยที่ถูกต้องอยู่แล้วใน ERROR_MESSAGES — Re-throw แล้วปล่อยให้
+  // replyWithError (Handler กลางท้ายไฟล์นี้) แปลเป็นข้อความให้ ไม่ต้องสร้างใหม่
+  // — คนละกรณีกับ "SEC Config ครบแต่ค้นชื่อนี้ไม่เจอจริงๆ" (status: 'not_found'
+  // ด้านล่าง ซึ่งไม่ throw) ที่ยังคงเป็น "ไม่รู้จักสินทรัพย์" ตามเดิม เพราะนั่นคือ
+  // ความผิดของ User จริง (พิมพ์ผิด/กองทุนไม่มีในระบบ)
+  //
+  // Error อื่นที่ไม่คาดคิด (Bug/Network แปลกๆ) ยังคง Fail Isolated แบบเดิม — ปล่อยผ่าน
+  // เป็น unknown asset ไม่ให้กระทบ Flow ซื้อสินทรัพย์อื่น (Static Type ที่รู้จักอยู่แล้ว
+  // ไม่มาเรียกฟังก์ชันนี้ตั้งแต่ต้น จึงไม่เคยได้รับผลจากโค้ดจุดนี้)
+  const SYSTEM_CAUSE_CODES = ['SEC_NOT_CONFIGURED', 'MUTUAL_FUND_LIST_UNAVAILABLE'];
   let result;
   try {
     result = await mutualFundService.resolveFundForBuy(symbol);
   } catch (err) {
+    if (SYSTEM_CAUSE_CODES.includes(err.code)) {
+      if (err.code === 'SEC_NOT_CONFIGURED') {
+        // Log แยกระดับสูงกว่า Error ทั่วไป — นี่คือ "ฟีเจอร์ทั้งฟีเจอร์ปิดอยู่" ไม่ใช่
+        // แค่ 1 คำขอพลาด อยากให้ Grep เจอง่ายแยกจาก Error รายครั้งปกติ (ซึ่ง
+        // replyWithError จะ Log ซ้ำอีกชั้นพร้อม code นี้อยู่แล้วตอน Re-throw ด้านล่าง)
+        console.warn('[mutualFund] SEC API not configured — fund search feature disabled');
+      }
+      throw err;
+    }
     console.error(`[webhook] fund resolve failed for ${symbol}: ${err.code ?? err.message}`);
     return null;
   }

@@ -2055,7 +2055,14 @@ describe('handleEvent — กองทุนรวมไทย (Round 7)', () =>
     expect(lastReplyText()).toContain('ไม่รู้จักสินทรัพย์นี้');
   });
 
-  test('(f) SEC ล่ม/ไม่ config ตอนค้นกองทุน → Fail Isolated (ปล่อยผ่านเป็น unknown asset ไม่ Crash)', async () => {
+  // ⚠️ Behavior เปลี่ยนโดยตั้งใจ (Bug Fix 2026-07-26): เดิม Test นี้ยืนยันว่า SEC ไม่
+  // Config ต้องตกไปเป็น "ไม่รู้จักสินทรัพย์นี้" เหมือน User พิมพ์ผิด — ซึ่งเป็นการ
+  // "ล็อกบั๊กไว้เป็นสเปก" จริงๆ แล้ว SEC_API_SUBSCRIPTION_KEY ไม่เคยถูกตั้งค่าบน
+  // Production เลยตั้งแต่สร้างระบบ ทำให้ User ทุกคนที่พิมพ์ชื่อกองทุนถูกต้อง (เช่น
+  // K-SELECT) เจอข้อความที่บอกว่าตัวเองพิมพ์ผิด ทั้งที่ไม่ใช่ความผิดของ User เลย
+  // สเปกใหม่: แยกเป็นข้อความเฉพาะที่บอกว่าฟีเจอร์นี้ยังไม่พร้อม (ERROR_MESSAGES.
+  // SEC_NOT_CONFIGURED ที่มีอยู่แล้ว แต่ไม่เคยถูกใช้จริงเพราะ Error ถูกกลืนทิ้ง)
+  test('(f) SEC ไม่ได้ Config เลย → ข้อความเฉพาะว่าฟีเจอร์ยังไม่พร้อม (ไม่ใช่ "ไม่รู้จักสินทรัพย์")', async () => {
     commandParser.parseCommand.mockReturnValue({
       command: COMMANDS.BUY,
       params: { symbol: 'K-SELECT', quantity: 1, pricePerUnit: 10 },
@@ -2063,6 +2070,44 @@ describe('handleEvent — กองทุนรวมไทย (Round 7)', () =>
     mutualFundService.resolveFundForBuy.mockRejectedValue(
       Object.assign(new Error('nc'), { code: 'SEC_NOT_CONFIGURED' })
     );
+
+    await handleEvent(textEvent('ซื้อ K-SELECT 1 หุ้น ราคา 10'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('ระบบข้อมูลกองทุนรวมยังไม่พร้อมใช้งาน');
+    expect(reply).not.toContain('ไม่รู้จักสินทรัพย์นี้');
+    // ไม่เคยไปถึง createPending เลย (ตัดสินใจตอบ Error จบตั้งแต่ tryResolveFundBuy)
+    expect(pendingService.createPending).not.toHaveBeenCalled();
+  });
+
+  // เคสที่ 2 ของ "ระบบเป็นต้นเหตุ": Config ครบ (มี Key/Path แล้ว) แต่ยิง SEC API
+  // แล้วพัง/Timeout — คนละเคสกับ SEC_NOT_CONFIGURED (Credentials ขาดทั้งชุด) แต่
+  // ต้องได้ผลลัพธ์แบบเดียวกัน: ข้อความเฉพาะ ไม่ใช่ "ไม่รู้จักสินทรัพย์"
+  test('SEC Config ครบแต่ยิง API แล้วพัง (MUTUAL_FUND_LIST_UNAVAILABLE) → ข้อความเฉพาะเช่นกัน', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.BUY,
+      params: { symbol: 'K-SELECT', quantity: 1, pricePerUnit: 10 },
+    });
+    mutualFundService.resolveFundForBuy.mockRejectedValue(
+      Object.assign(new Error('http 500'), { code: 'MUTUAL_FUND_LIST_UNAVAILABLE' })
+    );
+
+    await handleEvent(textEvent('ซื้อ K-SELECT 1 หุ้น ราคา 10'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('ค้นหารายชื่อกองทุนไม่ได้ในขณะนี้');
+    expect(reply).not.toContain('ไม่รู้จักสินทรัพย์นี้');
+  });
+
+  // Fail Isolated เดิมต้องยังอยู่สำหรับ Error ที่ "ไม่ใช่" 2 Code ข้างบน (Bug/Network
+  // แปลกๆ ที่ไม่คาดคิด) — ไม่งั้นทุก Error ที่ไม่รู้จักจะทำให้ Flow พังแทนที่จะ Fallback
+  // เป็น unknown asset เหมือนเดิม (Regression Guard ของพฤติกรรมเดิมที่ยังต้องคงไว้)
+  test('Error อื่นที่ไม่คาดคิด (ไม่ใช่ SEC_NOT_CONFIGURED/MUTUAL_FUND_LIST_UNAVAILABLE) → ยัง Fail Isolated เป็น unknown asset เหมือนเดิม', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.BUY,
+      params: { symbol: 'K-SELECT', quantity: 1, pricePerUnit: 10 },
+    });
+    mutualFundService.resolveFundForBuy.mockRejectedValue(new TypeError('unexpected bug'));
     const err = new Error('unknown');
     err.code = 'VALIDATION_ERROR';
     pendingService.createPending.mockRejectedValue(err);
