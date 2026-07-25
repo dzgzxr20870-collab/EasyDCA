@@ -2558,8 +2558,21 @@ function buildOcrPreviewMessage(ocr) {
   const sideLabel = isUnknownSide ? 'ซื้อ/ขาย?' : isBuy ? 'ซื้อ' : 'ขาย';
   const naText = 'อ่านไม่ได้ (กรุณากรอกเอง)';
 
+  // ── สถานะคำสั่ง: คำสั่งที่ยังไม่เกิดขึ้นจริง ห้ามเสนอปุ่ม "ยืนยันบันทึก" ─────────
+  // Limit Order ที่ "รอจับคู่/รอเวลาทำการ" อาจไม่มีวันจับคู่สำเร็จ (ยกเลิกได้/หมดอายุตอน
+  // ตลาดปิด) ถ้าผู้ใช้กดยืนยันไปแล้ว Ledger จะมีรายการที่ไม่เคยเกิดขึ้นจริง — และเป็น
+  // Immutable Ledger ที่แก้ทีหลังต้องใช้ Reversal ไม่ใช่ลบทิ้ง
+  //
+  // ⚠️ ตัดแค่ปุ่มยืนยัน "ไม่ใช่" ตอบเป็นการ์ด Error เต็มใบ — ปุ่ม "แก้ไข" ต้องคงอยู่เสมอ
+  // เพื่อให้ผู้ใช้ยังบันทึกเองได้ถ้า AI อ่านสถานะผิด (False Positive ต้องไม่ล็อกตาย)
+  // หลักการเดียวกับ isUnknownSide ที่ลดรูปการ์ดแทนการ Error ทิ้ง
+  const isUnfilled = ocr.orderStatus === 'pending' || ocr.orderStatus === 'cancelled';
+  const isCancelled = ocr.orderStatus === 'cancelled';
+
   // สร้างธุรกรรมได้เมื่อมี Symbol + (จำนวน&ราคา) หรือ (ยอดรวมบาท) อย่างใดอย่างหนึ่ง
+  // และคำสั่งต้องไม่อยู่ในสถานะที่ยังไม่เกิดขึ้นจริง
   const confirmable =
+    !isUnfilled &&
     Boolean(ocr.symbol) &&
     ((ocr.quantity !== null && ocr.pricePerUnit !== null) || ocr.amountThb !== null);
 
@@ -2573,11 +2586,16 @@ function buildOcrPreviewMessage(ocr) {
   // Multi-Currency (Round 10) — แสดงหน่วยตามสกุลที่ AI อ่านได้ (Default THB)
   const unit = ocr.currency === 'USD' ? 'USD' : 'บาท';
 
+  // หัวการ์ด: คำสั่งที่ยังไม่เกิดขึ้นจริงต้องไม่ขึ้นไอคอน 🟢/🔴 แบบรายการที่สำเร็จแล้ว
+  // (สีเขียว/แดงสื่อว่า "บันทึกได้เลย" ซึ่งขัดกับสิ่งที่การ์ดกำลังจะบอก)
+  const headIcon = isUnfilled ? (isCancelled ? '🚫' : '⏳') : isUnknownSide ? '⚠️' : isBuy ? '🟢' : '🔴';
+  const headSuffix = isUnfilled ? (isCancelled ? ' (ยกเลิกแล้ว)' : ' (ยังไม่จับคู่)') : '';
+
   const body = [
-    textLine(`${isUnknownSide ? '⚠️' : isBuy ? '🟢' : '🔴'} ${sideLabel} ${ocr.symbol}`, {
+    textLine(`${headIcon} ${sideLabel} ${ocr.symbol}${headSuffix}`, {
       size: 'lg',
       weight: 'bold',
-      color: isUnknownSide ? COLOR.warning : COLOR.textPrimary,
+      color: isUnknownSide || isUnfilled ? COLOR.warning : COLOR.textPrimary,
     }),
   ];
   // อ่านทิศทางไม่ชัด → บอกตรงๆ ว่าระบบไม่รู้ และต้องให้ผู้ใช้เลือกเอง (ห้ามเดาให้)
@@ -2588,6 +2606,24 @@ function buildOcrPreviewMessage(ocr) {
         color: COLOR.warning,
         wrap: true,
       })
+    );
+  }
+  // คำสั่งยังไม่เกิดขึ้นจริง → บอกให้ชัดว่า "ยังไม่บันทึก" และต้องกลับมาบันทึกเมื่อจับคู่แล้ว
+  // (ผู้ใช้ต้องเข้าใจว่าไม่ใช่ระบบอ่านไม่ออก แต่รายการนี้ยังไม่ควรลง Ledger)
+  if (isUnfilled) {
+    body.push(
+      textLine(
+        isCancelled
+          ? 'สลิปนี้ระบุว่าคำสั่ง "ถูกยกเลิก/หมดอายุ" จึงไม่มีธุรกรรมเกิดขึ้นจริง ระบบจึงไม่บันทึกให้'
+          : 'สลิปนี้ระบุว่าคำสั่ง "ยังไม่จับคู่สำเร็จ" (รอจับคู่/รอเวลาทำการ) ซึ่งอาจไม่เกิดขึ้นจริง ระบบจึงยังไม่บันทึกให้',
+        { size: 'sm', color: COLOR.warning, wrap: true }
+      ),
+      textLine(
+        isCancelled
+          ? 'หากคำสั่งนี้จับคู่สำเร็จจริง กรุณากด "✏️ บันทึกเอง" ด้านล่าง'
+          : 'เมื่อคำสั่งจับคู่สำเร็จแล้ว ให้ส่งสลิปใบใหม่ หรือกด "✏️ บันทึกเอง" ด้านล่าง',
+        { size: 'xs', color: COLOR.textSecondary, wrap: true }
+      )
     );
   }
   body.push(
@@ -2620,7 +2656,8 @@ function buildOcrPreviewMessage(ocr) {
       color: COLOR.textSecondary,
     })
   );
-  if (showManualQty) {
+  // คำใบ้นี้อ้างถึงปุ่ม "ยืนยันบันทึก" — ห้ามแสดงตอนที่ไม่มีปุ่มนั้นอยู่จริง (คำสั่งยังไม่จับคู่)
+  if (showManualQty && confirmable) {
     body.push(
       textLine('* หากกด "ยืนยันบันทึก" แล้วระบบหาราคาตลาดไม่ได้ ให้กด "✏️ กรอกจำนวนหุ้น" เพื่อระบุจำนวนหน่วยเอง', {
         size: 'xs',
@@ -2679,7 +2716,15 @@ function buildOcrPreviewMessage(ocr) {
       type: 'postback',
       // Manual Quantity Fallback (Round 10-B) — Amount-only + ไม่ใช่ Crypto ใช้ Label
       // ที่สื่อชัดว่าเป็นการกรอกจำนวนหุ้นเอง (ocr_edit จะ Prefill รูปแบบ "จำนวน + ยอดรวม")
-      label: showManualQty ? '✏️ กรอกจำนวนหุ้น' : confirmable ? '✏️ แก้ไข' : '✏️ กรอกเอง',
+      // คำสั่งที่ยังไม่จับคู่มาก่อนทุกกรณี — ปุ่มนี้คือทางออกเดียวที่เหลือ Label ต้องตรงกับ
+      // ข้อความเตือนด้านบนที่บอกให้ "บันทึกเอง" (ไม่ใช่ "กรอกจำนวนหุ้น" ที่สื่อคนละเรื่อง)
+      label: isUnfilled
+        ? '✏️ บันทึกเอง'
+        : showManualQty
+          ? '✏️ กรอกจำนวนหุ้น'
+          : confirmable
+            ? '✏️ แก้ไข'
+            : '✏️ กรอกเอง',
       data: ocrPostback('ocr_edit', ocr),
       displayText: 'แก้ไขรายการจากสลิป',
     },
@@ -2687,7 +2732,8 @@ function buildOcrPreviewMessage(ocr) {
 
   return {
     type: 'flex',
-    altText: `อ่านสลิป ${sideLabel} ${ocr.symbol}`,
+    // altText คือสิ่งที่ผู้ใช้เห็นใน Notification — ต้องไม่สื่อว่าบันทึกรายการแล้ว
+    altText: `อ่านสลิป ${sideLabel} ${ocr.symbol}${headSuffix}`,
     contents: {
       type: 'bubble',
       header: {

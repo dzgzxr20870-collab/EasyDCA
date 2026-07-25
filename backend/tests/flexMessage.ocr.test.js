@@ -154,6 +154,90 @@ describe('buildOcrPreviewMessage — Manual Quantity Fallback (Round 10-B)', () 
   });
 });
 
+// ── สถานะคำสั่ง: Limit Order ที่ยังไม่จับคู่ ต้องไม่มีปุ่ม "ยืนยันบันทึก" ──────────
+// เดิมการ์ดตัดสิน confirmable จาก "ข้อมูลครบหรือไม่" ล้วนๆ — สลิป "รอเวลาทำการ" มี
+// symbol+qty+price ครบ (เพราะเป็น Limit Order ที่ระบุราคาไว้แล้ว) จึงขึ้นปุ่มยืนยันทันที
+// ทั้งที่คำสั่งอาจไม่มีวันจับคู่ → Ledger มีรายการที่ไม่เคยเกิดขึ้นจริง
+describe('buildOcrPreviewMessage — สถานะคำสั่ง (pending/cancelled/filled/null)', () => {
+  test('orderStatus=pending → ไม่มีปุ่มยืนยันบันทึก แต่ยังมีทางออกให้บันทึกเอง', () => {
+    const msg = flex.buildOcrPreviewMessage({ ...CONFIRMABLE, orderStatus: 'pending' });
+    const datas = footerDatas(msg);
+    expect(datas.some((d) => d.startsWith('action=ocr_confirm'))).toBe(false);
+    // ⚠️ ต้องไม่ถูกบล็อกตาย — ปุ่มแก้ไขคือทางออกเมื่อ AI อ่านสถานะผิด
+    expect(datas.some((d) => d.startsWith('action=ocr_edit'))).toBe(true);
+    expect(footerButtonCount(msg)).toBe(1);
+  });
+
+  test('orderStatus=pending → การ์ดบอกเหตุผลชัดเจนว่ายังไม่จับคู่ + ไม่โชว์ 🟢 ลอยๆ', () => {
+    const msg = flex.buildOcrPreviewMessage({ ...CONFIRMABLE, orderStatus: 'pending' });
+    const text = JSON.stringify(msg);
+    expect(text).toContain('ยังไม่จับคู่');
+    expect(text).toContain('ระบบจึงยังไม่บันทึกให้');
+    // สีเขียว/ไอคอน 🟢 สื่อว่า "บันทึกได้เลย" ซึ่งขัดกับสิ่งที่การ์ดกำลังบอก
+    expect(text).not.toContain('🟢 ซื้อ BTC');
+  });
+
+  test('orderStatus=pending → altText (Notification) ต้องไม่สื่อว่าบันทึกแล้ว', () => {
+    const msg = flex.buildOcrPreviewMessage({ ...CONFIRMABLE, orderStatus: 'pending' });
+    expect(msg.altText).toContain('ยังไม่จับคู่');
+  });
+
+  test('orderStatus=cancelled → ไม่มีปุ่มยืนยัน + บอกว่าไม่มีธุรกรรมเกิดขึ้นจริง', () => {
+    const msg = flex.buildOcrPreviewMessage({ ...CONFIRMABLE, orderStatus: 'cancelled' });
+    expect(footerDatas(msg).some((d) => d.startsWith('action=ocr_confirm'))).toBe(false);
+    expect(JSON.stringify(msg)).toContain('ถูกยกเลิก/หมดอายุ');
+  });
+
+  test('orderStatus=filled → บันทึกได้ปกติเหมือนเดิม (Regression)', () => {
+    const msg = flex.buildOcrPreviewMessage({ ...CONFIRMABLE, orderStatus: 'filled' });
+    expect(footerDatas(msg).some((d) => d.startsWith('action=ocr_confirm'))).toBe(true);
+    expect(footerButtonCount(msg)).toBe(2);
+    expect(JSON.stringify(msg)).toContain('🟢 ซื้อ BTC');
+  });
+
+  // ⚠️ Regression ที่สำคัญที่สุด: สลิปทั่วไปส่วนใหญ่ไม่มีช่องสถานะเลย ห้ามถูกบล็อกตามไปด้วย
+  test.each([
+    ['orderStatus = null', null],
+    ['ไม่มี field orderStatus เลย (Postback/Flow เก่า)', undefined],
+  ])('%s → บันทึกได้ปกติ ไม่ถูกบล็อก', (_label, status) => {
+    const ocr = { ...CONFIRMABLE };
+    if (status === null) ocr.orderStatus = null;
+    const msg = flex.buildOcrPreviewMessage(ocr);
+    expect(footerDatas(msg).some((d) => d.startsWith('action=ocr_confirm'))).toBe(true);
+    expect(footerButtonCount(msg)).toBe(2);
+    expect(JSON.stringify(msg)).not.toContain('ยังไม่บันทึกให้');
+  });
+
+  // สถานะยังไม่จับคู่ต้องชนะทุกเงื่อนไขอื่น — รวมถึงเคสที่ทิศทางอ่านไม่ชัด (ซึ่งปกติจะ
+  // แตกเป็นปุ่มยืนยัน 2 ทาง) ต้องไม่มีปุ่มยืนยันหลุดออกมาเลยแม้แต่ปุ่มเดียว
+  test('pending + side=null → ต้องไม่มีปุ่มยืนยัน 2 ทางหลุดมา', () => {
+    const msg = flex.buildOcrPreviewMessage({
+      ...CONFIRMABLE,
+      side: null,
+      orderStatus: 'pending',
+    });
+    expect(footerDatas(msg).filter((d) => d.startsWith('action=ocr_confirm'))).toHaveLength(0);
+  });
+
+  // คำใบ้ Manual Quantity อ้างถึงปุ่ม "ยืนยันบันทึก" — ห้ามโผล่ตอนที่ปุ่มนั้นไม่มีอยู่จริง
+  test('pending + Amount-only → ไม่โชว์คำใบ้ที่อ้างปุ่มยืนยันที่ไม่มีอยู่', () => {
+    const msg = flex.buildOcrPreviewMessage({
+      ...CONFIRMABLE,
+      quantity: null,
+      pricePerUnit: null,
+      amountThb: 1000,
+      assetType: 'stock_us',
+      orderStatus: 'pending',
+    });
+    const text = JSON.stringify(msg);
+    // ⚠️ ห้ามค้นด้วยสตริงที่มี " อยู่ข้างใน — JSON.stringify escape เป็น \" ทำให้
+    // assertion ไม่มีวัน Match และผ่านตลอดแม้บั๊กยังอยู่ (เจอตอนรัน Red จริง)
+    expect(text).not.toContain('แล้วระบบหาราคาตลาดไม่ได้');
+    const labels = msg.contents.footer.contents.map((b) => b.action.label);
+    expect(labels).toContain('✏️ บันทึกเอง');
+  });
+});
+
 describe('buildOcrManualQuantityMessage', () => {
   test('แสดง Prefill "จำนวน + ยอดรวม" ให้ Copy + อธิบายการคำนวณราคาต่อหน่วย', () => {
     const msg = flex.buildOcrManualQuantityMessage('ซื้อ EOSE <จำนวนหุ้น> หุ้น รวม 1000 USD');

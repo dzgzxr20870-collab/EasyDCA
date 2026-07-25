@@ -114,9 +114,24 @@ const SYSTEM_PROMPT = [
   '  และให้ quantity = null, price_per_unit = null (ห้ามเอายอดรวมไปใส่เป็น price_per_unit)',
   '- currency = สกุลเงินของตัวเลขในสลิป: "USD" ถ้าเห็นสัญลักษณ์ $ หรือ USD ชัดเจน,',
   '  มิฉะนั้น (รวมถึงกรณีไม่ชัดเจน) ให้เป็น "THB"',
+  // ── สถานะคำสั่ง: แยก "ส่งคำสั่งแล้ว" ออกจาก "เกิดธุรกรรมจริงแล้ว" ──────────
+  // Limit Order ที่ยังรอจับคู่ = คำสั่งที่อาจไม่มีวันเกิดขึ้นจริง (ยกเลิกได้/หมดอายุตอน
+  // ตลาดปิด) ถ้าบันทึกลง Ledger ทันทีจะได้รายการที่ไม่มีอยู่จริง และเป็น Immutable
+  // Ledger ที่ต้องแก้ด้วย Reversal ทีหลัง — ต้องอ่านสถานะมาให้ฝั่งโค้ดตัดสินใจ
+  '- order_status = สถานะของคำสั่งตามที่สลิประบุ ต้องเป็นค่าใดค่าหนึ่งนี้เท่านั้น:',
+  '  "filled" = จับคู่/ดำเนินการสำเร็จแล้ว (ธุรกรรมเกิดขึ้นจริงแล้ว)',
+  '  "pending" = ยังไม่สำเร็จ เช่น รอจับคู่ รอเวลาทำการ รอดำเนินการ อยู่ระหว่างตรวจสอบ',
+  '  "cancelled" = ยกเลิกแล้ว/หมดอายุ/ถูกปฏิเสธ/ไม่สำเร็จ',
+  '  ถ้าสลิปไม่ได้ระบุสถานะไว้เลย ให้ null (ห้ามเดาว่า filled)',
+  // ⚠️ evidence ต้อง "แคบ" เฉพาะช่องสถานะเท่านั้น — สลิป pending จริงมีประโยคท้ายใบว่า
+  // "จนกว่าคุณจะกดยกเลิก" ถ้าคัดข้อความทั้งใบมา ฝั่งโค้ดจะเจอคำว่า "ยกเลิก" แล้วสรุป
+  // เป็น cancelled ผิด (ดู statusFromEvidence)
+  '- order_status_evidence = ข้อความที่ปรากฏในรูป "คำต่อคำ" เฉพาะบรรทัด/ช่อง "สถานะ"',
+  '  ที่คุณใช้ตัดสิน order_status (คัดลอกมาตรงๆ ห้ามแต่งเอง ห้ามแปล) เช่น "รอเวลาทำการ"',
+  '  หรือ "จับคู่แล้ว" ⚠️ ห้ามคัดคำอธิบาย/เงื่อนไขท้ายสลิปมาด้วย ถ้าหาไม่เจอให้ null',
   '',
   'ตอบกลับเป็น JSON object เดียวเท่านั้น ห้ามมีข้อความอื่น ห้ามใส่ markdown code fence รูปแบบ:',
-  '{"is_slip":boolean,"multiple_items":boolean,"symbol":string|null,"side":"buy"|"sell"|null,"side_evidence":string|null,"quantity":number|null,"price_per_unit":number|null,"amount":number|null,"net_amount":number|null,"currency":"THB"|"USD","date":string|null,"confidence":"high"|"medium"|"low"}',
+  '{"is_slip":boolean,"multiple_items":boolean,"symbol":string|null,"side":"buy"|"sell"|null,"side_evidence":string|null,"order_status":"filled"|"pending"|"cancelled"|null,"order_status_evidence":string|null,"quantity":number|null,"price_per_unit":number|null,"amount":number|null,"net_amount":number|null,"currency":"THB"|"USD","date":string|null,"confidence":"high"|"medium"|"low"}',
 ].join('\n');
 
 // แปลง Text ที่ Claude ตอบ → Object (เผื่อเผลอห่อ ```json ... ``` ก็ถอดออกก่อน Parse)
@@ -324,6 +339,115 @@ function resolveSide({ aiSide, evidenceSide, numericSide }) {
   return { side: null, reason: aiSide ? 'ai_only_not_trusted' : 'no_signal' };
 }
 
+// ── สถานะคำสั่ง (filled/pending/cancelled) ───────────────────────────────
+// ⚠️ บั๊กความถูกต้องทางการเงิน: เดิมระบบไม่มีแนวคิดเรื่องสถานะคำสั่งเลย ถือว่า "ทุกสลิป
+// ที่อ่านออก = ธุรกรรมที่เกิดขึ้นแล้ว" ซึ่งจริงกับ Market Order แต่ผิดกับ Limit Order —
+// สลิป Dime! ที่เขียน "🟠 รอเวลาทำการ / คำสั่งนี้จะรอจับคู่ ... จนกว่าคุณจะกดยกเลิก และ
+// คำสั่งจะหมดอายุไปเอง ณ เวลาตลาดปิด" ถูกเสนอให้บันทึกเป็นธุรกรรมสำเร็จทันที ทั้งที่
+// คำสั่งอาจไม่มีวันจับคู่สำเร็จเลย → Ledger มีรายการที่ไม่เคยเกิดขึ้นจริง (และเป็น
+// Immutable Ledger ที่ต้องแก้ด้วย Reversal ไม่ใช่ลบทิ้ง)
+//
+// ⚠️ ลำดับการเช็คสำคัญมาก (กับดัก Substring ที่เจอตอนสืบ — ห้ามสลับ):
+//   1) PENDING ก่อน FILLED : "รอจับคู่" มีคำว่า "จับคู่" อยู่ข้างใน ถ้าเช็ค FILLED ก่อน
+//      สลิปที่ยังไม่สำเร็จจะถูกอ่านเป็น "สำเร็จแล้ว" — บั๊กเดิมกลับมาทันที
+//   2) CANCELLED ก่อน FILLED : "ไม่สำเร็จ" มีคำว่า "สำเร็จ" อยู่ข้างใน (เช่นเดียวกับ
+//      "ยังไม่สำเร็จ") ถ้าเช็ค FILLED ก่อนจะกลายเป็นรายการสำเร็จ
+//
+// ผลพลอยได้ของลำดับนี้: ถ้า evidence กำกวมจน Match ได้หลายกลุ่ม ผลจะเอียงไปทาง
+// pending/cancelled (= ไม่เสนอบันทึก) เสมอ ซึ่งเป็นทิศทางที่ปลอดภัยทางการเงิน
+// — ต่างจาก side ที่กำกวมแล้วคืน null ให้ผู้ใช้เลือก เพราะ null ของสถานะ = "อนุญาตให้
+// บันทึก" การเอียงไป null ตอนกำกวมจึงอันตราย
+const PENDING_STATUS_PATTERNS = [
+  // /รอ/ กว้างโดยตั้งใจ — ครอบคลุมสถานะ "รอ*" ของทุกโบรกโดยไม่ต้องไล่เดารายคำ
+  // (รอจับคู่/รอเวลาทำการ/รอดำเนินการ/รอส่งคำสั่ง/รอยืนยัน/รออนุมัติ) ยอมรับ False
+  // Positive ได้เพราะทิศทางความเสียหายไม่เท่ากัน: พลาดไปบล็อก = ผู้ใช้กด "บันทึกเอง"
+  // เพิ่ม 1 คลิก / พลาดไม่บล็อก = Ledger มีรายการที่ไม่เคยเกิดขึ้นจริง แก้ได้ด้วย
+  // Reversal เท่านั้น — คำไทยที่มี "รอ" ติดกันจริงๆ (รอบ/กรอก/ตรอก) ไม่ใช่ค่าสถานะ
+  // และ evidence ถูกจำกัดไว้เฉพาะช่องสถานะอยู่แล้ว (ดู Prompt) ความเสี่ยงจึงต่ำ
+  /รอ/,
+  /อยู่ระหว่าง/,
+  /กำลังดำเนินการ/,
+  /ยังไม่/, // ยังไม่สำเร็จ / ยังไม่จับคู่
+  /\bpending\b/i,
+  /\bopen\b/i,
+  /\bworking\b/i,
+  /\bsubmitted\b/i,
+  /\bqueued\b/i,
+  // จับคู่บางส่วน = ยังมีส่วนที่ไม่เกิดขึ้นจริง → ไม่บันทึกอัตโนมัติ ให้ผู้ใช้กรอกเอง
+  /บางส่วน/,
+  /partial/i,
+];
+const CANCELLED_STATUS_PATTERNS = [
+  /ยกเลิก/,
+  /หมดอายุ/,
+  /ถูกปฏิเสธ/,
+  /ปฏิเสธ/,
+  /ไม่สำเร็จ/,
+  /ล้มเหลว/,
+  /cancel/i, // cancelled / canceled / cancel
+  /\bexpired\b/i,
+  /\breject/i,
+  /\bfailed\b/i,
+];
+const FILLED_STATUS_PATTERNS = [
+  /จับคู่/, // "จับคู่แล้ว" (มาถึงตรงนี้ได้เมื่อไม่ Match pending/cancelled ก่อน)
+  /สำเร็จ/,
+  /สมบูรณ์/,
+  /ดำเนินการแล้ว/,
+  /\bfilled\b/i,
+  /\bexecuted\b/i,
+  /\bmatched\b/i,
+  /\bcomplete/i,
+  /\bdone\b/i,
+  /\bsuccess/i,
+];
+
+// คืน 'filled' | 'pending' | 'cancelled' | null (null = ไม่มีหลักฐานสถานะในข้อความ)
+function statusFromEvidence(evidence) {
+  if (typeof evidence !== 'string' || !evidence.trim()) return null;
+  const text = evidence.trim();
+
+  if (PENDING_STATUS_PATTERNS.some((re) => re.test(text))) return 'pending';
+  if (CANCELLED_STATUS_PATTERNS.some((re) => re.test(text))) return 'cancelled';
+  if (FILLED_STATUS_PATTERNS.some((re) => re.test(text))) return 'filled';
+  return null;
+}
+
+// รับเฉพาะค่าที่อยู่ในชุดที่กำหนด (AI อาจตอบค่านอกสเปก/ตัวพิมพ์ใหญ่มา)
+const ORDER_STATUSES = new Set(['filled', 'pending', 'cancelled']);
+function normalizeOrderStatus(value) {
+  const normalized = String(value ?? '')
+    .trim()
+    .toLowerCase();
+  // รองรับสะกดแบบอเมริกันที่ Model ชอบตอบสลับกับ Prompt
+  if (normalized === 'canceled') return 'cancelled';
+  return ORDER_STATUSES.has(normalized) ? normalized : null;
+}
+
+// รวมสัญญาณสถานะ: หลักฐานข้อความชนะเสมอ (ตรวจสอบซ้ำได้จริง) — ไม่มีหลักฐานค่อยยอมใช้
+// ข้อสรุปของ AI
+//
+// ⚠️ ต่างจาก resolveSide ตรงที่ "ยอมเชื่อ AI ลำพังได้" เฉพาะทิศทางที่ปลอดภัยเท่านั้น:
+// เชื่อเพื่อ "ไม่บันทึก" (pending/cancelled) ได้ เพราะผลเสียแค่ผู้ใช้ต้องกดแก้ไขเอง
+// แต่ค่า filled ของ AI ไม่ได้ถูกใช้ปลดล็อกอะไร (null กับ filled ให้ผลเหมือนกันคือบันทึกได้)
+// จึงไม่มีทางที่ AI จะ "อนุญาต" ให้บันทึกรายการที่มีหลักฐานว่ายังไม่สำเร็จ
+function resolveOrderStatus({ aiStatus, evidenceStatus }) {
+  if (evidenceStatus) {
+    return {
+      orderStatus: evidenceStatus,
+      reason: evidenceStatus === aiStatus ? 'evidence_agrees_with_ai' : 'evidence_overrides_ai',
+    };
+  }
+  if (aiStatus) return { orderStatus: aiStatus, reason: 'ai_only' };
+  return { orderStatus: null, reason: 'no_status_on_slip' };
+}
+
+// สถานะที่ "ห้ามเสนอบันทึกเป็นธุรกรรมสำเร็จ" — null (สลิปไม่ระบุสถานะ) ไม่อยู่ในนี้
+// โดยตั้งใจ: สลิปทั่วไปส่วนใหญ่ไม่มีช่องสถานะเลย ต้องบันทึกได้ตามปกติ (กัน Regression)
+function isUnfilledStatus(orderStatus) {
+  return orderStatus === 'pending' || orderStatus === 'cancelled';
+}
+
 // ── Entry point ──────────────────────────────────────────────────────────
 // extractSlip(userId, buffer, contentType) → Object ข้อมูลที่อ่านได้ + โควตาคงเหลือ
 // ลำดับ: Rate Limit → Quota Check (ก่อนเรียก Claude) → Claude Vision → Validate →
@@ -411,6 +535,11 @@ async function extractSlip(userId, buffer, contentType, now = new Date()) {
   const numericSide = numericSideSignal(quantity, pricePerUnit, netAmount);
   const { side, reason } = resolveSide({ aiSide, evidenceSide, numericSide });
 
+  // ── สถานะคำสั่ง: สลิป Limit Order ที่ยังไม่จับคู่ต้องไม่ถูกเสนอบันทึกทันที ──────
+  const aiStatus = normalizeOrderStatus(raw.order_status);
+  const evidenceStatus = statusFromEvidence(raw.order_status_evidence);
+  const { orderStatus, reason: statusReason } = resolveOrderStatus({ aiStatus, evidenceStatus });
+
   // ⚠️ Log ทุกครั้งที่อ่านสลิป — ตอนสืบเคส BCPG ต้องดาวน์โหลดรูปจาก Storage มา Replay
   // ผ่าน Claude ใหม่เพียงเพื่อตอบว่า "AI ตอบ side อะไรมา" ซึ่งไม่ควรต้องทำอีก
   // (ไม่ Log ตัวเลขเงิน/รูป — เก็บเฉพาะที่จำเป็นต่อการวินิจฉัยทิศทางรายการ)
@@ -427,10 +556,31 @@ async function extractSlip(userId, buffer, contentType, now = new Date()) {
     aiConfidence: raw.confidence ?? null, // แสดงผลเท่านั้น ไม่ได้ใช้ตัดสิน (ดู resolveSide)
   });
 
+  // Log แยกอีกบรรทัดเฉพาะตอน "ไม่เสนอบันทึก" — จะได้ตอบได้ทันทีว่าทำไมสลิปใบนี้ไม่มี
+  // ปุ่มยืนยัน โดยไม่ต้องขอรูปจากผู้ใช้มา Replay (บทเรียนจากเคส BCPG)
+  if (isUnfilledStatus(orderStatus)) {
+    logger.info('slip ocr order not filled — confirm blocked', {
+      userId,
+      symbol,
+      rawOrderStatus: raw.order_status ?? null,
+      statusEvidence:
+        typeof raw.order_status_evidence === 'string'
+          ? raw.order_status_evidence.slice(0, 80)
+          : null,
+      aiStatus,
+      evidenceStatus,
+      resolvedOrderStatus: orderStatus,
+      statusReason,
+    });
+  }
+
   return {
     symbol,
     // 'buy' | 'sell' | null — null = อ่านไม่ชัด/สัญญาณขัดกัน ให้ผู้ใช้เลือกเองบนการ์ด
     side,
+    // 'filled' | 'pending' | 'cancelled' | null — null = สลิปไม่ระบุสถานะ (บันทึกได้ปกติ)
+    // การ์ด Preview ใช้ค่านี้ตัดปุ่ม "ยืนยันบันทึก" ออกเมื่อคำสั่งยังไม่เกิดขึ้นจริง
+    orderStatus,
     quantity,
     pricePerUnit,
     // ยอดเงินรวม — ชื่อ Key คง amountThb เพื่อไม่ให้ Controller เดิมพัง (ค่าเป็นสกุลตาม
@@ -462,6 +612,10 @@ module.exports = {
   sideFromEvidence,
   numericSideSignal,
   resolveSide,
+  // ตรรกะสถานะคำสั่ง (Limit Order ที่ยังไม่จับคู่ ต้องไม่ถูกเสนอบันทึก)
+  statusFromEvidence,
+  resolveOrderStatus,
+  isUnfilledStatus,
   SlipOcrError,
   MONTHLY_QUOTA,
   RATE_LIMIT_MS,

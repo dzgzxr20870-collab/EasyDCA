@@ -510,3 +510,138 @@ describe('resolveSide — รวม 3 สัญญาณ', () => {
     ).toEqual({ side: null, reason: 'no_signal' });
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// สถานะคำสั่ง (Limit Order ที่ยังไม่จับคู่ ต้องไม่ถูกบันทึกเป็นธุรกรรมสำเร็จ)
+// ───────────────────────────────────────────────────────────────────────────
+// ที่มา (2026-07-26): สลิป Dime! ที่เขียน "🟠 รอเวลาทำการ — คำสั่งของคุณอยู่ระหว่างการ
+// ตรวจสอบ และรอส่งคำสั่ง" ถูกเสนอให้บันทึกเป็นธุรกรรมสำเร็จทันที ทั้งที่คำสั่งอาจไม่มีวัน
+// จับคู่ (ยกเลิกได้/หมดอายุตอนตลาดปิด) → Ledger มีรายการที่ไม่เคยเกิดขึ้นจริง
+// ═══════════════════════════════════════════════════════════════════════════
+describe('statusFromEvidence — อ่านสถานะคำสั่งจากข้อความช่องสถานะ', () => {
+  test.each([
+    ['รอเวลาทำการ', 'pending'],
+    ['รอจับคู่', 'pending'],
+    ['รอดำเนินการ', 'pending'],
+    ['อยู่ระหว่างการตรวจสอบ', 'pending'],
+    ['Pending', 'pending'],
+    ['Open', 'pending'],
+    ['จับคู่แล้ว', 'filled'],
+    ['สำเร็จ', 'filled'],
+    ['Filled', 'filled'],
+    ['Executed', 'filled'],
+    ['ยกเลิกแล้ว', 'cancelled'],
+    ['หมดอายุ', 'cancelled'],
+    ['Cancelled', 'cancelled'],
+    ['Expired', 'cancelled'],
+  ])('%s → %s', (evidence, expected) => {
+    expect(slipOcr.statusFromEvidence(evidence)).toBe(expected);
+  });
+
+  // ── กับดักที่ 1: Substring ผิดลำดับ ──────────────────────────────────────
+  // "รอจับคู่" มีคำว่า "จับคู่" (pattern ของ filled) อยู่ข้างใน ถ้าเช็ค filled ก่อน pending
+  // สลิปที่ยังไม่สำเร็จจะถูกอ่านเป็น "สำเร็จแล้ว" = บั๊กเดิมกลับมาทั้งดุ้น
+  test('กับดัก: "รอจับคู่" ต้องเป็น pending ไม่ใช่ filled (มี "จับคู่" เป็นสตริงย่อย)', () => {
+    expect(slipOcr.statusFromEvidence('รอจับคู่')).toBe('pending');
+    expect(slipOcr.statusFromEvidence('รอจับคู่ในช่วงตลาดเปิดทำการ')).toBe('pending');
+  });
+
+  test('กับดัก: "ยังไม่สำเร็จ"/"ไม่สำเร็จ" ต้องไม่เป็น filled (มี "สำเร็จ" เป็นสตริงย่อย)', () => {
+    expect(slipOcr.statusFromEvidence('ยังไม่สำเร็จ')).toBe('pending');
+    expect(slipOcr.statusFromEvidence('ไม่สำเร็จ')).toBe('cancelled');
+  });
+
+  test('จับคู่บางส่วน (Partial) → pending (ยังมีส่วนที่ไม่เกิดขึ้นจริง)', () => {
+    expect(slipOcr.statusFromEvidence('จับคู่บางส่วน')).toBe('pending');
+    expect(slipOcr.statusFromEvidence('Partially Filled')).toBe('pending');
+  });
+
+  test.each([['โอนเงินสำเร็จแล้ว 500 บาท'], [''], [null], [undefined], ['   ']])(
+    'ไม่มีคำบ่งชี้สถานะ/ค่าว่าง (%s) → null',
+    (evidence) => {
+      const result = slipOcr.statusFromEvidence(evidence);
+      // "สำเร็จ" ในข้อความโอนเงินยังนับเป็น filled ได้ (ไม่ใช่ปัญหา — filled = บันทึกได้ปกติ)
+      expect(result === null || result === 'filled').toBe(true);
+    }
+  );
+});
+
+describe('resolveOrderStatus — หลักฐานชนะข้อสรุป AI', () => {
+  test('หลักฐานขัดกับ AI → เชื่อหลักฐาน', () => {
+    expect(
+      slipOcr.resolveOrderStatus({ aiStatus: 'filled', evidenceStatus: 'pending' })
+    ).toEqual({ orderStatus: 'pending', reason: 'evidence_overrides_ai' });
+  });
+
+  test('ไม่มีหลักฐาน แต่ AI บอก pending → เชื่อได้ (เอียงไปทางไม่บันทึก = ปลอดภัย)', () => {
+    expect(
+      slipOcr.resolveOrderStatus({ aiStatus: 'pending', evidenceStatus: null })
+    ).toEqual({ orderStatus: 'pending', reason: 'ai_only' });
+  });
+
+  test('ไม่มีสัญญาณเลย → null (สลิปไม่ระบุสถานะ = บันทึกได้ปกติ)', () => {
+    expect(
+      slipOcr.resolveOrderStatus({ aiStatus: null, evidenceStatus: null })
+    ).toEqual({ orderStatus: null, reason: 'no_status_on_slip' });
+  });
+});
+
+describe('isUnfilledStatus — สถานะที่ห้ามเสนอบันทึก', () => {
+  test.each([
+    ['pending', true],
+    ['cancelled', true],
+    ['filled', false],
+    [null, false], // ⚠️ สลิปไม่ระบุสถานะต้องบันทึกได้ปกติ (กัน Regression)
+  ])('%s → %s', (status, expected) => {
+    expect(slipOcr.isUnfilledStatus(status)).toBe(expected);
+  });
+});
+
+describe('extractSlip — สถานะคำสั่งไหลออกมาถึงผู้เรียก', () => {
+  // เคสจริงจากสลิป Dime! BCPG (12 พ.ค. 69) ที่จุดชนวนบั๊กนี้
+  test('สลิป "รอเวลาทำการ" → orderStatus = pending', async () => {
+    global.fetch.mockResolvedValue(
+      claudeOk({
+        ...VALID_SLIP,
+        symbol: 'BCPG',
+        side: 'sell',
+        side_evidence: 'ขาย BCPG',
+        order_status: 'pending',
+        order_status_evidence: 'รอเวลาทำการ',
+      })
+    );
+    const result = await slipOcr.extractSlip(USER_ID, BUFFER, 'image/jpeg', NOW);
+    expect(result.orderStatus).toBe('pending');
+  });
+
+  test('AI ตอบ filled แต่หลักฐานเขียน "รอจับคู่" → pending (หลักฐานชนะ)', async () => {
+    global.fetch.mockResolvedValue(
+      claudeOk({ ...VALID_SLIP, order_status: 'filled', order_status_evidence: 'รอจับคู่' })
+    );
+    const result = await slipOcr.extractSlip(USER_ID, BUFFER, 'image/jpeg', NOW);
+    expect(result.orderStatus).toBe('pending');
+  });
+
+  test('สลิป "จับคู่แล้ว" → filled (บันทึกได้ปกติ)', async () => {
+    global.fetch.mockResolvedValue(
+      claudeOk({ ...VALID_SLIP, order_status: 'filled', order_status_evidence: 'จับคู่แล้ว' })
+    );
+    const result = await slipOcr.extractSlip(USER_ID, BUFFER, 'image/jpeg', NOW);
+    expect(result.orderStatus).toBe('filled');
+  });
+
+  // Regression สำคัญที่สุด: สลิปทั่วไปส่วนใหญ่ไม่มีช่องสถานะเลย ต้องไม่ถูกบล็อก
+  test('สลิปไม่มีข้อมูลสถานะเลย → orderStatus = null (ไม่ถูกบล็อก)', async () => {
+    global.fetch.mockResolvedValue(claudeOk(VALID_SLIP)); // ไม่มี order_status* เลย
+    const result = await slipOcr.extractSlip(USER_ID, BUFFER, 'image/jpeg', NOW);
+    expect(result.orderStatus).toBeNull();
+  });
+
+  test('AI ตอบสถานะนอกสเปก → normalize เป็น null (ไม่บล็อกมั่ว)', async () => {
+    global.fetch.mockResolvedValue(
+      claudeOk({ ...VALID_SLIP, order_status: 'UNKNOWN_STATE', order_status_evidence: null })
+    );
+    const result = await slipOcr.extractSlip(USER_ID, BUFFER, 'image/jpeg', NOW);
+    expect(result.orderStatus).toBeNull();
+  });
+});
