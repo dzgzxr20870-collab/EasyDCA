@@ -30,6 +30,20 @@ function isReversal(transaction) {
   return typeof transaction.note === 'string' && transaction.note.startsWith(`${UNDO_MARKER}:`);
 }
 
+// ดึง "id ของรายการต้นฉบับ" ออกจาก note ของแถว Reversal — คืน null ถ้าไม่ใช่ Reversal
+//
+// ⚠️ ต้องตัดที่ช่องว่างแรก ไม่ใช่เอาทุกอย่างหลัง 'UNDO_OF:' ทั้งท่อน เพราะ note รองรับ
+// การต่อท้ายเหตุผลไว้ให้คนอ่าน เช่น 'UNDO_OF:<id> (test data cleanup)' ถ้าเอาทั้งท่อน
+// id ที่ได้จะกลายเป็น "<id> (test data cleanup)" ซึ่งไม่ตรงกับ transactions.id ของจริง
+// ทำให้ excludeUndoneTransactions กันรายการต้นฉบับออกจากสถิติไม่ได้ (นับ DCA เกินจริง)
+// และ Double-Undo guard ก็ตรวจไม่เจอว่าย้อนไปแล้ว
+function parseReversedId(note) {
+  if (typeof note !== 'string' || !note.startsWith(`${UNDO_MARKER}:`)) return null;
+  const rest = note.slice(`${UNDO_MARKER}:`.length).trim();
+  const [id] = rest.split(/\s/);
+  return id || null;
+}
+
 // คืนเฉพาะรายการที่ "ยังมีผลอยู่จริง" — ตัดทั้งคู่ของการยกเลิกออก:
 //  - แถว Reversal เอง (note = 'UNDO_OF:<id>')
 //  - แถวต้นฉบับที่ถูกย้อน (id ตรงกับที่ Reversal อ้างถึง)
@@ -49,9 +63,8 @@ function isReversal(transaction) {
 function excludeUndoneTransactions(transactions) {
   const reversedIds = new Set();
   for (const tx of transactions) {
-    if (isReversal(tx)) {
-      reversedIds.add(tx.note.slice(`${UNDO_MARKER}:`.length));
-    }
+    const reversedId = parseReversedId(tx.note);
+    if (reversedId) reversedIds.add(reversedId);
   }
 
   return transactions.filter((tx) => !isReversal(tx) && !reversedIds.has(tx.id));
@@ -94,7 +107,9 @@ async function undoLastTransaction(userId, options = {}) {
   // Double-Undo guard ชั้นที่ 2: มี Reversal ของรายการล่าสุดอยู่แล้วในประวัติ —
   // ครอบคลุมกรณีที่ findRecentByUser เรียงตาม date (รายวัน) แล้วรายการเดิมกับ
   // Reversal มี date เดียวกัน จน Reversal ไม่ได้ถูกคืนมาเป็นตัวแรก (Tie ordering)
-  const alreadyReversed = history.some((tx) => tx.note === buildReversalNote(latest.id));
+  // เทียบด้วย parseReversedId ไม่ใช่ note === buildReversalNote(...) ตรงตัว เพื่อให้
+  // Reversal ที่มีเหตุผลต่อท้าย note ('UNDO_OF:<id> (test data cleanup)') ถูกตรวจเจอด้วย
+  const alreadyReversed = history.some((tx) => parseReversedId(tx.note) === latest.id);
   if (alreadyReversed) {
     throw new UndoTransactionError(
       'ALREADY_UNDONE',
@@ -170,6 +185,7 @@ module.exports = {
   UNDO_MARKER,
   buildReversalNote,
   isReversal,
+  parseReversedId,
   excludeUndoneTransactions,
   undoLastTransaction,
 };

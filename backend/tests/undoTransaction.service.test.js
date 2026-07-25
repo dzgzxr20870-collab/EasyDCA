@@ -126,6 +126,60 @@ describe('undoLastTransaction', () => {
     });
     expect(transactionRepository.create).not.toHaveBeenCalled();
   });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// note ของ Reversal รองรับ "เหตุผลต่อท้าย" — 'UNDO_OF:<id> (test data cleanup)'
+//
+// เดิม parsing เอาทุกอย่างหลัง 'UNDO_OF:' มาเป็น id ทั้งท่อน ทำให้ Reversal ที่มี
+// ข้อความต่อท้าย (เช่น Reversal เพื่อล้าง Test Data ก่อนเปิด Beta) ได้ id ที่ไม่ตรงกับ
+// transactions.id จริง → รายการต้นฉบับไม่ถูกกันออกจากสถิติ DCA (นับเกินจริง) และ
+// Double-Undo guard ตรวจไม่เจอว่าย้อนไปแล้ว
+describe('parseReversedId / note ที่มีเหตุผลต่อท้าย', () => {
+  const {
+    parseReversedId,
+    excludeUndoneTransactions,
+  } = require('../src/services/undoTransaction.service');
+
+  test('note มาตรฐาน → คืน id ตรงๆ', () => {
+    expect(parseReversedId('UNDO_OF:tx-buy')).toBe('tx-buy');
+  });
+
+  test('note มีเหตุผลต่อท้าย → คืนเฉพาะ id ไม่รวมข้อความ', () => {
+    expect(parseReversedId('UNDO_OF:tx-buy (test data cleanup)')).toBe('tx-buy');
+  });
+
+  test('ไม่ใช่ Reversal → null', () => {
+    expect(parseReversedId('ซื้อประจำเดือน')).toBeNull();
+    expect(parseReversedId(null)).toBeNull();
+  });
+
+  test('excludeUndoneTransactions กันรายการต้นฉบับออกได้แม้ note มีเหตุผลต่อท้าย', () => {
+    const original = tx({ id: 'tx-buy', type: 'buy' });
+    const reversal = tx({
+      id: 'tx-reversal',
+      type: 'sell',
+      note: 'UNDO_OF:tx-buy (test data cleanup)',
+    });
+    const unrelated = tx({ id: 'tx-other', type: 'buy' });
+
+    const result = excludeUndoneTransactions([original, reversal, unrelated]);
+
+    // ทั้งคู่ของการยกเลิกต้องหายไป เหลือแต่รายการที่ไม่เกี่ยวข้อง
+    expect(result.map((t) => t.id)).toEqual(['tx-other']);
+  });
+
+  test('Double-Undo guard ตรวจเจอ Reversal ที่ note มีเหตุผลต่อท้าย', async () => {
+    const original = tx({ id: 'tx-buy', type: 'buy' });
+    transactionRepository.findRecentByUser.mockResolvedValue([original]);
+    transactionRepository.findAllByAsset.mockResolvedValue([
+      original,
+      tx({ id: 'tx-reversal', type: 'sell', note: 'UNDO_OF:tx-buy (test data cleanup)' }),
+    ]);
+
+    await expect(undoLastTransaction(USER_ID)).rejects.toMatchObject({ code: 'ALREADY_UNDONE' });
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
 
   test('Error ที่โยนเป็น UndoTransactionError (มี code + details)', async () => {
     transactionRepository.findRecentByUser.mockResolvedValue([]);
