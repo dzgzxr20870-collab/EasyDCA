@@ -35,6 +35,7 @@ const {
 const { schedulePortfolioSnapshot } = require('./jobs/portfolioSnapshot.job');
 const { schedulePurgeStaleWebhookEvents } = require('./jobs/webhookEventCleanup.job');
 const { scheduleNightlyBackup } = require('./jobs/dbBackup.job');
+const { schedulePurgeStaleSupportRequestSessions } = require('./jobs/supportRequestCleanup.job');
 
 // Schedule Cron Job ทั้งหมด — ลำดับไม่มีผล (แต่ละตัวลงทะเบียนอิสระต่อกัน) คงลำดับ/
 // Comment เดิมจาก index.js ไว้เพื่อให้ยังรู้ที่มา/รอบเวลาของแต่ละตัวได้ง่าย
@@ -79,6 +80,9 @@ function scheduleAllJobs() {
     // pg_dump ฐานข้อมูล → บีบอัด → อัปโหลด Cloudflare R2 → ลบ Backup เก่าเกิน Retention
     // ทุกคืนตี 3 Asia/Bangkok (dbBackup.job.js — Infra ก่อน Beta)
     nightlyBackup: scheduleNightlyBackup(),
+    // Purge Support Request Session ที่หมดอายุค้าง ตี 3 (supportRequestCleanup.job.js
+    // — ติดต่อ Admin ฉุกเฉินผ่าน LINE Chat ก่อนเปิด Closed Beta Wave 1)
+    purgeStaleSupportRequestSessions: schedulePurgeStaleSupportRequestSessions(),
   };
 }
 

@@ -1589,6 +1589,143 @@ function buildAdminPaymentRequestMessage(payment, userDisplayName, qrImageUrl) {
   };
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// ติดต่อ Admin/Support ฉุกเฉิน (ก่อนเปิด Closed Beta Wave 1)
+// ═══════════════════════════════════════════════════════════════════════
+// Flow ขั้นตอนเดียว: พิมพ์ Trigger ("ติดต่อแอดมิน" ฯลฯ) → ถามข้อความ → พิมพ์ข้อความ
+// → Push การ์ดนี้หา Admin ทุกคนใน ADMIN_LINE_USER_IDS (Pattern เดียวกับ
+// buildAdminPaymentRequestMessage/pushPaymentRequestToAdmins) → ตอบ User ตามจริง
+//
+// ⚠️ ห้ามใช้ textWithQuickReply()/guidedBuyTextWithQuickReply() ผนวกปุ่มยกเลิกของ Flow
+// นี้เด็ดขาด — จะไปเรียก cancelFlow ของ Flow อื่นผิดตัว (บั๊กเดียวกับที่เจอใน S8 R2
+// รอบ 1) จึงมี Helper คู่ของตัวเองด้านล่างเหมือน Guided Buy/Reminder Setup
+const SUPPORT_REQUEST_CANCEL_ACTION = 'cancel_support_request';
+
+function supportRequestCancelItem() {
+  return quickReplyPostback('❌ ยกเลิก', `action=${SUPPORT_REQUEST_CANCEL_ACTION}`, 'ยกเลิกการติดต่อ');
+}
+
+function supportRequestTextWithQuickReply(text) {
+  return {
+    type: 'text',
+    text,
+    quickReply: { items: [supportRequestCancelItem()] },
+  };
+}
+
+// เวลาแบบไทย "DD MMM YYYY HH:mm น." (Asia/Bangkok) — formatThaiDate ให้แค่วันที่
+// จึงต่อเวลาเองที่นี่ (เฉพาะจุดนี้ที่ต้องโชว์เวลานาที ไม่ใช่แค่วันที่เหมือนที่อื่น)
+function formatThaiDateTime(value) {
+  const timePart = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Bangkok',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(new Date(value));
+  return `${formatThaiDate(value)} ${timePart} น.`;
+}
+
+// ถามข้อความที่ต้องการแจ้ง (หลังพิมพ์ Trigger สำเร็จ)
+function buildSupportRequestAskMessageMessage() {
+  return supportRequestTextWithQuickReply(
+    'พิมพ์ข้อความที่ต้องการแจ้งทีมงานได้เลยครับ (เช่น ปัญหาที่เจอ/สิ่งที่ต้องการสอบถาม) ทีมงานจะติดต่อกลับโดยเร็วที่สุด'
+  );
+}
+
+function buildSupportRequestCancelledMessage() {
+  return bubble({
+    headerText: '❌ ยกเลิกการติดต่อแล้ว',
+    headerColor: COLOR.textSecondary,
+    headerBg: COLOR.warningBg,
+    bodyContents: [
+      textLine('ยกเลิกการติดต่อทีมงานแล้ว ยังไม่มีข้อความถูกส่งไป', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      textLine('ต้องการติดต่อใหม่ พิมพ์ "ติดต่อแอดมิน" ได้ทุกเมื่อ', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
+}
+
+// ⚠️ Rate Limit ตอบก่อนแม้แต่จะเริ่มถามข้อความ (กันเสียเวลาพิมพ์ยาวๆ แล้วโดนบล็อก
+// ทีหลัง) ไม่ใช่ Error ทั่วไป จึงไม่ผ่าน buildErrorMessage/ERROR_MESSAGES
+function buildSupportRequestRateLimitedMessage() {
+  return bubble({
+    headerText: '⏳ ส่งไปแล้วเมื่อไม่นานนี้',
+    headerColor: COLOR.warning,
+    headerBg: COLOR.warningBg,
+    bodyContents: [
+      textLine('คุณเพิ่งแจ้งไปแล้ว รอทีมงานติดต่อกลับก่อนนะคะ/ครับ', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+        wrap: true,
+      }),
+      textLine('ส่งได้อีกครั้งภายใน 1 ชั่วโมงหลังแจ้งครั้งล่าสุด', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
+}
+
+function buildSupportRequestTooLongMessage(maxLength) {
+  return supportRequestTextWithQuickReply(
+    `ข้อความยาวเกินไป (จำกัด ${maxLength} ตัวอักษร) กรุณาพิมพ์สั้นลงแล้วส่งใหม่อีกครั้ง`
+  );
+}
+
+// ตอบ User หลัง Push หา Admin เสร็จ — ต้องตรงกับสิ่งที่เกิดขึ้นจริงเท่านั้น (ห้ามบอกว่า
+// "ส่งถึงทีมงานแล้ว" ถ้า Push ไม่ถึง Admin สักคน — บทเรียนจากบั๊ก Payment Slip
+// auto-notify) notified = true เมื่อ Push สำเร็จอย่างน้อย 1 Admin
+function buildSupportRequestSentMessage(notified) {
+  if (notified) {
+    return bubble({
+      headerText: '✅ ส่งข้อความถึงทีมงานแล้ว',
+      headerColor: COLOR.profit,
+      headerBg: COLOR.profitBg,
+      bodyContents: [
+        textLine('ทีมงานได้รับข้อความของคุณแล้ว จะติดต่อกลับโดยเร็วที่สุด', {
+          size: 'sm',
+          color: COLOR.textPrimary,
+        }),
+      ],
+    });
+  }
+
+  return bubble({
+    headerText: '⚠️ ส่งข้อความไม่สำเร็จ',
+    headerColor: COLOR.warning,
+    headerBg: COLOR.warningBg,
+    bodyContents: [
+      textLine('ขออภัยค่ะ ระบบส่งข้อความถึงทีมงานไม่สำเร็จในขณะนี้ กรุณาลองใหม่อีกครั้ง', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+        wrap: true,
+      }),
+    ],
+  });
+}
+
+// ── Push หา Admin: มีข้อความติดต่อใหม่ (ข้อมูล ไม่มีปุ่ม Action — ต่างจากคำขอชำระเงิน
+// ที่ต้องอนุมัติ/ปฏิเสธ Admin ตอบกลับ User เองนอกระบบ) ─────────────────────────
+function buildAdminSupportRequestMessage(user, message, timestamp) {
+  return bubble({
+    headerText: '🆘 มีข้อความติดต่อใหม่',
+    headerColor: COLOR.warning,
+    headerBg: COLOR.warningBg,
+    bodyContents: [
+      textLine(`ผู้ใช้: ${user.displayName ?? '-'}`, { size: 'sm', color: COLOR.textSecondary }),
+      textLine(`LINE User ID: ${user.lineUserId}`, { size: 'xs', color: COLOR.textSecondary }),
+      textLine(`เวลา: ${formatThaiDateTime(timestamp)}`, { size: 'xs', color: COLOR.textSecondary }),
+      separator(),
+      textLine(message, { size: 'sm', color: COLOR.textPrimary, wrap: true }),
+    ],
+  });
+}
+
 // ── Reply ยืนยันกับ Admin หลังอนุมัติสำเร็จ ───────────────────────────────
 function buildAdminApproveAckMessage(payment, newExpiry) {
   return bubble({
@@ -2976,6 +3113,12 @@ module.exports = {
   buildGuidedBuyBusyMessage,
   buildAdminPaymentRequestMessage,
   buildAdminApproveAckMessage,
+  buildSupportRequestAskMessageMessage,
+  buildSupportRequestCancelledMessage,
+  buildSupportRequestRateLimitedMessage,
+  buildSupportRequestTooLongMessage,
+  buildSupportRequestSentMessage,
+  buildAdminSupportRequestMessage,
   buildAdminRejectAckMessage,
   buildPaymentApprovedMessage,
   buildPaymentRejectedMessage,

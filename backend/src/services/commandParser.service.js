@@ -17,6 +17,9 @@ const COMMANDS = {
   EXPORT_REPORT: 'EXPORT_REPORT',
   // PDPA Self-Service Erasure — ผู้ใช้ขอลบข้อมูล (Anonymize) ด้วยตัวเองผ่าน LINE Chat
   ERASE_DATA_REQUEST: 'ERASE_DATA_REQUEST',
+  // ติดต่อ Admin/Support ฉุกเฉิน (ก่อนเปิด Closed Beta Wave 1) — ดู
+  // supportRequestFlow.service.js / webhook.controller.js
+  CONTACT_SUPPORT: 'CONTACT_SUPPORT',
   UNKNOWN: 'UNKNOWN',
 };
 
@@ -79,6 +82,12 @@ const UNDO_LAST = /^(?:ยกเลิกล่าสุด|ยกเลิก�
 // PDPA Self-Service Erasure — คำสั่งเดียว ไม่มี Alias (ตั้งใจให้พิมพ์ตรงคำ ป้องกัน
 // การ Match กว้างเกินไปกับข้อความอื่น) ตรวจแล้วไม่ชนกับ Pattern ใดข้างต้นทั้งหมด
 const ERASE_DATA_REQUEST = /^ลบข้อมูล$/;
+
+// ── ติดต่อ Admin/Support ฉุกเฉิน (ก่อนเปิด Closed Beta Wave 1) ──────────────
+// รับหลาย Alias (Pattern เดียวกับ PORTFOLIO/IMPORT_PORTFOLIO) ต่างจาก
+// ERASE_DATA_REQUEST ที่ตั้งใจให้พิมพ์ตรงคำเดียว (Action ทำลายล้าง ต้องเจาะจงสุด) —
+// นี่ไม่ใช่ Action ทำลายล้าง จึงยอมรับหลายคำที่ผู้ใช้อาจพิมพ์ได้ตามธรรมชาติ
+const CONTACT_SUPPORT = /^(?:ติดต่อแอดมิน|ติดต่อทีมงาน|ติดต่อทีม|แจ้งปัญหา|ฉุกเฉิน)$/;
 
 // ── DCA Reminder (ฟีเจอร์ตั้งเตือนให้มาซื้อเอง — ไม่ซื้ออัตโนมัติ) ──────────
 // ชื่อวันไทยเรียงยาว→สั้น (พฤหัสบดี ก่อน พฤหัส) กัน Match ครึ่งคำ
@@ -330,6 +339,10 @@ function parseCommand(rawText) {
 
   if (ERASE_DATA_REQUEST.test(text)) {
     return { command: COMMANDS.ERASE_DATA_REQUEST, params: {} };
+  }
+
+  if (CONTACT_SUPPORT.test(text)) {
+    return { command: COMMANDS.CONTACT_SUPPORT, params: {} };
   }
 
   // รายเดือนก่อนรายสัปดาห์: ทั้งคู่ขึ้นต้น "ตั้งเตือน ... ทุกวัน" — รูปแบบ "ทุกวันที่ <เลข>"

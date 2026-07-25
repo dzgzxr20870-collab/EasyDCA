@@ -422,6 +422,31 @@ describe('commandParser.service', () => {
   });
 });
 
+describe('CONTACT_SUPPORT — ติดต่อ Admin ฉุกเฉิน', () => {
+  test.each([
+    ['ติดต่อแอดมิน'],
+    ['ติดต่อทีมงาน'],
+    ['ติดต่อทีม'],
+    ['แจ้งปัญหา'],
+    ['ฉุกเฉิน'],
+  ])('"%s" → COMMANDS.CONTACT_SUPPORT', (text) => {
+    expect(parseCommand(text)).toEqual({ command: COMMANDS.CONTACT_SUPPORT, params: {} });
+  });
+
+  test('ตัวพิมพ์ใหญ่/มีช่องว่างหัวท้าย (ผ่าน normalizeText) → ยัง Match', () => {
+    expect(parseCommand('  ติดต่อแอดมิน  ').command).toBe(COMMANDS.CONTACT_SUPPORT);
+  });
+
+  test('มีข้อความอื่นต่อท้าย → ไม่ Match (ต้องพิมพ์คำสั่งเดี่ยวๆ ไม่ปนกับเนื้อหาที่จะแจ้ง)', () => {
+    expect(parseCommand('ติดต่อแอดมิน หน่อยครับ').command).toBe(COMMANDS.UNKNOWN);
+  });
+
+  test('ไม่ชนกับคำสั่งอื่นที่มีคำใกล้เคียง', () => {
+    expect(parseCommand('ลบข้อมูล').command).toBe(COMMANDS.ERASE_DATA_REQUEST);
+    expect(parseCommand('นำเข้าพอร์ต').command).toBe(COMMANDS.IMPORT_PORTFOLIO);
+  });
+});
+
 describe('IMPORT_PORTFOLIO — เข้าโหมดนำเข้าพอร์ต', () => {
   test('"นำเข้าพอร์ต" → COMMANDS.IMPORT_PORTFOLIO', () => {
     expect(parseCommand('นำเข้าพอร์ต')).toEqual({ command: COMMANDS.IMPORT_PORTFOLIO, params: {} });

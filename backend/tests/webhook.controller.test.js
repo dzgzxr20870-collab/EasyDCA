@@ -36,6 +36,21 @@ jest.mock('../src/services/guidedBuyFlow.service', () => {
     cancelFlow: jest.fn(),
   };
 });
+// ติดต่อ Admin/Support ฉุกเฉิน — Mock ฟังก์ชันแต่คง SupportRequestError จริงไว้
+// (Pattern เดียวกับ reminderSetupFlow/guidedBuyFlow ด้านบน — automock ทำให้ err.code
+// เช็คไม่ได้ถ้าไม่คง Class จริงไว้)
+jest.mock('../src/services/supportRequestFlow.service', () => {
+  const actual = jest.requireActual('../src/services/supportRequestFlow.service');
+  return {
+    SupportRequestError: actual.SupportRequestError,
+    MAX_MESSAGE_LENGTH: actual.MAX_MESSAGE_LENGTH,
+    getCurrentSession: jest.fn(),
+    startFlow: jest.fn(),
+    validateMessage: jest.fn(),
+    recordRequest: jest.fn(),
+    cancelFlow: jest.fn(),
+  };
+});
 jest.mock('../src/services/line.service');
 jest.mock('../src/services/storage.service');
 jest.mock('../src/services/payment.service');
@@ -81,6 +96,7 @@ const historyService = require('../src/services/history.service');
 const reminderService = require('../src/services/dcaReminder.service');
 const reminderSetupFlow = require('../src/services/reminderSetupFlow.service');
 const guidedBuyFlow = require('../src/services/guidedBuyFlow.service');
+const supportRequestFlow = require('../src/services/supportRequestFlow.service');
 const lineService = require('../src/services/line.service');
 const storageService = require('../src/services/storage.service');
 const paymentService = require('../src/services/payment.service');
@@ -2127,6 +2143,289 @@ describe('handleEvent — กองทุนรวมไทย (Round 7)', () =>
     const reply = lastReplyText();
     expect(reply).toContain('ไม่พบชนิดหน่วยลงทุน');
     expect(reply).not.toContain('FUND_CLASS_NOT_FOUND');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// ติดต่อ Admin/Support ฉุกเฉิน (ก่อนเปิด Closed Beta Wave 1)
+// ═══════════════════════════════════════════════════════════════════════
+describe('handleEvent — ติดต่อ Admin/Support ฉุกเฉิน', () => {
+  beforeEach(() => {
+    supportRequestFlow.getCurrentSession.mockResolvedValue(null);
+    supportRequestFlow.startFlow.mockResolvedValue(undefined);
+    supportRequestFlow.cancelFlow.mockResolvedValue(undefined);
+    supportRequestFlow.recordRequest.mockResolvedValue({ id: 'sr-1' });
+    // validateMessage เป็นของจริง (ไม่ใช่ jest.fn ว่างเปล่า) เพราะเป็น Logic ล้วนที่
+    // ไม่แตะ DB — ทดสอบผ่าน Controller ตรงๆ ได้โดยไม่ต้อง Mock พฤติกรรม
+    const actual = jest.requireActual('../src/services/supportRequestFlow.service');
+    supportRequestFlow.validateMessage.mockImplementation(actual.validateMessage);
+  });
+
+  // ── Flow ปกติครบ: พิมพ์ Trigger → ถาม → ส่งข้อความ → Push สำเร็จ → Log → Auto-reply ──
+  test('พิมพ์ Trigger → startFlow + ถามข้อความ (มีปุ่มยกเลิก)', async () => {
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.CONTACT_SUPPORT, params: {} });
+
+    await handleEvent(textEvent('ติดต่อแอดมิน'));
+
+    expect(supportRequestFlow.startFlow).toHaveBeenCalledWith(FREE_USER.id);
+    const reply = lastReplyText();
+    expect(reply).toContain('พิมพ์ข้อความที่ต้องการแจ้ง');
+    expect(reply).toContain('action=cancel_support_request');
+  });
+
+  test('Flow ครบวงจร: มี Session ค้าง + พิมพ์ข้อความ → Push หา Admin ทุกคน + Log + ตอบสำเร็จ', async () => {
+    supportRequestFlow.getCurrentSession.mockResolvedValue({ userId: FREE_USER.id });
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+    lineService.pushMessage.mockResolvedValue(undefined);
+
+    await handleEvent(textEvent('จ่ายเงินแล้วไม่ได้ Premium ช่วยด้วยครับ'));
+
+    // Push หา Admin ทั้ง 2 คนตาม config.payment.adminLineUserIds (Mock ไว้ = Uadmin1/Uadmin2)
+    expect(lineService.pushMessage).toHaveBeenCalledTimes(2);
+    expect(lineService.pushMessage).toHaveBeenCalledWith(
+      'Uadmin1',
+      expect.objectContaining({
+        contents: expect.objectContaining({
+          body: expect.objectContaining({
+            contents: expect.arrayContaining([
+              expect.objectContaining({ text: expect.stringContaining('จ่ายเงินแล้วไม่ได้ Premium') }),
+            ]),
+          }),
+        }),
+      })
+    );
+
+    // Log ด้วยผลนับจริง (2 Admin, สำเร็จทั้ง 2)
+    expect(supportRequestFlow.recordRequest).toHaveBeenCalledWith(
+      FREE_USER.id,
+      'จ่ายเงินแล้วไม่ได้ Premium ช่วยด้วยครับ',
+      { adminCount: 2, notifiedCount: 2 }
+    );
+
+    // จบ Flow: ลบ Session ทิ้ง
+    expect(supportRequestFlow.cancelFlow).toHaveBeenCalledWith(FREE_USER.id);
+
+    // Auto-reply สำเร็จจริง
+    expect(lastReplyText()).toContain('ส่งข้อความถึงทีมงานแล้ว');
+  });
+
+  // ── Rate Limit บล็อกครั้งที่ 2 ภายใน 1 ชม. ──────────────────────────────
+  test('Rate Limit: ส่งซ้ำภายใน 1 ชม. → ตอบข้อความ Rate Limit ไม่เริ่ม Session ใหม่', async () => {
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.CONTACT_SUPPORT, params: {} });
+    supportRequestFlow.startFlow.mockRejectedValue(
+      new (jest.requireActual('../src/services/supportRequestFlow.service').SupportRequestError)(
+        'SUPPORT_REQUEST_RATE_LIMITED',
+        'rate limited'
+      )
+    );
+
+    await handleEvent(textEvent('ติดต่อแอดมิน'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('คุณเพิ่งแจ้งไปแล้ว');
+    expect(reply).not.toContain('action=cancel_support_request');
+  });
+
+  // ── Push ล้มเหลว → แจ้งตามจริง ไม่ใช่ข้อความปลอม → Log สถานะ "ล้มเหลว" ──────────
+  test('Push หา Admin ล้มเหลวทั้งหมด → ตอบตามจริงว่าไม่สำเร็จ (ไม่โกหก) + Log notifiedCount=0', async () => {
+    supportRequestFlow.getCurrentSession.mockResolvedValue({ userId: FREE_USER.id });
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+    lineService.pushMessage.mockRejectedValue(new Error('LINE API down'));
+
+    await handleEvent(textEvent('ทดสอบข้อความ'));
+
+    expect(supportRequestFlow.recordRequest).toHaveBeenCalledWith(
+      FREE_USER.id,
+      'ทดสอบข้อความ',
+      { adminCount: 2, notifiedCount: 0 }
+    );
+    // Session ยังถูกลบ (Action หลักคือ Push ที่ "พยายาม" แล้ว ไม่ใช่ Log สำเร็จ)
+    expect(supportRequestFlow.cancelFlow).toHaveBeenCalledWith(FREE_USER.id);
+
+    const reply = lastReplyText();
+    expect(reply).toContain('ส่งข้อความไม่สำเร็จ');
+    expect(reply).not.toContain('ส่งข้อความถึงทีมงานแล้ว');
+  });
+
+  test('Push สำเร็จบางส่วน (1 ใน 2 Admin) → ยังถือว่าสำเร็จ (notified=true)', async () => {
+    supportRequestFlow.getCurrentSession.mockResolvedValue({ userId: FREE_USER.id });
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+    lineService.pushMessage
+      .mockResolvedValueOnce(undefined) // Uadmin1 สำเร็จ
+      .mockRejectedValueOnce(new Error('blocked')); // Uadmin2 ล้มเหลว
+
+    await handleEvent(textEvent('ทดสอบข้อความ'));
+
+    expect(supportRequestFlow.recordRequest).toHaveBeenCalledWith(
+      FREE_USER.id,
+      'ทดสอบข้อความ',
+      { adminCount: 2, notifiedCount: 1 }
+    );
+    expect(lastReplyText()).toContain('ส่งข้อความถึงทีมงานแล้ว');
+  });
+
+  // ── บันทึก Log ล้มเหลว (DB ล่ม) → ไม่ Block ผู้ใช้ (Best-effort) ────────────────
+  test('บันทึก Log ล้มเหลว (DB ล่ม) → ผู้ใช้ยังได้รับคำตอบตามผล Push จริง ไม่ Error', async () => {
+    supportRequestFlow.getCurrentSession.mockResolvedValue({ userId: FREE_USER.id });
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+    lineService.pushMessage.mockResolvedValue(undefined);
+    supportRequestFlow.recordRequest.mockRejectedValue(new Error('db down'));
+
+    await handleEvent(textEvent('ทดสอบข้อความ'));
+
+    // Push สำเร็จจริง → ต้องยังตอบสำเร็จ แม้ Log พัง (Best-effort ไม่ Block)
+    expect(lastReplyText()).toContain('ส่งข้อความถึงทีมงานแล้ว');
+    expect(supportRequestFlow.cancelFlow).toHaveBeenCalledWith(FREE_USER.id);
+  });
+
+  // ── ข้อความว่าง/ยาวเกิน → ถามใหม่ ไม่ลบ Session ────────────────────────────────
+  test('พิมพ์ข้อความว่าง (ช่องว่างล้วน) → ถามใหม่ ไม่ Push ไม่ลบ Session', async () => {
+    supportRequestFlow.getCurrentSession.mockResolvedValue({ userId: FREE_USER.id });
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+
+    await handleEvent(textEvent('   '));
+
+    expect(lineService.pushMessage).not.toHaveBeenCalled();
+    expect(supportRequestFlow.cancelFlow).not.toHaveBeenCalled();
+    expect(lastReplyText()).toContain('พิมพ์ข้อความที่ต้องการแจ้ง');
+  });
+
+  test('พิมพ์ข้อความยาวเกิน 500 ตัวอักษร → ขอให้พิมพ์สั้นลง ไม่ Push ไม่ลบ Session', async () => {
+    supportRequestFlow.getCurrentSession.mockResolvedValue({ userId: FREE_USER.id });
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+
+    await handleEvent(textEvent('ก'.repeat(501)));
+
+    expect(lineService.pushMessage).not.toHaveBeenCalled();
+    expect(supportRequestFlow.cancelFlow).not.toHaveBeenCalled();
+    expect(lastReplyText()).toContain('ยาวเกินไป');
+  });
+
+  // ── ปุ่มยกเลิก ─────────────────────────────────────────────────────────────
+  test('Postback cancel_support_request → ลบ Session + ตอบยืนยันยกเลิก', async () => {
+    await handleEvent(postbackEvent('action=cancel_support_request'));
+
+    expect(supportRequestFlow.cancelFlow).toHaveBeenCalledWith(FREE_USER.id);
+    expect(lastReplyText()).toContain('ยกเลิกการติดต่อแล้ว');
+  });
+
+  // ── ไม่เช็ค Premium/Entitlement — เปิดให้ทุกคน ────────────────────────────────
+  test('Free User ก็ใช้ได้ปกติ ไม่มีการเช็ค Premium/Entitlement ใดๆ', async () => {
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.CONTACT_SUPPORT, params: {} });
+
+    await handleEvent(textEvent('ติดต่อแอดมิน'));
+
+    expect(entitlement.isPremiumActive).not.toHaveBeenCalled();
+    expect(supportRequestFlow.startFlow).toHaveBeenCalled();
+  });
+
+  // ── UX Trap ที่พบก่อน Apply Migration: User เปลี่ยนใจกลางทาง ─────────────────
+  // Session อยู่ได้ 5 นาทีและถูกเช็คก่อน Flow อื่นทั้งหมด — ถ้าไม่ Auto-cancel ตอนพิมพ์
+  // คำสั่งอื่น ข้อความสุ่มที่พิมพ์ทีหลัง (เช่น "ขอบคุณครับ") จะหลุดไปหา Admin โดยไม่ตั้งใจ
+  // ต่างจาก Reminder Setup/Guided Buy ที่ "ไม่" Auto-cancel เมื่อเจอคำสั่งอื่น เพราะ Flow
+  // เหล่านั้น Capture ผิดแค่ Bounce เป็น Error ให้พิมพ์ใหม่ (Reversible เต็มที่)
+  test('พิมพ์ Trigger แล้วเปลี่ยนใจพิมพ์คำสั่งอื่นที่รู้จัก (พอต) → Auto-cancel Session ทันที ไม่ Push ไปหา Admin', async () => {
+    supportRequestFlow.getCurrentSession.mockResolvedValue({ userId: FREE_USER.id });
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.PORTFOLIO, params: {} });
+    portfolioService.getPortfolioSummary.mockResolvedValue({ isEmpty: true, holdings: [], totalInvested: 0 });
+
+    await handleEvent(textEvent('พอต'));
+
+    expect(supportRequestFlow.cancelFlow).toHaveBeenCalledWith(FREE_USER.id);
+    expect(lineService.pushMessage).not.toHaveBeenCalled();
+    // ยังแสดงพอร์ตให้ตามปกติ (คำสั่งปกติชนะเสมอ ไม่ถูกดักไปตอบเป็น Support Flow)
+    expect(lastReplyText()).not.toContain('ส่งข้อความถึงทีมงานแล้ว');
+  });
+
+  test('ไม่มี Support Session ค้าง + พิมพ์คำสั่งอื่น → ไม่เรียก cancelFlow เลย (ไม่เสีย DB Call เกินจำเป็น)', async () => {
+    supportRequestFlow.getCurrentSession.mockResolvedValue(null);
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.PORTFOLIO, params: {} });
+    portfolioService.getPortfolioSummary.mockResolvedValue({ isEmpty: true, holdings: [], totalInvested: 0 });
+
+    await handleEvent(textEvent('พอต'));
+
+    expect(supportRequestFlow.cancelFlow).not.toHaveBeenCalled();
+  });
+
+  // ── Fail-open ของ Rate Limit เมื่อ Log ล้มเหลว: Log ต้องบอกผลกระทบชัดเจน ─────────
+  test('บันทึก Log ล้มเหลว → Log ข้อความต้องระบุชัดว่ากระทบ Rate Limit ด้วย ไม่ใช่แค่ "log failed"', async () => {
+    supportRequestFlow.getCurrentSession.mockResolvedValue({ userId: FREE_USER.id });
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+    lineService.pushMessage.mockResolvedValue(undefined);
+    supportRequestFlow.recordRequest.mockRejectedValue(new Error('db down'));
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    await handleEvent(textEvent('ทดสอบข้อความ'));
+
+    const loggedMessages = consoleErrorSpy.mock.calls.map((call) => call[0]);
+    expect(loggedMessages.some((msg) => msg.includes('Rate Limit'))).toBe(true);
+    consoleErrorSpy.mockRestore();
+  });
+
+  // ── ลำดับความสำคัญ: ชนะ Session ของ Flow อื่นที่ค้างอยู่ ──────────────────────
+  test('มี Session ตั้งเตือน DCA ค้างอยู่พร้อมกัน → ข้อความถัดไปยังถูกตีความเป็นเนื้อหาแจ้งปัญหา ไม่ใช่ Input ของ Flow ตั้งเตือน', async () => {
+    supportRequestFlow.getCurrentSession.mockResolvedValue({ userId: FREE_USER.id });
+    reminderSetupFlow.getCurrentSession.mockResolvedValue({
+      step: reminderSetupFlow.STEPS.AWAITING_AMOUNT,
+      symbol: 'BTC',
+    });
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+
+    await handleEvent(textEvent('1000'));
+
+    // ต้องไม่ถูกตีความเป็นจำนวนเงินของ Flow ตั้งเตือน
+    expect(reminderSetupFlow.handleAmountEntered).not.toHaveBeenCalled();
+    expect(lineService.pushMessage).toHaveBeenCalled();
+    expect(supportRequestFlow.cancelFlow).toHaveBeenCalledWith(FREE_USER.id);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// Regression: Flow อื่นที่ Reuse State Machine เดียวกัน (Session-based) ต้องไม่
+// ได้รับผลกระทบจากการเพิ่ม supportRequestFlow เข้า routeText
+// ═══════════════════════════════════════════════════════════════════════
+describe('Regression — Flow อื่นยังทำงานปกติหลังเพิ่ม Support Request Flow', () => {
+  beforeEach(() => {
+    supportRequestFlow.getCurrentSession.mockResolvedValue(null);
+  });
+
+  test('Reminder Setup: ไม่มี Support Session ค้าง → พิมพ์จำนวนเงินยังเข้า Flow ตั้งเตือนตามปกติ', async () => {
+    reminderSetupFlow.getCurrentSession.mockResolvedValue({
+      step: reminderSetupFlow.STEPS.AWAITING_AMOUNT,
+      symbol: 'BTC',
+    });
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+    reminderService.createReminder.mockResolvedValue({ id: 'r-1', symbol: 'BTC' });
+    reminderSetupFlow.handleAmountEntered.mockResolvedValue({ id: 'r-1', symbol: 'BTC' });
+
+    await handleEvent(textEvent('1000'));
+
+    expect(reminderSetupFlow.handleAmountEntered).toHaveBeenCalledWith(FREE_USER.id, 1000);
+  });
+
+  test('Guided Buy: ไม่มี Support Session ค้าง → พิมพ์ Symbol เองยังเข้า Flow Guided Buy ตามปกติ', async () => {
+    reminderSetupFlow.getCurrentSession.mockResolvedValue(null);
+    guidedBuyFlow.getCurrentSession.mockResolvedValue({
+      step: guidedBuyFlow.STEPS.AWAITING_SYMBOL,
+    });
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+    guidedBuyFlow.handleSymbolSelected.mockResolvedValue({ symbol: 'BTC' });
+
+    await handleEvent(textEvent('BTC'));
+
+    expect(guidedBuyFlow.handleSymbolSelected).toHaveBeenCalledWith(FREE_USER.id, 'BTC');
+  });
+
+  test('Bulk Import: ไม่มี Support Session ค้าง → ข้อความ Batch ยังเข้า previewBatch ตามปกติ', async () => {
+    reminderSetupFlow.getCurrentSession.mockResolvedValue(null);
+    guidedBuyFlow.getCurrentSession.mockResolvedValue(null);
+    bulkImportSession.getCurrentSession.mockResolvedValue({ step: 'AWAITING_BATCH' });
+    commandParser.parseCommand.mockReturnValue({ command: COMMANDS.UNKNOWN, params: {} });
+    bulkImportService.previewBatch.mockResolvedValue({ ok: true, items: [] });
+
+    await handleEvent(textEvent('BTC 0.01 ต้นทุน 1500000'));
+
+    expect(bulkImportService.previewBatch).toHaveBeenCalled();
   });
 });
 

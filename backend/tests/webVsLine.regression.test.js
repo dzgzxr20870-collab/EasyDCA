@@ -30,6 +30,10 @@ jest.mock('../src/services/reminderSetupFlow.service', () => {
   return { STEPS: actual.STEPS, getCurrentSession: jest.fn() };
 });
 jest.mock('../src/services/bulkImportSession.service');
+// routeText เช็ค supportRequestFlow.getCurrentSession ก่อน Flow อื่นทุกครั้ง (ลำดับ
+// สูงสุด — ดู webhook.controller.js) แม้ Test ชุดนี้ไม่ได้ทดสอบ Flow นี้เลยก็ต้อง Mock
+// ไว้ไม่งั้นจะยิง Supabase จริง (Pattern เดียวกับ guidedBuy.integration.test.js)
+jest.mock('../src/repositories/supportRequestSession.repository');
 
 const transactionRepository = require('../src/repositories/transaction.repository');
 const assetRepository = require('../src/repositories/asset.repository');
