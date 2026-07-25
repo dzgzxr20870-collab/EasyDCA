@@ -1879,21 +1879,57 @@ function buildPaymentNotifySubmittedMessage() {
 }
 
 // ตอบผู้ใช้เมื่อได้รับรูปสลิปและผูกเข้ากับคำขอ pending สำเร็จ (Image Handler ใน Webhook)
-function buildSlipReceivedMessage() {
+//
+// adminNotified   = Push การ์ดถึง Admin ได้จริงอย่างน้อย 1 คนหรือไม่
+// isReplacement   = เป็นสลิปใบที่ 2+ ของคำขอเดิม (เขียนทับใบก่อนหน้า) ซึ่งจะไม่ Push ซ้ำ
+//
+// ⚠️ ข้อความเดิมบอกว่า "กำลังรอ Admin ตรวจสอบ" ทุกกรณี ทั้งที่ตอนนั้นระบบยังไม่ได้ส่ง
+// อะไรไปหา Admin เลย (ต้องรอผู้ใช้กดปุ่ม "แจ้งชำระแล้ว" อีกที) ผู้ใช้จึงเข้าใจว่าจบแล้ว
+// แล้วคำขอค้างถาวร — ตอนนี้ระบบแจ้ง Admin ให้ตั้งแต่รับรูป ข้อความจึงยืนยันได้ว่าแจ้งจริง
+// แต่ต้อง "ไม่โกหก" เมื่อ Push ไม่สำเร็จ จึงแยกข้อความตามผลจริง
+function buildSlipReceivedMessage(adminNotified = true, isReplacement = false) {
+  // สลิปใบที่ 2+ ไม่ได้ Push รอบนี้ จึงห้ามพูดว่า "เพิ่งแจ้งทีมงาน" — และห้ามพูดว่ายังไม่แจ้ง
+  // ด้วย (ใบแรกอาจแจ้งไปแล้ว) ใช้ข้อความที่ถูกต้องทุกกรณี: อัปเดตรูปแล้ว + อยู่ระหว่างตรวจสอบ
+  const bodyContents = isReplacement
+    ? [
+        textLine('อัปเดตรูปสลิปล่าสุดให้คำขอนี้เรียบร้อยแล้ว', {
+          size: 'sm',
+          color: COLOR.textPrimary,
+        }),
+        textLine('ทีมงานกำลังตรวจสอบคำขอของคุณอยู่ เมื่ออนุมัติแล้วระบบจะแจ้งเตือนทันที', {
+          size: 'xs',
+          color: COLOR.textSecondary,
+        }),
+      ]
+    : adminNotified
+    ? [
+        textLine('ได้รับรูปสลิปการโอนเงินแล้ว และแจ้งทีมงานให้ตรวจสอบเรียบร้อยแล้ว', {
+          size: 'sm',
+          color: COLOR.textPrimary,
+        }),
+        textLine('เมื่ออนุมัติแล้วระบบจะแจ้งเตือนและเปิดสิทธิ์ Premium ให้ทันที', {
+          size: 'xs',
+          color: COLOR.textSecondary,
+        }),
+      ]
+    : [
+        textLine('ได้รับรูปสลิปการโอนเงินและบันทึกคำขอของคุณเรียบร้อยแล้ว', {
+          size: 'sm',
+          color: COLOR.textPrimary,
+        }),
+        // ไม่บอกว่า "แจ้งทีมงานแล้ว" เพราะ Push ไม่ถึงจริง — แต่คำขอถูกบันทึกใน DB แล้ว
+        // ทีมงานยังเห็นย้อนหลังได้ที่หน้า Admin จึงไม่ต้องให้ผู้ใช้ทำอะไรซ้ำ
+        textLine('ทีมงานจะตรวจสอบและอนุมัติให้โดยเร็วที่สุดครับ', {
+          size: 'xs',
+          color: COLOR.textSecondary,
+        }),
+      ];
+
   return bubble({
     headerText: '🧾 ได้รับสลิปแล้ว',
     headerColor: COLOR.info,
     headerBg: COLOR.profitBg,
-    bodyContents: [
-      textLine('ได้รับรูปสลิปการโอนเงินแล้ว กำลังรอ Admin ตรวจสอบ', {
-        size: 'sm',
-        color: COLOR.textPrimary,
-      }),
-      textLine('เมื่ออนุมัติแล้วระบบจะแจ้งเตือนและเปิดสิทธิ์ Premium ให้ทันที', {
-        size: 'xs',
-        color: COLOR.textSecondary,
-      }),
-    ],
+    bodyContents,
   });
 }
 

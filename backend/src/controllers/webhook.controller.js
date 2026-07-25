@@ -606,34 +606,22 @@ async function routePostback(user, data) {
       return flexMessage.buildPaymentQrMessage(payment, paymentService.buildQrImageUrl(result.paymentId));
     }
 
-    // ── ผู้ใช้กด "แจ้งชำระแล้ว" → Validate คำขอ แล้ว Push แจ้ง Admin ทุกคน ────────
-    // ตอบผู้ใช้ (reply) ว่ารอตรวจสอบ; Push หา Admin แบบ Best-effort (1 คนล้มไม่
-    // กระทบคนอื่น/การตอบผู้ใช้) — Error (PAYMENT_NOT_FOUND/PAYMENT_NOT_PENDING)
-    // ทะลุขึ้นไปให้ replyWithError แปลเป็นข้อความไทยตาม error code
+    // ── ผู้ใช้กด "แจ้งชำระแล้ว" บนการ์ด QR ─────────────────────────────────────
+    // ⚠️ ปุ่มนี้ "ไม่ Push ซ้ำ" อีกต่อไป — เป็นแค่การตอบสถานะให้ผู้ใช้สบายใจ
+    //
+    // เหตุผล: notifyPaymentSubmitted บังคับว่าต้องมีสลิปแนบแล้วเท่านั้น (SLIP_NOT_ATTACHED)
+    // และใน Flow LINE รูปสลิปทุกใบจะ Push แจ้ง Admin ให้ทันทีตั้งแต่ตอนรับรูปแล้ว
+    // (ดู handlePaymentSlipImage) ดังนั้นการกดปุ่มนี้สำเร็จ = Admin ได้รับแจ้งไปแล้วเสมอ
+    // ถ้ายัง Push ที่นี่อีก Admin จะได้การ์ดซ้ำสองใบสำหรับคำขอเดียว
+    //
+    // Validate เดิมคงไว้ครบ (เจ้าของคำขอ/ยัง pending/มีสลิปแล้ว) — Error ทะลุขึ้นไปให้
+    // replyWithError แปลไทยตาม code เหมือนเดิมทุกประการ
+    //
+    // ⚠️ Flow เว็บ (POST /api/v1/payment/:id/notify) ยัง Push ตามเดิม ไม่ถูกแตะ เพราะ
+    // การอัปโหลดสลิปฝั่งเว็บเป็นคนละขั้นกับการแจ้ง (Premium.jsx กด 2 ปุ่มแยก) จึงยัง
+    // ต้องอาศัยปุ่มแจ้งเป็นตัว Push อยู่
     case 'notify_payment': {
-      const payment = await paymentService.notifyPaymentSubmitted(
-        params.get('paymentId'),
-        user.id
-      );
-
-      const adminIds = config.payment.adminLineUserIds;
-      if (adminIds.length === 0) {
-        console.error('[webhook] notify_payment: no ADMIN_LINE_USER_IDS configured; nobody notified');
-      } else {
-        const adminMessage = flexMessage.buildAdminPaymentRequestMessage(
-          payment,
-          user.displayName,
-          paymentService.buildQrImageUrl(payment.id)
-        );
-        await Promise.all(
-          adminIds.map((adminId) =>
-            lineService.pushMessage(adminId, adminMessage).catch((pushErr) => {
-              console.error(`[webhook] notify_payment: push to admin ${adminId} failed: ${pushErr.message}`);
-            })
-          )
-        );
-      }
-
+      await paymentService.notifyPaymentSubmitted(params.get('paymentId'), user.id);
       return flexMessage.buildPaymentNotifySubmittedMessage();
     }
 
@@ -1079,7 +1067,8 @@ async function handleImage(event) {
 
   const pending = await paymentService.findPendingByUserId(user.id);
   if (pending) {
-    return handlePaymentSlipImage(event, pending);
+    // ส่ง user ต่อไปด้วย — ใช้ displayName ประกอบการ์ดแจ้ง Admin (ไม่ต้อง Query ซ้ำ)
+    return handlePaymentSlipImage(event, pending, user);
   }
 
   return handleAssetSlipImage(event, user);
@@ -1095,7 +1084,46 @@ async function handleImage(event) {
 // ไหม — ต่างจากความล้มเหลวทางเทคนิคด้านบน กรณีนี้ "ต้องตอบผู้ใช้" เพราะเป็นการกระทำที่
 // ผู้ใช้ตั้งใจทำ (ส่งสลิปเดิมซ้ำ) ไม่ใช่ความผิดพลาดของระบบ — ถ้าซ้ำ ให้จบ Flow ทันที
 // ไม่อัปโหลด/ไม่บันทึกอะไรเพิ่ม
-async function handlePaymentSlipImage(event, pending) {
+// Push การ์ด "คำขอชำระเงินใหม่" (มีปุ่มอนุมัติ/ปฏิเสธ) หา Admin ทุกคนใน
+// ADMIN_LINE_USER_IDS — คืน "จำนวน Admin ที่ Push สำเร็จจริง" ให้ผู้เรียกตัดสินใจว่าจะ
+// บอกผู้ใช้ว่าแจ้งทีมงานแล้วหรือยัง
+//
+// Best-effort ทั้งก้อน: Admin 1 คนล้ม (บล็อกบอท/LINE ล่ม) ต้องไม่กระทบคนอื่นและต้องไม่
+// ทำให้ Flow ของผู้ใช้พัง — สลิปถูกบันทึกลง DB เรียบร้อยแล้วก่อนถึงจุดนี้เสมอ Admin ยัง
+// เห็นคำขอย้อนหลังได้ที่หน้า /admin (ตาราง "การชำระเงิน") แม้ Push จะไม่ถึง
+async function pushPaymentRequestToAdmins(payment, displayName, context) {
+  const adminIds = config.payment.adminLineUserIds;
+  if (adminIds.length === 0) {
+    console.error(
+      `[webhook] ${context}: no ADMIN_LINE_USER_IDS configured; nobody notified (paymentId=${payment.id})`
+    );
+    return 0;
+  }
+
+  const adminMessage = flexMessage.buildAdminPaymentRequestMessage(
+    payment,
+    displayName,
+    paymentService.buildQrImageUrl(payment.id)
+  );
+
+  const results = await Promise.all(
+    adminIds.map((adminId) =>
+      lineService
+        .pushMessage(adminId, adminMessage)
+        .then(() => true)
+        .catch((pushErr) => {
+          console.error(
+            `[webhook] ${context}: push to admin ${adminId} failed: ${pushErr.message}`
+          );
+          return false;
+        })
+    )
+  );
+
+  return results.filter(Boolean).length;
+}
+
+async function handlePaymentSlipImage(event, pending, user) {
   const { buffer, contentType } = await lineService.getMessageContent(event.message.id);
   const slipHash = paymentService.hashSlipImage(buffer);
 
@@ -1109,10 +1137,43 @@ async function handlePaymentSlipImage(event, pending) {
     throw err;
   }
 
+  // "สลิปใบแรกของคำขอนี้หรือไม่" ต้องอ่านจาก pending ที่ดึงมา *ก่อน* attachSlipImage
+  // (หลัง attach ค่าใน DB จะไม่ว่างแล้วเสมอ) — findPendingByUserId select '*' จึงมี
+  // slipImageUrl ติดมาอยู่แล้ว ไม่ต้อง Query เพิ่ม
+  const isFirstSlip = !pending.slipImageUrl;
+
   const slipImageUrl = await storageService.uploadPaymentSlip(pending.id, buffer, contentType);
   await paymentService.attachSlipImage(pending.id, slipImageUrl, slipHash);
 
-  await lineService.replyMessage(event.replyToken, flexMessage.buildSlipReceivedMessage());
+  // ⚠️ Bug Fix: เดิมจบแค่ตรงนี้ — บันทึก URL แล้วตอบผู้ใช้ว่า "รอ Admin ตรวจสอบ" ทั้งที่
+  // ไม่มีอะไรถูกส่งไปหา Admin เลย ต้องรอผู้ใช้กดปุ่ม "แจ้งชำระแล้ว" บนการ์ด QR อีกทีถึงจะ
+  // Push จริง ผู้ใช้ที่ส่งรูปเข้าแชทตรงๆ (พฤติกรรมธรรมชาติ) จึงค้างสถานะ "รอตรวจสอบ"
+  // ตลอดกาลโดยที่ Admin ไม่เคยรู้ว่ามีคำขอ — และคำขอที่ค้างยัง Intercept รูปทุกใบที่
+  // ผู้ใช้ส่งเข้ามาหลังจากนั้นให้เข้า Flow จ่ายเงินแทน AI OCR (ดู handleImage)
+  //
+  // Push เฉพาะ "สลิปใบแรก" ของคำขอเท่านั้น — คำขอที่ค้างจะดักรูปทุกใบที่ผู้ใช้ส่งเข้ามา
+  // (เคสจริง: 4 ใบใน 11 นาที) ถ้า Push ทุกใบ Admin จะได้การ์ดซ้ำหลายใบต่อคำขอเดียว
+  // กลายเป็นสลับจากบั๊ก "ไม่แจ้งเลย" ไปเป็น "แจ้งรัว" — ใบถัดไปยังเขียนทับ slip_image_url
+  // ใน DB ตามปกติ (ผู้ใช้แก้รูปที่ส่งผิดได้) Admin เห็นรูปล่าสุดเสมอที่หน้า /admin
+  //
+  // Trade-off ที่ยอมรับ: การ์ดที่ Push ไปแล้วเป็น Flex ที่แก้ทีหลังไม่ได้ Hero จึงค้างเป็น
+  // รูปใบแรก — Admin ที่ต้องการรูปล่าสุดต้องดูที่หน้า /admin (ตาราง "การชำระเงิน")
+  let notifiedCount = 0;
+  if (isFirstSlip) {
+    // จังหวะนี้ดีที่สุดเพราะการ์ด Admin ใช้ slipImageUrl เป็น Hero ให้กดดูรูปเทียบยอดได้เลย
+    notifiedCount = await pushPaymentRequestToAdmins(
+      { ...pending, slipImageUrl },
+      user?.displayName ?? null,
+      'slip_image'
+    );
+  }
+
+  // ข้อความตอบผู้ใช้ต้องตรงกับสิ่งที่เกิดขึ้นจริง — ถ้า Push ไม่ถึง Admin สักคน (ไม่ได้ตั้ง
+  // ADMIN_LINE_USER_IDS / LINE API ล่ม / Admin บล็อกบอท) ห้ามบอกว่า "แจ้งทีมงานแล้ว"
+  await lineService.replyMessage(
+    event.replyToken,
+    flexMessage.buildSlipReceivedMessage(notifiedCount > 0, !isFirstSlip)
+  );
 }
 
 // อัปโหลดรูปสลิปธุรกรรมขึ้น Storage แบบ Best-effort (S8) — คืน token ถ้าสำเร็จ,

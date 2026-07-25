@@ -1016,7 +1016,11 @@ describe('handleEvent — Payment Postback (request/notify)', () => {
     expect(reply).toContain('action=notify_payment&paymentId=pay-5');
   });
 
-  test('notify_payment: แจ้งชำระ → Push แจ้ง Admin ทุกคน + reply ยืนยันรอตรวจสอบ', async () => {
+  // ⚠️ พฤติกรรมเปลี่ยนโดยตั้งใจ (Bug Fix: สลิปที่ส่งเข้าแชทไม่เคยแจ้ง Admin)
+  // เดิม Test นี้ชื่อ 'notify_payment: แจ้งชำระ → Push แจ้ง Admin ทุกคน...' และยืนยันว่า
+  // ปุ่มนี้เป็นตัว Push — ตอนนี้ Flow LINE Push ให้ตั้งแต่รับรูปสลิปแล้ว (handlePaymentSlipImage)
+  // ปุ่มนี้จึงเหลือหน้าที่แค่ตอบสถานะ ถ้ายัง Push ที่นี่อีก Admin จะได้การ์ดซ้ำ 2 ใบ/คำขอ
+  test('notify_payment: ไม่ Push ซ้ำ (รูปสลิปแจ้ง Admin ไปแล้ว) — Validate เดิม + reply ยืนยัน', async () => {
     paymentService.notifyPaymentSubmitted.mockResolvedValue({
       id: 'pay-1',
       userId: FREE_USER.id,
@@ -1027,33 +1031,29 @@ describe('handleEvent — Payment Postback (request/notify)', () => {
 
     await handleEvent(postbackEvent('action=notify_payment&paymentId=pay-1'));
 
+    // Validate เดิมยังต้องทำงานครบ (เจ้าของคำขอ/ยัง pending/มีสลิปแล้ว)
     expect(paymentService.notifyPaymentSubmitted).toHaveBeenCalledWith('pay-1', FREE_USER.id);
-    // Push แจ้ง Admin ครบ 2 คน (จาก config mock) พร้อมปุ่มอนุมัติ/ปฏิเสธ
-    expect(lineService.pushMessage).toHaveBeenCalledWith('Uadmin1', expect.any(Object));
-    expect(lineService.pushMessage).toHaveBeenCalledWith('Uadmin2', expect.any(Object));
-    const adminMsg = JSON.stringify(lineService.pushMessage.mock.calls[0][1]);
-    expect(adminMsg).toContain('action=approve_payment&paymentId=pay-1');
-    expect(adminMsg).toContain('action=reject_payment&paymentId=pay-1');
-    // การ์ด Admin ต้องมีรูป QR (Deterministic จาก paymentId) แนบมาด้วย (migration 016 —
-    // Admin เทียบ QR + สลิปคู่กันได้โดยไม่ต้องให้ User ส่ง Screenshot กลับมาเอง)
-    expect(adminMsg).toContain('https://api.easydca.test/api/v1/payment/pay-1/qr.png');
+    // ห้าม Push ซ้ำ
+    expect(lineService.pushMessage).not.toHaveBeenCalled();
     // ผู้ใช้ได้รับข้อความยืนยันรอตรวจสอบ
     expect(lastReplyText()).toContain('รอ Admin ตรวจสอบ');
   });
 
-  test('notify_payment: Push Admin 1 คนล้มเหลว → ยังตอบผู้ใช้สำเร็จ (Best-effort)', async () => {
+  // เดิม Test นี้ยืนยัน Best-effort ของการ Push ที่ปุ่มนี้ — ตอนนี้ปุ่มไม่ Push แล้ว
+  // Best-effort ย้ายไปอยู่ที่ handlePaymentSlipImage (มี Test คลุมในกลุ่ม Image ด้านล่าง)
+  // คงเคสไว้เพื่อยืนยันว่า "ต่อให้ Push พังก็ไม่มีการเรียก Push ที่นี่อีกแล้ว"
+  test('notify_payment: ไม่เรียก Push เลยแม้ Push จะพร้อมใช้งาน (Best-effort ย้ายไปที่ Image Handler)', async () => {
     paymentService.notifyPaymentSubmitted.mockResolvedValue({
       id: 'pay-1',
       userId: FREE_USER.id,
       amountThb: 59.17,
       billingPeriod: 'monthly',
     });
-    lineService.pushMessage
-      .mockRejectedValueOnce(new Error('blocked'))
-      .mockResolvedValueOnce(undefined);
+    lineService.pushMessage.mockRejectedValue(new Error('blocked'));
 
     await handleEvent(postbackEvent('action=notify_payment&paymentId=pay-1'));
 
+    expect(lineService.pushMessage).not.toHaveBeenCalled();
     expect(lastReplyText()).toContain('รอ Admin ตรวจสอบ');
   });
 
@@ -1635,6 +1635,105 @@ describe('handleEvent — Image (แนบสลิปตอนแจ้งช�
       'hash-abc'
     );
     expect(lastReplyText()).toContain('ได้รับ');
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // Bug Fix: ส่งสลิปเข้าแชทแล้ว Admin ไม่เคยรู้ (คำขอค้างถาวร + ดักรูปทุกใบหลังจากนั้น)
+  // เดิม handlePaymentSlipImage แค่เซฟ URL แล้วตอบ "รอ Admin ตรวจสอบ" โดยไม่ Push อะไรเลย
+  // ต้องรอผู้ใช้กดปุ่ม "แจ้งชำระแล้ว" อีกทีถึงจะแจ้ง Admin จริง
+  // ═══════════════════════════════════════════════════════════════════════
+  test('สลิปใบแรก → Push การ์ดหา Admin ทุกคนทันที (ไม่ต้องรอกดปุ่ม "แจ้งชำระแล้ว")', async () => {
+    paymentService.findPendingByUserId.mockResolvedValue({
+      id: 'pay-1',
+      status: 'pending',
+      amountThb: 59.17,
+      billingPeriod: 'monthly',
+      slipImageUrl: null, // ยังไม่เคยมีสลิป = ใบแรก
+    });
+    lineService.getMessageContent.mockResolvedValue({
+      buffer: Buffer.from([1, 2, 3]),
+      contentType: 'image/jpeg',
+    });
+    paymentService.hashSlipImage.mockReturnValueOnce('hash-first');
+    paymentService.assertSlipNotReused.mockResolvedValueOnce(undefined);
+    storageService.uploadPaymentSlip.mockResolvedValue('https://cdn.test/payment-slips/pay-1-new.jpg');
+    paymentService.attachSlipImage.mockResolvedValue({ id: 'pay-1' });
+    lineService.pushMessage.mockResolvedValue(undefined);
+
+    await handleEvent(imageEvent('img-first'));
+
+    // Push ครบทุก Admin (2 คนจาก config mock) พร้อมปุ่มอนุมัติ/ปฏิเสธของคำขอนี้
+    expect(lineService.pushMessage).toHaveBeenCalledWith('Uadmin1', expect.any(Object));
+    expect(lineService.pushMessage).toHaveBeenCalledWith('Uadmin2', expect.any(Object));
+    const adminMsg = JSON.stringify(lineService.pushMessage.mock.calls[0][1]);
+    expect(adminMsg).toContain('action=approve_payment&paymentId=pay-1');
+    expect(adminMsg).toContain('action=reject_payment&paymentId=pay-1');
+    // การ์ดต้องมีรูปสลิปที่เพิ่งอัปโหลด (Hero) ให้ Admin กดดูเทียบยอดได้
+    expect(adminMsg).toContain('https://cdn.test/payment-slips/pay-1-new.jpg');
+    // และต้องมีรูป QR (Deterministic จาก paymentId) คู่กันด้วย (migration 016 — Admin
+    // เทียบ QR + สลิปได้ในการ์ดเดียว ไม่ต้องให้ผู้ใช้ส่ง Screenshot กลับมาเอง)
+    // ⚠️ เดิม Assertion นี้อยู่ใน Test ของ notify_payment ซึ่งไม่ Push แล้ว จึงย้ายมาที่นี่
+    expect(adminMsg).toContain('https://api.easydca.test/api/v1/payment/pay-1/qr.png');
+    // ผู้ใช้ได้รับคำยืนยันที่ "ตรงกับความจริง" ว่าแจ้งทีมงานแล้ว
+    expect(lastReplyText()).toContain('แจ้งทีมงาน');
+  });
+
+  test('สลิปใบที่ 2 (เขียนทับ) → ยัง Update DB ตามปกติ แต่ไม่ Push ซ้ำ', async () => {
+    paymentService.findPendingByUserId.mockResolvedValue({
+      id: 'pay-1',
+      status: 'pending',
+      amountThb: 59.17,
+      billingPeriod: 'monthly',
+      slipImageUrl: 'https://cdn.test/payment-slips/pay-1-old.jpg', // มีสลิปแล้ว
+    });
+    lineService.getMessageContent.mockResolvedValue({
+      buffer: Buffer.from([9, 9, 9]),
+      contentType: 'image/jpeg',
+    });
+    paymentService.hashSlipImage.mockReturnValueOnce('hash-second');
+    paymentService.assertSlipNotReused.mockResolvedValueOnce(undefined);
+    storageService.uploadPaymentSlip.mockResolvedValue('https://cdn.test/payment-slips/pay-1-new2.jpg');
+    paymentService.attachSlipImage.mockResolvedValue({ id: 'pay-1' });
+
+    await handleEvent(imageEvent('img-second'));
+
+    // รูปใหม่ยังถูกเก็บและผูกเข้าคำขอเหมือนเดิม (ผู้ใช้แก้รูปที่ส่งผิดได้)
+    expect(storageService.uploadPaymentSlip).toHaveBeenCalled();
+    expect(paymentService.attachSlipImage).toHaveBeenCalledWith(
+      'pay-1',
+      'https://cdn.test/payment-slips/pay-1-new2.jpg',
+      'hash-second'
+    );
+    // แต่ห้าม Push การ์ดซ้ำ (คำขอค้างจะดักรูปทุกใบ — Push ทุกใบ = Admin โดนสแปม)
+    expect(lineService.pushMessage).not.toHaveBeenCalled();
+    expect(lastReplyText()).toContain('อัปเดตรูปสลิป');
+  });
+
+  test('สลิปใบแรกแต่ Push หา Admin ล้มทุกคน → ยังเซฟสลิป + ไม่บอกผู้ใช้ว่า "แจ้งทีมงานแล้ว"', async () => {
+    paymentService.findPendingByUserId.mockResolvedValue({
+      id: 'pay-1',
+      status: 'pending',
+      amountThb: 59.17,
+      billingPeriod: 'monthly',
+      slipImageUrl: null,
+    });
+    lineService.getMessageContent.mockResolvedValue({
+      buffer: Buffer.from([1, 2, 3]),
+      contentType: 'image/jpeg',
+    });
+    paymentService.hashSlipImage.mockReturnValueOnce('hash-fail');
+    paymentService.assertSlipNotReused.mockResolvedValueOnce(undefined);
+    storageService.uploadPaymentSlip.mockResolvedValue('https://cdn.test/payment-slips/pay-1-x.jpg');
+    paymentService.attachSlipImage.mockResolvedValue({ id: 'pay-1' });
+    lineService.pushMessage.mockRejectedValue(new Error('blocked'));
+
+    await handleEvent(imageEvent('img-pushfail'));
+
+    // สลิปถูกบันทึกแล้วจริง (Push ล้มต้องไม่ทำให้ Flow ผู้ใช้พัง)
+    expect(paymentService.attachSlipImage).toHaveBeenCalled();
+    // ห้ามอ้างว่าแจ้งทีมงานแล้วทั้งที่ Push ไม่ถึงใครเลย
+    expect(lastReplyText()).not.toContain('แจ้งทีมงาน');
+    expect(lastReplyText()).toContain('ได้รับรูปสลิป');
   });
 
   // ⚠️ Regression กันสับสน 2 Flow: "สลิปโอนเงินจ่าย Premium" (มี pending payment) ต้อง

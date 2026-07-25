@@ -364,10 +364,27 @@ describe('buildSlipReceivedMessage + Admin message แนบสลิป (Round 
     buildAdminPaymentRequestMessage,
   } = require('../src/utils/flexMessage.util');
 
-  test('buildSlipReceivedMessage → ยืนยัน "ได้รับสลิป" + รอ Admin ตรวจสอบ', () => {
-    const text = JSON.stringify(buildSlipReceivedMessage());
+  // ⚠️ ข้อความเปลี่ยนโดยตั้งใจ (Bug Fix: ส่งสลิปเข้าแชทแล้ว Admin ไม่เคยรู้)
+  // เดิมตอบ "กำลังรอ Admin ตรวจสอบ" ทุกกรณี ทั้งที่ระบบยังไม่ได้แจ้ง Admin เลย ผู้ใช้จึง
+  // เข้าใจว่าจบขั้นตอนแล้วและคำขอค้างถาวร — ตอนนี้ระบบ Push ให้ตั้งแต่รับรูป ข้อความจึงต้อง
+  // สะท้อน "สิ่งที่เกิดขึ้นจริง" 3 แบบ และห้ามอ้างว่าแจ้งแล้วถ้า Push ไม่ถึงใคร
+  test('buildSlipReceivedMessage: Push สำเร็จ → ยืนยันว่าแจ้งทีมงานแล้วจริง', () => {
+    const text = JSON.stringify(buildSlipReceivedMessage(true));
     expect(text).toContain('ได้รับ');
-    expect(text).toContain('รอ Admin');
+    expect(text).toContain('แจ้งทีมงาน');
+  });
+
+  test('buildSlipReceivedMessage: Push ไม่ถึงใครเลย → ห้ามบอกว่าแจ้งทีมงานแล้ว', () => {
+    const text = JSON.stringify(buildSlipReceivedMessage(false));
+    expect(text).toContain('ได้รับรูปสลิป');
+    expect(text).not.toContain('แจ้งทีมงาน');
+  });
+
+  test('buildSlipReceivedMessage: สลิปใบที่ 2 (ไม่ Push ซ้ำ) → บอกว่าอัปเดตรูปให้แล้ว', () => {
+    const text = JSON.stringify(buildSlipReceivedMessage(false, true));
+    expect(text).toContain('อัปเดตรูปสลิป');
+    // ไม่อ้างว่าเพิ่งแจ้ง และไม่บอกว่ายังไม่แจ้ง (ใบแรกอาจแจ้งไปแล้ว)
+    expect(text).not.toContain('แจ้งทีมงาน');
   });
 
   test('Admin message: มี slipImageUrl → แนบรูปเป็น hero พร้อม action เปิด URL เต็ม + มีรูป QR ใน body', () => {
