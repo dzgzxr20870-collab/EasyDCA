@@ -1,13 +1,12 @@
-# Infra ก่อน Beta — Nightly Backup ต้องใช้ Binary `pg_dump` (dbBackup.job.js) ซึ่ง
-# ไม่ได้มาพร้อม Railway Nixpacks Node.js Provider โดย Default — เพิ่ม `postgresql`
-# (Nix Package ที่รวม pg_dump/psql Client Tools) เข้าไปในขั้นตอน Setup ของ Build
+# ⚠️ ไฟล์นี้ "ไม่มีผลแล้ว" ตั้งแต่ Railway เปลี่ยน Builder ของ Project นี้จาก
+# Nixpacks → Railpack (ยืนยันจาก Build Log จริงของ easydca-worker: "using build
+# driver railpack-v0.33.0") — Railpack ไม่อ่าน nixpacks.toml เลย คนละ Config กัน
+# ทั้งหมด การเพิ่ม nixPkgs = ['...', 'postgresql'] ที่นี่ (Commit 4f823db,
+# 2026-07-24) จึงไม่เคยมีผลจริงบน Deployment แม้ Diff จะดู Merge สำเร็จก็ตาม
 #
-# ⚠️ "..." (บรรทัดถัดไป) จำเป็นเด็ดขาด — ยืนยันจาก Nixpacks Official Docs
-# (nixpacks.com/docs/configuration/file): ถ้าไม่มี "..." นำหน้า nixPkgs ของ
-# nixpacks.toml จะ Override ทับ List ที่ Node.js Provider Detect เองทั้งหมด (รวม
-# nodejs/yarn) เหลือแค่ ['postgresql'] อย่างเดียว → Build ทั้ง Service (ทั้ง backend
-# และ easydca-worker ที่ใช้ Root Directory /backend ร่วมกัน) จะพังเพราะไม่มี nodejs
-# ให้รัน ไม่ใช่แค่ Backup Job เสียอย่างเดียว — มี "..." แล้วจะ Extend (Merge) แทน
-# ได้ผลลัพธ์เป็น [...Provider Detect เดิม, 'postgresql']
+# Fix ตัวจริงสำหรับ pg_dump (Nightly Backup, dbBackup.job.js) อยู่ที่
+# backend/railpack.json (deploy.aptPackages) — เก็บไฟล์นี้ไว้เผื่อ Railway ย้อนกลับ
+# ไปใช้ Nixpacks Builder อีกครั้งเท่านั้น ถ้าเจอ Error "pg_dump ... ENOENT" อีกใน
+# อนาคต ให้เช็ค railpack.json ก่อน ไม่ใช่ไฟล์นี้
 [phases.setup]
 nixPkgs = ['...', 'postgresql']
