@@ -699,6 +699,9 @@ describe('หน่วยเงินสะกดผิด/คลุมเคร
   });
 
   test.each([
+    // เคสที่ User รายงานจาก Production จริง (พิมพ์ uad ที่ EOSE แล้วได้ 150 บาท)
+    ['สะกดผิดจาก usd — เคสจริงจาก Production', '150 uad'],
+    ['สะกดผิดจาก usd (ไม่เว้นวรรค)', '150uad'],
     ['สะกดผิดจาก usd', '150 uas'],
     ['เกินตัวอักษร', '150 usdd'],
     ['สั้นไป', '150 us'],
@@ -759,5 +762,72 @@ describe('หน่วยเงินสะกดผิด/คลุมเคร
 
     expect(pendingStore.size).toBe(0);
     expect(lastReplyJson()).toContain('จำนวนเงินไม่ถูกต้อง');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 10) Production Repro — EOSE + "150 uad" (รายงานจาก User จริง)
+// ═══════════════════════════════════════════════════════════════════════════
+// User พิมพ์ "150 uad" (พิมพ์ผิดจาก usd) ที่ EOSE แล้วระบบตีเป็น 150 บาท — เทสต์นี้
+// ล็อกพฤติกรรมด้วย Symbol ตัวจริงที่ User ใช้ (เดิมเทสต์ครอบแต่ MSFT) เพราะ EOSE เป็น
+// หุ้น Small-cap ที่ Twelve Data มักดึงราคาไม่ได้ ทำให้เดินเข้าเส้น Manual Quantity
+// Fallback ต่างจาก MSFT — ต้องพิสูจน์ว่ากฎสกุลเงินถูกบังคับ "ก่อน" เส้นนั้นเสมอ
+describe('Production Repro — EOSE (stock_us small-cap) + หน่วยเงินสะกดผิด', () => {
+  beforeEach(() => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue({
+      id: ASSET_ID,
+      symbol: 'EOSE',
+      type: 'stock_us',
+    });
+    assetRepository.findByIds.mockResolvedValue([{ id: ASSET_ID, symbol: 'EOSE' }]);
+  });
+
+  async function typeAtEose(text) {
+    await handleEvent(postbackEvent('action=buy_guide'));
+    await handleEvent(postbackEvent('action=gbuy_symbol&sym=EOSE'));
+    await handleEvent(postbackEvent('action=gbuy_amount_manual'));
+    await handleEvent(textEvent(text));
+  }
+
+  test('"150 uad" ที่ EOSE → ห้ามได้การ์ด Preview "150 บาท" (บั๊กที่ User เจอ)', async () => {
+    // ราคา USD ดึงได้ปกติ — พิสูจน์ว่าการปฏิเสธมาจากกฎสกุลเงิน ไม่ใช่เพราะ Price Feed ล่ม
+    priceFeedService.getCurrentPriceUsd.mockResolvedValue(4.5);
+    priceFeedService.getCurrentPrice.mockResolvedValue(150.75);
+
+    await typeAtEose('150 uad');
+
+    expect(pendingStore.size).toBe(0);
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+    const reply = lastReplyJson();
+    expect(reply).toContain('ไม่แน่ใจว่าคุณหมายถึงสกุลเงินไหน');
+    // Session คงอยู่ → พิมพ์ใหม่ต่อได้เลย
+    expect(guidedSession).toMatchObject({ step: 'AWAITING_AMOUNT', symbol: 'EOSE' });
+  });
+
+  test('"150 uad" แล้วพิมพ์ "150 usd" ใหม่ → บันทึกเป็น USD ถูกต้อง (กู้คืนได้ใน 1 ครั้ง)', async () => {
+    priceFeedService.getCurrentPriceUsd.mockResolvedValue(4.5);
+
+    await typeAtEose('150 uad');
+    await handleEvent(textEvent('150 usd'));
+    await confirmLatestPending();
+
+    const row = insertedRow();
+    expect(row.currency).toBe('USD');
+    expect(row.amountThb).toBe(150);
+    expect(row.pricePerUnit).toBe(4.5);
+  });
+
+  test('EOSE + "150 uad" ที่ Price Feed ล่มด้วย → ยังต้องถามสกุล ไม่ตกไปเส้น Manual Quantity', async () => {
+    // Twelve Data ล่มทั้ง USD และ THB — กฎสกุลเงินต้องถูกบังคับก่อนถึงจะถูก
+    priceFeedService.getCurrentPriceUsd.mockResolvedValue(null);
+    priceFeedService.getCurrentPrice.mockResolvedValue(null);
+
+    await typeAtEose('150 uad');
+
+    const reply = lastReplyJson();
+    expect(reply).toContain('ไม่แน่ใจว่าคุณหมายถึงสกุลเงินไหน');
+    // ห้ามชี้ทางไป Manual Quantity ด้วยยอด 150 ที่ยังไม่รู้สกุล
+    expect(reply).not.toContain('กรอกจำนวนหุ้นเอง');
+    expect(pendingStore.size).toBe(0);
   });
 });
