@@ -487,13 +487,28 @@ function buildPortfolioMessage(summary) {
     body.push(separator());
   });
 
-  body.push(
-    textLine(`รวมเงินลงทุนทั้งพอร์ต: ${formatNumber(summary.totalInvested)} บาท`, {
-      size: 'md',
-      weight: 'bold',
-      color: COLOR.textPrimary,
-    })
-  );
+  // Multi-Currency (Round 10): ยอดรวมต้องแยกตามสกุล ไม่ถัวข้ามสกุล — Pattern เดียวกับ
+  // Dashboard เว็บ (Dashboard.jsx / PortfolioDetailSection.jsx) คือ investedByCurrency
+  // จาก portfolio.service เป็นแหล่งจริง ส่วน summary.totalInvested เป็นยอด THB
+  // เท่านั้น (portfolio.service.js — คงไว้เพื่อ Backward Compat) จึงใช้ได้แค่เป็น
+  // Fallback ของยอด THB สำหรับ Caller เดิมที่ยังไม่ส่ง investedByCurrency มา
+  const investedThb = summary.investedByCurrency?.THB ?? summary.totalInvested ?? 0;
+  const investedUsd = summary.investedByCurrency?.USD ?? 0;
+
+  const totalLine = (text) =>
+    textLine(text, { size: 'md', weight: 'bold', color: COLOR.textPrimary });
+
+  if (investedThb > 0 && investedUsd > 0) {
+    // พอร์ตปนสกุล — กำกับสกุลในหัวข้อทั้งสองบรรทัดเพื่อไม่ให้เข้าใจผิดว่าเป็นยอดทั้งพอร์ต
+    body.push(totalLine(`รวมเงินลงทุนทั้งพอร์ต (บาท): ${formatNumber(investedThb)} บาท`));
+    body.push(totalLine(`รวมเงินลงทุนทั้งพอร์ต (USD): ${formatNumber(investedUsd)} USD`));
+  } else if (investedUsd > 0) {
+    // พอร์ต USD ล้วน — เดิมโชว์ "0 บาท" เพราะอ่าน totalInvested (ยอด THB) ตรงๆ
+    body.push(totalLine(`รวมเงินลงทุนทั้งพอร์ต: ${formatNumber(investedUsd)} USD`));
+  } else {
+    // พอร์ต THB ล้วน (และเคส 0 ทั้งคู่ — ยังต้องมีบรรทัดนี้ ไม่ปล่อยให้หาย)
+    body.push(totalLine(`รวมเงินลงทุนทั้งพอร์ต: ${formatNumber(investedThb)} บาท`));
+  }
 
   // ระบุชัดเจนว่ายังไม่มี Current Value / กำไร-ขาดทุน (ไม่มี Price Feed)
   body.push(

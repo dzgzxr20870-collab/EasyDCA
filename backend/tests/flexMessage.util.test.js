@@ -990,3 +990,166 @@ describe('LINE Quick Reply Label ≤ 20 ตัวอักษร (Hard Limit ข
     expectAllLabelsWithinLimit(buildFn());
   });
 });
+
+// Multi-Currency (Round 10) — buildPortfolioMessage (คำสั่ง "พอต" ทาง LINE)
+// Red-Green: เคส USD คือบั๊กจริงจาก Production — เดิมอ่าน summary.totalInvested
+// ตรงๆ ซึ่ง portfolio.service ตั้งไว้เป็น "ยอด THB เท่านั้น" (Backward Compat)
+// ทำให้พอร์ตที่ถือสินทรัพย์สกุล USD เห็น "รวมเงินลงทุนทั้งพอร์ต: 0 บาท"
+describe('buildPortfolioMessage — ยอดรวมแยกตามสกุล (investedByCurrency)', () => {
+  const { buildPortfolioMessage } = require('../src/utils/flexMessage.util');
+
+  // holding ของพอร์ต (currency = สกุลของ totalInvested/averageCost)
+  function holding(symbol, currency, heldQuantity, totalInvested, averageCost) {
+    return {
+      symbol,
+      name: symbol,
+      type: currency === 'USD' ? 'stock_us' : 'stock_th',
+      currency,
+      heldQuantity,
+      totalInvested,
+      averageCost,
+    };
+  }
+
+  test('พอร์ต THB ล้วน → โชว์ยอดบาทบรรทัดเดียว ไม่มีบรรทัด USD โผล่มา', () => {
+    const msg = buildPortfolioMessage({
+      isEmpty: false,
+      holdings: [holding('PTT', 'THB', 40, 1300, 32.5)],
+      investedByCurrency: { THB: 1300, USD: 0 },
+      totalInvested: 1300,
+    });
+    const text = allText(msg);
+
+    expect(text).toContain('รวมเงินลงทุนทั้งพอร์ต: 1,300 บาท');
+    expect(text).not.toContain('USD');
+  });
+
+  test('พอร์ต USD ล้วน → โชว์ยอด USD จริง ไม่ใช่ "0 บาท" (บั๊กเดิม)', () => {
+    const msg = buildPortfolioMessage({
+      isEmpty: false,
+      holdings: [holding('MSFT', 'USD', 2, 600, 300)],
+      investedByCurrency: { THB: 0, USD: 600 },
+      // portfolio.service ตั้ง totalInvested = ยอด THB เท่านั้น → 0 ในพอร์ต USD ล้วน
+      totalInvested: 0,
+    });
+    const text = allText(msg);
+
+    expect(text).toContain('รวมเงินลงทุนทั้งพอร์ต: 600 USD');
+    expect(text).not.toContain('รวมเงินลงทุนทั้งพอร์ต: 0 บาท');
+  });
+
+  test('พอร์ตปน THB + USD → โชว์แยก 2 บรรทัด กำกับสกุลชัดเจน ไม่ถัวข้ามสกุล', () => {
+    const msg = buildPortfolioMessage({
+      isEmpty: false,
+      holdings: [holding('EOSE', 'USD', 10, 100, 10), holding('BTC', 'THB', 0.01, 30000, 3000000)],
+      investedByCurrency: { THB: 30000, USD: 100 },
+      totalInvested: 30000,
+    });
+    const text = allText(msg);
+
+    expect(text).toContain('รวมเงินลงทุนทั้งพอร์ต (บาท): 30,000 บาท');
+    expect(text).toContain('รวมเงินลงทุนทั้งพอร์ต (USD): 100 USD');
+    // ห้ามมียอดถัวข้ามสกุล (30,000 + 100)
+    expect(text).not.toContain('30,100');
+  });
+
+  test('พอร์ตว่าง (isEmpty) → ข้อความแนะนำให้เริ่มบันทึก ไม่ Error และไม่มีบรรทัดยอดรวม', () => {
+    const msg = buildPortfolioMessage({
+      isEmpty: true,
+      holdings: [],
+      investedByCurrency: { THB: 0, USD: 0 },
+      totalInvested: 0,
+    });
+    const text = allText(msg);
+
+    expect(text).toContain('ยังว่างอยู่');
+    expect(text).not.toContain('รวมเงินลงทุนทั้งพอร์ต');
+  });
+
+  test('Caller เดิมที่ไม่ส่ง investedByCurrency มา → Fallback totalInvested (ไม่ Crash/ไม่ NaN)', () => {
+    const msg = buildPortfolioMessage({
+      isEmpty: false,
+      holdings: [holding('PTT', 'THB', 40, 1300, 32.5)],
+      totalInvested: 1300,
+    });
+    const text = allText(msg);
+
+    expect(text).toContain('รวมเงินลงทุนทั้งพอร์ต: 1,300 บาท');
+    expect(text).not.toContain('NaN');
+    expect(text).not.toContain('undefined');
+  });
+});
+
+// Regression — 2 Function ที่ทำ Pattern สกุลเงินถูกต้องอยู่แล้ว ต้องไม่กระทบ
+describe('Regression — buildProfitMessage / buildSellConfirmMessage แยกสกุลถูกต้องเหมือนเดิม', () => {
+  const {
+    buildProfitMessage,
+    buildSellConfirmMessage,
+  } = require('../src/utils/flexMessage.util');
+
+  test('buildProfitMessage (THB, Default) → หน่วยเป็นบาททุกบรรทัด', () => {
+    const text = allText(buildProfitMessage({ ...BASE_PROFIT, priceSource: 'user' }));
+
+    expect(text).toContain('เงินลงทุน: 30,000 บาท');
+    expect(text).toContain('มูลค่าปัจจุบัน: 40,000 บาท');
+    expect(text).not.toContain('USD');
+  });
+
+  test('buildProfitMessage (currency USD) → หน่วยเป็น USD + บรรทัดเทียบบาทจาก fxThb', () => {
+    const text = allText(
+      buildProfitMessage({
+        symbol: 'MSFT',
+        currency: 'USD',
+        heldQuantity: 2,
+        averageCost: 300,
+        totalInvested: 600,
+        currentPrice: 350,
+        currentValue: 700,
+        profitLoss: 100,
+        profitLossPercent: 16.67,
+        priceSource: 'twelvedata',
+        fxThb: { currentValueThb: 24500, profitLossThb: 3500, rate: 35, asOf: '2025-01-02', stale: false },
+      })
+    );
+
+    expect(text).toContain('เงินลงทุน: 600 USD');
+    expect(text).toContain('มูลค่าปัจจุบัน: 700 USD');
+    expect(text).toContain('≈ มูลค่า 24,500 บาท');
+    expect(text).toContain('1 USD = 35 บาท');
+  });
+
+  test('buildSellConfirmMessage (THB, Default) → หน่วยเป็นบาท', () => {
+    const text = allText(
+      buildSellConfirmMessage({
+        symbol: 'PTT',
+        quantity: 10,
+        pricePerUnit: 34,
+        amountThb: 340,
+        remainingQuantity: 30,
+        priceSource: 'user',
+      })
+    );
+
+    expect(text).toContain('ราคาต่อหน่วย: 34 บาท');
+    expect(text).toContain('มูลค่ารวม: 340 บาท');
+    expect(text).not.toContain('USD');
+  });
+
+  test('buildSellConfirmMessage (currency USD) → หน่วยเป็น USD', () => {
+    const text = allText(
+      buildSellConfirmMessage({
+        symbol: 'MSFT',
+        currency: 'USD',
+        quantity: 1,
+        pricePerUnit: 350,
+        amountThb: 350,
+        remainingQuantity: 1,
+        priceSource: 'twelvedata',
+      })
+    );
+
+    expect(text).toContain('ราคาต่อหน่วย: 350 USD');
+    expect(text).toContain('มูลค่ารวม: 350 USD');
+    expect(text).not.toContain('บาท');
+  });
+});
