@@ -52,15 +52,37 @@ function parseNumericText(text) {
   return match ? Number(match[0]) : NaN;
 }
 
-// Multi-Currency (S8 R2 รอบ 3) — สกุลเงินจากข้อความที่ผู้ใช้พิมพ์ในขั้น "กำหนดเอง"
-// ของ Guided Buy: ต่อท้ายว่า "usd" / "$" / "ดอลลาร์" = USD, ไม่มีเลย = บาท (Default
-// เดิม 100% — ข้อความที่มีแต่ตัวเลขให้ผลเท่าเดิมทุกประการ)
+// หน่วยเงินที่ระบบ "รู้จักแน่ชัด" สำหรับขั้นจำนวนเงินของ Guided Buy
 //
-// ใช้คำ "usd" ตัวเดียวกับที่ Expert Path รองรับอยู่แล้ว (commandParser — normalizeText
-// ทำ toLowerCase ให้ก่อน) เพื่อให้ผู้ใช้ไม่ต้องจำคำต่างกัน 2 ชุด
-// guidedBuyFlow.handleAmountEntered เป็นด่านตัดสินว่า Symbol นั้นรองรับ USD จริงไหม
+// ⚠️ ต้องเทียบ "ทั้ง Token แบบตรงเป๊ะ" ไม่ใช่ Substring: เวอร์ชันแรกใช้
+// /usd|\$|ดอลลาร์/.test() ซึ่งทำให้ "150 usdt" ถูกอ่านเป็น USD ทั้งที่ USDT เป็นชื่อ
+// Crypto ใน symbolRegistry (ไม่ใช่หน่วยเงิน) — Substring Match ตัดสินเรื่องเงินไม่ได้
+//
+// THB Token ต้องมีในลิสต์ด้วย (ไม่ใช่พึ่ง Default) เพราะกฎใหม่คือ "เหลือข้อความที่ไม่รู้จัก
+// = คลุมเครือ" ถ้าไม่ประกาศ 'บาท' ไว้ ผู้ใช้ที่พิมพ์ "150 บาท" จะถูกถามซ้ำโดยไม่มีเหตุผล
+const THB_UNIT_TOKENS = ['บาท', 'thb', '฿'];
+const USD_UNIT_TOKENS = ['usd', '$', 'ดอลลาร์'];
+
+// Multi-Currency (S8 R2 รอบ 3) — สกุลเงินจากข้อความที่ผู้ใช้พิมพ์ในขั้น "กำหนดเอง"
+// ของ Guided Buy คืน 'THB' | 'USD' | null (= คลุมเครือ ตัดสินไม่ได้)
+//
+// ⚠️ ห้าม Default เป็น THB เมื่อผู้ใช้พิมพ์หน่วยที่สะกดไม่ตรง (เช่น "150 uas" ที่พิมพ์
+// ผิดจาก usd): 150 บาท กับ 150 USD ต่างกัน ~30 เท่า ถ้าเดาเป็นบาทเงียบๆ ผู้ใช้อาจกด
+// ยืนยันโดยไม่ทันสังเกต — คืน null ให้ Service โยน GUIDED_BUY_AMBIGUOUS_CURRENCY
+// ให้พิมพ์ใหม่แทน (Pattern เดียวกับที่ห้าม "เดาราคา" ตอนดึง Price Feed ไม่ได้)
+//
+// กฎ (ตรวจจาก "ส่วนที่เหลือหลังตัดตัวเลขออก" — ตัวเลขตัวเดียวกับที่ parseNumericText ใช้):
+//   ไม่เหลืออะไรเลย (ตัวเลขล้วน)  → THB  (พฤติกรรมเดิม 100% — Guided Buy เดิมทีเป็นบาท)
+//   เหลือ Token ที่รู้จักแน่ชัด   → THB/USD ตามลิสต์
+//   เหลืออย่างอื่น                → null (คลุมเครือ ห้ามเดา)
 function parseCurrencyText(text) {
-  return /usd|\$|ดอลลาร์/.test(commandParser.normalizeText(text)) ? 'USD' : 'THB';
+  const normalized = commandParser.normalizeText(text).replace(/,/g, '');
+  const unit = normalized.replace(/-?\d+(?:\.\d+)?/, '').trim();
+
+  if (unit === '') return 'THB';
+  if (THB_UNIT_TOKENS.includes(unit)) return 'THB';
+  if (USD_UNIT_TOKENS.includes(unit)) return 'USD';
+  return null;
 }
 
 // ตรงกับ Label/displayText ของปุ่ม "📈 บันทึก DCA" (flexMessage.util.js

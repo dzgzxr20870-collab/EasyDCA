@@ -643,3 +643,121 @@ describe('Regression: stock_th (THB) — Flow เดิมไม่เปลี�
     expect(row.amountThb).toBe(1000);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 9) บั๊ก: หน่วยเงินสะกดผิด → เดาเป็นบาทเงียบๆ (แก้หลัง b2dcf4a)
+// ═══════════════════════════════════════════════════════════════════════════
+// Reproduce เดิม: พิมพ์ "150 uas" (พิมพ์ผิดจาก usd) ที่ MSFT → ได้ Preview
+// "มูลค่ารวม: 150 บาท" ทั้งที่ผู้ใช้หมายถึง 150 USD (ต่างกัน ~30 เท่า) เสี่ยงกดยืนยัน
+// โดยไม่ทันสังเกต — ต้องถามใหม่ ห้ามเดา
+describe('หน่วยเงินสะกดผิด/คลุมเครือ — ห้าม Default เป็นบาทเงียบๆ', () => {
+  const MSFT_USD_PRICE = 350;
+
+  beforeEach(() => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue({
+      id: ASSET_ID,
+      symbol: 'MSFT',
+      type: 'stock_us',
+    });
+    assetRepository.findByIds.mockResolvedValue([{ id: ASSET_ID, symbol: 'MSFT' }]);
+    priceFeedService.getCurrentPriceUsd.mockResolvedValue(MSFT_USD_PRICE);
+    priceFeedService.getCurrentPrice.mockResolvedValue(11725);
+  });
+
+  async function typeAmount(text) {
+    await handleEvent(postbackEvent('action=buy_guide'));
+    await handleEvent(postbackEvent('action=gbuy_symbol&sym=MSFT'));
+    await handleEvent(postbackEvent('action=gbuy_amount_manual'));
+    await handleEvent(textEvent(text));
+  }
+
+  test('"150 uas" (เคสในรายงาน) → ไม่สร้าง Preview เลย + ถามสกุลใหม่', async () => {
+    await typeAmount('150 uas');
+
+    // จุดสำคัญที่สุด: ต้องไม่มีการ์ด Preview ให้กดยืนยันได้
+    expect(pendingStore.size).toBe(0);
+    const reply = lastReplyJson();
+    expect(reply).toContain('ไม่แน่ใจว่าคุณหมายถึงสกุลเงินไหน');
+    // ต้องบอกวิธีพิมพ์ที่ถูกต้องทั้ง 2 แบบ ไม่ใช่แค่บอกว่าผิด
+    expect(reply).toContain('1500');
+    expect(reply).toContain('100 usd');
+    // ไม่โชว์ Error Code ดิบ
+    expect(reply).not.toContain('GUIDED_BUY_AMBIGUOUS_CURRENCY');
+  });
+
+  test('"150 uas" → Session ยังอยู่ขั้นเดิม พิมพ์ใหม่ต่อได้ทันทีไม่ต้องเริ่ม Flow ใหม่', async () => {
+    await typeAmount('150 uas');
+    expect(guidedSession).toMatchObject({ step: 'AWAITING_AMOUNT', symbol: 'MSFT' });
+
+    // พิมพ์ใหม่ให้ถูก → ผ่านทันที
+    await handleEvent(textEvent('150 usd'));
+    await confirmLatestPending();
+
+    const row = insertedRow();
+    expect(row.currency).toBe('USD');
+    expect(row.amountThb).toBe(150);
+  });
+
+  test.each([
+    ['สะกดผิดจาก usd', '150 uas'],
+    ['เกินตัวอักษร', '150 usdd'],
+    ['สั้นไป', '150 us'],
+    ['อังกฤษเต็มคำที่ระบบไม่รับ', '150 dollar'],
+    ['สะกดผิด dollar', '150 doller'],
+    ['ทับศัพท์ไทย', '150 ยูเอสดี'],
+    ['คำไทยที่ระบบไม่รับ', '150 เหรียญ'],
+    ['ดอลลาร์สะกดผิด', '150 ดอลล่าร์'],
+    ['บาทสะกดผิด', '150 บาด'],
+    ['สกุลอื่นที่ระบบไม่รองรับ', '150 eur'],
+  ])('หน่วยไม่รู้จัก (%s: "%s") → ถามใหม่ ไม่บันทึกเป็นบาท', async (_label, text) => {
+    await typeAmount(text);
+
+    expect(pendingStore.size).toBe(0);
+    expect(lastReplyJson()).toContain('ไม่แน่ใจว่าคุณหมายถึงสกุลเงินไหน');
+  });
+
+  test('"150 usdt" → ถามใหม่ (USDT เป็นชื่อ Crypto ไม่ใช่หน่วยเงิน — เดิม Substring Match อ่านเป็น USD)', async () => {
+    await typeAmount('150 usdt');
+
+    expect(pendingStore.size).toBe(0);
+    expect(lastReplyJson()).toContain('ไม่แน่ใจว่าคุณหมายถึงสกุลเงินไหน');
+  });
+
+  // ── Regression: รูปแบบที่เคยใช้ได้ต้องยังใช้ได้เหมือนเดิมทุกตัว ──────────────
+  test.each([
+    ['ตัวเลขล้วน', '150', 'THB', 150],
+    ['ตัวเลขล้วนหลักพัน', '1500', 'THB', 1500],
+    ['มี comma', '1,500', 'THB', 1500],
+    ['ระบุบาทชัดเจน', '150 บาท', 'THB', 150],
+    ['ระบุรหัสสกุลบาท', '150 thb', 'THB', 150],
+    ['usd ตัวเล็ก', '100 usd', 'USD', 100],
+    ['USD ตัวใหญ่', '100 USD', 'USD', 100],
+    ['สัญลักษณ์นำหน้า', '$100', 'USD', 100],
+    ['สัญลักษณ์ต่อท้าย', '100$', 'USD', 100],
+    ['ดอลลาร์ (ไทย)', '100 ดอลลาร์', 'USD', 100],
+    ['ทศนิยม USD', '9.99 usd', 'USD', 9.99],
+  ])('Regression — %s ("%s") → %s %s', async (_label, text, expectedCurrency, expectedAmount) => {
+    await typeAmount(text);
+    await confirmLatestPending();
+
+    const row = insertedRow();
+    expect(row.currency).toBe(expectedCurrency);
+    expect(row.amountThb).toBe(expectedAmount);
+  });
+
+  test('เลขไทย (๑๕๐๐) ยังอ่านเป็นบาทได้เหมือนเดิม', async () => {
+    await typeAmount('๑๕๐๐');
+    await confirmLatestPending();
+
+    const row = insertedRow();
+    expect(row.currency).toBe('THB');
+    expect(row.amountThb).toBe(1500);
+  });
+
+  test('ข้อความที่ไม่มีตัวเลขเลย → INVALID_AMOUNT (ตรวจยอดก่อนสกุล ไม่สลับลำดับ)', async () => {
+    await typeAmount('เท่าไหร่ดี usd');
+
+    expect(pendingStore.size).toBe(0);
+    expect(lastReplyJson()).toContain('จำนวนเงินไม่ถูกต้อง');
+  });
+});

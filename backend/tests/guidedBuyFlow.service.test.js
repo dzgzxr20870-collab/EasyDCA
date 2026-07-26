@@ -361,3 +361,55 @@ describe('handleAmountEntered — สกุลเงิน (S8 R2 รอบ 3)',
     });
   });
 });
+
+describe('handleAmountEntered — สกุลคลุมเครือ (currency = null)', () => {
+  beforeEach(() => {
+    sessionRepository.findValidByUser.mockResolvedValue({
+      userId: USER_ID,
+      step: STEPS.AWAITING_AMOUNT,
+      symbol: 'MSFT',
+    });
+  });
+
+  test('currency = null (Controller ตัดสินจากข้อความไม่ได้) → GUIDED_BUY_AMBIGUOUS_CURRENCY', async () => {
+    await expect(guidedBuyFlow.handleAmountEntered(USER_ID, 150, null)).rejects.toMatchObject({
+      code: 'GUIDED_BUY_AMBIGUOUS_CURRENCY',
+    });
+  });
+
+  test('คลุมเครือ → Code ต้องแยกจาก CURRENCY_NOT_SUPPORTED (สาเหตุคนละเรื่อง ข้อความคนละแบบ)', async () => {
+    sessionRepository.findValidByUser.mockResolvedValue({
+      userId: USER_ID,
+      step: STEPS.AWAITING_AMOUNT,
+      symbol: 'PTT',
+    });
+
+    // หุ้นไทย + สกุลคลุมเครือ → ยังต้องเป็น AMBIGUOUS (สะกดผิด) ไม่ใช่ NOT_SUPPORTED
+    await expect(guidedBuyFlow.handleAmountEntered(USER_ID, 150, null)).rejects.toMatchObject({
+      code: 'GUIDED_BUY_AMBIGUOUS_CURRENCY',
+    });
+    // หุ้นไทย + USD ชัดเจน → NOT_SUPPORTED (สินทรัพย์ไม่รองรับ)
+    await expect(guidedBuyFlow.handleAmountEntered(USER_ID, 150, 'USD')).rejects.toMatchObject({
+      code: 'GUIDED_BUY_CURRENCY_NOT_SUPPORTED',
+    });
+  });
+
+  test('คลุมเครือ → "ไม่ลบ/ไม่แก้ Session" ให้พิมพ์ใหม่ได้ทันทีในขั้นเดิม', async () => {
+    await expect(guidedBuyFlow.handleAmountEntered(USER_ID, 150, null)).rejects.toThrow();
+
+    expect(sessionRepository.deleteByUser).not.toHaveBeenCalled();
+    expect(sessionRepository.updateByUser).not.toHaveBeenCalled();
+  });
+
+  test('ไม่ส่ง currency มาเลย (undefined) → ยังเป็น THB ตาม Default เดิม ไม่ใช่คลุมเครือ', async () => {
+    const result = await guidedBuyFlow.handleAmountEntered(USER_ID, 150);
+
+    expect(result).toEqual({ symbol: 'MSFT', amountThb: 150 });
+  });
+
+  test('ยอดผิด + สกุลคลุมเครือพร้อมกัน → INVALID_AMOUNT มาก่อน (ลำดับการตรวจไม่สลับ)', async () => {
+    await expect(guidedBuyFlow.handleAmountEntered(USER_ID, NaN, null)).rejects.toMatchObject({
+      code: 'INVALID_AMOUNT',
+    });
+  });
+});

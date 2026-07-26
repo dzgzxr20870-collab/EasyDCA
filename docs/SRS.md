@@ -200,6 +200,117 @@ LINE Platform
 [5] สร้าง Flex Message แสดงผลสรุปพอร์ต
 ```
 
+### 2.5 Guided Buy Flow (LINE — กดปุ่มทีละขั้น)
+
+ทางเข้าแบบ "กดปุ่ม" สำหรับบันทึกการซื้อ คู่ขนานกับ **Expert Path** (พิมพ์คำสั่งตรง
+เช่น `ซื้อ BTC 1000` ตามหัวข้อ 2.3) — สำหรับผู้ใช้ที่ยังจำรูปแบบคำสั่งไม่ได้
+
+เข้าได้ 2 ทางซึ่งต้องให้ผลลัพธ์เหมือนกันเป๊ะ (ห้ามมี Logic คู่ขนาน): ปุ่ม
+**"📈 บันทึก DCA"** (Postback `action=buy_guide`) และการพิมพ์ข้อความตรงกับ Label
+ของปุ่มนั้นเอง
+
+#### State Machine (2 ขั้น)
+
+State เก็บใน `guided_buy_sessions` (migration 022 — `user_id` เป็น PK, TTL แบบ
+Sliding 5 นาทีนับจาก `updated_at`, Cron Purge ตี 3) เก็บเฉพาะ `step` + `symbol`
+
+```
+[buy_guide]
+    │
+    ▼
+AWAITING_SYMBOL
+    - ปุ่ม Symbol = สินทรัพย์ "ที่ผู้ใช้ถืออยู่จริง" ไม่เกิน 11 ตัว (ไม่ใช่รายการแนะนำ
+      จากระบบ — ห้ามชักชวนซื้อขายรายตัว) + ปุ่ม "✏️ พิมพ์ชื่อเอง" + "❌ ยกเลิก"
+      (LINE จำกัด 13 items/ข้อความ → 11 + 2 = 13 พอดี)
+    - พอร์ตว่างก็เริ่มได้ (ต่างจาก Flow ตั้งเตือน) — เหลือ "พิมพ์ชื่อเอง" เป็นทางเดียว
+    - Symbol ไม่ถูกต้อง → GUIDED_BUY_INVALID_SYMBOL โดย "ไม่เดินขั้น" (พิมพ์ใหม่ได้ทันที)
+    │
+    ▼ (ได้ Symbol แล้ว)
+AWAITING_AMOUNT
+    - ปุ่มจำนวนเงิน + "✏️ กำหนดเอง" + "❌ ยกเลิก" (ดูสกุลเงินด้านล่าง)
+    - ยอดไม่ถูกต้อง → INVALID_AMOUNT โดย "ไม่ลบ Session" (พิมพ์ยอดใหม่ได้ทันที)
+    │
+    ▼ (ได้จำนวนเงินแล้ว = ขั้นสุดท้าย)
+ส่งต่อเข้า routeCommand(BUY) → การ์ด Preview เดิม
+```
+
+**ไม่มีขั้น "ยืนยัน" ของตัวเอง** — ใช้การ์ด Preview + ปุ่ม `confirm`/`cancel` เดิมของ
+หัวข้อ 2.3 ต่อทันที และ**ไม่เก็บจำนวนเงินลง Session** เพราะขั้นจำนวนเงินเป็นขั้นสุดท้าย
+(ได้ค่ามาแล้วใช้ต่อในคำขอเดียว)
+
+#### Session Collision Guard
+
+Flow ตั้งเตือน DCA (`dca_reminder_setup_sessions`) และนำเข้าพอร์ต
+(`bulk_import_sessions`) เก็บ Input ที่ผู้ใช้กรอกไว้บางส่วนแล้ว **ห้ามเขียนทับเงียบๆ**:
+
+- `startFlow()` เช็ค Session ทั้ง 2 ชนิดก่อนเริ่ม — ถ้ามีค้าง → `GUIDED_BUY_SESSION_BUSY`
+  แล้วตอบข้อความบอกสถานะ + ปุ่มให้ผู้ใช้ตัดสินใจเอง (ไม่แตะ Session ใดเลย)
+- ผู้ใช้กดยืนยันทิ้งของเดิม → `gbuy_force_start` → `startFlow({ force: true })`
+  ล้าง Session อื่นตามคำสั่งผู้ใช้โดยตรง แล้วเริ่มใหม่
+- การเริ่มทับ **Session ของ Guided Buy เอง** ไม่ถือเป็นการชนข้าม Flow (UPSERT ได้เลย)
+- ปุ่มยกเลิกใช้ `action=cancel_guided_buy` **แยกจาก** `cancel_reminder_setup` เด็ดขาด
+  (ปุ่มยกเลิกข้าม Flow = ยกเลิกไม่ได้จริง + Session ค้าง)
+- ลำดับความสำคัญตอน Route ข้อความ: Expert Path → Reminder Setup → Bulk Import →
+  **Guided Buy** → Fallback Menu (Expert Path ชนะ Session เสมอ)
+
+#### สกุลเงิน (THB / USD)
+
+รองรับทั้งบาทและ USD โดย **สกุลอยู่ "ในปุ่มจำนวนเงิน" ไม่มีขั้นเลือกสกุลแยก** —
+Postback พก `cur=USD` ไปพร้อมยอด จึงไม่ต้องเก็บสกุลลง Session (ไม่มี Migration เพิ่ม)
+
+- ปุ่ม USD แสดง **เฉพาะสินทรัพย์ที่มีราคา USD จริง** ตัดสินด้วย
+  `USD_SUPPORTED_TYPES = ['crypto', 'stock_us']` — Single Source เดียวกับที่
+  `POST /api/v1/transactions` และแผน DCA ใช้ Validate
+  (ผ่าน `dcaReminder.isCurrencySupportedForSymbol`) สินทรัพย์อื่น (หุ้นไทย/ทอง/กองทุน)
+  เห็นปุ่มชุดบาทเหมือนเดิม
+- ชุดปุ่ม: บาท `500 / 1,000 / 3,000 / 5,000` และ USD `$50 / $100 / $300 / $500`
+  (เลขกลม USD ไม่ใช่ยอดบาทที่แปลงด้วยเรต — เรตขึ้นลงทุกวันปุ่มจะเพี้ยนตาม)
+- "กำหนดเอง" (พิมพ์เอง) ตัดสินสกุลจาก **หน่วยที่ต่อท้าย โดยเทียบ Token แบบตรงเป๊ะ**:
+  ```
+  ตัวเลขล้วน (เช่น 1500)              → THB  (Default — Guided Buy เดิมทีเป็นบาท)
+  หน่วยที่รู้จัก: บาท / thb / ฿         → THB
+  หน่วยที่รู้จัก: usd / $ / ดอลลาร์     → USD
+  หน่วยอื่นที่ไม่ตรงเป๊ะ (uas, dollar,
+  เหรียญ, eur, usdt, …)               → GUIDED_BUY_AMBIGUOUS_CURRENCY (ถามใหม่)
+  ```
+  ⚠️ **ห้าม Default เป็นบาทเมื่อหน่วยสะกดไม่ตรง** — 150 บาท กับ 150 USD ต่างกัน ~30 เท่า
+  ถ้าเดาเงียบๆ ผู้ใช้อาจกดยืนยันโดยไม่ทันสังเกต (หลักการเดียวกับที่ห้าม "เดาราคา" เมื่อ
+  ดึง Price Feed ไม่ได้) และต้องเทียบ Token ตรงเป๊ะไม่ใช่ Substring มิฉะนั้น `usdt`
+  (ชื่อ Crypto ใน Symbol Registry) จะถูกอ่านเป็น `usd`
+- `handleAmountEntered()` ที่ชั้น Service เป็น **ด่านตัดสินจริง** ไม่พึ่งว่า UI ซ่อนปุ่ม
+  ให้แล้ว (ผู้ใช้พิมพ์ `100 usd` เองได้) — สินทรัพย์ไม่รองรับ →
+  `GUIDED_BUY_CURRENCY_NOT_SUPPORTED` (แยก Code จาก AMBIGUOUS เพราะสาเหตุคนละเรื่อง)
+  ทุกกรณีที่ไม่ผ่าน **ไม่ลบ/ไม่แก้ Session** ให้พิมพ์ใหม่ได้ทันทีในขั้นเดิม
+
+#### จุดส่งต่อเข้า routeCommand(BUY)
+
+Flow นี้ **ห้ามคำนวณเงินหรือสร้าง Transaction เอง** — หน้าที่เดียวคือรวบรวม Input
+ทีละขั้นแล้วคืนพารามิเตอร์ **ชุดเดียวกับที่ Expert Path ส่งเข้า `routeCommand`**
+ปลายทางจึงเป็นโค้ดเส้นเดียวกัน 100%
+
+```
+handleAmountEntered() คืน { symbol, amountThb, currency? }
+    │  (ใส่ Key currency เฉพาะตอน USD — เส้น THB ต้องมี Shape ตรงกับ Expert Path เป๊ะ)
+    ▼
+routeCommand({ command: BUY, params }) — เส้นเดียวกับหัวข้อ 2.3 ทั้งหมด
+    │   เติม type จาก Symbol Registry → pendingTransaction.createPending()
+    │   → transaction.service คำนวณ quantity จากราคาสกุลเดียวกัน (ไม่แปลงข้ามสกุล)
+    ▼
+การ์ด Preview → [✅ ยืนยัน] → confirmPending() → transactions
+    │
+    └─ สำเร็จ → Controller ลบ Guided Session (ไม่ลบที่ Service เพราะ routeCommand
+       อาจ throw ASSET_LIMIT_REACHED/ราคาตลาดล่ม — ถ้าลบก่อนผู้ใช้จะตกจาก Flow)
+```
+
+**Manual Quantity Fallback**: Guided Flow ส่ง "ยอดเงินอย่างเดียว" เสมอ ถ้าสินทรัพย์นั้น
+ไม่มี Price Feed (หุ้น Small-cap / API ล่ม) `routeCommand` จะ throw — ระบบชี้ทางให้ผู้ใช้
+กรอกจำนวนหุ้นเองผ่าน Expert Path พร้อมข้อความ Prefill (มี suffix ` USD` ต่อท้ายด้วยถ้า
+เป็นรายการสกุล USD) แทนการตอบ Error ตัน
+
+> **Regression Guard ของ Flow นี้:** แถวใน `transactions` ที่ Guided Flow (กดปุ่ม)
+> บันทึก ต้อง **เท่ากับ** แถวที่ Expert Path (พิมพ์คำสั่ง) บันทึกทุก Field — พิสูจน์ว่า
+> ไม่มี Logic คำนวณเงินคู่ขนานเกิดขึ้น (ดู `tests/guidedBuy.integration.test.js`)
+
 ---
 
 ## 3. Web Dashboard Flow

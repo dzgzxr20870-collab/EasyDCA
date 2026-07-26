@@ -213,6 +213,17 @@ async function handleAmountEntered(userId, amount, currency = 'THB') {
     });
   }
 
+  // คลุมเครือ (Controller ตัดสินสกุลจากข้อความไม่ได้ เช่นผู้ใช้พิมพ์ "150 uas" ที่สะกด
+  // ผิดจาก usd) — ต้องถามใหม่ ห้ามเดาเป็นบาท เพราะยอดต่างกัน ~30 เท่า แยก Code จาก
+  // CURRENCY_NOT_SUPPORTED เพราะสาเหตุคนละเรื่อง (สะกดผิด vs สินทรัพย์ไม่รองรับ USD)
+  if (currency === null) {
+    throw new GuidedBuyError(
+      'GUIDED_BUY_AMBIGUOUS_CURRENCY',
+      'Currency could not be determined from the user input',
+      { symbol: session.symbol }
+    );
+  }
+
   if (currency !== 'THB' && currency !== 'USD') {
     throw new GuidedBuyError(
       'GUIDED_BUY_CURRENCY_NOT_SUPPORTED',
