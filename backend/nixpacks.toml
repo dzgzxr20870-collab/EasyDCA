@@ -5,8 +5,13 @@
 # 2026-07-24) จึงไม่เคยมีผลจริงบน Deployment แม้ Diff จะดู Merge สำเร็จก็ตาม
 #
 # Fix ตัวจริงสำหรับ pg_dump (Nightly Backup, dbBackup.job.js) อยู่ที่
-# backend/railpack.json (deploy.aptPackages) — เก็บไฟล์นี้ไว้เผื่อ Railway ย้อนกลับ
-# ไปใช้ Nixpacks Builder อีกครั้งเท่านั้น ถ้าเจอ Error "pg_dump ... ENOENT" อีกใน
-# อนาคต ให้เช็ค railpack.json ก่อน ไม่ใช่ไฟล์นี้
+# backend/railpack.json — Step "build" ที่ Vendor pg_dump 17 เข้า Image เอง
+# ผ่าน PGDG (ไม่ใช่แค่ deploy.aptPackages ธรรมดาอีกต่อไป ตั้งแต่พบว่า Supabase
+# จริงรัน PostgreSQL 17.6 แต่ apt Package "postgresql-client" ของ Debian
+# bookworm ให้แค่เวอร์ชัน 15 เป็น Default — ดูรายละเอียดเต็มใน
+# docs/DEPLOYMENT.md § 3.1 ข้อ [8] และ docs/BACKUP_AND_RECOVERY.md)
+# เก็บไฟล์นี้ไว้เผื่อ Railway ย้อนกลับไปใช้ Nixpacks Builder อีกครั้งเท่านั้น
+# ถ้าเจอ Error "pg_dump ... ENOENT" อีกในอนาคต ให้เช็ค railpack.json ก่อน
+# ไม่ใช่ไฟล์นี้
 [phases.setup]
 nixPkgs = ['...', 'postgresql']

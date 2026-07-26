@@ -121,14 +121,53 @@
       ใช้ตอน Deploy เท่านั้น ไม่ใช่ Uptime Monitoring ต่อเนื่องระยะยาว) —
       ต้อง Setup ผ่าน UptimeRobot Dashboard เอง (Login เว็บ)
 
-[8] Service "backend" และ "easydca-worker" ใช้ backend/nixpacks.toml ร่วมกัน
-    (Root Directory เดียวกัน) — nixPkgs = ["...", "postgresql"] ต้องมี "..."
-    นำหน้าเสมอ (Extend Package ที่ Node.js Provider Detect เอง ไม่ใช่
-    Override ทับ — ยืนยันจาก Nixpacks Docs) ถ้าลืม "..." Build จะพังทั้ง 2
-    Service เพราะขาด nodejs ไม่ใช่แค่ Backup Job ใช้ pg_dump ไม่ได้อย่างเดียว
-    — ตรวจสอบ Log Build หลัง Deploy เสมอว่าไม่มี Error เกี่ยวกับ Nix Package
+[8] Service "backend" และ "easydca-worker" ใช้ backend/railpack.json ร่วมกัน
+    (Root Directory เดียวกัน — Railway Builder ปัจจุบันคือ Railpack ไม่ใช่
+    Nixpacks แล้ว ดู backend/nixpacks.toml ที่เก็บไว้เป็น Comment อธิบาย
+    ประวัติเท่านั้น ไม่มีผลจริงอีกต่อไป)
+
+    railpack.json Step "build" ถูกขยายด้วย "..." (Array Extending — Railpack
+    เก็บคำสั่ง Auto-detect ของ Node Provider เดิม เช่น npm install ไว้ แล้ว
+    ต่อท้ายด้วยคำสั่งของเราเอง ไม่ Override ทับ) เพื่อ Vendor `pg_dump`
+    เวอร์ชัน 17 เข้า Image เอง — จำเป็นเพราะ Supabase จริงรัน PostgreSQL 17.6
+    แต่ Debian bookworm (Base Image ที่ Railpack ใช้) ให้ apt Package
+    `postgresql-client` เป็นเวอร์ชัน 15 เป็น Default เท่านั้น และ `pg_dump`
+    ปฏิเสธ Dump จาก Server ที่ Major Version สูงกว่าตัวเองเสมอ (Error
+    "aborting because of server version mismatch" — เจอจริงตอน Debug
+    Production, backup ใช้งานไม่ได้เลยแม้แต่คืนเดียวตั้งแต่เริ่มมีฟีเจอร์นี้
+    จนกว่าจะแก้จุดนี้)
+
+    ขั้นตอนที่ railpack.json ทำ (ดูไฟล์จริงประกอบ):
+      1. เพิ่ม PGDG (PostgreSQL Official Apt Repository) + Import GPG Key
+         ชั่วคราว "แค่ระหว่าง Build" — Repo/Key นี้ไม่ persist เข้า Final
+         Deploy Image (ยืนยันแล้วจากการทดสอบจริง — Railpack Merge เอาแค่
+         Path ที่มันรู้จัก เช่น /app เท่านั้นเข้า Deploy Image)
+      2. apt-get install postgresql-client-17 (ให้ apt Resolve Dependency
+         ทั้งหมดอัตโนมัติ — libpq5/libssl/libgssapi_krb5/libldap ฯลฯ)
+      3. รัน scripts/copy-pg17-deps.sh — Copy pg_dump Binary + Shared
+         Library ทุกตัวที่ `ldd` รายงาน ไปไว้ที่ /app/vendor-pg17/ (ต้องอยู่
+         ใต้ /app เท่านั้น — Path อื่น เช่น /usr/local/bin จะหายไปตอน Deploy
+         แม้จะ Copy สำเร็จตอน Build ก็ตาม เพราะ Railpack ไม่รวม Path นั้นเข้า
+         Deploy Image โดยอัตโนมัติ)
+
+    pgDump.util.js เรียก `/app/vendor-pg17/pg_dump` ตรงๆ (ไม่ใช่ `pg_dump`
+    เฉยๆ ที่จะไปเจอ Binary v15 ใน PATH ของระบบแทน) พร้อมตั้ง
+    `LD_LIBRARY_PATH=/app/vendor-pg17` เสมอ (libpq.so.5 ที่ Vendor ไว้ไม่ได้
+    อยู่ใน Path ที่ Dynamic Linker ค้นหาโดย Default)
+
+    ⚠️ ห้ามตั้งค่า `deploy.inputs` ใน railpack.json เด็ดขาดโดยไม่ทดสอบก่อน —
+    เคยลองแล้วพบว่าทำให้ Mise Runtime (Node/npm) หายไปจาก Deploy Image ทั้งคู่
+    (Deploy สำเร็จแต่ App รันไม่ได้เลย เพราะไม่มี Node ให้รัน) เนื่องจาก
+    Railpack รวม Node Runtime เข้า Deploy Image "โดยปริยาย" ก็ต่อเมื่อไม่มี
+    `deploy.inputs` Override เท่านั้น — ถ้าต้องเพิ่มอะไรเข้า Deploy Image
+    อีกในอนาคต ให้ขยาย Step "build" ที่มีอยู่แล้วด้วย "..." แบบเดียวกันนี้
+    แทนการสร้าง Step ใหม่ + ตั้ง deploy.inputs เอง
+
+    — ตรวจสอบ Log Build หลัง Deploy เสมอว่าไม่มี Error เกี่ยวกับ Apt/Package
     ก่อนเชื่อว่า Deploy สำเร็จจริง (ถ้า Build ล้มเหลว Railway จะคง Deployment
-    เดิมไว้ไม่ Switch Traffic ตามปกติ — ดู § 6 Rollback Plan)
+    เดิมไว้ไม่ Switch Traffic ตามปกติ — ดู § 6 Rollback Plan) และหลัง Deploy
+    ควรทดสอบจริงผ่าน `railway ssh` ว่า `pg_dump --version` ได้ 17.x และ
+    `node --version` ยังทำงานได้ทั้งคู่ ก่อนเชื่อว่า Nightly Backup จะสำเร็จ
 ```
 
 ### 3.2 ขั้นตอน Deploy ปกติ (Routine Deploy)

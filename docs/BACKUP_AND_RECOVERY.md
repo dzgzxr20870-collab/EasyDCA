@@ -62,6 +62,43 @@
   ป้องกันกรณี Supabase Project ทั้งหมดมีปัญหา (Account ถูกล็อค, บริการล่ม
   ระดับ Provider) — ดู Environment Variables ที่ต้องตั้งใน
   [ENV_VARIABLES.md § Nightly Backup](./ENV_VARIABLES.md)
+- ⚠️ **`pg_dump` ที่ใช้จริงเป็นเวอร์ชัน 17 ไม่ใช่ Default ของระบบ** — Supabase
+  Project จริงรัน **PostgreSQL 17.6** แต่ Base Image (Debian bookworm) ที่
+  Railway ใช้ Build ให้ apt Package `postgresql-client` เป็นเวอร์ชัน 15 เป็น
+  Default เท่านั้น (Debian ผูกเวอร์ชันไว้กับ Release ไม่อัพเดตตาม Server จริง)
+  และ `pg_dump` **ปฏิเสธ Dump จาก Server ที่ Major Version สูงกว่าตัวเองเสมอ**
+  (`aborting because of server version mismatch`) — ทำให้ Backup ใช้งานไม่ได้
+  เลยแม้แต่คืนเดียวตั้งแต่เริ่มมีฟีเจอร์นี้จนกว่าจะพบและแก้ปัญหานี้
+
+  แก้โดย Vendor `pg_dump` 17 (จาก PGDG — PostgreSQL Official Apt Repository)
+  เข้า Deploy Image เองตอน Build ผ่าน `backend/railpack.json` (ไม่ใช่พึ่ง apt
+  Package เริ่มต้นของ Debian) วางไว้ที่ `/app/vendor-pg17/pg_dump` พร้อม
+  Shared Library ที่จำเป็นทั้งหมด (`libpq.so.5` และ Dependency ของมัน) —
+  รายละเอียดขั้นตอน Build เต็มดู [DEPLOYMENT.md § 3.1 ข้อ [8]](./DEPLOYMENT.md)
+  `backend/src/utils/pgDump.util.js` เรียก Path นี้ตรงๆ พร้อมตั้ง
+  `LD_LIBRARY_PATH=/app/vendor-pg17` เสมอ
+
+  ⚠️ ผลกระทบตอน Restore: Backup ที่สร้างด้วย `pg_dump` 17 จะมีบรรทัด
+  `\restrict <token>` / `\unrestrict <token>` (Feature รักษาความปลอดภัยใหม่ของ
+  `psql` 17) กำกับต้นและท้ายไฟล์ — ถ้าเครื่องที่ใช้ Restore มี `psql` เก่ากว่า
+  17 บรรทัดนี้จะ Error "unrecognized command" ดู § 3.4 ข้อ [3] สำหรับวิธีแก้
+
+  ⚠️ **ยังไม่เคยพิสูจน์ว่า Restore เข้า Database ใหม่ทำงานได้จริง** — Verify
+  ล่าสุด (2026-07-27) ทำแค่ Decrypt + gunzip + อ่านเนื้อหาว่ามี Schema/Data
+  ครบ ("รู้อยู่แล้ว ยังไม่ทำ" § 7) ยังไม่ได้ลองรัน `psql < backup.sql` เข้า
+  Database จริงสักครั้ง — ทำ Restore Drill (§ 3.5) ก่อนเชื่อว่า Disaster
+  Recovery ทำได้จริง 100%
+- ⚠️ **(แก้แล้ว 2026-07-27) Race Condition ที่เคยทำให้ Backup ว่างเปล่าดูเหมือน
+  สำเร็จ:** `backend/src/utils/pgDump.util.js` เดิม Resolve เป็น "สำเร็จ" ทันทีที่
+  Stream ของ `pg_dump` จบ (`stdout 'end'`) โดยไม่รอเช็ค Exit Code จริงก่อน — Node
+  รับประกันว่า `stdout 'end'` มาก่อน Process `'close'` เสมอ ถ้า `pg_dump` ล้มเหลว
+  "เร็ว" (เช่น Root Cause ข้อบนที่ Version ไม่ตรงกัน หรือต่อ Database ไม่ได้เลย)
+  จะ Exit ทันทีโดยไม่เขียน stdout เลย ทำให้ Job คิดว่า Backup สำเร็จ (Log ขึ้น
+  "อัปโหลดสำเร็จ" จริง) ทั้งที่ได้ไฟล์เข้ารหัสของข้อมูลว่างเปล่า (~53 Bytes) — เป็น
+  Bug แบบ Deterministic ไม่ใช่ Flaky (Reproduce ได้ 20/20 รอบ) แก้แล้วโดยรอทั้ง
+  Exit Code จริงและ Stream จบจริงก่อนตัดสิน Resolve/Reject เสมอ — **บทเรียน:
+  Log "อัปโหลดสำเร็จ" ไม่ได้แปลว่า Backup ใช้งานได้จริง ต้อง Decrypt + อ่านเนื้อหา
+  จริงเป็นระยะเพื่อยืนยัน** (ดู § 7.3)
 - ✅ **Client-side Encryption — Implemented:** ไฟล์ Backup ถูกเข้ารหัสด้วย
   **AES-256-GCM** ตั้งแต่ "ก่อนออกจาก Server เรา" (`backend/src/utils/backupEncryption.util.js`)
   ไม่พึ่ง Encryption at Rest ของ Cloudflare R2 อย่างเดียวอีกต่อไป — R2 ยังเข้ารหัส
@@ -208,7 +245,8 @@ Backup เก่าที่เข้ารหัสด้วย Key เดิ�
 
 > ขั้นตอนนี้เขียนให้ "Copy ไปรันได้ทันที" ตอนเกิดเหตุจริง ไม่ต้องเดาอะไรเพิ่ม
 > — สิ่งที่ต้องมีก่อนเริ่ม: **(1)** ไฟล์ Backup จาก R2 **(2)** `BACKUP_ENCRYPTION_KEY`
-> ตัวที่ใช้เข้ารหัสไฟล์นั้น **(3)** Node.js + `psql` บนเครื่องที่รัน
+> ตัวที่ใช้เข้ารหัสไฟล์นั้น **(3)** Node.js + `psql` **เวอร์ชัน 17 ขึ้นไป**
+> บนเครื่องที่รัน (ดูเหตุผลที่ข้อ [3] ด้านล่าง)
 
 #### [1] ดาวน์โหลดไฟล์ Backup จาก R2
 
@@ -263,6 +301,18 @@ gunzip ~/restore/easydca-<timestamp>.sql.gz      # ได้ .sql ออกม�
 # ⚠️ Restore เข้า Database "ใหม่/Staging" ก่อนเสมอถ้าเวลาเอื้ออำนวย (ดู § 3.2 ข้อ 5)
 psql "<DATABASE_URL ปลายทาง>" < ~/restore/easydca-<timestamp>.sql
 ```
+
+> ⚠️ **`psql` ที่ใช้ Restore ต้องเป็นเวอร์ชัน 17 ขึ้นไป** (ตรงกับ `pg_dump` ที่
+> ใช้สร้างไฟล์นี้ — ดู § 2.2) ไฟล์ Backup จาก `pg_dump` 17 จะมีบรรทัด
+> `\restrict <token>` ต่อจาก Header และ `\unrestrict <token>` ท้ายไฟล์
+> (Feature รักษาความปลอดภัยใหม่ของ `psql` 17 — ล็อกไม่ให้รัน Meta-command
+> อันตรายกลางไฟล์ Dump) ถ้าเครื่องที่ใช้ Restore มี `psql` เก่ากว่า 17 จะ
+> Error `unrecognized command \restrict` ทันทีตั้งแต่บรรทัดแรก — แก้โดยติดตั้ง
+> `psql` 17 ก่อน (Mac: `brew install postgresql@17`, Debian/Ubuntu: เพิ่ม
+> PGDG Repo ตามที่ `backend/railpack.json` ทำ) หรือถ้าเชื่อใจว่าไฟล์มาจาก
+> แหล่งที่ถูกต้อง (Decrypt สำเร็จ = GCM ยืนยันแล้วว่าไม่ถูกแก้ไข) ตัด 2
+> บรรทัดนี้ทิ้งก่อน Restore ได้ (`\restrict`/`\unrestrict` เป็นแค่ Guard
+> ไม่ใช่ส่วนของ Schema/Data จริง)
 
 #### [4] ตรวจสอบว่ากู้คืนสำเร็จจริง
 

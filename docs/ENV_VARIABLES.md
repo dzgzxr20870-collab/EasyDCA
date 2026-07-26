@@ -123,15 +123,31 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 >    `BACKUP_RETENTION_DAYS` (Default 14 วัน) ดู
 >    [BACKUP_AND_RECOVERY.md § 2.3](./BACKUP_AND_RECOVERY.md)
 
-⚠️ **ต้องมี Binary `pg_dump` บน Railway ด้วย** — ทั้ง Service `backend` และ
-`easydca-worker` ใช้ `backend/nixpacks.toml` ร่วมกัน (Root Directory เดียวกัน)
-ประกาศ `nixPkgs = ["...", "postgresql"]` เพื่อ **Extend** Package ที่ Nixpacks
-Node.js Provider Detect เองอยู่แล้ว (`nodejs`/`yarn` ฯลฯ) ไม่ใช่ Override ทับ —
-`"..."` เป็นส่วนบังคับ (ยืนยันจาก [Nixpacks Docs](https://nixpacks.com/docs/configuration/file));
-ถ้าลืม `"..."` Build จะพังทั้ง 2 Service เพราะขาด `nodejs` ไม่ใช่แค่ Backup ใช้
-ไม่ได้ — Syntax ตรวจสอบกับเอกสารทางการแล้ว แต่ยังไม่เคย Deploy จริงบน Railway
-ให้เห็นผลลัพธ์ปลายทาง (Build สำเร็จ + `pg_dump` เรียกได้จริง) ต้องตรวจสอบ Log
-Build + Worker หลัง Deploy รอบแรกที่มีการตั้งค่าตัวแปรครบ
+⚠️ **ต้องมี Binary `pg_dump` เวอร์ชัน 17 บน Railway ด้วย (ไม่ใช่แค่ "มี pg_dump"
+เฉยๆ)** — ทั้ง Service `backend` และ `easydca-worker` ใช้ `backend/railpack.json`
+ร่วมกัน (Root Directory เดียวกัน) โดย Step "build" ถูกขยายด้วย `"..."` (Array
+Extending — เก็บคำสั่ง Auto-detect ของ Node Provider เดิมไว้ ไม่ Override ทับ)
+เพื่อดาวน์โหลด `postgresql-client-17` จาก **PGDG** (PostgreSQL Official Apt
+Repository) แล้ว Copy `pg_dump` + Shared Library ที่จำเป็นทั้งหมดไปไว้ที่
+`/app/vendor-pg17/`
+
+**ทำไมต้อง Vendor เองแทนใช้ `postgresql-client` ธรรมดาจาก Debian:** Supabase
+Project จริงรัน **PostgreSQL 17.6** แต่ apt Package `postgresql-client` ของ
+Debian bookworm (Base Image ที่ Railway ใช้) ให้เวอร์ชัน **15** เป็น Default
+เท่านั้น และ `pg_dump` ปฏิเสธ Dump จาก Server ที่ Major Version สูงกว่าตัวเอง
+เสมอ (`aborting because of server version mismatch`) — ทำให้ Backup ใช้งาน
+ไม่ได้เลยแม้แต่คืนเดียวจนกว่าจะแก้จุดนี้ ดูขั้นตอน Build เต็มใน
+[DEPLOYMENT.md § 3.1 ข้อ [8]](./DEPLOYMENT.md) และเหตุผล/ผลกระทบเต็มใน
+[BACKUP_AND_RECOVERY.md § 2.2](./BACKUP_AND_RECOVERY.md)
+
+`backend/src/utils/pgDump.util.js` เรียก `/app/vendor-pg17/pg_dump` ตรงๆ
+(ไม่ใช่ `pg_dump` เฉยๆ ที่ PATH ของระบบจะไปเจอ Binary v15 แทน) พร้อมตั้ง
+`LD_LIBRARY_PATH=/app/vendor-pg17` เสมอ — ตรวจสอบหลัง Deploy ทุกครั้งด้วย
+`railway ssh --service easydca-worker` แล้วรัน
+`LD_LIBRARY_PATH=/app/vendor-pg17 /app/vendor-pg17/pg_dump --version` ต้องได้
+เลข 17.x และ `node --version` ต้องยังทำงานได้ปกติทั้งคู่ ก่อนเชื่อว่า Deploy
+สำเร็จจริง (เคยพบว่าการตั้งค่า `deploy.inputs` เองใน `railpack.json` ทำให้
+Node Runtime หายไปทั้ง Deploy Image — ดู Comment เต็มในไฟล์จริง)
 
 ---
 
