@@ -221,3 +221,32 @@ Convention ที่ตกลงกันในบทสนทนากับ AI
   `not.toContain('หากกด "ยืนยันบันทึก"')` ผ่านตลอดทุกครั้งแม้ยังไม่ได้แก้ เพราะ
   `JSON.stringify` Escape `"` เป็น `\"` ทำให้ไม่มีวัน Match พบได้เพราะทำ
   Red-Green จริงจัง (ถอด Fix ออกแล้วต้องเห็นแดงก่อน) (ที่มาของ § 3 ข้อ 3)
+- **pg_dump Version Mismatch (2026-07-27)** — Nightly Backup ใช้งานไม่ได้เลย
+  แม้แต่คืนเดียวตั้งแต่เริ่มมีฟีเจอร์ เพราะ `postgresql-client` ที่ apt ของ
+  Debian bookworm ติดตั้งให้เป็น Default คือเวอร์ชัน **15** แต่ Supabase จริง
+  รัน PostgreSQL **17.6** — `pg_dump` ปฏิเสธ Dump จาก Server ที่ Major Version
+  สูงกว่าตัวเองเสมอ (`aborting because of server version mismatch`) **ห้าม
+  เชื่อว่า Package Version ที่ Distro ให้มาเป็น Default จะตรงกับ Server
+  Version จริงเสมอ** ต้องเช็ค Server Version จริงก่อน (`SELECT version()` หรือ
+  เทียบจาก Error ตรงๆ) แล้ว Vendor Binary เวอร์ชันที่ตรงกันเองถ้าจำเป็น —
+  ระหว่างแก้ยังเจอ Trap ซ้อน: ตั้ง `deploy.inputs` เองใน `railpack.json` เพื่อ
+  ดึงไฟล์จาก Step ที่เพิ่มใหม่ ทำให้ Node/npm Runtime (Mise) หายไปจาก Deploy
+  Image ทั้งคู่แบบไม่มี Error เตือน (Deploy สำเร็จ แต่ App รันไม่ได้เลย) เพราะ
+  Railpack รวม Runtime เข้า Deploy Image "โดยปริยาย" ก็ต่อเมื่อไม่มี
+  `deploy.inputs` Override เท่านั้น — ถ้าจำเป็นต้องเพิ่มไฟล์เข้า Deploy Image
+  ให้ขยาย Step ที่มีอยู่แล้วด้วย `"..."` แทนการตั้ง `deploy.inputs` เองใหม่
+  ทั้งหมด และต้องทดสอบใน Environment แยกก่อน Apply เข้า Production เสมอเมื่อ
+  แก้ Build Config ระดับนี้ (ที่มาของ § 3 ข้อ 4 และ § 4.5)
+- **Race Condition จาก Stream Event ตัดสิน Success ก่อน Process จบจริง
+  (2026-07-27)** — `pgDump.util.js` เดิม Resolve ว่า Backup "สำเร็จ" ทันทีที่
+  Stream `stdout` ของ Child Process ส่ง Event `'end'` โดยไม่รอเช็ค Exit Code
+  จาก Event `'close'` ก่อน — Node รับประกันว่า `stdout 'end'` มาก่อน Process
+  `'close'` เสมอ ถ้า Process ที่ถูก Pipe ข้อมูลออกมา (เช่น `pg_dump`) ล้มเหลว
+  "เร็ว" (Exit ทันทีโดยไม่ทันเขียน stdout เลย เช่นต่อ Database ไม่ได้) Job จะ
+  เข้าใจผิดว่าสำเร็จ (Log ขึ้น "อัปโหลดสำเร็จ" จริง) ทั้งที่ได้ผลลัพธ์ว่างเปล่า
+  — เป็น Bug แบบ **Deterministic ไม่ใช่ Flaky** (Reproduce ได้ 20/20 รอบด้วย
+  Script จำลอง Process ที่ Fail เร็ว) **กฎ: เมื่อ Pipe ข้อมูลจาก Child Process
+  ผ่าน Stream (เช่น `pgDump.stdout.pipe(gzip)`) ห้ามตัดสิน Resolve/Reject จาก
+  Stream Event (`'end'`) เพียงอย่างเดียวเด็ดขาด ต้องรอทั้ง Stream จบจริงและรู้
+  Exit Code จริงจาก Process Event (`'close'`) ก่อนตัดสินใจเสมอ ไม่ว่า Event
+  ไหนจะมาก่อนกัน** (ที่มาของ § 3 ข้อ 3-4)
