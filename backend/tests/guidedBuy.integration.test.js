@@ -448,3 +448,198 @@ describe('Manual Quantity Fallback — สินทรัพย์ที่ไ�
     expect(row.pricePerUnit).toBe(20);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 7) Multi-Currency (S8 R2 รอบ 3) — Guided Flow บันทึกเป็น USD ได้
+// ═══════════════════════════════════════════════════════════════════════════
+// สกุลเงินอยู่ "ในปุ่มจำนวนเงิน" (cur=USD) ไม่มีขั้นเลือกสกุลแยก + ไม่มีคอลัมน์
+// currency ใน guided_buy_sessions (ไม่ต้องมี Migration) — ปลายทางยังเป็น
+// routeCommand(BUY) → transaction.service เส้นเดียวกับ Expert Path 100%
+describe('Multi-Currency — Guided Flow รองรับ USD สำหรับ crypto/stock_us', () => {
+  const MSFT_USD_PRICE = 350;
+
+  // สลับ Boundary เป็นหุ้นสหรัฐ (MSFT) ที่มีราคา USD จริง
+  function useUsStock() {
+    assetRepository.findByUserAndSymbol.mockResolvedValue({
+      id: ASSET_ID,
+      symbol: 'MSFT',
+      type: 'stock_us',
+    });
+    assetRepository.findByIds.mockResolvedValue([{ id: ASSET_ID, symbol: 'MSFT' }]);
+    priceFeedService.getCurrentPriceUsd.mockResolvedValue(MSFT_USD_PRICE);
+  }
+
+  // หุ้นไทย (PTT) — ไม่มีราคา USD (getCurrentPriceUsd คืน null ตาม resetMoneyBoundary)
+  function useThaiStock() {
+    assetRepository.findByUserAndSymbol.mockResolvedValue({
+      id: ASSET_ID,
+      symbol: 'PTT',
+      type: 'stock_th',
+    });
+    assetRepository.findByIds.mockResolvedValue([{ id: ASSET_ID, symbol: 'PTT' }]);
+  }
+
+  test('stock_us (MSFT) → ปุ่มจำนวนเงินมีทั้งชุดบาทและชุด USD (50/100/300/500)', async () => {
+    useUsStock();
+
+    await handleEvent(postbackEvent('action=buy_guide'));
+    await handleEvent(postbackEvent('action=gbuy_symbol&sym=MSFT'));
+
+    const items = JSON.stringify(lastQuickReplyItems());
+    // ชุดบาทเดิมยังอยู่ครบ (ไม่ได้ถูกแทนที่)
+    for (const amount of [500, 1000, 3000, 5000]) {
+      expect(items).toContain('action=gbuy_amount&amt=' + amount + '"');
+    }
+    // ชุด USD พก cur=USD มาด้วย
+    for (const amount of [50, 100, 300, 500]) {
+      expect(items).toContain('action=gbuy_amount&amt=' + amount + '&cur=USD');
+    }
+    expect(items).toContain('$100');
+    expect(items).toContain('action=gbuy_amount_manual');
+    // LINE จำกัด 13 items/ข้อความ — 4 บาท + 4 USD + กำหนดเอง + ยกเลิก = 10
+    expect(lastQuickReplyItems().length).toBe(10);
+  });
+
+  test('stock_us + ปุ่ม $100 → บันทึก currency=USD, ยอด 100 USD, quantity หารจากราคา USD', async () => {
+    useUsStock();
+
+    await handleEvent(postbackEvent('action=buy_guide'));
+    await handleEvent(postbackEvent('action=gbuy_symbol&sym=MSFT'));
+    await handleEvent(postbackEvent('action=gbuy_amount&amt=100&cur=USD'));
+    await confirmLatestPending();
+
+    const row = insertedRow();
+    expect(row.currency).toBe('USD');
+    // amountThb = "ยอดในสกุลของ currency" ตาม Semantics migration 012 (ไม่แปลงเป็นบาท)
+    expect(row.amountThb).toBe(100);
+    expect(row.pricePerUnit).toBe(MSFT_USD_PRICE);
+    expect(row.quantity).toBeCloseTo(100 / MSFT_USD_PRICE, 8);
+    // ใช้ราคา USD จริงจาก Price Feed ไม่ใช่เอาราคา THB มาหารเรตเอง
+    expect(priceFeedService.getCurrentPriceUsd).toHaveBeenCalledWith('MSFT');
+  });
+
+  test('crypto (BTC) + ปุ่ม $50 → บันทึก currency=USD (ไม่ใช่แค่หุ้นสหรัฐที่ทำได้)', async () => {
+    priceFeedService.getCurrentPriceUsd.mockResolvedValue(70000);
+
+    await handleEvent(postbackEvent('action=buy_guide'));
+    await handleEvent(postbackEvent('action=gbuy_symbol&sym=BTC'));
+    await handleEvent(postbackEvent('action=gbuy_amount&amt=50&cur=USD'));
+    await confirmLatestPending();
+
+    const row = insertedRow();
+    expect(row.currency).toBe('USD');
+    expect(row.amountThb).toBe(50);
+    expect(row.quantity).toBeCloseTo(50 / 70000, 8);
+  });
+
+  test('ทศนิยม USD (9.99) พิมพ์เอง → ผ่าน Validation บันทึกครบ ไม่ปัดทิ้ง', async () => {
+    useUsStock();
+
+    await handleEvent(postbackEvent('action=buy_guide'));
+    await handleEvent(postbackEvent('action=gbuy_symbol&sym=MSFT'));
+    await handleEvent(postbackEvent('action=gbuy_amount_manual'));
+    await handleEvent(textEvent('9.99 usd'));
+    await confirmLatestPending();
+
+    const row = insertedRow();
+    expect(row.currency).toBe('USD');
+    expect(row.amountThb).toBe(9.99);
+    expect(row.quantity).toBeCloseTo(9.99 / MSFT_USD_PRICE, 8);
+  });
+
+  test('พิมพ์ตัวเลขเปล่า (ไม่มี usd) ให้ Asset ที่รองรับ USD → ยังเป็นบาทตามเดิม', async () => {
+    useUsStock();
+    // ยอดเงินบาทของหุ้นสหรัฐใช้ราคา THB (getCurrentPrice) ตามเส้นเดิม
+    priceFeedService.getCurrentPrice.mockResolvedValue(11725);
+
+    await handleEvent(postbackEvent('action=buy_guide'));
+    await handleEvent(postbackEvent('action=gbuy_symbol&sym=MSFT'));
+    await handleEvent(postbackEvent('action=gbuy_amount_manual'));
+    await handleEvent(textEvent('1500'));
+    await confirmLatestPending();
+
+    const row = insertedRow();
+    expect(row.currency).toBe('THB');
+    expect(row.amountThb).toBe(1500);
+  });
+
+  test('พิมพ์ "100 usd" ให้หุ้นไทย (ไม่มีราคา USD) → ปฏิเสธเป็นข้อความไทย Session ยังอยู่ขั้นเดิม', async () => {
+    useThaiStock();
+
+    await handleEvent(postbackEvent('action=buy_guide'));
+    await handleEvent(postbackEvent('action=gbuy_symbol&sym=PTT'));
+    await handleEvent(postbackEvent('action=gbuy_amount_manual'));
+    await handleEvent(textEvent('100 usd'));
+
+    expect(pendingStore.size).toBe(0);
+    expect(lastReplyJson()).toContain('บันทึกเป็น USD ไม่ได้');
+    // ไม่โชว์ Error Code ดิบให้ผู้ใช้เห็น
+    expect(lastReplyJson()).not.toContain('GUIDED_BUY_CURRENCY_NOT_SUPPORTED');
+    // พิมพ์ยอดใหม่ได้ทันทีในขั้นเดิม
+    expect(guidedSession).toMatchObject({ step: 'AWAITING_AMOUNT', symbol: 'PTT' });
+  });
+
+  test('Manual Quantity Fallback ของ USD → Prefill ต้องมี suffix USD ไม่กลายเป็นบาท', async () => {
+    useUsStock();
+    // Twelve Data ล่ม → หาราคา USD ไม่ได้ → PRICE_FEED_NOT_IMPLEMENTED → Fallback
+    priceFeedService.getCurrentPriceUsd.mockResolvedValue(null);
+
+    await handleEvent(postbackEvent('action=buy_guide'));
+    await handleEvent(postbackEvent('action=gbuy_symbol&sym=MSFT'));
+    await handleEvent(postbackEvent('action=gbuy_amount&amt=100&cur=USD'));
+
+    const reply = lastReplyJson();
+    expect(reply).toContain('กรอกจำนวนหุ้นเอง');
+    expect(reply).toContain('ซื้อ MSFT <จำนวนหุ้น> หุ้น รวม 100 USD');
+    expect(pendingStore.size).toBe(0);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 8) Regression — Asset ที่ไม่รองรับ USD ต้องเห็น Flow เดิมเป๊ะ
+// ═══════════════════════════════════════════════════════════════════════════
+describe('Regression: stock_th (THB) — Flow เดิมไม่เปลี่ยนแปลงเลย', () => {
+  beforeEach(() => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue({
+      id: ASSET_ID,
+      symbol: 'PTT',
+      type: 'stock_th',
+    });
+    assetRepository.findByIds.mockResolvedValue([{ id: ASSET_ID, symbol: 'PTT' }]);
+  });
+
+  test('หุ้นไทย → ไม่มีปุ่ม USD โผล่มา + ข้อความยังถามเป็น "กี่บาท" เหมือนเดิม', async () => {
+    await handleEvent(postbackEvent('action=buy_guide'));
+    await handleEvent(postbackEvent('action=gbuy_symbol&sym=PTT'));
+
+    const items = JSON.stringify(lastQuickReplyItems());
+    expect(items).not.toContain('cur=USD');
+    expect(items).not.toContain('$');
+    expect(lastReplyJson()).toContain('กี่บาท');
+    // ชุดปุ่มเดิม: 4 บาท + กำหนดเอง + ยกเลิก = 6
+    expect(lastQuickReplyItems().length).toBe(6);
+  });
+
+  test('หุ้นไทย "กำหนดเอง" → ข้อความชวนพิมพ์ยังเป็น "หน่วยเป็นบาท" ไม่พูดถึง usd', async () => {
+    await handleEvent(postbackEvent('action=buy_guide'));
+    await handleEvent(postbackEvent('action=gbuy_symbol&sym=PTT'));
+    await handleEvent(postbackEvent('action=gbuy_amount_manual'));
+
+    const reply = lastReplyJson();
+    expect(reply).toContain('หน่วยเป็นบาท');
+    expect(reply).not.toContain('usd');
+  });
+
+  test('หุ้นไทยบันทึกจนจบ → currency=THB (ไม่มี Key currency หลุดเป็น USD)', async () => {
+    priceFeedService.getCurrentPrice.mockResolvedValue(34);
+
+    await handleEvent(postbackEvent('action=buy_guide'));
+    await handleEvent(postbackEvent('action=gbuy_symbol&sym=PTT'));
+    await handleEvent(postbackEvent('action=gbuy_amount&amt=1000'));
+    await confirmLatestPending();
+
+    const row = insertedRow();
+    expect(row.currency).toBe('THB');
+    expect(row.amountThb).toBe(1000);
+  });
+});

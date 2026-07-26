@@ -209,7 +209,7 @@ describe('handleAmountEntered — ขั้น 2 (ขั้นสุดท้า
     expect(result).toEqual({ symbol: 'BTC', amountThb: 1000 });
   });
 
-  test('ไม่ใส่ Key currency เลย (รอบนี้ THB เท่านั้น — Shape ต้องตรงกับ Expert Path Path THB)', async () => {
+  test('THB (Default) → ไม่ใส่ Key currency เลย (Shape ต้องตรงกับ Expert Path Path THB)', async () => {
     const result = await guidedBuyFlow.handleAmountEntered(USER_ID, 1000);
 
     expect(result).not.toHaveProperty('currency');
@@ -252,5 +252,112 @@ describe('cancelFlow / purgeStaleSessions', () => {
     expect(count).toBe(3);
     const cutoffMs = new Date(sessionRepository.purgeStaleBefore.mock.calls[0][0]).getTime();
     expect(before - cutoffMs).toBeGreaterThanOrEqual(60 * 60 * 1000 - 2000);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Multi-Currency (S8 R2 รอบ 3) — สกุลเงินใน Guided Buy Flow
+// ═══════════════════════════════════════════════════════════════════════════
+// isUsdSupported ต้อง Reuse Single Source เดียวกับฝั่งเว็บ/แผน DCA
+// (dcaReminder.isCurrencySupportedForSymbol → USD_SUPPORTED_TYPES) ห้ามมีชุด
+// Asset Type ซ้ำในไฟล์ guidedBuyFlow — เทสต์ชุดนี้ใช้ symbolRegistry ตัวจริง
+describe('isUsdSupported — สกุล USD ใช้ได้กับ Symbol ไหน', () => {
+  test.each([
+    ['BTC (crypto)', 'BTC', true],
+    ['MSFT (stock_us)', 'MSFT', true],
+    ['EOSE (stock_us small-cap)', 'EOSE', true],
+    ['PTT (stock_th)', 'PTT', false],
+    ['GOLD (ทอง — ราคาเป็นบาททองคำ)', 'GOLD', false],
+    ['ZZZUNKNOWN (ไม่รู้จักใน Registry — ไม่เดาว่าเป็นหุ้นสหรัฐ)', 'ZZZUNKNOWN', false],
+  ])('%s → %s', (_label, symbol, expected) => {
+    expect(guidedBuyFlow.isUsdSupported(symbol)).toBe(expected);
+  });
+
+  test('ค่าที่ได้ต้องตรงกับ dcaReminder.isCurrencySupportedForSymbol (Single Source เดียวกัน)', () => {
+    const dcaReminderService = require('../src/services/dcaReminder.service');
+
+    for (const symbol of ['BTC', 'MSFT', 'PTT', 'GOLD']) {
+      expect(guidedBuyFlow.isUsdSupported(symbol)).toBe(
+        dcaReminderService.isCurrencySupportedForSymbol(symbol, 'USD')
+      );
+    }
+  });
+});
+
+describe('handleAmountEntered — สกุลเงิน (S8 R2 รอบ 3)', () => {
+  function sessionWith(symbol) {
+    sessionRepository.findValidByUser.mockResolvedValue({
+      userId: USER_ID,
+      step: STEPS.AWAITING_AMOUNT,
+      symbol,
+    });
+  }
+
+  test('USD กับ crypto → คืน currency: USD พร้อมยอดตามจริง (ไม่แปลงข้ามสกุล)', async () => {
+    sessionWith('BTC');
+
+    const result = await guidedBuyFlow.handleAmountEntered(USER_ID, 100, 'USD');
+
+    expect(result).toEqual({ symbol: 'BTC', amountThb: 100, currency: 'USD' });
+  });
+
+  test('USD กับ stock_us → คืน currency: USD', async () => {
+    sessionWith('MSFT');
+
+    const result = await guidedBuyFlow.handleAmountEntered(USER_ID, 9.99, 'USD');
+
+    expect(result).toEqual({ symbol: 'MSFT', amountThb: 9.99, currency: 'USD' });
+  });
+
+  test('ทศนิยม USD (9.99) ผ่าน Validation — ไม่มีกฎยอดขั้นต่ำมาปฏิเสธ', async () => {
+    sessionWith('MSFT');
+
+    await expect(guidedBuyFlow.handleAmountEntered(USER_ID, 9.99, 'USD')).resolves.toMatchObject({
+      amountThb: 9.99,
+    });
+    await expect(guidedBuyFlow.handleAmountEntered(USER_ID, 0.01, 'USD')).resolves.toMatchObject({
+      amountThb: 0.01,
+    });
+  });
+
+  test('USD กับหุ้นไทย → GUIDED_BUY_CURRENCY_NOT_SUPPORTED (ด่านตัดสินอยู่ที่ Service ไม่ใช่ UI)', async () => {
+    sessionWith('PTT');
+
+    await expect(guidedBuyFlow.handleAmountEntered(USER_ID, 100, 'USD')).rejects.toMatchObject({
+      code: 'GUIDED_BUY_CURRENCY_NOT_SUPPORTED',
+    });
+  });
+
+  test('USD ที่ไม่ผ่าน → "ไม่ลบ/ไม่แก้ Session" ให้พิมพ์ยอดใหม่ได้ทันทีในขั้นเดิม', async () => {
+    sessionWith('PTT');
+
+    await expect(guidedBuyFlow.handleAmountEntered(USER_ID, 100, 'USD')).rejects.toThrow();
+
+    expect(sessionRepository.deleteByUser).not.toHaveBeenCalled();
+    expect(sessionRepository.updateByUser).not.toHaveBeenCalled();
+  });
+
+  test('สกุลที่ระบบไม่รู้จัก (EUR) → GUIDED_BUY_CURRENCY_NOT_SUPPORTED ไม่หลุดไปบันทึก', async () => {
+    sessionWith('BTC');
+
+    await expect(guidedBuyFlow.handleAmountEntered(USER_ID, 100, 'EUR')).rejects.toMatchObject({
+      code: 'GUIDED_BUY_CURRENCY_NOT_SUPPORTED',
+    });
+  });
+
+  test('หุ้นไทย + THB (ไม่ส่ง currency) → ยังทำงานเหมือนเดิมทุกประการ', async () => {
+    sessionWith('PTT');
+
+    const result = await guidedBuyFlow.handleAmountEntered(USER_ID, 1000);
+
+    expect(result).toEqual({ symbol: 'PTT', amountThb: 1000 });
+  });
+
+  test('ยอดไม่ถูกต้องถูกตรวจก่อนสกุล (INVALID_AMOUNT มาก่อน CURRENCY_NOT_SUPPORTED)', async () => {
+    sessionWith('PTT');
+
+    await expect(guidedBuyFlow.handleAmountEntered(USER_ID, NaN, 'USD')).rejects.toMatchObject({
+      code: 'INVALID_AMOUNT',
+    });
   });
 });

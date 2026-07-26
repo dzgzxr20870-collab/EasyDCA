@@ -3,6 +3,7 @@ const portfolioService = require('./portfolio.service');
 const commandParser = require('./commandParser.service');
 const reminderSetupFlow = require('./reminderSetupFlow.service');
 const bulkImportSession = require('./bulkImportSession.service');
+const dcaReminderService = require('./dcaReminder.service');
 
 // ── State Machine ของ Flow บันทึก DCA แบบ Quick Reply หลายขั้นตอน (S8 R2 รอบ 2) ──
 // AWAITING_SYMBOL → AWAITING_AMOUNT → (จบ: ส่งพารามิเตอร์ให้ Controller Route เข้า
@@ -43,6 +44,20 @@ const MAX_SYMBOL_LENGTH = 20;
 
 function ttlCutoffIso() {
   return new Date(Date.now() - GUIDED_BUY_SESSION_TTL_MINUTES * 60 * 1000).toISOString();
+}
+
+// Multi-Currency (S8 R2 รอบ 3) — Symbol นี้บันทึกเป็น USD ได้ไหม
+//
+// ⚠️ ห้ามประกาศชุด Asset Type ที่รองรับ USD ซ้ำในไฟล์นี้เด็ดขาด — Reuse
+// dcaReminder.isCurrencySupportedForSymbol ซึ่งเป็น Single Source เดียวกับที่
+// Web Controller (POST /transactions) และแผน DCA ใช้ Validate จริง
+// (USD_SUPPORTED_TYPES = ['crypto','stock_us'] — ประเภทที่ priceFeed.
+// getCurrentPriceUsd หาราคา USD ได้จริง) ถ้าชุดนี้เปลี่ยน ทุกทางเข้าต้องเปลี่ยนพร้อมกัน
+//
+// Symbol ที่ไม่รู้จักใน Registry (lookupType คืน null) → false = บันทึกเป็นบาท
+// ตามเดิม (ไม่เดาว่าเป็นหุ้นสหรัฐจากชื่อ)
+function isUsdSupported(symbol) {
+  return dcaReminderService.isCurrencySupportedForSymbol(symbol, 'USD');
 }
 
 // คืน Session ปัจจุบันที่ "ยังไม่หมดอายุ" หรือ null (หมดอายุ/ไม่มี ให้ผลเหมือนกัน)
@@ -185,19 +200,45 @@ async function requireAwaitingAmount(userId) {
 // อาจ throw ASSET_LIMIT_REACHED / ราคาตลาดล่ม ฯลฯ) ถ้าลบทิ้งก่อน ผู้ใช้จะตกจาก Flow
 // ทันทีและต้องเริ่มใหม่ทั้งหมด — Controller เป็นผู้ลบ Session หลัง routeCommand สำเร็จ
 // (Pattern เดียวกับ reminderSetupFlow.handleAmountEntered ที่ลบหลัง createReminder ผ่าน)
-async function handleAmountEntered(userId, amountThb) {
+// currency (S8 R2 รอบ 3) — 'THB' (Default เดิม) หรือ 'USD' จากปุ่ม cur=USD /
+// Suffix "usd" ที่ผู้ใช้พิมพ์ ยอดที่ได้คือ "จำนวนเงินในสกุลนั้นตามจริง" ไม่แปลงข้ามสกุล
+// (transaction.service เป็นผู้หาร quantity จากราคาสกุลเดียวกัน — Semantics เดียวกับ
+// migration 012 ที่ amountThb = ยอดในสกุลของ currency)
+async function handleAmountEntered(userId, amount, currency = 'THB') {
   const session = await requireSessionAtStep(userId, STEPS.AWAITING_AMOUNT);
 
-  if (!Number.isFinite(amountThb) || amountThb <= 0) {
-    throw new GuidedBuyError('INVALID_AMOUNT', 'amountThb must be a positive number', {
-      amountThb,
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new GuidedBuyError('INVALID_AMOUNT', 'amount must be a positive number', {
+      amountThb: amount,
     });
   }
 
-  // Multi-Currency (Round 10) — รอบนี้ Guided Flow เป็น THB เสมอ (ตัด Scope โดยตั้งใจ
-  // ดู Comment ที่ buildGuidedBuyAmountQuickReply) จึง "ไม่ใส่ Key currency" เลย
-  // เพื่อให้ Shape params ตรงกับ Expert Path Path THB เดิมทุกประการ
-  return { symbol: session.symbol, amountThb };
+  if (currency !== 'THB' && currency !== 'USD') {
+    throw new GuidedBuyError(
+      'GUIDED_BUY_CURRENCY_NOT_SUPPORTED',
+      `Unsupported currency ${currency}`,
+      { currency }
+    );
+  }
+
+  // ปุ่ม USD ไม่เคยถูกแสดงให้สินทรัพย์ที่ไม่รองรับ แต่ผู้ใช้ "พิมพ์ 100 usd" เองได้
+  // → ชั้นนี้คือด่านตัดสินจริง (ไม่พึ่งว่า UI ซ่อนปุ่มให้แล้ว) ไม่อัปเดต/ไม่ลบ Session
+  // ให้พิมพ์ยอดใหม่ได้ทันทีในขั้นเดิม (Pattern เดียวกับ INVALID_AMOUNT)
+  if (currency === 'USD' && !isUsdSupported(session.symbol)) {
+    throw new GuidedBuyError(
+      'GUIDED_BUY_CURRENCY_NOT_SUPPORTED',
+      `${session.symbol} has no USD price feed`,
+      { symbol: session.symbol, currency }
+    );
+  }
+
+  // THB: "ไม่ใส่ Key currency" เลย เพื่อให้ Shape params ตรงกับ Expert Path เดิม
+  // ทุกประการ (Regression Guard — เทสต์เทียบ Field ต่อ Field กับการพิมพ์คำสั่งตรง)
+  return {
+    symbol: session.symbol,
+    amountThb: amount,
+    ...(currency === 'USD' ? { currency: 'USD' } : {}),
+  };
 }
 
 // ลบ Session ทิ้งกลางทาง (ผู้ใช้กดปุ่มยกเลิก / จบ Flow สำเร็จ) — Idempotent
@@ -220,6 +261,7 @@ module.exports = {
   PURGE_RETENTION_MINUTES,
   MAX_SYMBOL_BUTTONS,
   GuidedBuyError,
+  isUsdSupported,
   getCurrentSession,
   findBlockingSession,
   startFlow,

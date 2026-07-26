@@ -85,6 +85,10 @@ const ERROR_MESSAGES = {
     'ชื่อย่อสินทรัพย์ไม่ถูกต้อง กรุณาพิมพ์เป็นชื่อย่อคำเดียว (เช่น BTC, PTT, AAPL) อีกครั้ง',
   GUIDED_BUY_SESSION_BUSY:
     'คุณมีขั้นตอนอื่นค้างอยู่ กรุณาทำให้จบก่อน หรือกด "ยกเลิก" ของขั้นตอนนั้นแล้วเริ่มใหม่',
+  // Multi-Currency (S8 R2 รอบ 3) — ผู้ใช้พิมพ์ "100 usd" ให้สินทรัพย์ที่ไม่มีราคา USD
+  // (หุ้นไทย/ทอง/กองทุน) — ปุ่ม USD ไม่เคยแสดงให้สินทรัพย์กลุ่มนี้ แต่พิมพ์เองได้
+  GUIDED_BUY_CURRENCY_NOT_SUPPORTED:
+    'สินทรัพย์นี้บันทึกเป็น USD ไม่ได้ (รองรับเฉพาะ Crypto และหุ้นสหรัฐ) กรุณาพิมพ์เป็นจำนวนเงินบาท เช่น 1000',
   INVALID_DAY:
     'วันที่ไม่ถูกต้อง สำหรับรายเดือนกรุณาพิมพ์เลข 1-31 หรือเลือกจากปุ่มที่ระบบส่งให้',
   INTERNAL_ERROR: 'เกิดข้อผิดพลาดบางอย่าง กรุณาลองใหม่อีกครั้งในภายหลัง',
@@ -1362,15 +1366,25 @@ function buildGuidedBuyAskSymbolMessage() {
   );
 }
 
-// ── ขั้น 2: จำนวนเงิน — Amount Chips + กำหนดเอง ───────────────────────────
-// ⚠️ ข้อจำกัดที่ตั้งใจ (S8 R2 รอบ 2): Guided Flow รอบนี้เป็น "บาท (THB) เท่านั้น"
-// ไม่มีปุ่มเลือกสกุลเงิน — ผู้ใช้ที่ต้องการบันทึกเป็น USD ยังใช้ Expert Path เดิมได้
-// ครบ ("ซื้อ BTC 100 USD") และ Dashboard เว็บก็ยังมี Toggle THB/USD ตามเดิม
-// นี่คือการตัด Scope ให้รอบนี้เล็กลง ไม่ใช่ความตกหล่น — ถ้าจะเพิ่มต้องใส่ขั้นเลือกสกุล
-// ก่อนขั้นนี้ และเปลี่ยนชุดตัวเลข Chips ให้เหมาะกับ USD (50/100/300/500)
+// ── ขั้น 2: จำนวนเงิน — Amount Chips (บาท + USD) + กำหนดเอง ────────────────
+// Multi-Currency (S8 R2 รอบ 3): สกุลเงินอยู่ "ในปุ่มจำนวนเงิน" ไม่ใช่ขั้นแยก —
+// Postback พก cur=USD ไปพร้อมยอดเลย จึงไม่ต้องเก็บสกุลใน guided_buy_sessions
+// (ขั้นนี้เป็นขั้นสุดท้าย ได้ค่ามาแล้วใช้ต่อทันทีในคำขอเดียว เหตุผลเดียวกับที่
+// migration 022 ไม่เก็บจำนวนเงินไว้ใน Session) = ไม่ต้องมี Migration ใหม่
+//
+// ปุ่ม USD แสดง "เฉพาะสินทรัพย์ที่มีราคา USD จริง" (crypto/stock_us ตัดสินโดย
+// guidedBuyFlow.isUsdSupported ที่ Reuse Single Source เดียวกับฝั่งเว็บ) —
+// สินทรัพย์อื่น (หุ้นไทย/ทอง/กองทุน) เห็นปุ่มชุดเดิมเป๊ะ ไม่มีอะไรเปลี่ยน
 const GUIDED_BUY_AMOUNT_CHIPS = [500, 1000, 3000, 5000];
 
-function buildGuidedBuyAmountQuickReply(symbol) {
+// ⚠️ เลขกลม USD ตามชุดที่รอบก่อนระบุไว้ว่าจะใช้ (50/100/300/500) — "ไม่ใช่" ยอดบาท
+// ที่แปลงด้วยเรต เพราะเรตขึ้นลงทุกวันปุ่มจะเพี้ยนตาม และป้ายกำกับต้องแยกสกุลชัดเจน
+// ("$100" vs "1,000 บาท") กันผู้ใช้กดผิดสกุล — เป็นบทเรียนเดียวกับฟอร์มเว็บ
+// (DcaForm.jsx) ที่เลือก "ซ่อน" Chips บาทตอนสลับ USD เพราะกลัวกด 10,000 คิดว่าบาท
+const GUIDED_BUY_USD_AMOUNT_CHIPS = [50, 100, 300, 500];
+
+// LINE จำกัด 13 items/ข้อความ — กรณีเปิด USD: 4 บาท + 4 USD + กำหนดเอง + ยกเลิก = 10
+function buildGuidedBuyAmountQuickReply(symbol, { usdSupported = false } = {}) {
   const items = GUIDED_BUY_AMOUNT_CHIPS.map((amount) =>
     quickReplyPostback(
       `${formatNumber(amount)} บาท`,
@@ -1379,18 +1393,36 @@ function buildGuidedBuyAmountQuickReply(symbol) {
     )
   );
 
+  if (usdSupported) {
+    items.push(
+      ...GUIDED_BUY_USD_AMOUNT_CHIPS.map((amount) =>
+        quickReplyPostback(
+          `$${formatNumber(amount)}`,
+          `action=gbuy_amount&amt=${amount}&cur=USD`,
+          `${formatNumber(amount)} USD`
+        )
+      )
+    );
+  }
+
   items.push(quickReplyPostback('✏️ กำหนดเอง', 'action=gbuy_amount_manual', 'กำหนดเอง'));
 
   return guidedBuyTextWithQuickReply(
-    `บันทึกซื้อ ${symbol} เป็นเงินกี่บาทครับ? เลือกจากปุ่ม หรือกด "กำหนดเอง" เพื่อพิมพ์เอง`,
+    usdSupported
+      ? `บันทึกซื้อ ${symbol} เป็นเงินเท่าไรครับ? เลือกจากปุ่ม (บาท หรือ USD) หรือกด "กำหนดเอง" เพื่อพิมพ์เอง`
+      : `บันทึกซื้อ ${symbol} เป็นเงินกี่บาทครับ? เลือกจากปุ่ม หรือกด "กำหนดเอง" เพื่อพิมพ์เอง`,
     items
   );
 }
 
 // ผู้ใช้กด "กำหนดเอง" — ชวนพิมพ์ตัวเลข (ยังอยู่ขั้น AWAITING_AMOUNT)
-function buildGuidedBuyAskAmountMessage(symbol) {
+// สินทรัพย์ที่รองรับ USD: บอกวิธีพิมพ์สกุลด้วย ("100 usd") — คำเดียวกับที่ Expert Path
+// รองรับอยู่แล้ว ไม่มี Suffix = บาท (Default เดิม)
+function buildGuidedBuyAskAmountMessage(symbol, { usdSupported = false } = {}) {
   return guidedBuyTextWithQuickReply(
-    `พิมพ์จำนวนเงินที่ซื้อ ${symbol} มาได้เลยครับ (เช่น 1500) หน่วยเป็นบาท`
+    usdSupported
+      ? `พิมพ์จำนวนเงินที่ซื้อ ${symbol} มาได้เลยครับ — หน่วยเป็นบาท (เช่น 1500) หรือต่อท้ายว่า usd ถ้าเป็นดอลลาร์ (เช่น 100 usd)`
+      : `พิมพ์จำนวนเงินที่ซื้อ ${symbol} มาได้เลยครับ (เช่น 1500) หน่วยเป็นบาท`
   );
 }
 

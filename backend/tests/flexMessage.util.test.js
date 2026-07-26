@@ -971,6 +971,12 @@ describe('LINE Quick Reply Label ≤ 20 ตัวอักษร (Hard Limit ข
     ['buildGuidedBuyAskAmountMessage', () => flexMessage.buildGuidedBuyAskAmountMessage('BTC')],
     ['buildGuidedBuyAmountQuickReply', () => flexMessage.buildGuidedBuyAmountQuickReply('BTC')],
     [
+      // Multi-Currency (S8 R2 รอบ 3) — ชุดปุ่มตอนเปิด USD มี Label เพิ่ม ($50…$500)
+      // ต้องถูกตรวจ Limit ด้วย ไม่ใช่ตรวจแต่ชุดบาท
+      'buildGuidedBuyAmountQuickReply (usdSupported — มีปุ่มบาท + USD พร้อมกัน)',
+      () => flexMessage.buildGuidedBuyAmountQuickReply('BTC', { usdSupported: true }),
+    ],
+    [
       // Red-Green: เคสนี้คือบั๊กจริงจาก Production — Fail บนโค้ดเก่า (29 ตัวอักษร),
       // Pass บนโค้ดใหม่หลังย่อ Label แล้ว
       'buildGuidedBuyBusyMessage (kind=reminder_setup)',

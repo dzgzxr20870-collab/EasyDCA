@@ -52,6 +52,17 @@ function parseNumericText(text) {
   return match ? Number(match[0]) : NaN;
 }
 
+// Multi-Currency (S8 R2 รอบ 3) — สกุลเงินจากข้อความที่ผู้ใช้พิมพ์ในขั้น "กำหนดเอง"
+// ของ Guided Buy: ต่อท้ายว่า "usd" / "$" / "ดอลลาร์" = USD, ไม่มีเลย = บาท (Default
+// เดิม 100% — ข้อความที่มีแต่ตัวเลขให้ผลเท่าเดิมทุกประการ)
+//
+// ใช้คำ "usd" ตัวเดียวกับที่ Expert Path รองรับอยู่แล้ว (commandParser — normalizeText
+// ทำ toLowerCase ให้ก่อน) เพื่อให้ผู้ใช้ไม่ต้องจำคำต่างกัน 2 ชุด
+// guidedBuyFlow.handleAmountEntered เป็นด่านตัดสินว่า Symbol นั้นรองรับ USD จริงไหม
+function parseCurrencyText(text) {
+  return /usd|\$|ดอลลาร์/.test(commandParser.normalizeText(text)) ? 'USD' : 'THB';
+}
+
 // ตรงกับ Label/displayText ของปุ่ม "📈 บันทึก DCA" (flexMessage.util.js
 // fallbackQuickReplyItems) — ปุ่มจริงเป็น Postback (action=buy_guide) เสมอ ไม่เคย
 // ส่งข้อความนี้เป็น Text จริง (LINE ไม่ Echo displayText ของปุ่ม Postback กลับมา
@@ -439,8 +450,14 @@ async function attachSlipBestEffort(userId, pending, result) {
 // การลบ Session: ลบ "หลัง routeCommand สำเร็จ" เท่านั้น — ถ้า throw (เช่น
 // ASSET_LIMIT_REACHED) Session ยังค้างที่ AWAITING_AMOUNT ให้ผู้ใช้ลองยอดใหม่ได้ทันที
 // โดยไม่ต้องเริ่ม Flow ใหม่ทั้งหมด (Pattern เดียวกับ reminderSetupFlow.handleAmountEntered)
-async function finishGuidedBuy(user, symbol, amountThb) {
-  const parsed = { command: COMMANDS.BUY, params: { symbol, amountThb } };
+async function finishGuidedBuy(user, symbol, amountThb, currency = 'THB') {
+  // Multi-Currency (S8 R2 รอบ 3) — ใส่ Key currency เฉพาะตอน USD เพื่อให้ params ของ
+  // เส้น THB ตรงกับ Expert Path เดิมเป๊ะ (Shape เดียวกับที่ commandParser ผลิต)
+  const isUsd = currency === 'USD';
+  const parsed = {
+    command: COMMANDS.BUY,
+    params: { symbol, amountThb, ...(isUsd ? { currency: 'USD' } : {}) },
+  };
 
   // Manual Quantity Fallback (Round 10-B) — Guided Flow ส่ง "ยอดเงินอย่างเดียว" เสมอ
   // เหมือนสลิป Amount-only จึงเจอปัญหาเดียวกัน: สินทรัพย์ที่ไม่ใช่ Crypto มักไม่มี
@@ -458,8 +475,10 @@ async function finishGuidedBuy(user, symbol, amountThb) {
       // ข้อความที่ผู้ใช้กำลังจะพิมพ์ (ข้อความ Prefill นั้น parseCommand จับได้เองอยู่แล้ว
       // และ Expert Path ชนะ Session เสมอ แต่การปล่อย Session ตายค้างไว้ไม่มีประโยชน์)
       await guidedBuyFlow.cancelFlow(user.id);
+      // Suffix สกุลต้องติดไปกับ Prefill ด้วย มิฉะนั้นผู้ใช้ Copy ข้อความไปบันทึกแล้ว
+      // กลายเป็นบาทเงียบๆ ทั้งที่กดปุ่ม USD มา (Pattern เดียวกับเส้น OCR ด้านล่าง)
       return flexMessage.buildOcrManualQuantityMessage(
-        `ซื้อ ${symbol} <จำนวนหุ้น> หุ้น รวม ${amountThb}`
+        `ซื้อ ${symbol} <จำนวนหุ้น> หุ้น รวม ${amountThb}${isUsd ? ' USD' : ''}`
       );
     }
     throw err;
@@ -770,7 +789,9 @@ async function routePostback(user, data) {
     // ขั้น 1 — เลือก Symbol จากปุ่ม (พอร์ตของผู้ใช้เอง)
     case 'gbuy_symbol': {
       const session = await guidedBuyFlow.handleSymbolSelected(user.id, params.get('sym'));
-      return flexMessage.buildGuidedBuyAmountQuickReply(session.symbol);
+      return flexMessage.buildGuidedBuyAmountQuickReply(session.symbol, {
+        usdSupported: guidedBuyFlow.isUsdSupported(session.symbol),
+      });
     }
 
     // ขั้น 1 — กด "พิมพ์ชื่อเอง" (ยังอยู่ขั้นเดิม รอข้อความ — ดักที่ routeText)
@@ -780,18 +801,22 @@ async function routePostback(user, data) {
     }
 
     // ขั้น 2 — เลือกจำนวนเงินจาก Chips → จบ Flow (Preview)
+    // cur=USD ติดมากับปุ่ม USD เท่านั้น (ปุ่มบาทไม่มี Key นี้ → THB ตามเดิม)
     case 'gbuy_amount': {
-      const { symbol, amountThb } = await guidedBuyFlow.handleAmountEntered(
+      const { symbol, amountThb, currency } = await guidedBuyFlow.handleAmountEntered(
         user.id,
-        Number(params.get('amt'))
+        Number(params.get('amt')),
+        params.get('cur') === 'USD' ? 'USD' : 'THB'
       );
-      return finishGuidedBuy(user, symbol, amountThb);
+      return finishGuidedBuy(user, symbol, amountThb, currency);
     }
 
     // ขั้น 2 — กด "กำหนดเอง" (ยังอยู่ขั้นเดิม รอข้อความ — ดักที่ routeText)
     case 'gbuy_amount_manual': {
       const session = await guidedBuyFlow.requireAwaitingAmount(user.id);
-      return flexMessage.buildGuidedBuyAskAmountMessage(session.symbol);
+      return flexMessage.buildGuidedBuyAskAmountMessage(session.symbol, {
+        usdSupported: guidedBuyFlow.isUsdSupported(session.symbol),
+      });
     }
 
     // ปุ่มยกเลิกของ Guided Buy — action แยกจาก cancel_reminder_setup เด็ดขาด
@@ -1003,15 +1028,19 @@ async function routeText(user, text) {
   if (guidedSession) {
     if (guidedSession.step === GUIDED_STEPS.AWAITING_SYMBOL) {
       const updated = await guidedBuyFlow.handleSymbolSelected(user.id, text);
-      return flexMessage.buildGuidedBuyAmountQuickReply(updated.symbol);
+      return flexMessage.buildGuidedBuyAmountQuickReply(updated.symbol, {
+        usdSupported: guidedBuyFlow.isUsdSupported(updated.symbol),
+      });
     }
 
     if (guidedSession.step === GUIDED_STEPS.AWAITING_AMOUNT) {
-      const { symbol, amountThb } = await guidedBuyFlow.handleAmountEntered(
+      // "100 usd" → USD / "1500" → บาท (Default เดิม) — ดู parseCurrencyText
+      const { symbol, amountThb, currency } = await guidedBuyFlow.handleAmountEntered(
         user.id,
-        parseNumericText(text)
+        parseNumericText(text),
+        parseCurrencyText(text)
       );
-      return finishGuidedBuy(user, symbol, amountThb);
+      return finishGuidedBuy(user, symbol, amountThb, currency);
     }
   }
 
