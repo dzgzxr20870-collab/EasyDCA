@@ -1021,6 +1021,9 @@ describe('buildPortfolioMessage — ยอดรวมแยกตามสก�
     const text = allText(msg);
 
     expect(text).toContain('รวมเงินลงทุนทั้งพอร์ต: 1,300 บาท');
+    // บรรทัดรายสินทรัพย์ยังเป็นบาทเหมือนเดิม (ไม่ Regression)
+    expect(text).toContain('ต้นทุนเฉลี่ย: 32.5 บาท/หน่วย');
+    expect(text).toContain('เงินลงทุน: 1,300 บาท');
     expect(text).not.toContain('USD');
   });
 
@@ -1036,6 +1039,10 @@ describe('buildPortfolioMessage — ยอดรวมแยกตามสก�
 
     expect(text).toContain('รวมเงินลงทุนทั้งพอร์ต: 600 USD');
     expect(text).not.toContain('รวมเงินลงทุนทั้งพอร์ต: 0 บาท');
+    // บรรทัดรายสินทรัพย์ต้องใช้หน่วยตาม h.currency ไม่ Hardcode "บาท"
+    expect(text).toContain('ต้นทุนเฉลี่ย: 300 USD/หน่วย');
+    expect(text).toContain('เงินลงทุน: 600 USD');
+    expect(text).not.toContain('600 บาท');
   });
 
   test('พอร์ตปน THB + USD → โชว์แยก 2 บรรทัด กำกับสกุลชัดเจน ไม่ถัวข้ามสกุล', () => {
@@ -1051,6 +1058,10 @@ describe('buildPortfolioMessage — ยอดรวมแยกตามสก�
     expect(text).toContain('รวมเงินลงทุนทั้งพอร์ต (USD): 100 USD');
     // ห้ามมียอดถัวข้ามสกุล (30,000 + 100)
     expect(text).not.toContain('30,100');
+    // แต่ละแถวใช้หน่วยของตัวเอง — EOSE เป็น USD, BTC เป็นบาท ในการ์ดใบเดียวกัน
+    expect(text).toContain('เงินลงทุน: 100 USD');
+    expect(text).toContain('เงินลงทุน: 30,000 บาท');
+    expect(text).not.toContain('เงินลงทุน: 100 บาท');
   });
 
   test('พอร์ตว่าง (isEmpty) → ข้อความแนะนำให้เริ่มบันทึก ไม่ Error และไม่มีบรรทัดยอดรวม', () => {
@@ -1151,5 +1162,140 @@ describe('Regression — buildProfitMessage / buildSellConfirmMessage แยก�
     expect(text).toContain('ราคาต่อหน่วย: 350 USD');
     expect(text).toContain('มูลค่ารวม: 350 USD');
     expect(text).not.toContain('บาท');
+  });
+});
+
+// Multi-Currency (Round 10) — buildPortfolioSummaryPushMessage (Push สรุปพอร์ต
+// รายสัปดาห์/รายเดือนจาก portfolioSummary.job) บั๊กคลาสเดียวกับ buildPortfolioMessage:
+// totalInvestedAllAssets = summary.totalInvested ของ portfolio.service = ยอด THB
+// เท่านั้น → พอร์ต USD ล้วนเห็น "เงินลงทุนรวมทั้งพอร์ต: 0 บาท"
+describe('buildPortfolioSummaryPushMessage — เงินลงทุนรวมแยกสกุล (byCurrency + fxRate)', () => {
+  const BASE = {
+    totalInvestedAllAssets: 30000,
+    totalCurrentValue: 40000,
+    totalProfitLoss: 10000,
+    totalProfitLossPercent: 33.33,
+    excludedCount: 0,
+    periodLabel: 'weekly',
+  };
+
+  // ส่วน Multi-Currency ที่ portfolioSummary.service แนบมาให้ (byCurrency นับเฉพาะ
+  // Asset ที่ดึงราคาได้ / fx* คือเรตที่ใช้แปลงยอด "เทียบบาท")
+  function withFx(fields) {
+    return { fxRate: 35, fxAsOf: '2025-01-02', fxStale: false, fxUnavailableForUsd: false, ...fields };
+  }
+
+  test('พอร์ต THB ล้วน → ข้อความเดิมทุกตัวอักษร ไม่มีบรรทัด USD / ไม่มีคำว่า "เทียบบาท"', () => {
+    const text = allText(
+      buildPortfolioSummaryPushMessage({
+        ...BASE,
+        byCurrency: { THB: { currentValue: 40000, invested: 30000 }, USD: { currentValue: 0, invested: 0 } },
+        fxRate: null,
+        fxUnavailableForUsd: false,
+      })
+    );
+
+    expect(text).toContain('เงินลงทุนรวมทั้งพอร์ต: 30,000 บาท');
+    expect(text).toContain('มูลค่าปัจจุบันรวม: 40,000 บาท');
+    expect(text).not.toContain('USD');
+    expect(text).not.toContain('เทียบบาท');
+  });
+
+  test('พอร์ต USD ล้วน → โชว์ยอด USD จริง ไม่ใช่ "0 บาท" (บั๊กเดิม)', () => {
+    const text = allText(
+      buildPortfolioSummaryPushMessage(
+        withFx({
+          ...BASE,
+          // portfolio.service ตั้ง totalInvested = ยอด THB เท่านั้น → 0 ในพอร์ต USD ล้วน
+          totalInvestedAllAssets: 0,
+          totalCurrentValue: 24500,
+          totalProfitLoss: 3500,
+          totalProfitLossPercent: 16.67,
+          byCurrency: { THB: { currentValue: 0, invested: 0 }, USD: { currentValue: 700, invested: 600 } },
+        })
+      )
+    );
+
+    expect(text).toContain('เงินลงทุนรวมทั้งพอร์ต: 600 USD');
+    expect(text).not.toContain('เงินลงทุนรวมทั้งพอร์ต: 0 บาท');
+    // ยอดมูลค่า/กำไรเป็นยอดแปลงเทียบบาท → ต้องกำกับให้ชัด + บอกเรตที่ใช้
+    expect(text).toContain('มูลค่าปัจจุบันรวม (เทียบบาท): 24,500 บาท');
+    expect(text).toContain('อัตราแลกเปลี่ยน 1 USD = 35 บาท ณ 2025-01-02');
+  });
+
+  test('พอร์ตปน THB + USD → แยก 2 บรรทัด ไม่ถัวข้ามสกุล + กำกับ (เทียบบาท) และเรต', () => {
+    const text = allText(
+      buildPortfolioSummaryPushMessage(
+        withFx({
+          ...BASE,
+          totalCurrentValue: 64500,
+          totalProfitLoss: 13500,
+          totalProfitLossPercent: 21.09,
+          byCurrency: { THB: { currentValue: 40000, invested: 30000 }, USD: { currentValue: 700, invested: 600 } },
+        })
+      )
+    );
+
+    expect(text).toContain('เงินลงทุนรวมทั้งพอร์ต (บาท): 30,000 บาท');
+    expect(text).toContain('เงินลงทุนรวมทั้งพอร์ต (USD): 600 USD');
+    expect(text).toContain('มูลค่าปัจจุบันรวม (เทียบบาท): 64,500 บาท');
+    expect(text).toContain('กำไร/ขาดทุนรวม (เทียบบาท): +13,500 บาท');
+    expect(text).toContain('1 USD = 35 บาท');
+    // ห้ามถัวข้ามสกุล (30,000 + 600)
+    expect(text).not.toContain('30,600');
+  });
+
+  test('มี USD แต่ดึงเรตไม่ได้ (fxUnavailableForUsd) → เตือนว่ายอดเทียบบาทยังไม่รวมส่วน USD', () => {
+    const text = allText(
+      buildPortfolioSummaryPushMessage({
+        ...BASE,
+        byCurrency: { THB: { currentValue: 40000, invested: 30000 }, USD: { currentValue: 700, invested: 600 } },
+        fxRate: null,
+        fxAsOf: null,
+        fxStale: false,
+        fxUnavailableForUsd: true,
+      })
+    );
+
+    expect(text).toContain('เงินลงทุนรวมทั้งพอร์ต (USD): 600 USD');
+    expect(text).toContain('ดึงอัตราแลกเปลี่ยนไม่สำเร็จ');
+    expect(text).not.toContain('อัตราแลกเปลี่ยน 1 USD =');
+  });
+
+  test('เรตเก่า (fxStale) → กำกับว่าเป็น "เรตล่าสุดที่มี" ไม่เงียบ', () => {
+    const text = allText(
+      buildPortfolioSummaryPushMessage(
+        withFx({
+          ...BASE,
+          fxStale: true,
+          byCurrency: { THB: { currentValue: 40000, invested: 30000 }, USD: { currentValue: 700, invested: 600 } },
+        })
+      )
+    );
+
+    expect(text).toContain('(เรตล่าสุดที่มี)');
+  });
+
+  test('Caller เดิมที่ไม่ส่ง byCurrency/fx* มา → Fallback ยอด THB (ไม่ Crash/ไม่ NaN)', () => {
+    const text = allText(buildPortfolioSummaryPushMessage(BASE));
+
+    expect(text).toContain('เงินลงทุนรวมทั้งพอร์ต: 30,000 บาท');
+    expect(text).not.toContain('NaN');
+    expect(text).not.toContain('undefined');
+  });
+
+  test('มี Asset ไม่มีราคาตลาด + มี USD → เตือน excludedCount และบอกเรตพร้อมกันได้', () => {
+    const text = allText(
+      buildPortfolioSummaryPushMessage(
+        withFx({
+          ...BASE,
+          excludedCount: 2,
+          byCurrency: { THB: { currentValue: 40000, invested: 30000 }, USD: { currentValue: 700, invested: 600 } },
+        })
+      )
+    );
+
+    expect(text).toContain('ไม่รวม 2 สินทรัพย์ที่ยังไม่มีราคาตลาด');
+    expect(text).toContain('1 USD = 35 บาท');
   });
 });

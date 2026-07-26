@@ -465,6 +465,11 @@ function buildPortfolioMessage(summary) {
   const body = [];
 
   summary.holdings.forEach((h) => {
+    // Multi-Currency (Round 10) — หน่วยตามสกุลของสินทรัพย์ (Default THB) เหมือน
+    // buildProfitMessage/buildHistoryMessage และตาราง Holdings ฝั่งเว็บที่ใช้
+    // formatMoneyCur(…, h.currency) — h.currency มาจาก portfolio.service
+    const unit = h.currency === 'USD' ? 'USD' : 'บาท';
+
     body.push(textLine(h.symbol, { size: 'md', weight: 'bold', color: COLOR.textPrimary }));
     body.push(
       textLine(`จำนวน: ${formatNumber(h.heldQuantity)} ${h.symbol}`, {
@@ -474,12 +479,12 @@ function buildPortfolioMessage(summary) {
     );
     body.push(
       textLine(
-        `ต้นทุนเฉลี่ย: ${h.averageCost === null ? '-' : formatNumber(h.averageCost)} บาท/หน่วย`,
+        `ต้นทุนเฉลี่ย: ${h.averageCost === null ? '-' : formatNumber(h.averageCost)} ${unit}/หน่วย`,
         { size: 'sm', color: COLOR.textSecondary }
       )
     );
     body.push(
-      textLine(`เงินลงทุน: ${formatNumber(h.totalInvested)} บาท`, {
+      textLine(`เงินลงทุน: ${formatNumber(h.totalInvested)} ${unit}`, {
         size: 'sm',
         color: COLOR.textSecondary,
       })
@@ -1452,20 +1457,61 @@ function buildPortfolioSummaryPushMessage(summary) {
   const sign = isProfit ? '+' : '-';
   const plAbs = Math.abs(summary.totalProfitLoss);
 
+  // Multi-Currency (Round 10): เงินลงทุนรวมต้องแยกตามสกุล ไม่ถัวข้ามสกุล (Pattern
+  // เดียวกับ buildPortfolioMessage) — totalInvestedAllAssets เป็นยอด THB เท่านั้น
+  // (portfolioSummary.service ส่งต่อ portfolio.service.totalInvested ที่คงไว้เพื่อ
+  // Backward Compat) ส่วนยอดสกุล USD อ่านจาก summary.byCurrency
+  // หมายเหตุ: byCurrency นับเฉพาะ Asset ที่ดึงราคาได้ ต่างจาก totalInvestedAllAssets
+  // ที่นับทุก Asset — บรรทัด excludedCount ด้านล่างบอก User อยู่แล้วว่ามี Asset ที่ไม่ถูกนับ
+  const investedThb = summary.totalInvestedAllAssets ?? 0;
+  const investedUsd = summary.byCurrency?.USD?.invested ?? 0;
+  const hasUsd = investedUsd > 0;
+
+  const investedLines = [];
+  if (investedThb > 0 && hasUsd) {
+    investedLines.push(
+      textLine(`เงินลงทุนรวมทั้งพอร์ต (บาท): ${formatNumber(investedThb)} บาท`, {
+        size: 'sm',
+        color: COLOR.textSecondary,
+      }),
+      textLine(`เงินลงทุนรวมทั้งพอร์ต (USD): ${formatNumber(investedUsd)} USD`, {
+        size: 'sm',
+        color: COLOR.textSecondary,
+      })
+    );
+  } else if (hasUsd) {
+    // พอร์ต USD ล้วน — เดิมโชว์ "0 บาท" เพราะอ่าน totalInvestedAllAssets (ยอด THB) ตรงๆ
+    investedLines.push(
+      textLine(`เงินลงทุนรวมทั้งพอร์ต: ${formatNumber(investedUsd)} USD`, {
+        size: 'sm',
+        color: COLOR.textSecondary,
+      })
+    );
+  } else {
+    investedLines.push(
+      textLine(`เงินลงทุนรวมทั้งพอร์ต: ${formatNumber(investedThb)} บาท`, {
+        size: 'sm',
+        color: COLOR.textSecondary,
+      })
+    );
+  }
+
+  // มูลค่า/กำไร-ขาดทุนรวมเป็นยอด "เทียบบาท" (แปลง USD ด้วยเรตเดียวใน portfolioSummary
+  // .service) — กำกับ (เทียบบาท) เมื่อมีส่วน USD เพื่อไม่ให้เข้าใจผิดว่าเป็นยอด THB ล้วน
+  // (Pattern เดียวกับ reportExport.service ที่ใช้ 'รวมทั้งพอร์ต (เทียบบาท)')
+  const thbEquivSuffix = hasUsd ? ' (เทียบบาท)' : '';
+
   // percent เป็น null เมื่อไม่มี Asset ที่มีราคาเลย (หารด้วยศูนย์) → แสดงเฉพาะจำนวนเงิน
   const plText =
     summary.totalProfitLossPercent === null
-      ? `กำไร/ขาดทุนรวม: ${sign}${formatNumber(plAbs)} บาท`
-      : `กำไร/ขาดทุนรวม: ${sign}${formatNumber(plAbs)} บาท (${sign}${formatNumber(
+      ? `กำไร/ขาดทุนรวม${thbEquivSuffix}: ${sign}${formatNumber(plAbs)} บาท`
+      : `กำไร/ขาดทุนรวม${thbEquivSuffix}: ${sign}${formatNumber(plAbs)} บาท (${sign}${formatNumber(
           Math.abs(summary.totalProfitLossPercent)
         )}%)`;
 
   const body = [
-    textLine(`เงินลงทุนรวมทั้งพอร์ต: ${formatNumber(summary.totalInvestedAllAssets)} บาท`, {
-      size: 'sm',
-      color: COLOR.textSecondary,
-    }),
-    textLine(`มูลค่าปัจจุบันรวม: ${formatNumber(summary.totalCurrentValue)} บาท`, {
+    ...investedLines,
+    textLine(`มูลค่าปัจจุบันรวม${thbEquivSuffix}: ${formatNumber(summary.totalCurrentValue)} บาท`, {
       size: 'md',
       weight: 'bold',
       color: COLOR.textPrimary,
@@ -1479,6 +1525,27 @@ function buildPortfolioSummaryPushMessage(summary) {
     body.push(
       textLine(
         `* ไม่รวม ${summary.excludedCount} สินทรัพย์ที่ยังไม่มีราคาตลาด (เช่น หุ้นไทย) ตัวเลขนี้จึงไม่ใช่ทั้งพอร์ต`,
+        { size: 'xs', color: COLOR.textSecondary }
+      )
+    );
+  }
+
+  // Multi-Currency (Round 10): กำกับเรตที่ใช้แปลงยอด "เทียบบาท" (Pattern เดียวกับ
+  // buildProfitMessage) — และถ้ามีส่วน USD แต่ดึงเรตไม่ได้ (fxUnavailableForUsd)
+  // ต้องบอกตรงๆ ว่ายอดเทียบบาทยังไม่รวมส่วนนั้น ไม่ปล่อยให้ User เข้าใจว่าครบแล้ว
+  if (summary.fxUnavailableForUsd) {
+    body.push(
+      textLine('* ยังตีส่วนสกุล USD เป็นบาทไม่ได้ (ดึงอัตราแลกเปลี่ยนไม่สำเร็จ) ยอดเทียบบาทจึงยังไม่รวมส่วนนี้', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      })
+    );
+  } else if (hasUsd && summary.fxRate) {
+    body.push(
+      textLine(
+        `อัตราแลกเปลี่ยน 1 USD = ${formatNumber(summary.fxRate)} บาท` +
+          `${summary.fxAsOf ? ` ณ ${summary.fxAsOf}` : ''}` +
+          `${summary.fxStale ? ' (เรตล่าสุดที่มี)' : ''}`,
         { size: 'xs', color: COLOR.textSecondary }
       )
     );
