@@ -8,7 +8,6 @@ const undoService = require('../services/undoTransaction.service');
 const reminderService = require('../services/dcaReminder.service');
 const reminderSetupFlow = require('../services/reminderSetupFlow.service');
 const guidedBuyFlow = require('../services/guidedBuyFlow.service');
-const supportRequestFlow = require('../services/supportRequestFlow.service');
 const pendingService = require('../services/pendingTransaction.service');
 const paymentService = require('../services/payment.service');
 const userErasureService = require('../services/userErasure.service');
@@ -378,21 +377,17 @@ async function routeCommand(user, parsed) {
       return flexMessage.buildErasureConfirmMessage(Boolean(pendingPayment));
     }
 
-    // ── ติดต่อ Admin/Support ฉุกเฉิน (ก่อนเปิด Closed Beta Wave 1) ───────────
-    // เช็ค Rate Limit "ก่อน" ถามข้อความเสมอ (กันเสียเวลาพิมพ์ยาวๆ แล้วโดนบล็อกทีหลัง)
-    // ไม่เช็ค Premium/Entitlement ใดๆ — เปิดให้ทุกคนติดต่อได้เท่ากัน (ไม่ใช่ Feature
-    // หารายได้) และไม่บล็อกแม้มี Session ของ Flow อื่นค้างอยู่ (ดู
-    // supportRequestFlow.startFlow — เหตุผลอยู่ที่นั่น)
+    // ── ติดต่อ Admin/Support (ก่อนเปิด Closed Beta Wave 1) ───────────────────
+    // ⚠️ เดิม Flow นี้ถามข้อความต่อในแชท LINE ตรงๆ (Session-based) — เปลี่ยนมาชี้
+    // ไปหน้าเว็บ /support แทน เพราะ Webhook ตอบอัตโนมัติชนกับตอน Admin เข้าไปตอบมือ
+    // ใน LINE Chat Mode เดียวกัน (Bot ทับคำตอบของ Admin) — ไม่มี Session/Rate Limit
+    // ฝั่ง LINE อีกต่อไป (ตอบ Link คงที่ ไม่ Push/ไม่เขียน DB จึงไม่มีอะไรให้ Spam)
+    // Pattern เดียวกับปุ่ม Dashboard (case 'open_dashboard' ด้านล่าง)
     case COMMANDS.CONTACT_SUPPORT: {
-      try {
-        await supportRequestFlow.startFlow(user.id);
-      } catch (err) {
-        if (err.code === 'SUPPORT_REQUEST_RATE_LIMITED') {
-          return flexMessage.buildSupportRequestRateLimitedMessage();
-        }
-        throw err;
-      }
-      return flexMessage.buildSupportRequestAskMessageMessage();
+      const supportUrl = config.liff.id
+        ? `https://liff.line.me/${config.liff.id}/support`
+        : `${config.app.frontendUrl || ''}/support`;
+      return flexMessage.buildSupportLinkMessage(supportUrl);
     }
 
     case COMMANDS.UNKNOWN:
@@ -806,13 +801,6 @@ async function routePostback(user, data) {
       return flexMessage.buildGuidedBuyCancelledMessage();
     }
 
-    // ปุ่มยกเลิกของ Flow ติดต่อ Admin — action แยกของตัวเอง เหตุผลเดียวกับ
-    // cancel_guided_buy (ห้ามใช้ action ของ Flow อื่นร่วมกัน)
-    case 'cancel_support_request': {
-      await supportRequestFlow.cancelFlow(user.id);
-      return flexMessage.buildSupportRequestCancelledMessage();
-    }
-
     // ── ปุ่ม "❓ วิธีใช้งาน" → รวมคำสั่งพิมพ์ตรงทั้งหมด (Expert Path ต้องหาเจอเสมอ) ──
     case 'help_guide': {
       return flexMessage.buildHelpMessage();
@@ -967,35 +955,11 @@ async function routePostback(user, data) {
 //    เท่านั้น ที่ถูกตีความเป็น Input ของ Flow (จำนวนเงิน / วันที่ของเดือนที่พิมพ์เอง)
 async function routeText(user, text) {
   const session = await reminderSetupFlow.getCurrentSession(user.id);
-  // ── ติดต่อ Admin/Support ฉุกเฉิน — เช็คไว้ก่อนเสมอ (ใช้ทั้งสองสาขาด้านล่าง) ──
-  const supportSession = await supportRequestFlow.getCurrentSession(user.id);
   const parsed = commandParser.parseCommand(text);
 
   // คำสั่งปกติชนะเสมอ (ไม่ถูก Flow ดักจับ)
   if (parsed.command !== COMMANDS.UNKNOWN) {
-    // ⚠️ Auto-cancel Support Session ถ้าค้างอยู่ — ต่างจาก Reminder Setup/Guided
-    // Buy/Bulk Import ที่ "ไม่" Auto-cancel Session ของตัวเองเมื่อเจอคำสั่งอื่น
-    // (Requirement ข้อ 3 เดิม) เพราะ Flow เหล่านั้น Capture ข้อความผิดพลาดแค่ Bounce
-    // กลับเป็น Error ให้พิมพ์ใหม่ — Reversible เต็มที่ ไม่มีผลข้างเคียงจริงกับใครนอก
-    // ระบบ แต่ Support Request มีผลข้างเคียงที่ Rollback ไม่ได้ (Push ข้อความหา Admin
-    // จริง) — ถ้า User พิมพ์คำสั่งอื่นที่รู้จัก (เช่น "พอต") ระหว่าง Session ยังค้างอยู่
-    // (TTL 5 นาที) แปลว่าเปลี่ยนใจไม่ส่งข้อความนี้แล้ว ต้อง Cancel ทันที ไม่งั้นข้อความ
-    // สุ่มที่พิมพ์ทีหลัง (เช่น "ขอบคุณครับ") จะหลุดไปหา Admin โดยไม่ได้ตั้งใจ (พบระหว่าง
-    // Audit ก่อน Apply Migration — ยังไม่เคยเกิดจริงบน Production)
-    if (supportSession) {
-      await supportRequestFlow.cancelFlow(user.id);
-    }
     return routeCommand(user, parsed);
-  }
-
-  // ── ติดต่อ Admin/Support ฉุกเฉิน — ลำดับสูงสุดในบรรดา Session ทั้งหมด ──────
-  // ข้อความถัดไปหลังพิมพ์ Trigger ("ติดต่อแอดมิน" ฯลฯ) ต้องถูกตีความเป็นเนื้อหาที่
-  // ต้องการแจ้งเสมอ ไม่ถูก Session ค้างของ Flow อื่น (ตั้งเตือน/นำเข้าพอร์ต/Guided
-  // Buy) แย่งไปตีความผิดก่อน — ต่างจาก Flow อื่นที่บล็อกกันเองไม่ให้ 2 Session ซ้อน
-  // กัน Flow นี้ "ไม่บล็อก" การเริ่ม (ดู supportRequestFlow.startFlow) จึงอาจมี
-  // Session อื่นค้างอยู่พร้อมกันได้จริง ต้องเช็คก่อนสุดเพื่อไม่ให้ถูกแย่ง
-  if (supportSession) {
-    return handleSupportRequestMessage(user, text);
   }
 
   // Text ไม่ใช่คำสั่งที่รู้จัก + มี Session ค้าง → อาจเป็น Input ของ Flow
@@ -1198,90 +1162,6 @@ async function pushPaymentRequestToAdmins(payment, displayName, context) {
   );
 
   return results.filter(Boolean).length;
-}
-
-// ── ติดต่อ Admin/Support ฉุกเฉิน (ก่อนเปิด Closed Beta Wave 1) ─────────────────
-// Push การ์ดแจ้งข้อความหา Admin ทุกคนใน ADMIN_LINE_USER_IDS — Pattern เดียวกับ
-// pushPaymentRequestToAdmins เป๊ะ (Best-effort ทีละคน คืนจำนวนที่ Push สำเร็จจริง)
-async function pushSupportRequestToAdmins(user, message) {
-  const adminIds = config.payment.adminLineUserIds;
-  if (adminIds.length === 0) {
-    console.error(
-      `[webhook] support request: no ADMIN_LINE_USER_IDS configured; nobody notified (userId=${user.id})`
-    );
-    return 0;
-  }
-
-  const adminMessage = flexMessage.buildAdminSupportRequestMessage(user, message, new Date());
-
-  const results = await Promise.all(
-    adminIds.map((adminId) =>
-      lineService
-        .pushMessage(adminId, adminMessage)
-        .then(() => true)
-        .catch((pushErr) => {
-          console.error(
-            `[webhook] support request: push to admin ${adminId} failed: ${pushErr.message}`
-          );
-          return false;
-        })
-    )
-  );
-
-  return results.filter(Boolean).length;
-}
-
-// ขั้นที่ 2 ของ Flow ติดต่อ Admin — ผู้ใช้พิมพ์ข้อความที่ต้องการแจ้งแล้ว (ถูกเรียก
-// จาก routeText เมื่อมี Session AWAITING_MESSAGE ค้างอยู่เท่านั้น จึงไม่ต้อง
-// ตรวจสอบ Session ซ้ำที่นี่ — Caller เป็นผู้ยืนยันมาแล้ว)
-//
-// ⚠️ ข้อความว่าง/ยาวเกิน → ตอบขอให้พิมพ์ใหม่ "โดยไม่ลบ Session" (ให้พิมพ์ใหม่ได้
-// ในขั้นเดิมทันที — Pattern เดียวกับ reminderSetupFlow ตอน INVALID_AMOUNT)
-//
-// ⚠️ Log ผลลัพธ์เป็น Best-effort (เขียนไม่สำเร็จไม่ Block ผู้ใช้ — Pattern เดียวกับ
-// aiOcrUsageRepository.incrementUsage ใน slipOcr.service) แต่ "ลบ Session เสมอ"
-// ไม่ว่า Log จะสำเร็จหรือไม่ เพราะการ Push หา Admin (Action หลักของ Flow นี้) เกิด
-// ขึ้นจริงไปแล้ว ไม่ใช่สิ่งที่ต้อง Rollback (Source of Truth = Push ถึง Admin สำเร็จ
-// ไหม ไม่ใช่ Log บันทึกสำเร็จไหม)
-async function handleSupportRequestMessage(user, text) {
-  let message;
-  try {
-    message = supportRequestFlow.validateMessage(text);
-  } catch (err) {
-    if (err.code === 'SUPPORT_REQUEST_EMPTY_MESSAGE') {
-      return flexMessage.buildSupportRequestAskMessageMessage();
-    }
-    if (err.code === 'SUPPORT_REQUEST_MESSAGE_TOO_LONG') {
-      return flexMessage.buildSupportRequestTooLongMessage(err.details.max);
-    }
-    throw err;
-  }
-
-  const notifiedCount = await pushSupportRequestToAdmins(user, message);
-
-  try {
-    await supportRequestFlow.recordRequest(user.id, message, {
-      adminCount: config.payment.adminLineUserIds.length,
-      notifiedCount,
-    });
-  } catch (err) {
-    // ⚠️ ไม่ใช่แค่ Log หาย — supportRequestFlow.startFlow เช็ค Rate Limit จากตาราง
-    // support_requests ตัวเดียวกันนี้ (findRecentByUser) ถ้า Insert ล้มเหลวแถวนี้จะ
-    // ไม่ถูกนับเป็น "คำขอล่าสุด" ทำให้ User คนนี้ส่งคำขอถัดไปได้ทันทีโดยไม่ติด Rate
-    // Limit 1 ครั้ง/ชม. (Fail-open) — ยอมรับความเสี่ยงนี้ไว้ (DB ล่มเป็นเหตุการณ์หายาก
-    // และตอนนั้นระบบอื่นก็กระทบเป็นวงกว้างอยู่แล้ว) แต่ต้อง Log ให้ชัดว่ากระทบ Rate
-    // Limit ด้วย ไม่ใช่แค่ "ประวัติหาย" เฉยๆ เพื่อให้ Debug ย้อนหลังง่ายถ้ามีคนสงสัยว่า
-    // ทำไม Rate Limit ไม่ทำงานกับ User รายนี้
-    console.error(
-      `[webhook] support request log failed — Rate Limit (1 ครั้ง/ชม.) จะไม่มีผลกับ ` +
-        `user ${user.id} จนกว่าจะมีคำขอถัดไปที่ Log สำเร็จ (Push ถึง Admin สำเร็จแล้ว ` +
-        `ไม่กระทบ): ${err.message}`
-    );
-  }
-
-  await supportRequestFlow.cancelFlow(user.id);
-
-  return flexMessage.buildSupportRequestSentMessage(notifiedCount > 0);
 }
 
 async function handlePaymentSlipImage(event, pending, user) {

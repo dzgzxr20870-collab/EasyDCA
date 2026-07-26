@@ -3,6 +3,7 @@ import Login from './pages/Login.jsx';
 import DashboardHome from './pages/DashboardHome.jsx';
 import Admin from './pages/Admin.jsx';
 import Premium from './pages/Premium.jsx';
+import Support from './pages/Support.jsx';
 
 function App() {
   return (
@@ -23,6 +24,9 @@ function App() {
         {/* Business Model Beta — หน้าอัพเกรด Premium ผ่าน PromptPay QR บนเว็บ
             (เป้าหมายของปุ่มอัพเกรดจาก Export Gate + DCA Planner Gate + Banner Free) */}
         <Route path="/premium" element={<Premium />} />
+        {/* ติดต่อ Admin/Support (ก่อนเปิด Closed Beta Wave 1) — แทนที่ Flow LINE Chat
+            เดิมที่ชนกับ Admin ตอบมือใน Chat Mode เดียวกัน (Bot ทับคำตอบของ Admin) */}
+        <Route path="/support" element={<Support />} />
         <Route path="/admin" element={<Admin />} />
       </Routes>
     </BrowserRouter>

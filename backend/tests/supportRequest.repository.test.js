@@ -71,6 +71,99 @@ describe('supportRequest.repository.create', () => {
       })
     ).rejects.toThrow('db down');
   });
+
+  // ── Migration 026 — category/source (Pivot ไปหน้าเว็บ /support) ──────────────
+  test('ส่ง category/source มาด้วย → Insert เข้าไปด้วย', async () => {
+    __query.single.mockResolvedValue({
+      data: {
+        id: 'sr-2',
+        user_id: 'user-1',
+        message: 'x',
+        admin_count: 2,
+        notified_count: 2,
+        category: 'ocr',
+        source: 'web',
+        created_at: '2026-07-26T00:00:00.000Z',
+      },
+      error: null,
+    });
+
+    const result = await supportRequestRepository.create({
+      userId: 'user-1',
+      message: 'x',
+      adminCount: 2,
+      notifiedCount: 2,
+      category: 'ocr',
+      source: 'web',
+    });
+
+    expect(__query.insert).toHaveBeenCalledWith({
+      user_id: 'user-1',
+      message: 'x',
+      admin_count: 2,
+      notified_count: 2,
+      category: 'ocr',
+      source: 'web',
+    });
+    expect(result).toMatchObject({ category: 'ocr', source: 'web' });
+  });
+
+  // ⚠️ ไม่ส่ง category/source เลย (เช่น Flow เก่าก่อน Migration 026 ถ้ายังมี Caller
+  // เดิมหลงเหลือ) → "ไม่ใส่ Key เข้า insert()" ให้ DB Default ('line') ทำงานแทน ไม่ใช่
+  // ส่ง undefined ทับ Default โดยไม่ตั้งใจ (บั๊กเงียบที่เจอได้ถ้าใช้ ?? 'line' ฝั่ง JS
+  // แทนที่จะปล่อยให้ DB จัดการ)
+  test('ไม่ส่ง category/source มา → insert() ไม่มี Key เหล่านี้เลย (ให้ DB Default ทำงาน)', async () => {
+    __query.single.mockResolvedValue({
+      data: {
+        id: 'sr-3',
+        user_id: 'user-1',
+        message: 'x',
+        admin_count: 1,
+        notified_count: 1,
+        category: null,
+        source: 'line',
+        created_at: '2026-07-26T00:00:00.000Z',
+      },
+      error: null,
+    });
+
+    await supportRequestRepository.create({
+      userId: 'user-1',
+      message: 'x',
+      adminCount: 1,
+      notifiedCount: 1,
+    });
+
+    const insertPayload = __query.insert.mock.calls[0][0];
+    expect(insertPayload).not.toHaveProperty('category');
+    expect(insertPayload).not.toHaveProperty('source');
+  });
+
+  test('toSupportRequest map category=null (แถวเก่าก่อน Migration 026) → คืน null ไม่ใช่ undefined', async () => {
+    __query.single.mockResolvedValue({
+      data: {
+        id: 'sr-4',
+        user_id: 'user-1',
+        message: 'x',
+        admin_count: 0,
+        notified_count: 0,
+        category: null,
+        source: 'line',
+        created_at: '2026-07-26T00:00:00.000Z',
+      },
+      error: null,
+    });
+
+    const result = await supportRequestRepository.create({
+      userId: 'user-1',
+      message: 'x',
+      adminCount: 0,
+      notifiedCount: 0,
+    });
+
+    expect(result.category).toBeNull();
+    expect(result.source).toBe('line');
+  });
 });
 
 describe('supportRequest.repository.findRecentByUser', () => {

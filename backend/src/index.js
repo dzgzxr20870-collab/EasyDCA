@@ -16,6 +16,7 @@ const reportsRoutes = require('./routes/reports.routes');
 const assetsRoutes = require('./routes/assets.routes');
 const transactionsRoutes = require('./routes/transactions.routes');
 const dcaPlansRoutes = require('./routes/dcaPlans.routes');
+const supportRoutes = require('./routes/support.routes');
 const healthAlertService = require('./services/healthAlert.service');
 
 const app = express();
@@ -78,6 +79,11 @@ app.use('/api/v1/admin', adminRoutes);
 // Mount Reports Routes (Phase 3 Round 8 — Export PDF/Excel) ที่ /api/v1/reports
 // ทุก Route ผ่าน requireAuth + เช็ค Premium ในชั้น Controller (ดู reports.controller.js)
 app.use('/api/v1/reports', reportsRoutes);
+
+// Mount Support Routes (ติดต่อ Admin/Support ก่อนเปิด Closed Beta Wave 1) ที่
+// /api/v1/support — แทนที่ Flow LINE Chat เดิมที่ชนกับ Admin ตอบมือ (ดู
+// support.routes.js / webhook.controller.js case COMMANDS.CONTACT_SUPPORT)
+app.use('/api/v1/support', supportRoutes);
 
 // Railway Health Check (ดู docs/DEPLOYMENT.md § 3.1) — ไม่ต้อง Auth (UptimeRobot/
 // Railway ต้องเรียกได้จากภายนอกโดยตรง) เช็คว่า Database (Supabase) เชื่อมต่อได้จริง

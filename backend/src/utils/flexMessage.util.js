@@ -1590,28 +1590,13 @@ function buildAdminPaymentRequestMessage(payment, userDisplayName, qrImageUrl) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// ติดต่อ Admin/Support ฉุกเฉิน (ก่อนเปิด Closed Beta Wave 1)
+// ติดต่อ Admin/Support (ก่อนเปิด Closed Beta Wave 1)
 // ═══════════════════════════════════════════════════════════════════════
-// Flow ขั้นตอนเดียว: พิมพ์ Trigger ("ติดต่อแอดมิน" ฯลฯ) → ถามข้อความ → พิมพ์ข้อความ
-// → Push การ์ดนี้หา Admin ทุกคนใน ADMIN_LINE_USER_IDS (Pattern เดียวกับ
-// buildAdminPaymentRequestMessage/pushPaymentRequestToAdmins) → ตอบ User ตามจริง
-//
-// ⚠️ ห้ามใช้ textWithQuickReply()/guidedBuyTextWithQuickReply() ผนวกปุ่มยกเลิกของ Flow
-// นี้เด็ดขาด — จะไปเรียก cancelFlow ของ Flow อื่นผิดตัว (บั๊กเดียวกับที่เจอใน S8 R2
-// รอบ 1) จึงมี Helper คู่ของตัวเองด้านล่างเหมือน Guided Buy/Reminder Setup
-const SUPPORT_REQUEST_CANCEL_ACTION = 'cancel_support_request';
-
-function supportRequestCancelItem() {
-  return quickReplyPostback('❌ ยกเลิก', `action=${SUPPORT_REQUEST_CANCEL_ACTION}`, 'ยกเลิกการติดต่อ');
-}
-
-function supportRequestTextWithQuickReply(text) {
-  return {
-    type: 'text',
-    text,
-    quickReply: { items: [supportRequestCancelItem()] },
-  };
-}
+// ⚠️ Pivot จาก LINE Chat Inline (พิมพ์ Trigger → ถามข้อความในแชทตรงๆ — Migration
+// 024) เป็นหน้าเว็บ /support แยกต่างหาก เพราะ Webhook ตอบอัตโนมัติชนกับตอน Admin
+// เข้าไปตอบมือใน LINE Chat Mode เดียวกัน (Bot ทับคำตอบของ Admin) — LINE Chat ฝั่ง
+// เดิมตอนนี้แค่พิมพ์ Trigger แล้วได้ Link ไปหน้าเว็บทันที (ดู buildSupportLinkMessage)
+// Builder ที่เหลือด้านล่างใช้ตอน Submit จากหน้าเว็บ (support.controller.js)
 
 // เวลาแบบไทย "DD MMM YYYY HH:mm น." (Asia/Bangkok) — formatThaiDate ให้แค่วันที่
 // จึงต่อเวลาเองที่นี่ (เฉพาะจุดนี้ที่ต้องโชว์เวลานาที ไม่ใช่แค่วันที่เหมือนที่อื่น)
@@ -1625,105 +1610,79 @@ function formatThaiDateTime(value) {
   return `${formatThaiDate(value)} ${timePart} น.`;
 }
 
-// ถามข้อความที่ต้องการแจ้ง (หลังพิมพ์ Trigger สำเร็จ)
-function buildSupportRequestAskMessageMessage() {
-  return supportRequestTextWithQuickReply(
-    'พิมพ์ข้อความที่ต้องการแจ้งทีมงานได้เลยครับ (เช่น ปัญหาที่เจอ/สิ่งที่ต้องการสอบถาม) ทีมงานจะติดต่อกลับโดยเร็วที่สุด'
-  );
-}
-
-function buildSupportRequestCancelledMessage() {
-  return bubble({
-    headerText: '❌ ยกเลิกการติดต่อแล้ว',
-    headerColor: COLOR.textSecondary,
-    headerBg: COLOR.warningBg,
-    bodyContents: [
-      textLine('ยกเลิกการติดต่อทีมงานแล้ว ยังไม่มีข้อความถูกส่งไป', {
-        size: 'sm',
-        color: COLOR.textPrimary,
-      }),
-      textLine('ต้องการติดต่อใหม่ พิมพ์ "ติดต่อแอดมิน" ได้ทุกเมื่อ', {
-        size: 'xs',
-        color: COLOR.textSecondary,
-      }),
-    ],
-  });
-}
-
-// ⚠️ Rate Limit ตอบก่อนแม้แต่จะเริ่มถามข้อความ (กันเสียเวลาพิมพ์ยาวๆ แล้วโดนบล็อก
-// ทีหลัง) ไม่ใช่ Error ทั่วไป จึงไม่ผ่าน buildErrorMessage/ERROR_MESSAGES
-function buildSupportRequestRateLimitedMessage() {
-  return bubble({
-    headerText: '⏳ ส่งไปแล้วเมื่อไม่นานนี้',
-    headerColor: COLOR.warning,
-    headerBg: COLOR.warningBg,
-    bodyContents: [
-      textLine('คุณเพิ่งแจ้งไปแล้ว รอทีมงานติดต่อกลับก่อนนะคะ/ครับ', {
-        size: 'sm',
-        color: COLOR.textPrimary,
-        wrap: true,
-      }),
-      textLine('ส่งได้อีกครั้งภายใน 1 ชั่วโมงหลังแจ้งครั้งล่าสุด', {
-        size: 'xs',
-        color: COLOR.textSecondary,
-      }),
-    ],
-  });
-}
-
-function buildSupportRequestTooLongMessage(maxLength) {
-  return supportRequestTextWithQuickReply(
-    `ข้อความยาวเกินไป (จำกัด ${maxLength} ตัวอักษร) กรุณาพิมพ์สั้นลงแล้วส่งใหม่อีกครั้ง`
-  );
-}
-
-// ตอบ User หลัง Push หา Admin เสร็จ — ต้องตรงกับสิ่งที่เกิดขึ้นจริงเท่านั้น (ห้ามบอกว่า
-// "ส่งถึงทีมงานแล้ว" ถ้า Push ไม่ถึง Admin สักคน — บทเรียนจากบั๊ก Payment Slip
-// auto-notify) notified = true เมื่อ Push สำเร็จอย่างน้อย 1 Admin
-function buildSupportRequestSentMessage(notified) {
-  if (notified) {
-    return bubble({
-      headerText: '✅ ส่งข้อความถึงทีมงานแล้ว',
-      headerColor: COLOR.profit,
-      headerBg: COLOR.profitBg,
-      bodyContents: [
-        textLine('ทีมงานได้รับข้อความของคุณแล้ว จะติดต่อกลับโดยเร็วที่สุด', {
-          size: 'sm',
-          color: COLOR.textPrimary,
-        }),
-      ],
-    });
-  }
-
-  return bubble({
-    headerText: '⚠️ ส่งข้อความไม่สำเร็จ',
-    headerColor: COLOR.warning,
-    headerBg: COLOR.warningBg,
-    bodyContents: [
-      textLine('ขออภัยค่ะ ระบบส่งข้อความถึงทีมงานไม่สำเร็จในขณะนี้ กรุณาลองใหม่อีกครั้ง', {
-        size: 'sm',
-        color: COLOR.textPrimary,
-        wrap: true,
-      }),
-    ],
-  });
-}
+// ป้ายชื่อหมวดปัญหา (ตรงกับ supportRequestFlow.CATEGORIES) — ใช้แสดงบนการ์ด Admin
+const SUPPORT_CATEGORY_LABELS = {
+  payment_premium: 'ปัญหาชำระเงิน/Premium',
+  ocr: 'OCR อ่านสลิปผิด',
+  portfolio_ledger: 'ข้อมูลพอร์ต/Ledger ผิด',
+  other: 'อื่นๆ',
+};
 
 // ── Push หา Admin: มีข้อความติดต่อใหม่ (ข้อมูล ไม่มีปุ่ม Action — ต่างจากคำขอชำระเงิน
 // ที่ต้องอนุมัติ/ปฏิเสธ Admin ตอบกลับ User เองนอกระบบ) ─────────────────────────
-function buildAdminSupportRequestMessage(user, message, timestamp) {
+// category อาจเป็น null (แถวเก่าก่อน Migration 026 ไม่มีหมวด) → ไม่แสดงบรรทัดนี้เลย
+function buildAdminSupportRequestMessage(user, message, timestamp, category = null) {
+  const body = [
+    textLine(`ผู้ใช้: ${user.displayName ?? '-'}`, { size: 'sm', color: COLOR.textSecondary }),
+    textLine(`LINE User ID: ${user.lineUserId}`, { size: 'xs', color: COLOR.textSecondary }),
+    textLine(`เวลา: ${formatThaiDateTime(timestamp)}`, { size: 'xs', color: COLOR.textSecondary }),
+  ];
+  if (category && SUPPORT_CATEGORY_LABELS[category]) {
+    body.push(
+      textLine(`หมวด: ${SUPPORT_CATEGORY_LABELS[category]}`, { size: 'xs', color: COLOR.textSecondary })
+    );
+  }
+  body.push(separator(), textLine(message, { size: 'sm', color: COLOR.textPrimary, wrap: true }));
+
   return bubble({
     headerText: '🆘 มีข้อความติดต่อใหม่',
     headerColor: COLOR.warning,
     headerBg: COLOR.warningBg,
-    bodyContents: [
-      textLine(`ผู้ใช้: ${user.displayName ?? '-'}`, { size: 'sm', color: COLOR.textSecondary }),
-      textLine(`LINE User ID: ${user.lineUserId}`, { size: 'xs', color: COLOR.textSecondary }),
-      textLine(`เวลา: ${formatThaiDateTime(timestamp)}`, { size: 'xs', color: COLOR.textSecondary }),
-      separator(),
-      textLine(message, { size: 'sm', color: COLOR.textPrimary, wrap: true }),
-    ],
+    bodyContents: body,
   });
+}
+
+// ── Trigger ในแชท LINE → ตอบ Link ไปหน้าเว็บ /support ทันที (Pattern เดียวกับ
+// buildDashboardLinkMessage) ไม่มี Session/Push ฝั่ง LINE อีกต่อไป ─────────────
+function buildSupportLinkMessage(supportUrl) {
+  return {
+    type: 'flex',
+    altText: 'ติดต่อทีมงาน',
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: COLOR.warningBg,
+        paddingAll: '12px',
+        contents: [textLine('🆘 ติดต่อทีมงาน', { weight: 'bold', color: COLOR.warning })],
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: [
+          textLine('แจ้งปัญหาหรือติดต่อทีมงานได้ที่หน้าเว็บนี้เลยครับ', {
+            size: 'sm',
+            color: COLOR.textPrimary,
+            wrap: true,
+          }),
+        ],
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        contents: [
+          {
+            type: 'button',
+            style: 'primary',
+            color: COLOR.warning,
+            action: { type: 'uri', label: 'ไปหน้าติดต่อทีมงาน', uri: supportUrl },
+          },
+        ],
+      },
+    },
+  };
 }
 
 // ── Reply ยืนยันกับ Admin หลังอนุมัติสำเร็จ ───────────────────────────────
@@ -3113,12 +3072,8 @@ module.exports = {
   buildGuidedBuyBusyMessage,
   buildAdminPaymentRequestMessage,
   buildAdminApproveAckMessage,
-  buildSupportRequestAskMessageMessage,
-  buildSupportRequestCancelledMessage,
-  buildSupportRequestRateLimitedMessage,
-  buildSupportRequestTooLongMessage,
-  buildSupportRequestSentMessage,
   buildAdminSupportRequestMessage,
+  buildSupportLinkMessage,
   buildAdminRejectAckMessage,
   buildPaymentApprovedMessage,
   buildPaymentRejectedMessage,

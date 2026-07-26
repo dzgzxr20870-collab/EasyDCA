@@ -15,7 +15,6 @@ jest.mock('../src/jobs/guidedBuyCleanup.job');
 jest.mock('../src/jobs/portfolioSummary.job');
 jest.mock('../src/jobs/portfolioSnapshot.job');
 jest.mock('../src/jobs/webhookEventCleanup.job');
-jest.mock('../src/jobs/supportRequestCleanup.job');
 jest.mock('../src/utils/logger.util');
 
 const pendingCleanup = require('../src/jobs/pendingCleanup.job');
@@ -28,11 +27,10 @@ const guidedBuyCleanup = require('../src/jobs/guidedBuyCleanup.job');
 const portfolioSummary = require('../src/jobs/portfolioSummary.job');
 const portfolioSnapshot = require('../src/jobs/portfolioSnapshot.job');
 const webhookEventCleanup = require('../src/jobs/webhookEventCleanup.job');
-const supportRequestCleanup = require('../src/jobs/supportRequestCleanup.job');
 const logger = require('../src/utils/logger.util');
 
 describe('worker.js — Schedule ทุก Cron Job ครบ (แยกจาก Web Server Process)', () => {
-  test('require worker.js → เรียก schedule* function ของทั้ง 11 ไฟล์ Job อย่างละ 1 ครั้งพอดี', () => {
+  test('require worker.js → เรียก schedule* function ของทั้ง 10 ไฟล์ Job อย่างละ 1 ครั้งพอดี', () => {
     require('../src/worker');
 
     // pendingCleanup.job.js — 2 Function
@@ -59,20 +57,19 @@ describe('worker.js — Schedule ทุก Cron Job ครบ (แยกจา�
     expect(portfolioSnapshot.schedulePortfolioSnapshot).toHaveBeenCalledTimes(1);
     // webhookEventCleanup.job.js (migration 013 — เพิ่มหลัง Spec นี้ถูกร่างไว้ ต้องย้ายมาด้วย)
     expect(webhookEventCleanup.schedulePurgeStaleWebhookEvents).toHaveBeenCalledTimes(1);
-    // supportRequestCleanup.job.js (migration 024 — ติดต่อ Admin ฉุกเฉินก่อนเปิด
-    // Closed Beta Wave 1)
-    expect(supportRequestCleanup.schedulePurgeStaleSupportRequestSessions).toHaveBeenCalledTimes(1);
   });
 
-  test('Log ยืนยัน Startup ผ่าน logger.info หลัง Schedule ครบ (jobCount = 15 พอดี)', () => {
+  test('Log ยืนยัน Startup ผ่าน logger.info หลัง Schedule ครบ (jobCount = 14 พอดี)', () => {
     // ⚠️ ยึด "เลขที่ Derive จาก Object.keys จริง" ไว้เป็น Regression Guard — ไม่ได้
-    // Hardcode เดา: นับจาก 15 Function call ข้างบน (test แรกในไฟล์นี้) พอดี ถ้าเพิ่ม/
+    // Hardcode เดา: นับจาก 14 Function call ข้างบน (test แรกในไฟล์นี้) พอดี ถ้าเพิ่ม/
     // ลด Job ในอนาคตแล้วลืมแก้เลขนี้ Test จะแดงทันที (ตรงข้ามกับปัญหาเดิมที่ jobCount
     // เคย Hardcode ไว้ในโค้ดจริงแล้ว Drift ไม่มีใครรู้ — ตอนนี้โค้ดจริง Derive เองแล้ว
-    // จึงเหลือแค่ Test นี้ที่ต้องคอย Sync คู่มือเป็นจำนวนเต็มตายตัวไว้เตือน)
+    // จึงเหลือแค่ Test นี้ที่ต้องคอย Sync คู่มือเป็นจำนวนเต็มตายตัวไว้เตือน — jobCount
+    // ลดจาก 15 กลับมาเป็น 14 หลัง Drop supportRequestCleanup.job.js — Migration 027
+    // Pivot Flow "ติดต่อ Admin" ไปเป็นหน้าเว็บ /support ไม่มี Session ให้ Purge อีกแล้ว)
     expect(logger.info).toHaveBeenCalledWith(
       'worker process started',
-      expect.objectContaining({ jobCount: 15 })
+      expect.objectContaining({ jobCount: 14 })
     );
   });
 });

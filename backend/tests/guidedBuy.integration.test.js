@@ -21,10 +21,6 @@ jest.mock('../src/repositories/lineWebhookEvent.repository');
 jest.mock('../src/repositories/guidedBuySession.repository');
 jest.mock('../src/repositories/reminderSetupSession.repository');
 jest.mock('../src/repositories/bulkImportSession.repository');
-// routeText เช็ค supportRequestFlow.getCurrentSession ก่อน Flow อื่นทุกครั้ง (ลำดับ
-// สูงสุด — ดู webhook.controller.js) แม้ Test ชุดนี้ไม่ได้ทดสอบ Flow นี้เลยก็ต้อง Mock
-// ไว้ไม่งั้นจะยิง Supabase จริง
-jest.mock('../src/repositories/supportRequestSession.repository');
 jest.mock('../src/services/priceFeed.service');
 jest.mock('../src/services/fxRate.service');
 jest.mock('../src/services/line.service');

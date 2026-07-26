@@ -351,6 +351,10 @@ label.dh-fl .dh-fl-opt { color: var(--muted); font-weight: 500; }
   .dh-m-brand b { font-size: 17.5px; }
   .dh-m-brand small { display: block; color: var(--muted); font-size: 10.5px; margin-top: -2px; font-weight: 500; }
   .dh-app .dh-m-logout-btn { width: 34px; height: 34px; border-radius: 10px; background: var(--card); border: 1px solid var(--line); font-size: 15px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  /* ปุ่มไอคอนมือถือทั่วไปที่ dh-m-brand (Style เดียวกับ .dh-m-logout-btn เป๊ะ แค่แยกชื่อ
+     Class ไม่ให้สื่อความหมายผิดว่าเป็นปุ่ม Logout เท่านั้น — เพิ่มตอนใส่ปุ่ม "ติดต่อ
+     ซัพพอต" ที่นี่ เพราะ Bottom Nav มีแค่ 5 ช่องตายตัวอยู่แล้ว ไม่มีที่เพิ่ม) */
+  .dh-app .dh-m-icon-btn { width: 34px; height: 34px; border-radius: 10px; background: var(--card); border: 1px solid var(--line); font-size: 15px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
   .dh-topbar { order: -2; }
   #dh-dca { order: -1; }
   .dh-rail { display: flex; }

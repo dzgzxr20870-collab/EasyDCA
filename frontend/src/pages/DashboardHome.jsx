@@ -322,6 +322,12 @@ function DashboardHome() {
               <Link className="dh-nav-item" to="/premium">
                 <span className="dh-ic">👤</span> โปรไฟล์ / Premium
               </Link>
+              {/* ติดต่อ Admin/Support (ก่อนเปิด Closed Beta Wave 1) — แทนที่ Flow LINE
+                  Chat เดิมที่ชนกับ Admin ตอบมือใน Chat Mode เดียวกัน (Bot ทับคำตอบของ
+                  Admin) — Client-side Navigate เหมือนปุ่มอื่นในเมนูนี้ */}
+              <Link className="dh-nav-item" to="/support">
+                <span className="dh-ic">🆘</span> ติดต่อซัพพอต
+              </Link>
               {/* เฉพาะ Admin (role มาจาก GET /dashboard/me — Fetch ไว้แล้วตอน load())
                   — ใช้ onClick={() => navigate('/admin')} ตรงตาม Pattern เดิมของ
                   Dashboard.jsx (บรรทัด 393-405 ที่นั่น) ไม่ใช้ <Link> แม้จุดอื่นในไฟล์
@@ -367,6 +373,14 @@ function DashboardHome() {
                 ตอนนี้แท็บ "โปรไฟล์" เปลี่ยนไปพาไปหน้า /premium แล้ว (แก้บั๊กเมนูโปรไฟล์
                 มือถือ) จึงต้องมีทางออกจากระบบสำรองไว้ที่นี่แทน กันมือถือไม่มีปุ่ม
                 Logout เหลือเลย) */}
+            {/* ติดต่อ Admin/Support มือถือ — Bottom Nav มี 5 ช่องตายตัวเต็มพอดีแล้ว
+                (หน้าหลัก/พอร์ต/บันทึก/ประวัติ/โปรไฟล์) ไม่มีที่เพิ่มไอคอนที่ 6 จึงเพิ่ม
+                ที่ dh-m-brand แทน (Pattern เดียวกับปุ่ม Logout 🚪 ที่อยู่ตรงนี้อยู่แล้ว)
+                — มือถือ/LIFF คือช่องทางหลักของ User ส่วนใหญ่ ถ้ามีแค่ Sidebar Desktop
+                (ซ่อนบนมือถือ) กลุ่มเป้าหมายหลักจะหาเมนูนี้ไม่เจอเลย */}
+            <Link className="dh-m-icon-btn" to="/support" aria-label="ติดต่อซัพพอต">
+              🆘
+            </Link>
             <button
               type="button"
               className="dh-m-logout-btn"

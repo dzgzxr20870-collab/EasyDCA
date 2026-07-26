@@ -12,6 +12,10 @@ function toSupportRequest(row) {
     message: row.message,
     adminCount: row.admin_count,
     notifiedCount: row.notified_count,
+    // Migration 026 — Pivot ไปหน้าเว็บ /support: category null ได้ (แถวเก่าก่อน
+    // Migration นี้ไม่มีข้อมูลหมวด) source Default 'line' เสมอที่ชั้น DB
+    category: row.category ?? null,
+    source: row.source,
     createdAt: row.created_at,
   };
 }
@@ -19,15 +23,22 @@ function toSupportRequest(row) {
 // บันทึก Log 1 แถวหลัง Push หา Admin เสร็จ (ผลนับจริง ณ ตอน Push — เรียกหลัง Push
 // เท่านั้น ไม่ใช่ก่อน เพื่อให้ adminCount/notifiedCount เป็นค่าสุดท้ายในการ Insert
 // ครั้งเดียว ไม่ต้องมี UPDATE ตามมาทีหลัง — Pattern เดียวกับ broadcastLogRepository.create)
+//
+// category/source ไม่บังคับส่ง (Optional) — ไม่ใส่ Key เข้า insert() เลยถ้าไม่มีค่า
+// เพื่อให้ DB Default ('line') ทำงานแทน ไม่ Insert 'undefined' ทับ Default โดยไม่ตั้งใจ
 async function create(data) {
+  const payload = {
+    user_id: data.userId,
+    message: data.message,
+    admin_count: data.adminCount,
+    notified_count: data.notifiedCount,
+  };
+  if (data.category !== undefined) payload.category = data.category;
+  if (data.source !== undefined) payload.source = data.source;
+
   const { data: row, error } = await supabaseAdmin
     .from('support_requests')
-    .insert({
-      user_id: data.userId,
-      message: data.message,
-      admin_count: data.adminCount,
-      notified_count: data.notifiedCount,
-    })
+    .insert(payload)
     .select('*')
     .single();
 
