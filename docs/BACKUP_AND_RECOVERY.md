@@ -83,11 +83,13 @@
   `psql` 17) กำกับต้นและท้ายไฟล์ — ถ้าเครื่องที่ใช้ Restore มี `psql` เก่ากว่า
   17 บรรทัดนี้จะ Error "unrecognized command" ดู § 3.4 ข้อ [3] สำหรับวิธีแก้
 
-  ⚠️ **ยังไม่เคยพิสูจน์ว่า Restore เข้า Database ใหม่ทำงานได้จริง** — Verify
-  ล่าสุด (2026-07-27) ทำแค่ Decrypt + gunzip + อ่านเนื้อหาว่ามี Schema/Data
-  ครบ ("รู้อยู่แล้ว ยังไม่ทำ" § 7) ยังไม่ได้ลองรัน `psql < backup.sql` เข้า
-  Database จริงสักครั้ง — ทำ Restore Drill (§ 3.5) ก่อนเชื่อว่า Disaster
-  Recovery ทำได้จริง 100%
+  ✅ **(ยืนยันแล้ว 2026-07-28) Restore เข้า Database ใหม่ทำงานได้จริง** —
+  ทำ Restore Drill เต็มรูปแบบ (§ 3.5) ด้วย Backup จริงจาก R2 เข้า PostgreSQL
+  17.10 บน localhost (แยกจาก Production เด็ดขาด): Decrypt → gunzip → `psql <
+  backup.sql` → ได้ 23 Table ครบตรงกับที่ Decrypt ตรวจสอบไว้ก่อนหน้า + สุ่ม
+  เช็คข้อมูล `transactions`/`users` อ่านค่าได้ถูกต้อง ไม่เพี้ยน (ตัวเลข,
+  Foreign Key, Check Constraint ผ่านหมด) — รายละเอียดผลจริงดู § 3.5 ตาราง
+  Log และ § 3.4 ข้อ [3] สำหรับ Error ที่พบ (ไม่กระทบ Table ของแอป)
 - ⚠️ **(แก้แล้ว 2026-07-27) Race Condition ที่เคยทำให้ Backup ว่างเปล่าดูเหมือน
   สำเร็จ:** `backend/src/utils/pgDump.util.js` เดิม Resolve เป็น "สำเร็จ" ทันทีที่
   Stream ของ `pg_dump` จบ (`stdout 'end'`) โดยไม่รอเช็ค Exit Code จริงก่อน — Node
@@ -299,7 +301,11 @@ node scripts/decryptBackup.js \
 gunzip ~/restore/easydca-<timestamp>.sql.gz      # ได้ .sql ออกมา
 
 # ⚠️ Restore เข้า Database "ใหม่/Staging" ก่อนเสมอถ้าเวลาเอื้ออำนวย (ดู § 3.2 ข้อ 5)
-psql "<DATABASE_URL ปลายทาง>" < ~/restore/easydca-<timestamp>.sql
+# ถ้าปลายทางเป็น Local/Self-hosted Postgres (ไม่ใช่ Supabase Project ใหม่) ให้ใส่
+# -v ON_ERROR_STOP=0 ด้วย เพราะจะเจอ Error ของ Extension supabase_vault ที่ไม่มีใน
+# Postgres ทั่วไปแน่นอน (ดู Error ที่พบจริงในข้อ [3] ด้านล่าง) — ไม่ใส่ Flag นี้
+# psql จะหยุด Restore กลางคันตั้งแต่เจอ Error แรก ทำให้ Table ส่วนที่เหลือไม่ถูก Restore
+psql "<DATABASE_URL ปลายทาง>" -v ON_ERROR_STOP=0 < ~/restore/easydca-<timestamp>.sql
 ```
 
 > ⚠️ **`psql` ที่ใช้ Restore ต้องเป็นเวอร์ชัน 17 ขึ้นไป** (ตรงกับ `pg_dump` ที่
@@ -309,10 +315,32 @@ psql "<DATABASE_URL ปลายทาง>" < ~/restore/easydca-<timestamp>.sql
 > อันตรายกลางไฟล์ Dump) ถ้าเครื่องที่ใช้ Restore มี `psql` เก่ากว่า 17 จะ
 > Error `unrecognized command \restrict` ทันทีตั้งแต่บรรทัดแรก — แก้โดยติดตั้ง
 > `psql` 17 ก่อน (Mac: `brew install postgresql@17`, Debian/Ubuntu: เพิ่ม
-> PGDG Repo ตามที่ `backend/railpack.json` ทำ) หรือถ้าเชื่อใจว่าไฟล์มาจาก
+> PGDG Repo ตามที่ `backend/railpack.json` ทำ, Windows ไม่มีสิทธิ์ Admin/ไม่มี
+> Docker: ใช้ EDB Binary Zip แบบไม่ต้องติดตั้ง — ดาวน์โหลดจาก
+> `get.enterprisedb.com/postgresql/postgresql-17.x-windows-x64-binaries.zip`
+> แตกไฟล์แล้วเรียก `psql.exe`/`pg_restore.exe` ใน `pgsql/bin/` ตรงๆ ได้เลย
+> ไม่ต้องมีสิทธิ์ Admin) หรือถ้าเชื่อใจว่าไฟล์มาจาก
 > แหล่งที่ถูกต้อง (Decrypt สำเร็จ = GCM ยืนยันแล้วว่าไม่ถูกแก้ไข) ตัด 2
 > บรรทัดนี้ทิ้งก่อน Restore ได้ (`\restrict`/`\unrestrict` เป็นแค่ Guard
 > ไม่ใช่ส่วนของ Schema/Data จริง)
+>
+> ✅ **ยืนยันแล้ว (2026-07-28):** ใช้ `psql` 17.10 ตรงเวอร์ชันกับ `pg_dump` ที่
+> สร้างไฟล์ (17.10) — Restore เข้าไปได้โดย**ไม่ต้องตัดบรรทัด `\restrict`/
+> `\unrestrict` ทิ้งเลย** psql จัดการ Token ทั้งคู่เองอัตโนมัติไม่มี Error ใดๆ
+> เกี่ยวกับ Restrict Feature ทั้งไฟล์
+>
+> ⚠️ **Error ที่พบจริงระหว่าง Restore (ไม่เกี่ยวกับ Restrict, ไม่กระทบ Table
+> ของแอป):** `extension "supabase_vault" is not available`,
+> `relation "vault.secrets" does not exist` — เกิดขึ้นเพราะ `supabase_vault`
+> เป็น Extension เฉพาะของ Supabase Managed Postgres เท่านั้น เครื่อง
+> PostgreSQL 17 ทั่วไป (Local/Self-hosted) ไม่มี Extension นี้ให้ติดตั้ง จึง
+> Error ตอนสร้าง Schema/Table `vault.*` และ COPY ข้อมูลเข้า `vault.secrets`
+> — **เป็น Error ที่คาดไว้และไม่กระทบ Data จริงของแอป** (23 Table ใน Schema
+> `public` ที่แอปใช้งานจริงถูก Restore ครบสมบูรณ์ ไม่มี Error เลย) รันด้วย
+> `psql -v ON_ERROR_STOP=0` เพื่อให้ข้าม Error ส่วน `vault.*` นี้ไปแล้ว
+> Restore ส่วนที่เหลือต่อได้จนจบไฟล์ — ถ้า Restore เข้า Supabase Project ใหม่
+> (ไม่ใช่ Local Postgres) จะไม่เจอปัญหานี้เพราะ Supabase ติดตั้ง
+> `supabase_vault` ให้เป็นค่าเริ่มต้นอยู่แล้ว
 
 #### [4] ตรวจสอบว่ากู้คืนสำเร็จจริง
 
@@ -350,7 +378,7 @@ Role ของ Supabase Project ต้นทาง) ดังนั้นหล�
 
 | วันที่ซ้อม | ผู้ทำ | เวลาที่ใช้จริง | ผลลัพธ์ |
 |---|---|---|---|
-| _(ยังไม่เคยซ้อมบน Production — ต้องทำก่อนเปิด Beta)_ | | | |
+| 2026-07-28 | AI-assisted (Claude Code) + Developer | ~20 นาที (Restore จริง) + ~10 นาทีตั้ง PostgreSQL 17 Local ครั้งแรก (เครื่องนี้ไม่เคยมี `psql`/Docker มาก่อน) | ✅ สำเร็จ — ไฟล์ `easydca-2026-07-27T20-00-00-090Z.sql.gz.enc` จาก R2, Decrypt + gunzip ปกติ, Restore เข้า PostgreSQL 17.10 บน localhost (แยกจาก Production) ด้วย `psql` 17.10 ตรงเวอร์ชัน — ได้ 23 Table ครบ, สุ่มเช็ค `transactions`/`users` ข้อมูลถูกต้อง (Numeric ไม่เพี้ยน, FK Join ผ่าน, Check Constraint ผ่านหมด 0 แถวผิดกฎ) ไม่ต้องตัดบรรทัด `\restrict`/`\unrestrict` ทิ้งเลย มี Error เฉพาะ `vault.secrets`/`supabase_vault` (Extension เฉพาะ Supabase ไม่มีใน Local Postgres — ดู § 3.4 ข้อ [3]) ซึ่งไม่กระทบ Table ของแอป — Drop Test Database + ลบไฟล์ Decrypt แล้วทันทีหลังตรวจสอบเสร็จ |
 
 ---
 
