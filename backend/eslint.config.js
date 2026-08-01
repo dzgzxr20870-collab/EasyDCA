@@ -15,6 +15,7 @@ module.exports = [
         console: 'readonly',
         Buffer: 'readonly',
         fetch: 'readonly',
+        URL: 'readonly',
         URLSearchParams: 'readonly',
         // Node.js timers + AbortController (ใช้ทำ Request Timeout ใน priceFeed/slipOcr)
         setTimeout: 'readonly',

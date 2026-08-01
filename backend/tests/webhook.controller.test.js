@@ -73,6 +73,7 @@ jest.mock('../src/services/commandParser.service', () => {
   return { COMMANDS: actual.COMMANDS, normalizeText: actual.normalizeText, parseCommand: jest.fn() };
 });
 
+const config = require('../src/config/env');
 const userRepository = require('../src/repositories/user.repository');
 const pendingService = require('../src/services/pendingTransaction.service');
 const portfolioService = require('../src/services/portfolio.service');
@@ -1272,12 +1273,40 @@ describe('handleEvent — ERASE_DATA_REQUEST (PDPA Self-Service Erasure)', () =>
   });
 });
 
+// ⚠️ ปุ่ม Dashboard เปิดไม่ขึ้นในบาง Case ตอนยังชี้ https://liff.line.me/{liffId}
+// (LIFF In-App Browser ของ LINE ไม่เสถียร) — เปลี่ยนมาชี้ Domain ของเว็บเราตรงๆ
+// (config.app.frontendUrl) + ?openExternalBrowser=1 บังคับเปิดผ่าน Browser
+// ภายนอกของเครื่องแทนเสมอ (LINE Docs ยืนยันว่าพารามิเตอร์นี้ "ใช้ไม่ได้เลย" กับ
+// liff.line.me — ดู utils/externalUrl.util.js) Login/JWT ยังทำงานถูกต้องเหมือน
+// เดิม เพราะ Login.jsx เรียก liff.init()+liff.isLoggedIn()+liff.login() เอง
+// ไม่ได้พึ่งการเปิดผ่าน liff.line.me เลย
 describe('handleEvent — Dashboard Postback', () => {
-  test('open_dashboard: ส่งลิงก์เปิด LIFF Dashboard (uri ประกอบจาก config.liff.id)', async () => {
+  test('open_dashboard: ส่งลิงก์เปิด Dashboard ชี้ Domain ตรงๆ + openExternalBrowser=1', async () => {
     await handleEvent(postbackEvent('action=open_dashboard'));
 
     const reply = lastReplyText();
-    expect(reply).toContain('https://liff.line.me/2010586158-DO9yzmaP');
+    expect(reply).toContain('https://app.easydca.test/dashboard?openExternalBrowser=1');
+  });
+
+  test('open_dashboard: ไม่มี liff.line.me ปนอยู่เลย (สาเหตุเดิมของบั๊ก — ต้องไม่กลับมา)', async () => {
+    await handleEvent(postbackEvent('action=open_dashboard'));
+
+    const reply = lastReplyText();
+    expect(reply).not.toContain('liff.line.me');
+  });
+
+  test('open_dashboard: FRONTEND_URL ไม่ได้ตั้งค่า → ตอบ Error ทั่วไป ไม่ส่งปุ่ม uri ว่างๆ', async () => {
+    const originalFrontendUrl = config.app.frontendUrl;
+    config.app.frontendUrl = null;
+    try {
+      await handleEvent(postbackEvent('action=open_dashboard'));
+
+      const reply = lastReplyText();
+      expect(reply).not.toContain('"uri":""');
+      expect(reply).not.toContain('undefined');
+    } finally {
+      config.app.frontendUrl = originalFrontendUrl;
+    }
   });
 });
 
@@ -2140,13 +2169,16 @@ describe('handleEvent — กองทุนรวมไทย (Round 7)', () =>
 // ยกเลิกฝั่ง LINE อีกต่อไป (ทดสอบ submitRequest ของหน้าเว็บแยกที่ support.controller
 // .test.js) Pattern การทดสอบเดียวกับ 'open_dashboard' (Dashboard Postback ด้านบน)
 describe('handleEvent — ติดต่อ Admin/Support', () => {
-  test('พิมพ์ Trigger ("ติดต่อแอดมิน") → ตอบ Link ไปหน้าเว็บ /support (uri ประกอบจาก config.liff.id)', async () => {
+  // เหตุผลเดียวกับปุ่ม Dashboard (case 'open_dashboard') — เลิกใช้ liff.line.me
+  // เพื่อบังคับเปิดผ่าน Browser ภายนอกด้วย openExternalBrowser=1 ได้จริง
+  test('พิมพ์ Trigger ("ติดต่อแอดมิน") → ตอบ Link ไปหน้าเว็บ /support ชี้ Domain ตรงๆ + openExternalBrowser=1', async () => {
     commandParser.parseCommand.mockReturnValue({ command: COMMANDS.CONTACT_SUPPORT, params: {} });
 
     await handleEvent(textEvent('ติดต่อแอดมิน'));
 
     const reply = lastReplyText();
-    expect(reply).toContain('https://liff.line.me/2010586158-DO9yzmaP/support');
+    expect(reply).toContain('https://app.easydca.test/support?openExternalBrowser=1');
+    expect(reply).not.toContain('liff.line.me');
   });
 
   test('ไม่เช็ค Premium/Entitlement ใดๆ — เปิดให้ทุกคนเท่ากัน (ไม่ใช่ Feature หารายได้)', async () => {

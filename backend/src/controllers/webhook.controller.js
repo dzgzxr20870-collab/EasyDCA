@@ -25,6 +25,7 @@ const reportExportService = require('../services/reportExport.service');
 const slipOcrService = require('../services/slipOcr.service');
 const flexMessage = require('../utils/flexMessage.util');
 const logger = require('../utils/logger.util');
+const { buildExternalUrl } = require('../utils/externalUrl.util');
 
 const { COMMANDS } = commandParser;
 const { STEPS } = reminderSetupFlow;
@@ -417,9 +418,12 @@ async function routeCommand(user, parsed) {
     // ฝั่ง LINE อีกต่อไป (ตอบ Link คงที่ ไม่ Push/ไม่เขียน DB จึงไม่มีอะไรให้ Spam)
     // Pattern เดียวกับปุ่ม Dashboard (case 'open_dashboard' ด้านล่าง)
     case COMMANDS.CONTACT_SUPPORT: {
-      const supportUrl = config.liff.id
-        ? `https://liff.line.me/${config.liff.id}/support`
-        : `${config.app.frontendUrl || ''}/support`;
+      // เหตุผลเดียวกับปุ่ม Dashboard ด้านบน (case 'open_dashboard') — เลิกใช้
+      // liff.line.me เปลี่ยนไปชี้ Domain ตรงๆ + openExternalBrowser=1
+      const supportUrl = buildExternalUrl('/support');
+      if (!supportUrl) {
+        throw new Error('FRONTEND_URL is not configured; cannot build support link');
+      }
       return flexMessage.buildSupportLinkMessage(supportUrl);
     }
 
@@ -769,13 +773,20 @@ async function routePostback(user, data) {
       });
     }
 
-    // ── ปุ่ม Dashboard (Rich Menu) → ส่งลิงก์เปิด LIFF Dashboard ────────────────
-    // ประกอบ URL จาก config.liff.id (ไม่ Hardcode) — Fallback ไป FRONTEND_URL
-    // ถ้ายังไม่ได้ตั้ง LIFF_ID
+    // ── ปุ่ม Dashboard → ส่งลิงก์เปิด Dashboard ผ่าน Browser ภายนอกเสมอ ─────────
+    // เดิมชี้ https://liff.line.me/{liffId} (LIFF In-App Browser) ซึ่งเปิดไม่ขึ้น
+    // ในบาง Case จริง — เปลี่ยนมาชี้ Domain ของเว็บเราตรงๆ + openExternalBrowser=1
+    // (ดูเหตุผลเต็มใน utils/externalUrl.util.js — สำคัญ: openExternalBrowser=1
+    // "ใช้ไม่ได้เลย" กับ liff.line.me ตาม LINE Docs จึงต้องเลิกใช้ Domain นั้นด้วย)
+    // Login/JWT ยังทำงานถูกต้องเหมือนเดิม (Login.jsx ไม่ได้พึ่งการเปิดผ่าน LIFF)
     case 'open_dashboard': {
-      const dashboardUrl = config.liff.id
-        ? `https://liff.line.me/${config.liff.id}`
-        : config.app.frontendUrl || '';
+      const dashboardUrl = buildExternalUrl('/dashboard');
+      if (!dashboardUrl) {
+        // FRONTEND_URL ไม่ได้ตั้งค่า — throw ให้ replyWithError จับแล้ว Log +
+        // ตอบข้อความ Error ทั่วไปแทน (Pattern เดียวกับ Error อื่นทั้งไฟล์นี้ ไม่ตอบ
+        // ปุ่มลิงก์ที่ว่างเปล่าซึ่ง LINE จะปฏิเสธทั้งข้อความด้วย 400)
+        throw new Error('FRONTEND_URL is not configured; cannot build dashboard link');
+      }
       return flexMessage.buildDashboardLinkMessage(dashboardUrl);
     }
 

@@ -16,6 +16,7 @@ const config = require('../config/env');
 // วาง bounds ให้ตรงกับรูปจริง (2500x1686 = 2 แถว x 3 คอลัมน์) แต่ไม่ใช้
 // generatePlaceholderImage แล้ว — เปลี่ยนไปอ่านรูป Design จริงจากไฟล์แทน (ดู main)
 const { WIDTH, HEIGHT, CELL_WIDTH, CELL_HEIGHT } = require('./richMenuImage');
+const { buildExternalUrl } = require('../utils/externalUrl.util');
 
 // รูป Rich Menu จริงจากทีม Design (ขนาด 2500x1686 ตรงตาม Grid เดิมเป๊ะ)
 const RICHMENU_IMAGE_PATH = path.join(__dirname, '../../assets/richmenu-2500x1686.png');
@@ -42,20 +43,22 @@ function buildRichMenuPayload() {
   });
   const message = (text) => ({ type: 'message', text });
 
-  // LIFF Endpoint รองรับ Path ต่อท้ายตาม LIFF URL Scheme มาตรฐาน:
-  // https://liff.line.me/{liffId}/{path} → เปิด {Endpoint URL ที่ตั้งค่าไว้บน LINE
-  // Developers Console}/{path} — Endpoint URL ปัจจุบันคือ Frontend SPA ที่มี
-  // Catch-all Rewrite ทุก Path ไปที่ index.html อยู่แล้ว (frontend/public/serve.json)
-  // จึงลิงก์ตรงเข้าหน้าในแอปได้เลย (เช่น /dashboard, /premium) — ถ้า JWT ใน Memory
-  // ยังไม่มี (เพิ่งเปิด LIFF ใหม่ๆ) Route Guard ของแต่ละหน้าจะ stashReturnTo + เด้งไป
-  // Login ให้เอง แล้ว Login พากลับมาหน้าเดิมหลัง Verify เสร็จ (Return-To Pattern
-  // เดียวกับที่ใช้อยู่แล้วทั่วเว็บ ไม่ต้องเขียน Logic ใหม่) — Fallback เป็น
-  // FRONTEND_URL ตรงๆ (ไม่ผ่าน LIFF) ถ้ายังไม่ได้ตั้ง LIFF_ID เหมือน Pattern เดิม
-  // ใน webhook.controller.js (case 'open_dashboard')
-  function liffUrl(path) {
-    return config.liff.id
-      ? `https://liff.line.me/${config.liff.id}${path}`
-      : `${config.app.frontendUrl || ''}${path}`;
+  // ปุ่ม Dashboard/Premium ชี้ Domain ของเว็บเราตรงๆ + openExternalBrowser=1 แทน
+  // https://liff.line.me/{liffId} เดิม — บังคับเปิดผ่าน Browser ภายนอกของเครื่อง
+  // เสมอ (LIFF In-App Browser เดิมเปิดไม่ขึ้นในบาง Case จริง) เหตุผลเต็ม + ยืนยัน
+  // ว่า Login/JWT ยังทำงานถูกต้องอยู่ใน utils/externalUrl.util.js — Path Catch-all
+  // Rewrite ทุก Path ไปที่ index.html อยู่แล้ว (frontend/public/serve.json) จึง
+  // ลิงก์ตรงเข้าหน้าในแอปได้เลย ถ้า JWT ใน Memory ยังไม่มี Route Guard ของแต่ละหน้า
+  // จะ stashReturnTo + เด้งไป Login ให้เอง แล้ว Login พากลับมาหน้าเดิมหลัง Verify
+  // เสร็จ (Return-To Pattern เดียวกับที่ใช้อยู่แล้วทั่วเว็บ)
+  const dashboardUrl = buildExternalUrl('/dashboard');
+  const premiumUrl = buildExternalUrl('/premium');
+  if (!dashboardUrl || !premiumUrl) {
+    // Fail-fast ก่อนยิง LINE API เลย — ดีกว่าสร้าง Rich Menu ที่มีปุ่มลิงก์พังค้าง
+    // ไว้บน Production (ต้องลบแล้วสร้างใหม่ทั้งอัน ไม่มี "แก้ปุ่มเดียว" ทำได้)
+    throw new Error(
+      'FRONTEND_URL ยังไม่ได้ตั้งค่า — ต้องตั้งก่อนรัน setup-richmenu (ปุ่ม Dashboard/Premium ต้องมี URL จริง)'
+    );
   }
 
   return {
@@ -76,10 +79,10 @@ function buildRichMenuPayload() {
       cell(2, 0, message('ประวัติ')), // ดูประวัติ (เร็ว) — เช่นเดียวกัน
       // ── แถวล่าง ────────────────────────────────────────────────────────
       // แดชบอร์ดเว็บ — เปลี่ยนจาก Postback (ตอบการ์ดในแชทแล้วต้องกดปุ่มในการ์ดซ้ำ
-      // อีกที) เป็น uri ตรงๆ ลัดไปเปิด LIFF /dashboard ทันทีในคลิกเดียว (เดิมมี Flex
-      // Message Card คั่นกลาง — buildDashboardLinkMessage ยังอยู่ในโค้ดเผื่อจุดอื่น
-      // เรียกใช้ แต่ Rich Menu ไม่ผ่านจุดนั้นแล้ว)
-      cell(0, 1, { type: 'uri', uri: liffUrl('/dashboard'), label: 'แดชบอร์ดเว็บ' }),
+      // อีกที) เป็น uri ตรงๆ ลัดไปเปิด /dashboard ทันทีในคลิกเดียว ผ่าน Browser
+      // ภายนอกเสมอ (เดิมมี Flex Message Card คั่นกลาง — buildDashboardLinkMessage
+      // ยังอยู่ในโค้ดเผื่อจุดอื่นเรียกใช้ แต่ Rich Menu ไม่ผ่านจุดนั้นแล้ว)
+      cell(0, 1, { type: 'uri', uri: dashboardUrl, label: 'แดชบอร์ดเว็บ' }),
       // ปุ่มใหม่ — Postback (ไม่ใช่ message) เพราะเริ่ม Flow ตั้งเตือน DCA แบบ Quick
       // Reply หลายขั้นตอน webhook.controller routePostback จับ action นี้ (ไม่ผ่าน
       // Command Parser) displayText แสดงในแชทเสมือนผู้ใช้กดเลือกเอง
@@ -95,7 +98,7 @@ function buildRichMenuPayload() {
       // webhook.controller.js) ไม่มีทางเข้าถึงจาก Rich Menu อีกต่อไป (เคย Grep ยืนยัน
       // ว่าไม่มี Text Command อื่นเรียก action นี้เลย จึงกลายเป็น Dead Code ในทาง
       // ปฏิบัติ — โค้ด Handler เดิมยังอยู่ครบ ไม่ได้ลบ เผื่อย้อนกลับ Decision นี้ทีหลัง)
-      cell(2, 1, { type: 'uri', uri: liffUrl('/premium'), label: 'อัพเกรด Premium' }),
+      cell(2, 1, { type: 'uri', uri: premiumUrl, label: 'อัพเกรด Premium' }),
     ],
   };
 }
