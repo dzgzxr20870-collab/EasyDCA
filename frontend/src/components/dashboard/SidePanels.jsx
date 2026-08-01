@@ -1,4 +1,4 @@
-import { typeMeta } from '../../lib/assetTypeMeta.js';
+import AssetAvatar from './AssetAvatar.jsx';
 
 function fmt(n) {
   const num = Number(n);
@@ -43,12 +43,9 @@ function CalendarPlaceholder({ todayDuePlans, hasActivePlans, symbolTypeBySymbol
         <h3>📅 วันนี้ถึงรอบ DCA</h3>
         <div className="dh-hold-list">
           {todayDuePlans.map((plan) => {
-            const meta = typeMeta(symbolTypeBySymbol.get(plan.symbol));
             return (
               <div className="dh-hrow" key={plan.id}>
-                <span className="dh-avatar" style={{ background: meta.color }}>
-                  {plan.symbol.slice(0, 4)}
-                </span>
+                <AssetAvatar symbol={plan.symbol} type={symbolTypeBySymbol.get(plan.symbol)} />
                 <span className="dh-hrow-nm">
                   <b>{plan.symbol}</b>
                   <small>{plan.dayLabel}</small>
@@ -109,12 +106,9 @@ function HoldingsPanel({ allocation }) {
       ) : (
         <div className="dh-hold-list">
           {holdings.map((h) => {
-            const meta = typeMeta(h.type);
             return (
               <div className="dh-hrow" key={h.symbol}>
-                <span className="dh-avatar" style={{ background: meta.color }}>
-                  {h.symbol.slice(0, 4)}
-                </span>
+                <AssetAvatar symbol={h.symbol} type={h.type} />
                 <span className="dh-hrow-nm">
                   <b>{h.symbol}</b> {h.priceUnavailable && <span className="dh-nofeed">ที่ต้นทุน</span>}
                   <small>{h.name}</small>

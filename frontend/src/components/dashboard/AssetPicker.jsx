@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { filterSymbols } from '../../lib/assetPickerSearch.js';
 import { typeMeta, CATEGORIES } from '../../lib/assetTypeMeta.js';
+import AssetAvatar from './AssetAvatar.jsx';
 
 // ═══════════════════════════════════════════════════════════════════════
 // AssetPicker — Dropdown ค้นหา+เลื่อนเลือกสินทรัพย์ (S8 R1b งานที่ 2)
@@ -109,9 +110,7 @@ function AssetPicker({ symbols, value, onChange, disabled = false, openSignal })
       >
         {value ? (
           <>
-            <span className="dh-avatar" style={{ background: typeMeta(value.type).color }}>
-              {value.symbol.slice(0, 4)}
-            </span>
+            <AssetAvatar symbol={value.symbol} type={value.type} />
             <span className="dh-picker-sym">
               <b>{value.symbol}</b>
               <small>{value.name}</small>
@@ -181,9 +180,7 @@ function AssetPicker({ symbols, value, onChange, disabled = false, openSignal })
                     onClick={() => choose(s)}
                     onMouseMove={() => setHighlight(i)}
                   >
-                    <span className="dh-avatar" style={{ background: meta.color }}>
-                      {s.symbol.slice(0, 4)}
-                    </span>
+                    <AssetAvatar symbol={s.symbol} type={s.type} />
                     <span className="dh-dd-nm">
                       <b>{s.symbol}</b>
                       <small>{s.name}</small>

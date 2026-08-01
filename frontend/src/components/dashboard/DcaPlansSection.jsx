@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import AssetPicker from './AssetPicker.jsx';
-import { typeMeta } from '../../lib/assetTypeMeta.js';
+import AssetAvatar from './AssetAvatar.jsx';
 import { apiPost, apiPatch, apiDelete } from '../../lib/api.js';
 import { dcaPlanErrorMessage, isUpgradeRequiredError } from '../../lib/dcaPlansErrors.js';
 import { isCurrencySupportedForSymbol } from '../../lib/dcaPlanCurrency.js';
@@ -174,13 +174,10 @@ function DcaPlansSection({ plans, symbols, loadError, onChanged, showToast, onUp
       ) : (
         <div className="dh-hold-list">
           {plans.map((plan) => {
-            const meta = typeMeta(symbolTypeBySymbol.get(plan.symbol));
             const busy = busyPlanId === plan.id;
             return (
               <div className="dh-hrow" key={plan.id}>
-                <span className="dh-avatar" style={{ background: meta.color }}>
-                  {plan.symbol.slice(0, 4)}
-                </span>
+                <AssetAvatar symbol={plan.symbol} type={symbolTypeBySymbol.get(plan.symbol)} />
                 <span className="dh-hrow-nm">
                   <b>{plan.symbol}</b>{' '}
                   <span className={`dh-tbadge ${plan.active ? 'dh-t-active' : 'dh-t-paused'}`}>

@@ -1,4 +1,4 @@
-import { typeMeta } from '../../lib/assetTypeMeta.js';
+import AssetAvatar from './AssetAvatar.jsx';
 import { formatTransactionNote } from '../../lib/transactionNote.js';
 
 const THAI_MONTH_SHORT = [
@@ -48,13 +48,10 @@ function RecentList({ recent, assetTypeBySymbol, onRequestUndo }) {
       </div>
       <div className="dh-tx-list">
         {recent.map((tx, i) => {
-          const meta = typeMeta(assetTypeBySymbol.get(tx.symbol));
           const noteText = formatTransactionNote(tx.note);
           return (
             <div className="dh-tx" key={tx.id}>
-              <span className="dh-avatar" style={{ background: meta.color }}>
-                {tx.symbol.slice(0, 4)}
-              </span>
+              <AssetAvatar symbol={tx.symbol} type={assetTypeBySymbol.get(tx.symbol)} />
               <span className="dh-tx-nm">
                 <b>{tx.symbol}</b>{' '}
                 <span className={`dh-side-b ${tx.side === 'buy' ? 'dh-b-buy' : 'dh-b-sell'}`}>

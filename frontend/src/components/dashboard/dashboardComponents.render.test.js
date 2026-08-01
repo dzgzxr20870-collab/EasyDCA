@@ -26,6 +26,7 @@ import InvestedChart from './InvestedChart.jsx';
 import SidePanels from './SidePanels.jsx';
 import UndoConfirmModal from './UndoConfirmModal.jsx';
 import AssetPicker from './AssetPicker.jsx';
+import AssetAvatar from './AssetAvatar.jsx';
 import DcaForm from './DcaForm.jsx';
 import DcaPlansSection from './DcaPlansSection.jsx';
 import PortfolioDetailSection from './PortfolioDetailSection.jsx';
@@ -611,5 +612,46 @@ describe('DcaForm — โหมดขาย', () => {
     expect(html).toContain('disabled');
     // ไม่ควรโชว์ช่องกรอกจำนวน/ราคาเลยเมื่อไม่มีอะไรให้ขาย
     expect(html).not.toContain('จำนวนหน่วยที่ขาย');
+  });
+});
+
+// ── AssetAvatar — โลโก้สินทรัพย์ (ดึงอัตโนมัติ) ────────────────────────────────
+// renderToStaticMarkup ไม่รัน useEffect (ดูหมายเหตุหัวไฟล์) จึงตรวจได้แค่ "Render
+// ครั้งแรก" (ก่อน Fetch ใดๆ เสร็จ) — Logic Fallback ตอน onError จริง/CoinGecko
+// สำเร็จ-ล้มเหลว ถูก Unit Test แยกใน lib/assetLogo.test.js แล้ว (ฟังก์ชัน Pure ที่
+// Component นี้เรียกใช้) ที่นี่พิสูจน์แค่ว่า Component เลือก "จุดเริ่มต้น" ถูก Path
+describe('AssetAvatar', () => {
+  test('หุ้นที่มี Domain รู้จัก (AAPL) → Render เป็น <img> ทันทีตั้งแต่ Render แรก (Sync)', () => {
+    const html = renderToStaticMarkup(React.createElement(AssetAvatar, { symbol: 'AAPL', type: 'stock_us' }));
+    expect(html).toContain('<img');
+    expect(html).toContain('cdn.tickerlogos.com/apple.com');
+  });
+
+  test('หุ้นที่ไม่มี Domain ใน Map (EOSE) → Fallback ตัวอักษรย่อทันที ไม่มี <img>', () => {
+    const html = renderToStaticMarkup(React.createElement(AssetAvatar, { symbol: 'EOSE', type: 'stock_us' }));
+    expect(html).not.toContain('<img');
+    expect(html).toContain('EOSE'); // slice(0,4) ของ 'EOSE' = 'EOSE' เต็มคำพอดี
+  });
+
+  test('Crypto (BTC) → Render แรกยังไม่มี <img> เสมอ (ต้องรอ CoinGecko Fetch ผ่าน useEffect ก่อน)', () => {
+    const html = renderToStaticMarkup(React.createElement(AssetAvatar, { symbol: 'BTC', type: 'crypto' }));
+    expect(html).not.toContain('<img');
+    expect(html).toContain('BTC');
+  });
+
+  test('ทอง (gold_bar) → ไม่มี Logo บริษัท เป็นตัวอักษรย่อเสมอ', () => {
+    const html = renderToStaticMarkup(React.createElement(AssetAvatar, { symbol: 'GOLD', type: 'gold_bar' }));
+    expect(html).not.toContain('<img');
+  });
+
+  test('Symbol ยาวเกิน 4 ตัวอักษร (Fallback) → ตัดเหลือ 4 ตัวเหมือนของเดิม (GOLDORN → GOLD)', () => {
+    const html = renderToStaticMarkup(React.createElement(AssetAvatar, { symbol: 'GOLDORN', type: 'gold_ornament' }));
+    expect(html).not.toContain('<img');
+    expect(html).toContain('GOLD');
+  });
+
+  test('ยังคงเป็น <span className="dh-avatar"> ครอบไว้เสมอ (CSS/Layout เดิมไม่พัง)', () => {
+    const html = renderToStaticMarkup(React.createElement(AssetAvatar, { symbol: 'AAPL', type: 'stock_us' }));
+    expect(html).toContain('dh-avatar');
   });
 });
