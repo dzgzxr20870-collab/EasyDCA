@@ -24,6 +24,7 @@ const logger = require('./utils/logger.util');
 const { scheduleExpirePending, schedulePurgeOld } = require('./jobs/pendingCleanup.job');
 const { scheduleExpirePayments, scheduleAutoReleaseStaleAmounts } = require('./jobs/paymentExpiry.job');
 const { schedulePlanDowngrade } = require('./jobs/planDowngrade.job');
+const { schedulePremiumExpiryReminder } = require('./jobs/premiumExpiryReminder.job');
 const { scheduleReminderPush } = require('./jobs/dcaReminder.job');
 const { schedulePurgeStaleSetupSessions } = require('./jobs/reminderSetupCleanup.job');
 const { schedulePurgeStaleBulkImportSessions } = require('./jobs/bulkImportCleanup.job');
@@ -71,6 +72,9 @@ function scheduleAllJobs() {
     autoReleaseStaleAmounts: scheduleAutoReleaseStaleAmounts(),
     // Downgrade ผู้ใช้ Premium ที่หมดอายุกลับเป็น Free ทุกวันตี 1 (planDowngrade.job.js)
     planDowngrade: schedulePlanDowngrade(),
+    // Push เตือน "Premium ใกล้หมดอายุ" ล่วงหน้า 3 วัน ทุกวันตี 2 — หลัง planDowngrade
+    // เพื่อไม่ให้คนที่หมดอายุไปแล้วถูกหยิบมาเตือนซ้ำ (premiumExpiryReminder.job.js)
+    premiumExpiryReminder: schedulePremiumExpiryReminder(),
     // เก็บ Snapshot มูลค่าพอตของทุก User ทุกวันเที่ยงคืน Asia/Bangkok (portfolioSnapshot.job.js)
     portfolioSnapshot: schedulePortfolioSnapshot(),
     // Purge LINE Webhook Event ที่เก่ากว่า 7 วันค้าง (Idempotency Guard — migration 013) ตี 3

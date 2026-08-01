@@ -2196,6 +2196,70 @@ function buildDashboardLinkMessage(dashboardUrl) {
   };
 }
 
+// ── Push เตือน "Premium ใกล้หมดอายุ" (premiumExpiryReminder.job) ──────────────
+// ส่งล่วงหน้าก่อนหมดอายุ เพื่อให้ผู้ใช้มีเวลาต่ออายุก่อนถูกลดชั้นเป็น Free
+// (คู่กับ buildPlanDowngradedMessage ด้านล่างที่ส่ง "หลัง" หมดอายุแล้ว — คนละใบ
+// คนละจังหวะ ไม่ซ้ำกัน เพราะ Job คนละตัวและกรองช่วงเวลาไม่ทับกัน)
+//
+// premiumUrl อาจเป็น null ได้ถ้ายังไม่ได้ตั้ง FRONTEND_URL — กรณีนั้นไม่ใส่ปุ่มลิงก์
+// (Pattern เดียวกับ buildPdpaConsentRequiredMessage: uri ว่างทำให้ LINE ปฏิเสธทั้ง
+// ข้อความด้วย 400 ผู้ใช้จะไม่เห็นแม้แต่ข้อความเตือน)
+function buildPremiumExpiringSoonMessage(daysLeft, expiresAt, premiumUrl) {
+  const message = {
+    type: 'flex',
+    altText: `Premium ใกล้หมดอายุ (อีก ${daysLeft} วัน)`,
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: COLOR.warningBg,
+        paddingAll: '12px',
+        contents: [
+          textLine('⏳ Premium ใกล้หมดอายุ', { weight: 'bold', color: COLOR.warning }),
+        ],
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: [
+          textLine(`แพ็กเกจ Premium ของคุณจะหมดอายุในอีก ${daysLeft} วัน`, {
+            size: 'sm',
+            color: COLOR.textPrimary,
+          }),
+          textLine(`หมดอายุวันที่ ${formatThaiDate(expiresAt)}`, {
+            size: 'sm',
+            weight: 'bold',
+            color: COLOR.textPrimary,
+          }),
+          textLine(
+            'ต่ออายุก่อนหมดเพื่อใช้สินทรัพย์ไม่จำกัดและแผน DCA ไม่จำกัดต่อเนื่อง — ข้อมูลเดิมยังอยู่ครบเสมอแม้ไม่ต่อ',
+            { size: 'xs', color: COLOR.textSecondary }
+          ),
+        ],
+      },
+    },
+  };
+
+  if (premiumUrl) {
+    message.contents.footer = {
+      type: 'box',
+      layout: 'vertical',
+      contents: [
+        {
+          type: 'button',
+          style: 'primary',
+          color: COLOR.warning,
+          action: { type: 'uri', label: '👑 ต่ออายุ Premium', uri: premiumUrl },
+        },
+      ],
+    };
+  }
+
+  return message;
+}
+
 // ── Push หาผู้ใช้เมื่อ Premium หมดอายุ (planDowngrade.job) — กลับเป็น Free ────
 function buildPlanDowngradedMessage() {
   return bubble({
@@ -3209,6 +3273,7 @@ module.exports = {
   buildFundNotFoundMessage,
   buildDashboardLinkMessage,
   buildPlanDowngradedMessage,
+  buildPremiumExpiringSoonMessage,
   buildErrorMessage,
   buildAddGuideMessage,
   buildUnknownCommandMessage,

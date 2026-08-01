@@ -267,6 +267,8 @@ describe('claimFreeTrial — Atomic Claim (กดรับ Premium ฟรีค�
         plan: 'premium',
         plan_expires_at: EXPIRES.toISOString(),
         free_trial_claimed_at: NOW.toISOString(),
+        // รอบบิลใหม่ → ต้องเตือนได้อีกครั้งก่อนหมดอายุ
+        expiry_reminder_sent_at: null,
       })
     );
   });
@@ -306,8 +308,88 @@ describe('claimFreeTrial — Atomic Claim (กดรับ Premium ฟรีค�
   });
 });
 
-describe('toUser mapping — free_trial_claimed_at (migration 029)', () => {
-  test('DB ไม่มีค่า → map เป็น null', async () => {
+describe('updatePlan — Reset ตัวจำการเตือน (migration 030)', () => {
+  test('🔁 Reset expiry_reminder_sent_at = null ทุกครั้ง (ไม่งั้นรอบบิลถัดไปไม่เตือนอีกเลย)', async () => {
+    __query.single.mockResolvedValue({ data: { id: 'u1', plan: 'premium' }, error: null });
+
+    await userRepository.updatePlan('u1', 'premium', '2026-09-01T00:00:00.000Z');
+
+    expect(__query.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        plan: 'premium',
+        plan_expires_at: '2026-09-01T00:00:00.000Z',
+        expiry_reminder_sent_at: null,
+      })
+    );
+  });
+
+  test('Reset ตอน Downgrade เป็น free ด้วย (กลับมา Premium อีกครั้งต้องเตือนได้ใหม่)', async () => {
+    __query.single.mockResolvedValue({ data: { id: 'u1', plan: 'free' }, error: null });
+
+    await userRepository.updatePlan('u1', 'free', null);
+
+    expect(__query.update).toHaveBeenCalledWith(
+      expect.objectContaining({ plan: 'free', expiry_reminder_sent_at: null })
+    );
+  });
+});
+
+describe('findPremiumExpiringBefore — Query ของ Cron เตือนก่อนหมดอายุ', () => {
+  const NOW = new Date('2026-08-01T00:00:00.000Z');
+  const CUTOFF = new Date('2026-08-04T00:00:00.000Z');
+
+  test('กรองครบ 4 เงื่อนไข: premium + ยังไม่หมดอายุ + ภายใน cutoff + ยังไม่เคยเตือน', async () => {
+    __query.is.mockResolvedValue({ data: [], error: null });
+
+    await userRepository.findPremiumExpiringBefore(CUTOFF, NOW);
+
+    expect(__query.eq).toHaveBeenCalledWith('plan', 'premium');
+    // gt(now) สำคัญ: ตัดคนที่หมดอายุไปแล้วออก (เป็นงานของ planDowngrade คนละใบ)
+    expect(__query.gt).toHaveBeenCalledWith('plan_expires_at', NOW.toISOString());
+    expect(__query.lte).toHaveBeenCalledWith('plan_expires_at', CUTOFF.toISOString());
+    // กันส่งซ้ำทุกวัน
+    expect(__query.is).toHaveBeenCalledWith('expiry_reminder_sent_at', null);
+  });
+
+  test('map แถวเป็น user object (มี planExpiresAt ให้ Job คำนวณจำนวนวันได้)', async () => {
+    __query.is.mockResolvedValue({
+      data: [{ id: 'u1', line_user_id: 'U1', plan: 'premium', plan_expires_at: '2026-08-03T00:00:00.000Z' }],
+      error: null,
+    });
+
+    const result = await userRepository.findPremiumExpiringBefore(CUTOFF, NOW);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ id: 'u1', lineUserId: 'U1', planExpiresAt: '2026-08-03T00:00:00.000Z' });
+  });
+
+  test('DB error → throw', async () => {
+    __query.is.mockResolvedValue({ data: null, error: { message: 'boom' } });
+
+    await expect(userRepository.findPremiumExpiringBefore(CUTOFF, NOW)).rejects.toThrow(/boom/);
+  });
+});
+
+describe('markExpiryReminderSent', () => {
+  test('ปั๊มเวลาที่เตือนลงคอลัมน์ของ User คนนั้น', async () => {
+    const NOW = new Date('2026-08-01T00:00:00.000Z');
+    __query.eq.mockResolvedValueOnce({ error: null });
+
+    await userRepository.markExpiryReminderSent('u1', NOW);
+
+    expect(__query.update).toHaveBeenCalledWith({ expiry_reminder_sent_at: NOW.toISOString() });
+    expect(__query.eq).toHaveBeenCalledWith('id', 'u1');
+  });
+
+  test('DB error → throw (Job จะ Log แล้วข้ามคนนี้ ไม่ปั๊มค้าง)', async () => {
+    __query.eq.mockResolvedValueOnce({ error: { message: 'write failed' } });
+
+    await expect(userRepository.markExpiryReminderSent('u1', new Date())).rejects.toThrow(/write failed/);
+  });
+});
+
+describe('toUser mapping — free_trial_claimed_at (029) + expiry_reminder_sent_at (030)', () => {
+  test('DB ไม่มีค่า → map เป็น null ทั้งคู่', async () => {
     __query.order.mockResolvedValueOnce({
       data: [{ id: 'u1', line_user_id: 'U1', plan: 'free', created_at: '2026-08-01' }],
       error: null,
@@ -316,13 +398,15 @@ describe('toUser mapping — free_trial_claimed_at (migration 029)', () => {
     const result = await userRepository.findAll();
 
     expect(result[0].freeTrialClaimedAt).toBeNull();
+    expect(result[0].expiryReminderSentAt).toBeNull();
   });
 
-  test('DB มีค่าจริง → map ผ่านตรงๆ (Guard ใน freeTrial.service อ่านค่านี้)', async () => {
+  test('DB มีค่าจริง → map ผ่านตรงๆ (entitlement/Guard อ่านค่านี้)', async () => {
     __query.order.mockResolvedValueOnce({
       data: [{
         id: 'u1', line_user_id: 'U1', plan: 'premium', created_at: '2026-08-01',
         free_trial_claimed_at: '2026-08-01T00:00:00.000Z',
+        expiry_reminder_sent_at: '2026-08-28T00:00:00.000Z',
       }],
       error: null,
     });
@@ -330,5 +414,6 @@ describe('toUser mapping — free_trial_claimed_at (migration 029)', () => {
     const result = await userRepository.findAll();
 
     expect(result[0].freeTrialClaimedAt).toBe('2026-08-01T00:00:00.000Z');
+    expect(result[0].expiryReminderSentAt).toBe('2026-08-28T00:00:00.000Z');
   });
 });

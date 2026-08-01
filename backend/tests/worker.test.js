@@ -8,6 +8,7 @@ const path = require('path');
 jest.mock('../src/jobs/pendingCleanup.job');
 jest.mock('../src/jobs/paymentExpiry.job');
 jest.mock('../src/jobs/planDowngrade.job');
+jest.mock('../src/jobs/premiumExpiryReminder.job');
 jest.mock('../src/jobs/dcaReminder.job');
 jest.mock('../src/jobs/reminderSetupCleanup.job');
 jest.mock('../src/jobs/bulkImportCleanup.job');
@@ -20,6 +21,7 @@ jest.mock('../src/utils/logger.util');
 const pendingCleanup = require('../src/jobs/pendingCleanup.job');
 const paymentExpiry = require('../src/jobs/paymentExpiry.job');
 const planDowngrade = require('../src/jobs/planDowngrade.job');
+const premiumExpiryReminder = require('../src/jobs/premiumExpiryReminder.job');
 const dcaReminder = require('../src/jobs/dcaReminder.job');
 const reminderSetupCleanup = require('../src/jobs/reminderSetupCleanup.job');
 const bulkImportCleanup = require('../src/jobs/bulkImportCleanup.job');
@@ -42,6 +44,9 @@ describe('worker.js — Schedule ทุก Cron Job ครบ (แยกจา�
     expect(paymentExpiry.scheduleAutoReleaseStaleAmounts).toHaveBeenCalledTimes(1);
     // planDowngrade.job.js
     expect(planDowngrade.schedulePlanDowngrade).toHaveBeenCalledTimes(1);
+    // premiumExpiryReminder.job.js — เตือนก่อน Premium หมดอายุ 3 วัน (คู่กับ
+    // planDowngrade ที่แจ้ง "หลัง" หมดอายุ — คนละ Job คนละจังหวะ)
+    expect(premiumExpiryReminder.schedulePremiumExpiryReminder).toHaveBeenCalledTimes(1);
     // dcaReminder.job.js
     expect(dcaReminder.scheduleReminderPush).toHaveBeenCalledTimes(1);
     // reminderSetupCleanup.job.js
@@ -59,17 +64,22 @@ describe('worker.js — Schedule ทุก Cron Job ครบ (แยกจา�
     expect(webhookEventCleanup.schedulePurgeStaleWebhookEvents).toHaveBeenCalledTimes(1);
   });
 
-  test('Log ยืนยัน Startup ผ่าน logger.info หลัง Schedule ครบ (jobCount = 14 พอดี)', () => {
+  test('Log ยืนยัน Startup ผ่าน logger.info หลัง Schedule ครบ (jobCount = 15 พอดี)', () => {
     // ⚠️ ยึด "เลขที่ Derive จาก Object.keys จริง" ไว้เป็น Regression Guard — ไม่ได้
     // Hardcode เดา: นับจาก 14 Function call ข้างบน (test แรกในไฟล์นี้) พอดี ถ้าเพิ่ม/
     // ลด Job ในอนาคตแล้วลืมแก้เลขนี้ Test จะแดงทันที (ตรงข้ามกับปัญหาเดิมที่ jobCount
     // เคย Hardcode ไว้ในโค้ดจริงแล้ว Drift ไม่มีใครรู้ — ตอนนี้โค้ดจริง Derive เองแล้ว
     // จึงเหลือแค่ Test นี้ที่ต้องคอย Sync คู่มือเป็นจำนวนเต็มตายตัวไว้เตือน — jobCount
     // ลดจาก 15 กลับมาเป็น 14 หลัง Drop supportRequestCleanup.job.js — Migration 027
-    // Pivot Flow "ติดต่อ Admin" ไปเป็นหน้าเว็บ /support ไม่มี Session ให้ Purge อีกแล้ว)
+    // Pivot Flow "ติดต่อ Admin" ไปเป็นหน้าเว็บ /support ไม่มี Session ให้ Purge อีกแล้ว
+    // แล้วกลับขึ้นเป็น 15 อีกครั้งเมื่อเพิ่ม premiumExpiryReminder.job.js)
+    //
+    // ⚠️ บทเรียนจากรอบนี้: ไฟล์ Job ใหม่ "ต้อง" ถูก jest.mock() ที่หัวไฟล์นี้ด้วยเสมอ
+    // ไม่งั้น cron.schedule จริงจะถูกเรียกตอน require worker.js → Timer ค้างใน Event
+    // Loop → jest แฮงก์ไม่จบ (ไม่ใช่ Test แดง แต่ค้างเฉยๆ ซึ่งหาสาเหตุยากกว่ามาก)
     expect(logger.info).toHaveBeenCalledWith(
       'worker process started',
-      expect.objectContaining({ jobCount: 14 })
+      expect.objectContaining({ jobCount: 15 })
     );
   });
 });
@@ -96,6 +106,7 @@ describe('index.js — ไม่มี Cron Scheduling หลงเหลือ�
       'scheduleExpirePayments',
       'scheduleAutoReleaseStaleAmounts',
       'schedulePlanDowngrade',
+      'schedulePremiumExpiryReminder',
       'schedulePortfolioSnapshot',
       'schedulePurgeStaleWebhookEvents',
     ];

@@ -21,6 +21,9 @@ function toUser(row) {
     // Self-service Free Trial (migration 029) — NULL = ยังไม่เคยกดรับ Premium ฟรี
     // (สิทธิ์ครั้งเดียวตลอดชีพ ห้าม Reset — ดู freeTrial.service)
     freeTrialClaimedAt: row.free_trial_claimed_at ?? null,
+    // NULL = ยังไม่เคยถูกเตือน "Premium ใกล้หมดอายุ" ในรอบบิลปัจจุบัน (migration 030)
+    // ถูก Reset ทุกครั้งที่ updatePlan (ดูเหตุผลในฟังก์ชันนั้น)
+    expiryReminderSentAt: row.expiry_reminder_sent_at ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -177,12 +180,22 @@ async function anonymize(userId) {
   return toUser(data);
 }
 
+// ทางเข้า "เดียว" ของการเขียน plan/plan_expires_at ทั้งระบบ (payment อนุมัติ /
+// admin grant / free trial / downgrade เรียกตัวนี้ทั้งหมด)
+//
+// ⚠️ Reset expiry_reminder_sent_at = null ทุกครั้ง (migration 030): วันหมดอายุเพิ่ง
+// เปลี่ยน "รอบบิลใหม่" จึงเริ่มนับการเตือนใหม่ด้วย — ถ้าไม่ Reset ผู้ใช้ที่ต่ออายุแล้ว
+// จะไม่ได้รับการเตือนอีกเลยตลอดชีพ (ปั๊มค้างจากรอบก่อน) วางไว้ที่นี่จุดเดียวเพราะเป็น
+// Choke Point ที่ทุก Path ต้องผ่าน — ไม่ต้องไล่แก้ทีละ Caller และไม่มีทางลืม
+// (กรณี downgrade เป็น free ก็ Reset ด้วย ซึ่งถูกต้อง: ไม่มีอะไรให้เตือนแล้ว และถ้า
+// กลับมา Premium อีกครั้งก็ควรเตือนได้ใหม่)
 async function updatePlan(userId, plan, expiresAt) {
   const { data, error } = await supabaseAdmin
     .from('users')
     .update({
       plan,
       plan_expires_at: expiresAt,
+      expiry_reminder_sent_at: null,
     })
     .eq('id', userId)
     .select('*')
@@ -214,6 +227,8 @@ async function claimFreeTrial(userId, expiresAt, now = new Date()) {
       plan: 'premium',
       plan_expires_at: expiresAt instanceof Date ? expiresAt.toISOString() : expiresAt,
       free_trial_claimed_at: now.toISOString(),
+      // รอบบิลใหม่ → เริ่มนับการเตือนใหม่ (เหตุผลเดียวกับ updatePlan ด้านบน)
+      expiry_reminder_sent_at: null,
     })
     .eq('id', userId)
     .is('free_trial_claimed_at', null)
@@ -227,6 +242,41 @@ async function claimFreeTrial(userId, expiresAt, now = new Date()) {
   return toUser(data);
 }
 
+// ── Cron เตือนก่อน Premium หมดอายุ ────────────────────────────────────────────
+// หาคนที่ plan='premium' + วันหมดอายุอยู่ในช่วง (now, cutoff] + ยังไม่เคยเตือนรอบนี้
+//
+// .gt('plan_expires_at', nowIso) สำคัญ: ตัดคนที่ "หมดอายุไปแล้ว" ออก — คนกลุ่มนั้น
+// เป็นงานของ planDowngrade.job (ตอบข้อความคนละแบบ: "หมดอายุแล้ว" ไม่ใช่ "ใกล้หมด")
+// ถ้าไม่กรอง จะยิง Push ซ้อนกันสองใบในวันเดียวกัน
+async function findPremiumExpiringBefore(cutoff, now = new Date()) {
+  const { data, error } = await supabaseAdmin
+    .from('users')
+    .select('*')
+    .eq('plan', 'premium')
+    .gt('plan_expires_at', now.toISOString())
+    .lte('plan_expires_at', cutoff.toISOString())
+    .is('expiry_reminder_sent_at', null);
+
+  if (error) {
+    throw new Error(`Failed to find premium users expiring soon: ${error.message}`);
+  }
+
+  return (data ?? []).map(toUser);
+}
+
+// ปั๊มว่าเตือนแล้ว — เรียก "หลัง" Push สำเร็จเท่านั้น (ถ้าปั๊มก่อนแล้ว Push พัง ผู้ใช้
+// จะไม่ได้รับการเตือนเลยทั้งรอบบิล ซึ่งแย่กว่าการเสี่ยงเตือนซ้ำ 1 ใบ)
+async function markExpiryReminderSent(userId, now = new Date()) {
+  const { error } = await supabaseAdmin
+    .from('users')
+    .update({ expiry_reminder_sent_at: now.toISOString() })
+    .eq('id', userId);
+
+  if (error) {
+    throw new Error(`Failed to mark expiry reminder sent for user ${userId}: ${error.message}`);
+  }
+}
+
 module.exports = {
   findByLineUserId,
   findById,
@@ -235,6 +285,8 @@ module.exports = {
   findExpiredPremiumUsers,
   updatePlan,
   claimFreeTrial,
+  findPremiumExpiringBefore,
+  markExpiryReminderSent,
   updateDisplayName,
   setPdpaConsent,
   anonymize,
