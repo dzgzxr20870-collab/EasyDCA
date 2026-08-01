@@ -1884,6 +1884,58 @@ function buildPaymentRejectedMessage(payment) {
   });
 }
 
+// ── Push หาผู้ใช้: กดรับ Free Trial สำเร็จ (self-service, ดู freeTrial.service) ──
+// รูปแบบเดียวกับ buildPaymentApprovedMessage (Header สีเขียว/โทนเดียวกัน) ต่างกันที่
+// 1) มีวันเริ่มด้วย (Payment จริงไม่ต้องบอกวันเริ่มเพราะเริ่มทันที/ต่อจากวันหมดอายุเดิม
+//    ซึ่งผู้ใช้รู้อยู่แล้ว ส่วน Free Trial ผู้ใช้อาจอยากรู้ชัดว่านับจากวันนี้)
+// 2) มีปุ่มลิงก์ไปหน้า /premium (Pattern เดียวกับ buildPremiumExpiringSoonMessage —
+//    ใช้ URL ผ่านภายนอก Browser จาก externalUrl.util ไม่ใช่ liff.line.me) ให้กดต่ออายุ
+//    ตอนหมดอายุได้ทันทีจากข้อความนี้เลย ไม่ต้องหาทางกลับไปหน้า Premium เอง
+// premiumUrl เป็น null ได้ (ยังไม่ได้ตั้ง FRONTEND_URL) → ไม่ใส่ปุ่ม แต่ยัง Push ได้ปกติ
+function buildFreeTrialClaimedMessage(claimedAt, expiresAt, premiumUrl) {
+  const message = bubble({
+    headerText: '🎁 รับ Premium ฟรี 1 เดือนสำเร็จ',
+    headerColor: COLOR.profit,
+    headerBg: COLOR.profitBg,
+    bodyContents: [
+      textLine('บัญชีของคุณเป็น Premium แล้ว ใช้งานได้เต็มรูปแบบ', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      textLine(`เริ่มใช้งาน: ${formatDateBangkok(claimedAt)}`, {
+        size: 'sm',
+        color: COLOR.textSecondary,
+      }),
+      textLine(`ใช้งาน Premium ได้ถึง: ${formatDateBangkok(expiresAt)}`, {
+        size: 'md',
+        weight: 'bold',
+        color: COLOR.textPrimary,
+      }),
+      textLine('หากต้องการใช้ต่อหลังหมดอายุ ต่ออายุได้ผ่านเว็บ Dashboard', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
+
+  if (premiumUrl) {
+    message.contents.footer = {
+      type: 'box',
+      layout: 'vertical',
+      contents: [
+        {
+          type: 'button',
+          style: 'primary',
+          color: COLOR.profit,
+          action: { type: 'uri', label: '👑 ไปที่ Dashboard', uri: premiumUrl },
+        },
+      ],
+    };
+  }
+
+  return message;
+}
+
 // ยอดเงินบาททศนิยม 2 ตำแหน่งเป๊ะเสมอ (เช่น 59.17 / 590.05) — ยอดชำระมีเศษ
 // สตางค์เฉพาะ (satang tag) ที่ต้องโอนให้ตรงทุกหลัก ต่างจาก formatNumber ที่ตัด
 // ศูนย์ท้าย (59.10 → "59.1") ซึ่งอาจทำให้ผู้ใช้โอนยอดผิด
@@ -3259,6 +3311,7 @@ module.exports = {
   buildAdminRejectAckMessage,
   buildPaymentApprovedMessage,
   buildPaymentRejectedMessage,
+  buildFreeTrialClaimedMessage,
   buildPremiumOfferMessage,
   buildPremiumStatusMessage,
   buildPaymentQrMessage,

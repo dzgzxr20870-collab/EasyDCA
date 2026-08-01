@@ -7,6 +7,7 @@ const storageService = require('../services/storage.service');
 const userRepository = require('../repositories/user.repository');
 const lineService = require('../services/line.service');
 const flexMessage = require('../utils/flexMessage.util');
+const { buildExternalUrl } = require('../utils/externalUrl.util');
 
 // Map PaymentServiceError.code → HTTP Status (Pattern เดียวกับ dashboard.controller
 // ที่ Map ProfitServiceError → 404) code ที่ไม่อยู่ในตารางถือเป็น 500 INTERNAL_ERROR
@@ -238,6 +239,24 @@ async function getFreeTrialStatus(req, res) {
 async function claimFreeTrial(req, res) {
   try {
     const { user, newExpiry } = await freeTrialService.claimFreeTrial(req.user.id);
+
+    // Push แจ้งผู้ใช้แบบ Best-effort (Pattern เดียวกับ webhook.controller
+    // approve_payment) — สิทธิ์ถูกให้แล้วจริง (Source of Truth คือ DB) ถ้า Push พัง
+    // ห้ามทำให้ Endpoint ตอบ Error เพราะผู้ใช้จะเข้าใจผิดว่ากดรับไม่สำเร็จทั้งที่ได้แล้ว
+    try {
+      if (user.lineUserId) {
+        await lineService.pushMessage(
+          user.lineUserId,
+          flexMessage.buildFreeTrialClaimedMessage(
+            user.freeTrialClaimedAt,
+            newExpiry,
+            buildExternalUrl('/premium')
+          )
+        );
+      }
+    } catch (pushErr) {
+      console.error(`[payment] claimFreeTrial: push to user failed: ${pushErr.message}`);
+    }
 
     return res.status(200).json({
       status: 'claimed',

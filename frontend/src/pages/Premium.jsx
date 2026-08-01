@@ -361,15 +361,6 @@ function Premium() {
               <>
                 <div className="premium-freetrial-body">
                   <p className="premium-freetrial-title">🎁 รับ Premium ฟรี 1 เดือน</p>
-                  <p className="premium-freetrial-desc">
-                    ลองใช้ Premium เต็มรูปแบบฟรี 1 เดือน ไม่ต้องผูกบัตร ไม่ตัดเงินอัตโนมัติ
-                  </p>
-                  {/* เงื่อนไขต้องชัดตั้งแต่ก่อนกด — ไม่ให้ผู้ใช้เข้าใจว่าต่อได้เรื่อยๆ */}
-                  <ul className="premium-freetrial-terms">
-                    <li>ใช้ได้ <b>ครั้งเดียวต่อบัญชี</b> (กดรับซ้ำไม่ได้)</li>
-                    <li>ครบ 1 เดือนแล้ว <b>กลับเป็น Free อัตโนมัติ</b> ไม่มีการต่ออายุให้เอง</li>
-                    <li>หากต้องการใช้ต่อ ต้องชำระเงินตามปกติ</li>
-                  </ul>
                 </div>
                 <div className="premium-freetrial-action">
                   <button

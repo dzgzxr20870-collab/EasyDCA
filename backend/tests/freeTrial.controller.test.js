@@ -13,13 +13,18 @@ jest.mock('../src/services/line.service');
 jest.mock('../src/utils/logger.util');
 jest.mock('../src/config/env', () => {
   const actual = jest.requireActual('../src/config/env');
-  return { ...actual, payment: { ...actual.payment, freeTrialEnabled: true } };
+  return {
+    ...actual,
+    payment: { ...actual.payment, freeTrialEnabled: true },
+    app: { ...actual.app, frontendUrl: 'https://app.easydca.test' },
+  };
 });
 
 const config = require('../src/config/env');
 const userRepository = require('../src/repositories/user.repository');
 const paymentRepository = require('../src/repositories/payment.repository');
 const premiumGrantLogRepository = require('../src/repositories/premiumGrantLog.repository');
+const lineService = require('../src/services/line.service');
 const paymentController = require('../src/controllers/payment.controller');
 
 const USER_ID = 'user-uuid-1';
@@ -66,6 +71,7 @@ beforeEach(() => {
   paymentRepository.findAllByUserId.mockResolvedValue([]);
   premiumGrantLogRepository.findAllByUserId.mockResolvedValue([]);
   premiumGrantLogRepository.create.mockResolvedValue({ id: 'log-1' });
+  lineService.pushMessage.mockResolvedValue(undefined);
 });
 
 describe('GET /payment/free-trial — เช็คสิทธิ์', () => {
@@ -211,6 +217,63 @@ describe('POST /payment/free-trial/claim — กดรับ', () => {
 
     expect(statusOf(res)).toBe(500);
     expect(JSON.stringify(jsonOf(res))).not.toMatch(/secret internals/);
+    console.error.mockRestore();
+  });
+});
+
+describe('POST /payment/free-trial/claim — LINE Push แจ้งหลังกดรับสำเร็จ', () => {
+  test('Push สำเร็จ → ส่งหา lineUserId ของผู้ใช้ พร้อมวันเริ่ม/วันหมดอายุตรงกับที่ Claim จริง', async () => {
+    const res = mockRes();
+    await paymentController.claimFreeTrial(mockReq(), res);
+
+    expect(statusOf(res)).toBe(200);
+    const body = jsonOf(res);
+
+    expect(lineService.pushMessage).toHaveBeenCalledTimes(1);
+    const [toLineUserId, message] = lineService.pushMessage.mock.calls[0];
+    expect(toLineUserId).toBe('U-line-1');
+
+    // ดึงข้อความจาก Flex ไปเทียบว่าไม่ได้เพี้ยนจากค่าที่ตอบ Client (วันเดียวกันเป๊ะ)
+    // ใช้ Intl แปลง Asia/Bangkok เดียวกับที่ flexMessage.util ใช้จริง — ห้ามเทียบด้วย
+    // slice(0,10) ตรงๆ กับ ISO UTC เพราะช่วง 17:00-23:59 UTC จะข้ามวันกัน (Flaky)
+    const expectedExpiryDate = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Bangkok',
+    }).format(new Date(body.planExpiresAt));
+    const flexText = JSON.stringify(message);
+    expect(flexText).toContain('รับ Premium ฟรี 1 เดือนสำเร็จ');
+    expect(flexText).toContain(expectedExpiryDate);
+    // มีปุ่มลิงก์ External Browser ไปหน้า /premium (Reuse externalUrl.util)
+    expect(flexText).toContain('https://app.easydca.test/premium');
+    expect(flexText).toContain('openExternalBrowser=1');
+  });
+
+  test('ไม่มี lineUserId (ถูก Anonymize) → ข้ามการ Push เงียบๆ ไม่กระทบ Claim', async () => {
+    userRepository.findById.mockResolvedValue(eligibleUser({ lineUserId: null }));
+    userRepository.claimFreeTrial.mockImplementation(async (id, expiresAt, now) => ({
+      ...eligibleUser({ lineUserId: null }),
+      id,
+      plan: 'premium',
+      planExpiresAt: expiresAt,
+      freeTrialClaimedAt: now,
+    }));
+
+    const res = mockRes();
+    await paymentController.claimFreeTrial(mockReq(), res);
+
+    expect(statusOf(res)).toBe(200);
+    expect(lineService.pushMessage).not.toHaveBeenCalled();
+  });
+
+  test('Push ล้มเหลว (LINE API Error) → Claim ยัง Commit สำเร็จ ตอบ 200 ตามปกติ (Push เป็น Side Effect ไม่ใช่ Ledger หลัก)', async () => {
+    lineService.pushMessage.mockRejectedValue(new Error('LINE API down'));
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const res = mockRes();
+    await paymentController.claimFreeTrial(mockReq(), res);
+
+    expect(statusOf(res)).toBe(200);
+    expect(jsonOf(res).status).toBe('claimed');
+    expect(userRepository.claimFreeTrial).toHaveBeenCalledTimes(1);
     console.error.mockRestore();
   });
 });
