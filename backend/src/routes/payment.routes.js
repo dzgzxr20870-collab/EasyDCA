@@ -25,6 +25,13 @@ router.use(requireAuth);
 // PDPA Compliance (migration 017) — ต้องกดยืนยัน Privacy Policy ก่อนทำรายการชำระเงิน
 router.use(requireConsent);
 
+// ── Self-service Free Trial (แคมเปญชั่วคราว — ปิดด้วย PREMIUM_FREE_TRIAL_ENABLED) ──
+// อยู่หลัง requireAuth + requireConsent เหมือน Route อื่นทั้งหมดในไฟล์นี้ (userId มา
+// จาก JWT เท่านั้น ไม่รับจาก Body) — วางไว้ "ก่อน" Route ที่มี :id เพื่อไม่ให้
+// 'free-trial' ถูกตีความเป็น payment id
+router.get('/free-trial', paymentController.getFreeTrialStatus);
+router.post('/free-trial/claim', paymentController.claimFreeTrial);
+
 router.post('/request', paymentController.requestPayment);
 // เว็บอัปโหลดสลิป (Feature 3) — rawSlipBody ต้องมาก่อน Controller เพื่อแปลง Body เป็น Buffer
 router.post('/:id/slip', rawSlipBody, paymentController.uploadSlip);

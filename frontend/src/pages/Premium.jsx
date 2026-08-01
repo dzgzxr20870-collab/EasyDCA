@@ -156,6 +156,26 @@ function errorText(code) {
   return ERROR_MESSAGES[code] ?? ERROR_MESSAGES.INTERNAL_ERROR;
 }
 
+// ── รับ Premium ฟรี 1 เดือน (แคมเปญชั่วคราว) — Error Code จาก
+// POST /api/v1/payment/free-trial/claim (payment.controller FREE_TRIAL_MESSAGES)
+// แยกตารางจาก ERROR_MESSAGES ด้านบนเพราะเป็นคนละ Endpoint/คนละชุด Code
+const FREE_TRIAL_ERROR_MESSAGES = {
+  FEATURE_DISABLED: 'แคมเปญรับ Premium ฟรีปิดรับแล้วในขณะนี้',
+  ACCOUNT_NOT_ELIGIBLE: 'บัญชีนี้ไม่สามารถรับสิทธิ์นี้ได้',
+  ALREADY_CLAIMED: 'คุณใช้สิทธิ์รับ Premium ฟรีไปแล้ว (ใช้ได้ครั้งเดียวเท่านั้น)',
+  ALREADY_PREMIUM: 'คุณเป็นสมาชิก Premium อยู่แล้ว',
+  ALREADY_PAID_BEFORE:
+    'สิทธิ์นี้สำหรับผู้ที่ยังไม่เคยเป็นสมาชิก Premium เท่านั้น — ต่ออายุได้ผ่านการชำระเงินตามปกติ',
+  ALREADY_GRANTED_BEFORE: 'คุณเคยได้รับสิทธิ์ Premium ฟรีไปแล้ว',
+  USER_NOT_FOUND: 'ไม่พบบัญชีผู้ใช้',
+  UNAUTHORIZED: 'เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่อีกครั้ง',
+  INTERNAL_ERROR: 'เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง',
+};
+
+function freeTrialErrorText(code) {
+  return FREE_TRIAL_ERROR_MESSAGES[code] ?? FREE_TRIAL_ERROR_MESSAGES.INTERNAL_ERROR;
+}
+
 function qrImageUrl(paymentId) {
   return `${API_BASE_URL}/api/v1/payment/${paymentId}/qr.png`;
 }
@@ -194,6 +214,16 @@ function Premium() {
   const [notifyError, setNotifyError] = useState(null);
   const [notified, setNotified] = useState(false);
 
+  // ── รับ Premium ฟรี 1 เดือน (แคมเปญชั่วคราว) ──────────────────────────────────
+  // freeTrial = ผลจาก GET /api/v1/payment/free-trial
+  //   { enabled, eligible, reason, message, claimedAt }
+  // Default enabled:false → ถ้า Endpoint ล่ม/ยังโหลดไม่เสร็จ จะ "ไม่โชว์ Banner" ไว้ก่อน
+  // (Fail-closed: ดีกว่าโชว์ปุ่มแจกของฟรีค้างไว้ทั้งที่แคมเปญปิดแล้ว)
+  const [freeTrial, setFreeTrial] = useState({ enabled: false, eligible: false });
+  const [claimingTrial, setClaimingTrial] = useState(false);
+  const [trialError, setTrialError] = useState(null);
+  const [trialClaimed, setTrialClaimed] = useState(null); // { planExpiresAt } หลังกดสำเร็จ
+
   // ── Route Guard — ไม่มี Token → กลับ Login (เหมือน DashboardHome/Admin) ────────
   useEffect(() => {
     if (!getToken()) {
@@ -211,7 +241,36 @@ function Premium() {
       .catch(() => {});
   }, []);
 
+  // สิทธิ์รับ Premium ฟรี — แยก Endpoint จาก /dashboard/me โดยเจตนา (ต้อง Query
+  // payments + premium_grant_logs เพิ่ม ซึ่งหนักเกินจะใส่ใน Hot Path ของ Dashboard)
+  // ล้มเหลวเงียบๆ แล้วคง enabled:false ไว้ (ไม่บล็อกหน้า ไม่โชว์ Banner)
+  useEffect(() => {
+    apiGet('/api/v1/payment/free-trial')
+      .then(setFreeTrial)
+      .catch(() => {});
+  }, []);
+
   const featureRows = buildFeatureRows(planInfo.assetLimit ?? 2);
+
+  // กดรับ Premium ฟรี — Backend เป็นด่านตัดสินจริงเสมอ (Banner นี้แค่ซ่อน/โชว์ตาม
+  // eligible เพื่อ UX เท่านั้น ไม่ได้เป็น Guard)
+  async function handleClaimFreeTrial() {
+    setTrialError(null);
+    setClaimingTrial(true);
+    try {
+      const result = await apiPost('/api/v1/payment/free-trial/claim', {});
+      setTrialClaimed({ planExpiresAt: result.planExpiresAt });
+      // Refetch สถานะจริงจาก Backend แทนการเดาเอง (planInfo ต้องกลายเป็น Premium
+      // และ freeTrial ต้องกลายเป็น eligible:false — ให้ Server เป็นคนบอก)
+      apiGet('/api/v1/dashboard/me').then(setPlanInfo).catch(() => {});
+      apiGet('/api/v1/payment/free-trial').then(setFreeTrial).catch(() => {});
+    } catch (err) {
+      // apiPost โยน Error(code) — แปลผ่านตารางข้อความไทย (ไม่โชว์ Code ดิบ)
+      setTrialError(freeTrialErrorText(err.message));
+    } finally {
+      setClaimingTrial(false);
+    }
+  }
 
   async function handleCreatePayment(period) {
     setCreateError(null);
@@ -280,6 +339,54 @@ function Premium() {
       </header>
 
       <div className="dashboard-container">
+        {/* ── แคมเปญชั่วคราว: รับ Premium ฟรี 1 เดือน ────────────────────────────
+            เงื่อนไขการโชว์ (ทั้งหมดต้องจริง):
+              - freeTrial.enabled  → แคมเปญยังเปิดอยู่ (Flag ฝั่ง Backend)
+              - ไม่ได้อยู่ในขั้นตอนจ่ายเงิน (!payment) → ไม่แย่งความสนใจตอนกำลังสแกน QR
+              - eligible หรือเพิ่งกดสำเร็จ → คนที่ใช้สิทธิ์ไปแล้ว/ไม่มีสิทธิ์ ไม่เห็นเลย
+                (ไม่โชว์ปุ่มที่กดแล้วขึ้น Error — Backend ยังกันซ้ำอยู่ดี Banner แค่ UX)
+            ⚠️ Banner นี้ "ไม่ใช่ Guard" — ด่านตัดสินจริงคือ freeTrial.service ฝั่ง Backend */}
+        {freeTrial.enabled && !payment && (freeTrial.eligible || trialClaimed) && (
+          <section className="premium-freetrial">
+            {trialClaimed ? (
+              <div className="premium-freetrial-done">
+                <p className="premium-freetrial-title">🎉 รับสิทธิ์เรียบร้อยแล้ว!</p>
+                <p className="premium-freetrial-desc">
+                  คุณเป็นสมาชิก Premium ถึงวันที่ <b>{formatThaiDate(trialClaimed.planExpiresAt)}</b>{' '}
+                  — หลังจากนั้นบัญชีจะกลับเป็น Free อัตโนมัติ (ข้อมูลเดิมยังอยู่ครบ)
+                  ต่ออายุได้ผ่านการชำระเงินด้านล่าง
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="premium-freetrial-body">
+                  <p className="premium-freetrial-title">🎁 รับ Premium ฟรี 1 เดือน</p>
+                  <p className="premium-freetrial-desc">
+                    ลองใช้ Premium เต็มรูปแบบฟรี 1 เดือน ไม่ต้องผูกบัตร ไม่ตัดเงินอัตโนมัติ
+                  </p>
+                  {/* เงื่อนไขต้องชัดตั้งแต่ก่อนกด — ไม่ให้ผู้ใช้เข้าใจว่าต่อได้เรื่อยๆ */}
+                  <ul className="premium-freetrial-terms">
+                    <li>ใช้ได้ <b>ครั้งเดียวต่อบัญชี</b> (กดรับซ้ำไม่ได้)</li>
+                    <li>ครบ 1 เดือนแล้ว <b>กลับเป็น Free อัตโนมัติ</b> ไม่มีการต่ออายุให้เอง</li>
+                    <li>หากต้องการใช้ต่อ ต้องชำระเงินตามปกติ</li>
+                  </ul>
+                </div>
+                <div className="premium-freetrial-action">
+                  <button
+                    type="button"
+                    className="premium-freetrial-btn"
+                    onClick={handleClaimFreeTrial}
+                    disabled={claimingTrial}
+                  >
+                    {claimingTrial ? 'กำลังดำเนินการ...' : '🎁 รับสิทธิ์ฟรี 1 เดือน'}
+                  </button>
+                  {trialError && <p className="premium-freetrial-error">{trialError}</p>}
+                </div>
+              </>
+            )}
+          </section>
+        )}
+
         {/* ── Hero Banner + Mascot (ข้อยกเว้นเฉพาะหน้านี้) ─────────────────────── */}
         {!payment && (
           <section className="dashboard-premium-hero">

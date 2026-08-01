@@ -18,6 +18,9 @@ function toUser(row) {
     // บัญชียัง Active ปกติ ตามลำดับ ดู setPdpaConsent / anonymize ด้านล่าง
     pdpaConsentedAt: row.pdpa_consented_at ?? null,
     anonymizedAt: row.anonymized_at ?? null,
+    // Self-service Free Trial (migration 029) — NULL = ยังไม่เคยกดรับ Premium ฟรี
+    // (สิทธิ์ครั้งเดียวตลอดชีพ ห้าม Reset — ดู freeTrial.service)
+    freeTrialClaimedAt: row.free_trial_claimed_at ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -192,6 +195,38 @@ async function updatePlan(userId, plan, expiresAt) {
   return toUser(data);
 }
 
+// ── Atomic Claim: กดรับ Premium ฟรี 1 เดือน (ครั้งเดียวตลอดชีพ) ────────────────
+// หัวใจของการกัน "กดซ้ำ/กดรัวพร้อมกัน": ให้สิทธิ์ (plan + plan_expires_at) กับปั๊มว่า
+// ใช้สิทธิ์แล้ว (free_trial_claimed_at) เกิดใน UPDATE Statement เดียวกัน พร้อมเงื่อนไข
+// WHERE free_trial_claimed_at IS NULL — Postgres รับประกันว่ามีแค่ Request เดียวที่
+// Match ได้ อีกตัวจะได้ 0 แถวกลับมา (Pattern เดียวกับ paymentRepository.claimForApproval)
+//
+// คืน null = "มีคนชิงไปแล้ว/เคยกดรับแล้ว" ให้ Caller ตอบ ALREADY_CLAIMED
+// คืน user = Claim สำเร็จ (สิทธิ์ถูกเขียนลง DB เรียบร้อยแล้วจริง)
+//
+// ⚠️ ห้ามแยกเป็น 2 Statement (update plan แล้วค่อย update claimed_at) เด็ดขาด —
+// Supabase JS ไม่มี Transaction ครอบ ถ้าแยกจะมีช่องให้ 2 Request ผ่าน Guard พร้อมกัน
+// แล้วได้ Premium 2 เดือน (Stack) ซึ่งผิดข้อกำหนด "1 เดือนเท่านั้น"
+async function claimFreeTrial(userId, expiresAt, now = new Date()) {
+  const { data, error } = await supabaseAdmin
+    .from('users')
+    .update({
+      plan: 'premium',
+      plan_expires_at: expiresAt instanceof Date ? expiresAt.toISOString() : expiresAt,
+      free_trial_claimed_at: now.toISOString(),
+    })
+    .eq('id', userId)
+    .is('free_trial_claimed_at', null)
+    .select('*')
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Failed to claim free trial for user ${userId}: ${error.message}`);
+  }
+
+  return toUser(data);
+}
+
 module.exports = {
   findByLineUserId,
   findById,
@@ -199,6 +234,7 @@ module.exports = {
   create,
   findExpiredPremiumUsers,
   updatePlan,
+  claimFreeTrial,
   updateDisplayName,
   setPdpaConsent,
   anonymize,

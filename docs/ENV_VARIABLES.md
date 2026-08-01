@@ -59,6 +59,33 @@ cp .env.example .env
 
 ---
 
+## Premium / Payment
+
+| Variable | จำเป็น | คำอธิบาย |
+|---|---|---|
+| `PROMPTPAY_ID` | ❌ | เบอร์พร้อมเพย์/เลขบัตรที่รับเงิน (ไม่ตั้ง = สร้าง QR ไม่ได้) |
+| `ADMIN_LINE_USER_IDS` | ❌ | `line_user_id` ของ Admin ที่อนุมัติ Payment ได้ (คั่นด้วย `,`) |
+| `PREMIUM_PRICE_MONTHLY` | ❌ | ราคารายเดือน (Default: `59`) |
+| `PREMIUM_PRICE_YEARLY` | ❌ | ราคารายปี (Default: `590`) |
+| `PREMIUM_FREE_TRIAL_ENABLED` | ❌ | **แคมเปญชั่วคราว** — เปิดให้ผู้ใช้กดรับ Premium ฟรี 1 เดือนเองได้ (ครั้งเดียวตลอดชีพต่อบัญชี) ค่าที่เปิดคือ `true` **ตรงๆ เท่านั้น** (Default: ปิด) |
+
+> ### ⚠️ `PREMIUM_FREE_TRIAL_ENABLED` — Fail-closed โดยเจตนา
+>
+> ต้องเป็นสตริง `true` เป๊ะๆ ถึงจะเปิด — ไม่ตั้งค่า / สะกดผิด / ค่าว่าง = **ปิด**
+> เพราะแคมเปญแจกของฟรีที่ "เปิดค้างเพราะพิมพ์ผิด" กระทบรายได้ทางเดียว จึงยอมให้
+> พลาดไปทาง "ปิด" ดีกว่า "เปิด"
+>
+> **วิธีปิดแคมเปญบน Production:** Railway → Variables → ตั้ง
+> `PREMIUM_FREE_TRIAL_ENABLED=false` → Service Restart อัตโนมัติ (~1-2 นาที)
+> **ไม่ต้อง `git push` / ไม่ต้อง Build ใหม่** — ผู้ใช้ที่รับสิทธิ์ไปแล้วยังคงใช้
+> Premium จนครบกำหนดตามปกติ (ปิดแคมเปญ = ปิดการ "กดรับใหม่" เท่านั้น)
+>
+> ผลกระทบต่อ `/admin/stats`: **ไม่กระทบ `totalRevenue`/`revenueThisMonth`**
+> (Free Trial ไม่สร้างแถวใน `payments`) แต่ `premiumUsers` จะเพิ่มตามจริง —
+> ระหว่างแคมเปญ ตัวเลข Premium ≠ จำนวนลูกค้าที่จ่ายเงิน
+
+---
+
 ## Market Data (หุ้นสหรัฐ)
 
 | Variable | จำเป็น | คำอธิบาย |

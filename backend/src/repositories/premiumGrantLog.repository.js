@@ -41,4 +41,24 @@ async function create(data) {
   return toGrantLog(row);
 }
 
-module.exports = { create, toGrantLog };
+// ประวัติการ Grant ทั้งหมดของผู้ใช้รายนี้ (ใช้ Index idx_premium_grant_logs_user_id)
+// — freeTrial.service ใช้ตรวจว่า "เคยได้ Premium ฟรีจาก Admin มาก่อนไหม" (Beta Wave 1)
+//
+// ⚠️ ใช้เป็น "เงื่อนไขคัดกรองเพิ่ม" เท่านั้น ห้ามใช้เป็น Guard หลักกันกดซ้ำ — ตารางนี้
+// ไม่มี UNIQUE constraint และถูกเขียนแบบ best-effort (try/catch) ทั้งใน adminGrant
+// และ freeTrial จึงอาจขาดแถวได้ Guard หลักคือ users.free_trial_claimed_at (Atomic)
+async function findAllByUserId(userId) {
+  const { data, error } = await supabaseAdmin
+    .from('premium_grant_logs')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    throw new Error(`Failed to find premium grant logs for user ${userId}: ${error.message}`);
+  }
+
+  return (data ?? []).map(toGrantLog);
+}
+
+module.exports = { create, findAllByUserId, toGrantLog };

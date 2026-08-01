@@ -1042,6 +1042,101 @@ Response `200`: `{ "plan": <plan> }`
 
 ---
 
+## 15.6 Self-service Free Trial — รับ Premium ฟรี 1 เดือน (แคมเปญชั่วคราว)
+
+เปิด/ปิดด้วย Env Var `PREMIUM_FREE_TRIAL_ENABLED` (ดู
+[ENV_VARIABLES.md](./ENV_VARIABLES.md)) — ปิดอยู่โดย Default
+
+> **สิทธิ์ครั้งเดียวตลอดชีพต่อบัญชี** — ได้ Premium **1 เดือนเป๊ะ ไม่ Stack**
+> (ส่ง `null` เข้า `entitlement.computeRenewalExpiry` โดยเจตนา ต่างจาก Payment จริง/
+> Admin Grant ที่ต่อทบจากวันเดิม) หมดอายุแล้ว `planDowngrade.job` ลดกลับเป็น Free
+> อัตโนมัติด้วย Path เดียวกับ Premium ที่จ่ายเงินจริง **ไม่มีการต่ออายุให้เอง**
+>
+> **ไม่แตะตาราง `payments` เลย** → `totalRevenue`/`revenueThisMonth` ใน
+> `/admin/stats` ไม่ขยับ (แต่ `premiumUsers` เพิ่มตามจริง) — เหตุผลเดียวกับ
+> Admin Grant (ดู migration 023)
+
+### 15.6.1 GET `/api/v1/payment/free-trial` — เช็คสิทธิ์
+
+ตอบ **200 เสมอ** แม้กดไม่ได้ (เป็นการ "ถามสถานะ" ไม่ใช่ Error)
+
+```json
+{
+  "enabled": true,
+  "eligible": false,
+  "reason": "ALREADY_CLAIMED",
+  "message": "คุณใช้สิทธิ์รับ Premium ฟรีไปแล้ว (ใช้ได้ครั้งเดียวเท่านั้น)",
+  "claimedAt": "2026-08-01T00:00:00.000Z"
+}
+```
+
+| Field | คำอธิบาย |
+|---|---|
+| `enabled` | แคมเปญยังเปิดอยู่ไหม (Flag ฝั่ง Server) — `false` = Frontend ซ่อน Banner ทั้งก้อน |
+| `eligible` | บัญชีนี้กดรับได้ไหม |
+| `reason` / `message` | เหตุผลที่กดไม่ได้ + ข้อความไทยพร้อมแสดง (`null` ทั้งคู่เมื่อ `eligible: true`) |
+| `claimedAt` | วันที่เคยกดรับ (`null` ถ้ายังไม่เคย) |
+
+### 15.6.2 POST `/api/v1/payment/free-trial/claim` — กดรับ (Body ว่าง)
+
+`userId` มาจาก JWT เท่านั้น — ไม่เคยรับจาก Body (กันกดรับแทนคนอื่น)
+
+**Response `200`**
+```json
+{
+  "status": "claimed",
+  "plan": "premium",
+  "planExpiresAt": "2026-09-01T00:00:00.000Z",
+  "message": "รับ Premium ฟรี 1 เดือนเรียบร้อยแล้ว"
+}
+```
+
+**Error ที่เป็นไปได้** (ทุกตัวมี `message` ภาษาไทยกำกับ — ไม่โชว์ Code ดิบให้ผู้ใช้)
+
+| Code | HTTP | เมื่อไหร่ |
+|---|---|---|
+| `FEATURE_DISABLED` | 403 | แคมเปญปิดอยู่ (`PREMIUM_FREE_TRIAL_ENABLED` ≠ `true`) |
+| `ACCOUNT_NOT_ELIGIBLE` | 403 | บัญชีถูกล็อก (`is_locked`) หรือถูกลบข้อมูลตาม PDPA (`anonymized_at`) |
+| `ALREADY_CLAIMED` | 403 | เคยกดรับไปแล้ว (รวมเคสกดรัวพร้อมกันแล้วแพ้ Race) — **ตลอดชีพ ไม่รีเซ็ตแม้หมดอายุ** |
+| `ALREADY_PREMIUM` | 403 | ตอนนี้เป็น Premium อยู่แล้ว (ไม่ให้ซ้อนทบวัน) |
+| `ALREADY_PAID_BEFORE` | 403 | เคยจ่ายเงินสำเร็จมาก่อน (`payments.status='confirmed'`) — ต้องต่อผ่าน QR จริง |
+| `ALREADY_GRANTED_BEFORE` | 403 | เคยได้ Premium ฟรีจาก Admin มาก่อน (`premium_grant_logs`) |
+| `USER_NOT_FOUND` | 404 | ไม่พบบัญชี |
+
+**ลำดับการตรวจ** (ถูกข้อใดข้อหนึ่ง = Block ทันที) — เรียงจากถูกที่สุดไปแพงที่สุด:
+
+```
+1. Flag ปิด              → FEATURE_DISABLED       (ไม่แตะ DB เลย)
+2. บัญชี locked/anonymized → ACCOUNT_NOT_ELIGIBLE
+3. free_trial_claimed_at  → ALREADY_CLAIMED
+4. Premium Active อยู่     → ALREADY_PREMIUM
+5. เคยจ่ายเงินสำเร็จ       → ALREADY_PAID_BEFORE     (Query payments)
+6. เคยได้ Admin Grant     → ALREADY_GRANTED_BEFORE  (Query premium_grant_logs)
+7. [ATOMIC] UPDATE users SET plan='premium', plan_expires_at=..., 
+            free_trial_claimed_at=now()
+     WHERE id=? AND free_trial_claimed_at IS NULL
+   → 0 แถว = ALREADY_CLAIMED (แพ้ Race)
+```
+
+> ⚠️ **ข้อ 7 คือ Guard จริงเพียงข้อเดียวที่กัน Race ได้** — ข้อ 1-6 เป็นการอ่านล้วน
+> ที่แข่งกันได้ Supabase JS ไม่มี Transaction ครอบ จึงต้องให้ "ให้สิทธิ์ + ปั๊มว่าใช้
+> สิทธิ์แล้ว" เกิดใน `UPDATE` เดียวกัน (Pattern เดียวกับ `claimForApproval` ของ Payment)
+
+---
+
+## 15.7 Cron — เตือนก่อน Premium หมดอายุ
+
+`premiumExpiryReminder.job` (ทุกวันตี 2, หลัง `planDowngrade` ตี 1) Push แจ้งผู้ใช้ที่
+Premium จะหมดอายุใน **3 วัน** พร้อมปุ่มไปหน้า `/premium`
+
+- ใช้กับ Premium **ทุกคนเท่ากัน** ไม่ว่าได้มาจากจ่ายเงินจริง / Admin Grant /
+  Free Trial (กรองจาก `users.plan` + `plan_expires_at` คอลัมน์เดียวที่ทุก Path เขียน)
+- กันส่งซ้ำด้วย `users.expiry_reminder_sent_at` (ปั๊ม**หลัง** Push สำเร็จเท่านั้น)
+- Reset เป็น `NULL` ทุกครั้งที่ `updatePlan()` → รอบบิลถัดไปเตือนได้อีก
+- Error Isolation รายคน: 1 คนพัง ไม่หยุดทั้ง Batch (คนที่พังไม่ถูกปั๊ม → ลองใหม่พรุ่งนี้)
+
+---
+
 **Version:** 1.0.0 | **Last Updated:** 18 กรกฎาคม 2569
 
 *อ้างอิงจาก [PROJECT_BRIEF.md](../PROJECT_BRIEF.md)*

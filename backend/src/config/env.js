@@ -115,6 +115,17 @@ module.exports = {
       .filter(Boolean),
     premiumPriceMonthly: Number(process.env.PREMIUM_PRICE_MONTHLY || 59),
     premiumPriceYearly: Number(process.env.PREMIUM_PRICE_YEARLY || 590),
+    // ── Self-service Free Trial (แคมเปญชั่วคราว) ────────────────────────────
+    // เปิดให้ "ทุก User กดรับ Premium ฟรี 1 เดือนได้เอง ครั้งเดียวตลอดชีพ" — ตั้งใจ
+    // ให้เป็นของชั่วคราว จึงคุมด้วย Flag ที่ปิดได้โดยไม่ต้อง Deploy Code ใหม่
+    //
+    // ⚠️ Fail-closed โดยเจตนา: ต้องตั้งเป็น 'true' ตรงๆ เท่านั้นถึงจะเปิด — ไม่ตั้ง
+    // ค่า / สะกดผิด / ค่าว่าง = ปิด (แคมเปญแจกของฟรีที่ "เปิดค้างเพราะพิมพ์ผิด"
+    // กระทบรายได้ทางเดียว จึงยอมให้พลาดไปทาง "ปิด" ดีกว่า "เปิด")
+    //
+    // วิธีปิดบน Production: Railway → Variables → PREMIUM_FREE_TRIAL_ENABLED=false
+    // (Service Restart อัตโนมัติ ~1-2 นาที ไม่ต้อง git push / ไม่ต้อง Build ใหม่)
+    freeTrialEnabled: process.env.PREMIUM_FREE_TRIAL_ENABLED === 'true',
   },
   // Nightly Backup (Infra ก่อน Beta) — Cloudflare R2 (S3-compatible, ไม่ผูก OAuth)
   // ⚠️ ไม่บังคับใน REQUIRED_ENV_VARS — ถ้าไม่ตั้งค่า dbBackup.job จะ Alert Admin

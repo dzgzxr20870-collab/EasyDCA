@@ -60,6 +60,9 @@ admins (1) ─────────────────── (many) paym
 > **อัปเดต (PDPA Compliance):** เพิ่ม `pdpa_consented_at` (migration 017) และ
 > `anonymized_at` (migration 018) จริงใน Production — `CREATE TABLE` ด้านล่าง
 > ยังไม่รวม 2 คอลัมน์นี้ (Doc Drift เดิม) ดูรายละเอียดในตาราง Field ด้านล่าง
+>
+> **อัปเดต (Self-service Free Trial):** เพิ่ม `free_trial_claimed_at`
+> (migration 029) — `CREATE TABLE` ด้านล่างยังไม่รวมเช่นกัน ดูตาราง Field
 
 ```sql
 CREATE TABLE users (
@@ -89,6 +92,7 @@ CREATE TABLE users (
 | locked_at | TIMESTAMPTZ | วันที่ถูกล็อค (nullable) |
 | pdpa_consented_at | TIMESTAMPTZ | (nullable) วันที่ผู้ใช้กดยืนยัน Privacy Policy แบบ Express Opt-in — NULL = ยังไม่เคยกดยืนยัน (ต้องเจอหน้า Consent ก่อนใช้งาน) User เดิมก่อน Migration 017 ถูก Backfill ด้วย `created_at` ของตัวเอง (Grandfather Clause) ดู migration 017 |
 | anonymized_at | TIMESTAMPTZ | (nullable) วันที่บัญชีถูก Anonymize ตามคำขอ PDPA Erasure — NULL = บัญชียัง Active ปกติ ไม่ใช่ NULL = `line_user_id`/`display_name`/`picture_url` ถูกแทนที่ด้วยข้อมูลไม่ระบุตัวตนแล้ว และ `requireAuth` จะปฏิเสธ Token เดิมทันที (401 ACCOUNT_ERASED) ดู migration 018 |
+| free_trial_claimed_at | TIMESTAMPTZ | (nullable, migration 029) วันที่ผู้ใช้กดรับ "Premium ฟรี 1 เดือน" ด้วยตัวเอง — NULL = ยังไม่เคยรับ. ใช้เป็น **Atomic Claim Guard** (`UPDATE ... WHERE free_trial_claimed_at IS NULL`) กันกดซ้ำ/กดรัวพร้อมกัน **ห้าม Reset เด็ดขาด** แม้ Premium หมดอายุไปแล้ว (สิทธิ์ครั้งเดียวตลอดชีพ) ดู `freeTrial.service` |
 | created_at | TIMESTAMPTZ | วันที่สมัคร |
 | updated_at | TIMESTAMPTZ | วันที่อัพเดทล่าสุด |
 
