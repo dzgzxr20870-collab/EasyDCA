@@ -377,3 +377,147 @@ describe('วันที่ย้อนหลัง', () => {
     expect(insertedRow().date).toBe('2026-01-15');
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ฝั่งขาย — "เว็บ = LINE" (ปุ่มขายบน Dashboard)
+// ═══════════════════════════════════════════════════════════════════════════
+// เหตุผลเดียวกับฝั่งซื้อด้านบน: การขายบนเว็บต้องไหลผ่าน transaction.service
+// (validateSell → processSellCommand) ตัวเดียวกับคำสั่งพิมพ์ใน LINE เป๊ะ ไม่มีเส้นทาง
+// คำนวณเงินคู่ขนานของเว็บ — พิสูจน์โดยเทียบแถวที่จะ INSERT จริงจากทั้งสองช่องทาง
+
+// ยอดคงเหลือของ Asset ที่ validateSell จะคำนวณได้ (Σbuy − Σsell จากประวัติจริง)
+function heldHistory(quantity, currency = 'THB') {
+  return [{ id: 'txn-buy-old', assetId: ASSET_ID, type: 'buy', quantity, currency }];
+}
+
+// ตั้ง Mock ชุดเดิมใหม่หลัง clearAllMocks (เตรียมรันช่องทางที่สอง) — เลียนแบบ Pattern
+// ที่เคสฝั่งซื้อด้านบนใช้อยู่แล้ว เพิ่มแค่ประวัติยอดคงเหลือที่การขายต้องใช้
+function resetForSecondChannel({ symbol = 'AAPL', type = 'stock_us', history, price, priceUsd }) {
+  setupPendingFake();
+  assetRepository.findByUserAndSymbol.mockResolvedValue({ id: ASSET_ID, symbol, type });
+  assetRepository.countActiveByUser.mockResolvedValue(1);
+  transactionRepository.findAllByUser.mockResolvedValue([]);
+  transactionRepository.findAllByAsset.mockResolvedValue(history);
+  transactionRepository.create.mockImplementation(async (data) => ({
+    ...data,
+    id: 'txn-uuid-sell',
+    createdAt: '2026-07-17T10:00:00.000Z',
+  }));
+  if (price !== undefined) priceFeedService.getCurrentPrice.mockResolvedValue(price);
+  if (priceUsd !== undefined) priceFeedService.getCurrentPriceUsd.mockResolvedValue(priceUsd);
+}
+
+// ── เคส 6: ขายระบุจำนวนหน่วย + ราคา ─────────────────────────────────────────
+describe('ขาย AAPL 4 หุ้น ราคา 250 (ระบุจำนวนหน่วย + ราคาที่ขายได้)', () => {
+  const HISTORY = heldHistory(10);
+
+  beforeEach(() => {
+    transactionRepository.findAllByAsset.mockResolvedValue(HISTORY);
+    priceFeedService.getCurrentPrice.mockResolvedValue(250);
+    priceFeedService.getCurrentPriceUsd.mockResolvedValue(250);
+  });
+
+  test('LINE กับเว็บ INSERT แถวขายเดียวกันทุก Field ที่ควรเท่า (ต่างแค่ source)', async () => {
+    await runLineFlow('ขาย AAPL 4 หุ้น ราคา 250');
+    const lineRow = insertedRow();
+
+    jest.clearAllMocks();
+    resetForSecondChannel({ history: HISTORY, price: 250, priceUsd: 250 });
+
+    await transactionsController.createTransaction(
+      webReq({ symbol: 'AAPL', side: 'sell', quantity: 4, pricePerUnit: 250, currency: 'THB' }),
+      mockRes()
+    );
+    const webRow = insertedRow();
+
+    // ต้องเป็นรายการ "ขาย" ทั้งคู่ ไม่ใช่ซื้อ (ทิศทางผิด = พอร์ตเพี้ยนทั้งใบ)
+    expect(lineRow.type).toBe('sell');
+    expect(webRow.type).toBe('sell');
+
+    expect(webRow.quantity).toBe(lineRow.quantity);
+    expect(webRow.pricePerUnit).toBe(lineRow.pricePerUnit);
+    expect(webRow.amountThb).toBe(lineRow.amountThb);
+    expect(webRow.currency).toBe(lineRow.currency);
+    expect(webRow.assetId).toBe(lineRow.assetId);
+    expect(webRow.userId).toBe(lineRow.userId);
+    expect(webRow.date).toBe(lineRow.date);
+    expect(webRow.feeThb).toBe(lineRow.feeThb);
+
+    // ตัวเลขจริงที่ลง Ledger (Before/After ตาม AI_WORK_POLICY § 4.1)
+    expect(webRow.quantity).toBe(4);
+    expect(webRow.amountThb).toBe(1000);
+
+    expect(lineRow.source).toBe('line');
+    expect(webRow.source).toBe('web');
+  });
+});
+
+// ── เคส 7: "ขายทั้งหมด" — Service ดึงยอด + ราคาตลาดเอง ────────────────────────
+describe('ขาย AAPL ทั้งหมด (sellAll)', () => {
+  // ยอดที่มีเศษทศนิยมยาว: ถ้าฝั่งใดฝั่งหนึ่งคิดจำนวนเอง ตัวเลขจะไม่ตรงกันทันที
+  const HISTORY = heldHistory(0.05231467);
+  const PRICE = 2450000;
+
+  beforeEach(() => {
+    transactionRepository.findAllByAsset.mockResolvedValue(HISTORY);
+    priceFeedService.getCurrentPrice.mockResolvedValue(PRICE);
+    priceFeedService.getCurrentPriceUsd.mockResolvedValue(PRICE);
+  });
+
+  test('LINE "ขาย AAPL ทั้งหมด" = เว็บ sellAll:true — ขายเกลี้ยงเท่ากัน ไม่เหลือเศษ', async () => {
+    await runLineFlow('ขาย AAPL ทั้งหมด');
+    const lineRow = insertedRow();
+
+    jest.clearAllMocks();
+    resetForSecondChannel({ history: HISTORY, price: PRICE, priceUsd: PRICE });
+
+    await transactionsController.createTransaction(
+      webReq({ symbol: 'AAPL', side: 'sell', sellAll: true }),
+      mockRes()
+    );
+    const webRow = insertedRow();
+
+    expect(webRow.type).toBe('sell');
+    expect(webRow.quantity).toBe(lineRow.quantity);
+    expect(webRow.pricePerUnit).toBe(lineRow.pricePerUnit);
+    expect(webRow.amountThb).toBe(lineRow.amountThb);
+    expect(webRow.currency).toBe(lineRow.currency);
+
+    // ขายออกทั้งยอดคงเหลือจริง (ไม่ใช่ค่าที่ Frontend ปัดเศษมาเอง)
+    expect(webRow.quantity).toBe(0.05231467);
+
+    expect(lineRow.source).toBe('line');
+    expect(webRow.source).toBe('web');
+  });
+});
+
+// ── เคส 8: ขายเกินยอด — ทั้งสองช่องทางต้องปฏิเสธเหมือนกัน ไม่มีทางลัดของเว็บ ───
+describe('ขายเกินยอดคงเหลือ', () => {
+  const HISTORY = heldHistory(2);
+
+  beforeEach(() => {
+    transactionRepository.findAllByAsset.mockResolvedValue(HISTORY);
+    priceFeedService.getCurrentPrice.mockResolvedValue(250);
+    priceFeedService.getCurrentPriceUsd.mockResolvedValue(250);
+  });
+
+  test('LINE ไม่สร้าง Pending / เว็บตอบ 400 — ไม่มีช่องทางไหน INSERT ลง Ledger ได้', async () => {
+    await webhookController.handleEvent(textEvent('ขาย AAPL 5 หุ้น ราคา 250'));
+    // validateSell ถูกเรียก "ก่อน" สร้าง Pending → ยอดไม่พอต้องไม่มี Pending ค้างเลย
+    expect(pendingStore.size).toBe(0);
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+
+    jest.clearAllMocks();
+    resetForSecondChannel({ history: HISTORY, price: 250, priceUsd: 250 });
+
+    const res = mockRes();
+    await transactionsController.createTransaction(
+      webReq({ symbol: 'AAPL', side: 'sell', quantity: 5, pricePerUnit: 250 }),
+      res
+    );
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json.mock.calls[0][0].error).toBe('INSUFFICIENT_QUANTITY');
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
+});

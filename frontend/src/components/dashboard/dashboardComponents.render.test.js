@@ -547,3 +547,69 @@ describe('Render smoke test (renderToStaticMarkup — no crash given realistic A
     ).not.toThrow();
   });
 });
+
+// ── โหมดขายในกล่องบันทึกรายการ (Toggle ซื้อ/ขาย) ──────────────────────────────
+// renderToStaticMarkup ไม่รัน Interaction จึงสลับโหมดด้วยการคลิกไม่ได้ — ใช้ prop
+// defaultSide (โหมดเริ่มต้นของฟอร์ม) เปิดโหมดขายมาตรงๆ แทน
+describe('DcaForm — โหมดขาย', () => {
+  const HOLDINGS = [
+    { symbol: 'AAPL', name: 'AAPL', type: 'stock_us', units: 12.5, currency: 'USD' },
+    { symbol: 'BTC', name: 'BTC', type: 'crypto', units: 0.05231467, currency: 'THB' },
+  ];
+
+  function renderForm(props) {
+    return renderToStaticMarkup(
+      withRouter(
+        React.createElement(DcaForm, {
+          symbols: SYMBOLS,
+          pickerOpenSignal: 0,
+          onRecorded: () => {},
+          onRequestUndo: () => {},
+          ...props,
+        })
+      )
+    );
+  }
+
+  test('มี Toggle ซื้อ/ขาย และค่าเริ่มต้นคือ "ซื้อ" (พฤติกรรมเดิมของหน้า)', () => {
+    const html = renderForm({ holdings: HOLDINGS });
+
+    expect(html).toContain('ซื้อ (DCA)');
+    expect(html).toContain('🔴 ขาย');
+    // Default = ซื้อ → ต้องยังเห็นฟอร์ม DCA เดิมครบ
+    expect(html).toContain('จำนวนเงินที่ลงทุน (DCA)');
+    expect(html).toContain('บันทึก DCA');
+    expect(html).not.toContain('จำนวนหน่วยที่ขาย');
+  });
+
+  test('Regression — ส่ง holdings มาแล้วโหมดซื้อต้องไม่เปลี่ยนอะไรเลย', () => {
+    // กันเคสที่การเพิ่มโหมดขายไปซ่อน/ย้าย Field ของฝั่งซื้อโดยไม่ตั้งใจ
+    expect(renderForm({ holdings: HOLDINGS })).toBe(renderForm({ holdings: [] }));
+  });
+
+  test('โหมดขาย → เห็นช่องจำนวนหน่วย + ราคาที่ขายได้ + ปุ่มขายทั้งหมด (ไม่ใช่ช่องจำนวนเงิน)', () => {
+    const html = renderForm({ holdings: HOLDINGS, defaultSide: 'sell' });
+
+    expect(html).toContain('จำนวนหน่วยที่ขาย');
+    expect(html).toContain('ราคาที่ขายได้');
+    expect(html).toContain('ขายทั้งหมด');
+    expect(html).toContain('บันทึกการขาย');
+    // ช่อง/ปุ่มของฝั่งซื้อต้องหายไปหมด ไม่ปนกัน
+    expect(html).not.toContain('จำนวนเงินที่ลงทุน (DCA)');
+    expect(html).not.toContain('บันทึก DCA');
+  });
+
+  test('โหมดขายไม่มีช่องแนบสลิป (รอบนี้เปิดเฉพาะฝั่งซื้อ) แม้เป็น Premium', () => {
+    const html = renderForm({ holdings: HOLDINGS, defaultSide: 'sell', isPremiumActive: true });
+    expect(html).not.toContain('เลือกรูปสลิป');
+  });
+
+  test('โหมดขายตอนพอร์ตว่าง → Empty State + ปุ่มบันทึกถูกปิด (ไม่ปล่อยให้กดแล้วเจอ Error)', () => {
+    const html = renderForm({ holdings: [], defaultSide: 'sell' });
+
+    expect(html).toContain('ยังไม่มีสินทรัพย์ในพอร์ตให้ขาย');
+    expect(html).toContain('disabled');
+    // ไม่ควรโชว์ช่องกรอกจำนวน/ราคาเลยเมื่อไม่มีอะไรให้ขาย
+    expect(html).not.toContain('จำนวนหน่วยที่ขาย');
+  });
+});

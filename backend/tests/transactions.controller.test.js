@@ -612,3 +612,346 @@ describe('Regression — บันทึก DCA โดยไม่แนบส�
     expect(transactionRepository.attachSlipImagePath).not.toHaveBeenCalled();
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ฝั่งขาย (side='sell') — แตะ Ledger โดยตรง (AI_WORK_POLICY § 4.1)
+// ═══════════════════════════════════════════════════════════════════════════
+// Controller ไม่คำนวณเงินเองแม้แต่บรรทัดเดียว — ทุกเคสด้านล่างจึงยืนยัน 2 อย่างคู่กัน
+// เสมอ: (1) Response ที่ผู้ใช้เห็น (2) Argument ที่ไหลถึง transactionRepository.create
+// (= แถวที่จะถูก INSERT จริงลง Ledger) ไม่ใช่แค่ Status Code
+
+// ประวัติธุรกรรมของ Asset (calculateHeldQuantity อ่าน type + quantity, deriveAssetCurrency
+// อ่าน currency) — ใช้ตั้ง "ยอดคงเหลือจริง" ที่ validateSell จะคำนวณได้
+function holdingHistory(quantity, currency = 'THB') {
+  return [{ id: 'txn-buy-1', assetId: 'asset-1', type: 'buy', quantity, currency }];
+}
+
+describe('POST /transactions (side=sell) — Validation', () => {
+  test.each([
+    ['side ไม่รู้จัก', { symbol: 'AAPL', side: 'short', quantity: 1, pricePerUnit: 100 }],
+    ['ไม่ส่ง quantity', { symbol: 'AAPL', side: 'sell', pricePerUnit: 100 }],
+    ['quantity = 0', { symbol: 'AAPL', side: 'sell', quantity: 0, pricePerUnit: 100 }],
+    ['quantity ติดลบ', { symbol: 'AAPL', side: 'sell', quantity: -1, pricePerUnit: 100 }],
+    ['quantity ไม่ใช่ตัวเลข', { symbol: 'AAPL', side: 'sell', quantity: 'abc', pricePerUnit: 100 }],
+    ['quantity เป็น boolean', { symbol: 'AAPL', side: 'sell', quantity: true, pricePerUnit: 100 }],
+  ])('%s → 400 VALIDATION_ERROR (ไม่แตะ Ledger)', async (_label, body) => {
+    const res = mockRes();
+    await createTransaction(mockReq(body), res);
+
+    expect(statusOf(res)).toBe(400);
+    expect(jsonOf(res).error).toBe('VALIDATION_ERROR');
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
+
+  test('ขายโดยไม่กรอกราคา → 400 SELL_PRICE_REQUIRED (ชี้ทางออกให้กด "ขายทั้งหมด")', async () => {
+    const res = mockRes();
+    await createTransaction(mockReq({ symbol: 'AAPL', side: 'sell', quantity: 1 }), res);
+
+    expect(statusOf(res)).toBe(400);
+    expect(jsonOf(res).error).toBe('SELL_PRICE_REQUIRED');
+    expect(jsonOf(res).message).toMatch(/ราคาที่ขายได้ต่อหน่วย/);
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
+
+  test('ขายวันที่อนาคต → 400 DATE_IN_FUTURE (กฎเดียวกับฝั่งซื้อ)', async () => {
+    transactionRepository.findAllByAsset.mockResolvedValue(holdingHistory(10));
+
+    const res = mockRes();
+    await createTransaction(
+      mockReq({ symbol: 'AAPL', side: 'sell', quantity: 1, pricePerUnit: 100, date: '2026-07-18' }),
+      res
+    );
+
+    expect(statusOf(res)).toBe(400);
+    expect(jsonOf(res).error).toBe('DATE_IN_FUTURE');
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
+
+  test('sellAll ต้องเป็น true แท้ๆ — ส่ง "true" (String) ไม่นับ จึงยังบังคับ quantity', async () => {
+    const res = mockRes();
+    await createTransaction(mockReq({ symbol: 'AAPL', side: 'sell', sellAll: 'true' }), res);
+
+    expect(statusOf(res)).toBe(400);
+    expect(jsonOf(res).error).toBe('VALIDATION_ERROR');
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /transactions (side=sell) — Business Rule จาก validateSell', () => {
+  test('ไม่เคยถือสินทรัพย์นี้ → 400 ASSET_NOT_FOUND (ไม่ใช่ 500)', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue(null);
+
+    const res = mockRes();
+    await createTransaction(
+      mockReq({ symbol: 'AAPL', side: 'sell', quantity: 1, pricePerUnit: 100 }),
+      res
+    );
+
+    expect(statusOf(res)).toBe(400);
+    expect(jsonOf(res).error).toBe('ASSET_NOT_FOUND');
+    expect(jsonOf(res).message).toMatch(/ยังไม่มีสินทรัพย์นี้ในพอร์ต/);
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
+
+  test('ขายเกินยอดที่ถืออยู่จริง → 400 INSUFFICIENT_QUANTITY + บอกยอดจริงใน details', async () => {
+    transactionRepository.findAllByAsset.mockResolvedValue(holdingHistory(2));
+
+    const res = mockRes();
+    await createTransaction(
+      mockReq({ symbol: 'AAPL', side: 'sell', quantity: 5, pricePerUnit: 100 }),
+      res
+    );
+
+    expect(statusOf(res)).toBe(400);
+    expect(jsonOf(res).error).toBe('INSUFFICIENT_QUANTITY');
+    expect(jsonOf(res).message).toMatch(/เกินจำนวนที่ถืออยู่จริง/);
+    expect(jsonOf(res).details).toEqual({ requested: 5, held: 2 });
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
+
+  test('ขายเท่ายอดคงเหลือพอดี → ผ่าน (ไม่ใช่ "เกิน")', async () => {
+    transactionRepository.findAllByAsset.mockResolvedValue(holdingHistory(2));
+
+    const res = mockRes();
+    await createTransaction(
+      mockReq({ symbol: 'AAPL', side: 'sell', quantity: 2, pricePerUnit: 100 }),
+      res
+    );
+
+    expect(statusOf(res)).toBe(201);
+    expect(jsonOf(res).transaction.remainingQuantity).toBe(0);
+  });
+
+  test('"ขายทั้งหมด" แต่ขายออกไปหมดแล้ว → 400 NOTHING_TO_SELL', async () => {
+    transactionRepository.findAllByAsset.mockResolvedValue([
+      { id: 't1', type: 'buy', quantity: 3, currency: 'THB' },
+      { id: 't2', type: 'sell', quantity: 3, currency: 'THB' },
+    ]);
+
+    const res = mockRes();
+    await createTransaction(mockReq({ symbol: 'AAPL', side: 'sell', sellAll: true }), res);
+
+    expect(statusOf(res)).toBe(400);
+    expect(jsonOf(res).error).toBe('NOTHING_TO_SELL');
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
+
+  test('"ขายทั้งหมด" แต่ดึงราคาตลาดไม่ได้ → 503 MARKET_PRICE_UNAVAILABLE (ไม่เดาราคา)', async () => {
+    transactionRepository.findAllByAsset.mockResolvedValue(holdingHistory(2));
+    priceFeedService.getCurrentPrice.mockResolvedValue(null);
+
+    const res = mockRes();
+    await createTransaction(mockReq({ symbol: 'AAPL', side: 'sell', sellAll: true }), res);
+
+    expect(statusOf(res)).toBe(503);
+    expect(jsonOf(res).error).toBe('MARKET_PRICE_UNAVAILABLE');
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /transactions (side=sell) — บันทึกสำเร็จ', () => {
+  test('ขายตามจำนวนหน่วย + ราคาที่ขายได้ → INSERT type=sell, source=web, ยอดเงิน = หน่วย × ราคา', async () => {
+    transactionRepository.findAllByAsset.mockResolvedValue(holdingHistory(10));
+
+    const res = mockRes();
+    await createTransaction(
+      mockReq({ symbol: 'AAPL', side: 'sell', quantity: 4, pricePerUnit: 250, note: 'ขายทำกำไร' }),
+      res
+    );
+
+    expect(statusOf(res)).toBe(201);
+    expect(transactionRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assetId: 'asset-1',
+        type: 'sell',
+        quantity: 4,
+        pricePerUnit: 250,
+        amountThb: 1000,
+        currency: 'THB',
+        date: '2026-07-17',
+        note: 'ขายทำกำไร',
+        source: 'web',
+      })
+    );
+    expect(jsonOf(res).transaction).toEqual(
+      expect.objectContaining({
+        side: 'sell',
+        symbol: 'AAPL',
+        units: 4,
+        pricePerUnit: 250,
+        amountTotal: 1000,
+        currency: 'THB',
+        // Service คำนวณให้ (10 - 4) — Controller/Frontend ไม่ลบเอง
+        remainingQuantity: 6,
+      })
+    );
+    // ขายต้องไม่สร้าง Asset ใหม่เด็ดขาด
+    expect(assetRepository.create).not.toHaveBeenCalled();
+  });
+
+  test('ขายหุ้นไทย (ไม่มี Price Feed) → บันทึกได้ โดยไม่แตะ Price Feed เลย', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue({ id: 'asset-1', symbol: 'PTT', type: 'stock_th' });
+    transactionRepository.findAllByAsset.mockResolvedValue(holdingHistory(100));
+
+    const res = mockRes();
+    await createTransaction(
+      mockReq({ symbol: 'PTT', side: 'sell', quantity: 50, pricePerUnit: 36 }),
+      res
+    );
+
+    expect(statusOf(res)).toBe(201);
+    expect(priceFeedService.getCurrentPrice).not.toHaveBeenCalled();
+    expect(transactionRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'sell', quantity: 50, pricePerUnit: 36, amountThb: 1800 })
+    );
+  });
+
+  test('"ขายทั้งหมด" → Service ดึงยอดคงเหลือ + ราคาตลาดเอง เหลือ 0 ไม่มีเศษค้าง', async () => {
+    // ยอดที่มีเศษทศนิยมยาว — ถ้า Frontend คิดจำนวนเองจะเหลือฝุ่นค้างในพอร์ต
+    transactionRepository.findAllByAsset.mockResolvedValue(holdingHistory(0.05231467));
+    priceFeedService.getCurrentPrice.mockResolvedValue(2450000);
+
+    const res = mockRes();
+    await createTransaction(mockReq({ symbol: 'AAPL', side: 'sell', sellAll: true }), res);
+
+    expect(statusOf(res)).toBe(201);
+    expect(transactionRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'sell', quantity: 0.05231467, pricePerUnit: 2450000 })
+    );
+    expect(jsonOf(res).transaction.remainingQuantity).toBe(0);
+  });
+
+  test('"ขายทั้งหมด" ของสินทรัพย์ USD → บันทึกเป็น USD ตามประวัติจริง แม้ Client ไม่ส่ง currency', async () => {
+    transactionRepository.findAllByAsset.mockResolvedValue(holdingHistory(3, 'USD'));
+    priceFeedService.getCurrentPriceUsd.mockResolvedValue(200);
+
+    const res = mockRes();
+    await createTransaction(mockReq({ symbol: 'AAPL', side: 'sell', sellAll: true }), res);
+
+    expect(statusOf(res)).toBe(201);
+    // ราคาต้องมาจาก Feed สกุล USD ไม่ใช่ getCurrentPrice (THB) — ไม่ปนข้ามสกุล
+    expect(priceFeedService.getCurrentPriceUsd).toHaveBeenCalledWith('AAPL');
+    expect(transactionRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'sell', currency: 'USD', quantity: 3, amountThb: 600 })
+    );
+  });
+
+  test('ขายเป็น USD (ระบุราคาเอง) → เก็บเป็น USD ตามจริง ไม่แปลงเป็นบาทตอนบันทึก', async () => {
+    transactionRepository.findAllByAsset.mockResolvedValue(holdingHistory(10, 'USD'));
+
+    const res = mockRes();
+    await createTransaction(
+      mockReq({ symbol: 'AAPL', side: 'sell', quantity: 2, pricePerUnit: 190.5, currency: 'USD' }),
+      res
+    );
+
+    expect(statusOf(res)).toBe(201);
+    expect(transactionRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'sell', currency: 'USD', quantity: 2, amountThb: 381 })
+    );
+  });
+
+  test('Free Plan ที่ใช้สินทรัพย์เต็มโควตาแล้ว ยังขายได้ (Asset Limit คุมแค่การสร้างใหม่)', async () => {
+    assetRepository.countActiveByUser.mockResolvedValue(99);
+    transactionRepository.findAllByAsset.mockResolvedValue(holdingHistory(10));
+
+    const res = mockRes();
+    await createTransaction(
+      mockReq(
+        { symbol: 'AAPL', side: 'sell', quantity: 1, pricePerUnit: 100 },
+        { id: USER_ID, plan: 'free', planExpiresAt: null }
+      ),
+      res
+    );
+
+    expect(statusOf(res)).toBe(201);
+  });
+
+  test('Symbol นอก Registry แต่ถืออยู่จริง (Dynamic Symbol) → ขายได้ ไม่ติด SYMBOL_NOT_SUPPORTED', async () => {
+    // เคสจริง: หุ้น Small-cap ที่ถูกสร้างผ่าน Manual Quantity Fallback ทาง LINE
+    // (Round 10-B) — ถ้ากั้นด้วย Registry ผู้ใช้จะซื้อได้แต่ขายไม่ได้
+    assetRepository.findByUserAndSymbol.mockResolvedValue({ id: 'asset-1', symbol: 'EOSE', type: 'stock_us' });
+    transactionRepository.findAllByAsset.mockResolvedValue(holdingHistory(100));
+
+    const res = mockRes();
+    await createTransaction(
+      mockReq({ symbol: 'EOSE', side: 'sell', quantity: 40, pricePerUnit: 5 }),
+      res
+    );
+
+    expect(statusOf(res)).toBe(201);
+    expect(transactionRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'sell', quantity: 40, pricePerUnit: 5 })
+    );
+  });
+});
+
+// ── Regression (Red-Green): เพิ่มปุ่มขายต้องไม่ทำ Payload เดิมของฝั่งซื้อเพี้ยน ──────
+describe('Regression — Payload เดิมที่ไม่มี side ต้องเป็น "ซื้อ" เหมือนเดิมทุกประการ', () => {
+  test('ไม่ส่ง side → type=buy และคง Field เดิมของฝั่งซื้อไว้ครบ', async () => {
+    const res = mockRes();
+    await createTransaction(mockReq({ symbol: 'AAPL', amountTotal: 1000 }), res);
+
+    expect(statusOf(res)).toBe(201);
+    expect(transactionRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'buy', source: 'web' })
+    );
+    expect(jsonOf(res).transaction.side).toBe('buy');
+    // Field เดิมของฝั่งซื้อต้องยังอยู่ (Frontend เดิมอ่าน newAssetCreated)
+    expect(jsonOf(res).transaction).toHaveProperty('newAssetCreated');
+    expect(jsonOf(res).transaction).not.toHaveProperty('remainingQuantity');
+  });
+
+  test('ส่ง side=buy ตรงๆ → แถวที่ INSERT ลง Ledger เท่ากับตอนไม่ส่ง side เป๊ะ', async () => {
+    const resImplicit = mockRes();
+    await createTransaction(mockReq({ symbol: 'AAPL', amountTotal: 1000 }), resImplicit);
+    const implicitArgs = transactionRepository.create.mock.calls[0][0];
+
+    transactionRepository.create.mockClear();
+
+    const resExplicit = mockRes();
+    await createTransaction(mockReq({ symbol: 'AAPL', amountTotal: 1000, side: 'buy' }), resExplicit);
+    const explicitArgs = transactionRepository.create.mock.calls[0][0];
+
+    expect(explicitArgs).toEqual(implicitArgs);
+  });
+});
+
+describe('POST /transactions (side=sell) — currency ที่ถูกละเว้นเมื่อ sellAll', () => {
+  test('sellAll + Client ส่ง currency ที่สินทรัพย์ไม่รองรับ → ไม่ Reject (ค่านั้นถูกละเว้นอยู่แล้ว)', async () => {
+    // ทองบันทึกเป็น USD ไม่ได้ (CURRENCY_NOT_SUPPORTED_FOR_ASSET ฝั่งซื้อ) — แต่เมื่อ
+    // sellAll ค่า currency ที่ Client ส่งมาไม่ถูกใช้เลย (Service อนุมานจากประวัติจริง)
+    // การปฏิเสธ Request เพราะ Field ที่ไม่ได้ใช้ = Error ที่ผู้ใช้แก้ตามไม่ถูก
+    assetRepository.findByUserAndSymbol.mockResolvedValue({ id: 'asset-1', symbol: 'GOLD', type: 'gold_bar' });
+    transactionRepository.findAllByAsset.mockResolvedValue(holdingHistory(2));
+    priceFeedService.getCurrentPrice.mockResolvedValue(52000);
+    priceFeedService.getUsdThbFxRate.mockResolvedValue(35);
+
+    const res = mockRes();
+    await createTransaction(
+      mockReq({ symbol: 'GOLD', side: 'sell', sellAll: true, currency: 'USD' }),
+      res
+    );
+
+    expect(statusOf(res)).toBe(201);
+    // บันทึกเป็น THB ตามประวัติจริงของสินทรัพย์ ไม่ใช่ USD ที่ Client ส่งมา
+    expect(transactionRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'sell', currency: 'THB', quantity: 2 })
+    );
+  });
+
+  test('ขายระบุจำนวนเอง + currency USD กับทอง → ยัง Reject ตามเดิม (ค่านั้นถูกใช้จริง)', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue({ id: 'asset-1', symbol: 'GOLD', type: 'gold_bar' });
+    transactionRepository.findAllByAsset.mockResolvedValue(holdingHistory(2));
+
+    const res = mockRes();
+    await createTransaction(
+      mockReq({ symbol: 'GOLD', side: 'sell', quantity: 1, pricePerUnit: 52000, currency: 'USD' }),
+      res
+    );
+
+    expect(statusOf(res)).toBe(400);
+    expect(jsonOf(res).error).toBe('CURRENCY_NOT_SUPPORTED_FOR_ASSET');
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
+});

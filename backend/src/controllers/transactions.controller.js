@@ -7,21 +7,34 @@ const entitlementService = require('../services/entitlement.service');
 const storageService = require('../services/storage.service');
 
 // ═══════════════════════════════════════════════════════════════════════════
-// transactions.controller — บันทึก DCA จากเว็บ (S8 Round 1a)
+// transactions.controller — บันทึก DCA (ซื้อ) และการขาย จากเว็บ (S8 Round 1a)
 // ═══════════════════════════════════════════════════════════════════════════
 // หลักการเดียวของไฟล์นี้: "ไม่มีตรรกะสร้างธุรกรรมที่นี่เลย" — หน้าที่ทั้งหมดคือ
 // แปลง (Map) ฟอร์มเว็บ → params รูปแบบเดิมของ transaction.service ตัวเดียวกับที่
-// webhook.controller (LINE) ใช้ แล้วเรียก processBuyCommand ตรงๆ
+// webhook.controller (LINE) ใช้ แล้วเรียก processBuyCommand / processSellCommand ตรงๆ
 //
 // ทุกอย่างที่เป็น "เงิน" (ดึงราคาตลาด / คำนวณจำนวนหน่วย / Multi-Currency / FX /
-// Freemium Asset Limit) เกิดขึ้นใน transaction.service ที่เดียวเหมือนเดิมทุกประการ
-// ไฟล์นี้ทำแค่ Validate Input + Map + แปลง Error เป็นข้อความไทย
+// Freemium Asset Limit / ตรวจยอดคงเหลือก่อนขาย) เกิดขึ้นใน transaction.service ที่เดียว
+// เหมือนเดิมทุกประการ ไฟล์นี้ทำแค่ Validate Input + Map + แปลง Error เป็นข้อความไทย
 //
 // ⚠️ ข้อแตกต่างเดียวที่ตั้งใจให้ต่างจาก LINE: เว็บบันทึก "ทันที" (ไม่มี Preview →
 // Confirm 2 ขั้นแบบ LINE) เพราะฟอร์มบนเว็บเห็นข้อมูลครบก่อนกดปุ่มอยู่แล้ว จึงเรียก
-// processBuyCommand ตรง (เส้นทางเดียวกับที่ pendingTransaction.confirmPending เรียก
-// ตอนผู้ใช้กดยืนยันใน LINE) — ไม่ใช่การ Skip Validation ใดๆ เพราะ processBuyCommand
-// เรียก validateBuy เต็มรูปแบบภายในตัวเองอยู่แล้ว
+// processBuyCommand/processSellCommand ตรง (เส้นทางเดียวกับที่
+// pendingTransaction.confirmPending เรียกตอนผู้ใช้กดยืนยันใน LINE) — ไม่ใช่การ Skip
+// Validation ใดๆ เพราะทั้งสองฟังก์ชันเรียก validateBuy/validateSell เต็มรูปแบบใน
+// ตัวเองอยู่แล้ว (รวมถึงการตรวจ "ขายเกินยอดคงเหลือ" ที่คำนวณจาก Ledger จริง)
+//
+// ── ฝั่งขาย (side='sell') ────────────────────────────────────────────────────
+// รับ 2 รูปแบบเท่าที่ transaction.service รองรับอยู่แล้ว (ตรงกับคำสั่งพิมพ์ใน LINE
+// ทุกประการ ไม่มีเส้นทางคำนวณใหม่):
+//   1) quantity + pricePerUnit  = "ขาย PTT 50 หุ้น ราคา 34"  (ใช้ได้ทุกประเภทสินทรัพย์
+//      รวมหุ้นไทยที่ไม่มี Price Feed — ผู้ใช้รู้ราคาที่ขายได้จริงอยู่แล้ว)
+//   2) sellAll: true            = "ขาย BTC ทั้งหมด"          (Service ดึงยอดคงเหลือจาก
+//      Ledger + ราคาตลาด ณ ตอนนี้ให้เอง จึงไม่มีเศษทศนิยมค้างจากการที่ Frontend
+//      คำนวณจำนวนหน่วยเอง — Frontend "ห้าม" ส่งจำนวนที่คิดเองมาแทน)
+// จงใจไม่รับ "ขายด้วยจำนวนเงิน" (amountTotal) บนเว็บ แม้ Service จะรองรับ — เพราะ
+// เส้นทางนั้นต้องหาร quantity จากราคาตลาด ทำให้ผู้ใช้ที่ "ตั้งใจขายหมด" เหลือเศษ
+// ค้างในพอร์ต และใช้กับหุ้นไทยไม่ได้เลย (ไม่มี Price Feed → 503)
 
 // สินทรัพย์ที่ระบบดึง "ราคาสด" ให้ได้ → ฟอร์มเว็บไม่ต้องส่ง pricePerUnit มา
 // (เส้นทาง LINE #1: "ซื้อ AAPL 1000" — service ดึงราคาเองแล้วหารจำนวนหน่วย)
@@ -54,6 +67,14 @@ const WEB_ERROR_MESSAGES = {
   AMOUNT_TOO_SMALL_FOR_PRICE:
     'จำนวนเงินน้อยเกินไปเมื่อเทียบกับราคาต่อหน่วย จนคำนวณจำนวนหน่วยไม่ได้ กรุณาเพิ่มจำนวนเงินหรือตรวจสอบราคา',
   NOTE_RESERVED_PREFIX: 'หมายเหตุนี้ใช้ไม่ได้ (ขึ้นต้นด้วยคำที่ระบบสงวนไว้) กรุณาแก้ไขข้อความ',
+  // ── ฝั่งขาย ────────────────────────────────────────────────────────────────
+  // 3 Code แรกโยนมาจาก transaction.service.validateSell (มีมาตั้งแต่เส้นทาง LINE
+  // แล้ว) แต่ไม่เคยถูก Map ที่ชั้นนี้เลยเพราะเว็บยังไม่มีปุ่มขาย — ถ้าไม่เติม
+  // จะตกไป INTERNAL_ERROR 500 ทั้งที่เป็น Business Rule ที่ผู้ใช้แก้เองได้ (400)
+  ASSET_NOT_FOUND: 'คุณยังไม่มีสินทรัพย์นี้ในพอร์ต จึงบันทึกการขายไม่ได้',
+  NOTHING_TO_SELL: 'สินทรัพย์นี้ขายออกไปหมดแล้ว ไม่มียอดคงเหลือให้ขาย',
+  INSUFFICIENT_QUANTITY: 'ขายเกินจำนวนที่ถืออยู่จริง กรุณาตรวจสอบยอดคงเหลือแล้วลองใหม่',
+  SELL_PRICE_REQUIRED: 'กรุณากรอก "ราคาที่ขายได้ต่อหน่วย" ด้วย (หรือกดปุ่ม "ขายทั้งหมด" เพื่อใช้ราคาตลาด)',
   ASSET_LIMIT_REACHED:
     'คุณใช้ครบ 2 สินทรัพย์ตามแพ็กเกจ Free แล้ว หากต้องการเพิ่มสินทรัพย์ใหม่ กรุณาอัพเกรดเป็น Premium',
   PRICE_FEED_NOT_IMPLEMENTED:
@@ -91,6 +112,12 @@ const ERROR_STATUS = {
   DATE_IN_FUTURE: 400,
   AMOUNT_TOO_SMALL_FOR_PRICE: 400,
   NOTE_RESERVED_PREFIX: 400,
+  // ฝั่งขาย — ทั้ง 4 ตัวเป็น Business Rule ที่ผู้ใช้แก้เองได้ (เลือกสินทรัพย์อื่น /
+  // ลดจำนวน / กรอกราคา) จึงเป็น 400 ไม่ใช่ 404/500 ตาม API.md § 5-6
+  ASSET_NOT_FOUND: 400,
+  NOTHING_TO_SELL: 400,
+  INSUFFICIENT_QUANTITY: 400,
+  SELL_PRICE_REQUIRED: 400,
   NO_TRANSACTION_TO_UNDO: 400,
   ALREADY_UNDONE: 400,
   CANNOT_UNDO_QUANTITY_MISMATCH: 400,
@@ -154,25 +181,58 @@ function isValidIsoDate(value) {
   return parsed.toISOString().slice(0, 10) === value;
 }
 
-// POST /api/v1/transactions — บันทึกรายการซื้อ (DCA) จากฟอร์มเว็บ
+// POST /api/v1/transactions — บันทึกรายการซื้อ (DCA) หรือขาย จากฟอร์มเว็บ
 async function createTransaction(req, res) {
   const body = req.body ?? {};
 
-  // ── 1) Symbol ต้องอยู่ใน Registry (แหล่งตัดสินเดียวกับ LINE) ────────────────
+  // ── 0) ทิศทางรายการ ────────────────────────────────────────────────────────
+  // ไม่ส่ง side มา = 'buy' — Payload เดิมทุกตัว (ฟอร์มเว็บก่อนรอบนี้) จึงเดิน
+  // เส้นทางเดิมเป๊ะโดยไม่ต้องแก้อะไรฝั่ง Client (Additive ล้วน)
+  const side = body.side ?? 'buy';
+  if (side !== 'buy' && side !== 'sell') {
+    return fail(res, 'VALIDATION_ERROR', { field: 'side' });
+  }
+  const isSell = side === 'sell';
+  // "ขายทั้งหมด" — Service ดึงยอดคงเหลือ + ราคาตลาดเอง (ไม่รับ quantity/price/สกุล
+  // จาก Client เลยในเคสนี้) รับเฉพาะ true แท้ๆ ไม่รับ Truthy อื่น ('false'/1) กัน
+  // Client ส่งค่าผิดชนิดแล้วกลายเป็นขายยกพอร์ตโดยไม่ตั้งใจ
+  const sellAll = isSell && body.sellAll === true;
+
+  // ── 1) Symbol ──────────────────────────────────────────────────────────────
   const rawSymbol = body.symbol;
   if (typeof rawSymbol !== 'string' || rawSymbol.trim() === '') {
     return fail(res, 'VALIDATION_ERROR', { field: 'symbol' });
   }
   const symbol = rawSymbol.trim().toUpperCase();
   const type = symbolRegistry.lookupType(symbol);
-  if (!type) {
+  // ซื้อ: ต้องอยู่ใน Registry (แหล่งตัดสินเดียวกับ LINE) เพราะอาจต้องสร้าง Asset ใหม่
+  // ซึ่ง validateBuy บังคับให้มี type เสมอ
+  // ขาย: "ไม่" บังคับ — สินทรัพย์ที่ผู้ใช้ถืออยู่จริงอาจไม่อยู่ใน Registry ได้ (Dynamic
+  //   Symbol / Manual Quantity Fallback Round 10-B เช่น EOSE) ถ้ากั้นด้วย Registry
+  //   ผู้ใช้จะ "ซื้อผ่าน LINE ได้แต่ขายบนเว็บไม่ได้" — ตัวตัดสินที่ถูกต้องคือ Ledger
+  //   (validateSell → findByUserAndSymbol → ASSET_NOT_FOUND) ไม่ใช่ Registry
+  //   เส้นทาง LINE ก็ไม่เติม type ให้คำสั่งขายเช่นกัน (webhook.controller: เติมเฉพาะ BUY)
+  if (!isSell && !type) {
     return fail(res, 'SYMBOL_NOT_SUPPORTED', { symbol });
   }
 
-  // ── 2) จำนวนเงินรวม > 0 และเป็นตัวเลขจริง ──────────────────────────────────
-  const amountTotal = toPositiveNumber(body.amountTotal);
-  if (amountTotal === null) {
-    return fail(res, 'VALIDATION_ERROR', { field: 'amountTotal' });
+  // ── 2) จำนวน — คนละความหมายตามทิศทาง ───────────────────────────────────────
+  //   ซื้อ: amountTotal = "จำนวนเงินรวม" (Service หารเป็นหน่วยให้)
+  //   ขาย: quantity = "จำนวนหน่วยที่ขาย" (ไม่ใช่เงิน) — ยกเว้น sellAll ที่ไม่ต้องส่ง
+  let amountTotal = null;
+  let sellQuantity = null;
+  if (isSell) {
+    if (!sellAll) {
+      sellQuantity = toPositiveNumber(body.quantity);
+      if (sellQuantity === null) {
+        return fail(res, 'VALIDATION_ERROR', { field: 'quantity' });
+      }
+    }
+  } else {
+    amountTotal = toPositiveNumber(body.amountTotal);
+    if (amountTotal === null) {
+      return fail(res, 'VALIDATION_ERROR', { field: 'amountTotal' });
+    }
   }
 
   // ── 3) สกุลเงิน ────────────────────────────────────────────────────────────
@@ -180,7 +240,10 @@ async function createTransaction(req, res) {
   if (currency !== 'THB' && currency !== 'USD') {
     return fail(res, 'VALIDATION_ERROR', { field: 'currency' });
   }
-  if (currency === 'USD' && !USD_SUPPORTED_TYPES.includes(type)) {
+  // เช็คกับ type ได้เฉพาะตอนรู้ type (ขาย Dynamic Symbol จะไม่รู้ — ดูเหตุผลข้อ 1)
+  // ข้าม sellAll: ค่า currency ที่ส่งมาถูก "ละเว้น" อยู่แล้วในเคสนั้น (Service อนุมาน
+  // จากประวัติจริง) — ปฏิเสธ Request เพราะ Field ที่เราไม่ได้ใช้เลยคือ Error ที่งง
+  if (currency === 'USD' && !sellAll && type && !USD_SUPPORTED_TYPES.includes(type)) {
     return fail(res, 'CURRENCY_NOT_SUPPORTED_FOR_ASSET', { symbol, type });
   }
 
@@ -220,36 +283,58 @@ async function createTransaction(req, res) {
     note = body.note.trim() === '' ? undefined : body.note.trim();
   }
 
-  // ── 6) ราคาต่อหน่วย + Map เข้า 2 เส้นทางเดิมของ transaction.service ────────
+  // ── 6) ราคาต่อหน่วย + Map เข้าเส้นทางเดิมของ transaction.service ───────────
   const hasPrice = body.pricePerUnit !== undefined && body.pricePerUnit !== null && body.pricePerUnit !== '';
   const pricePerUnit = hasPrice ? toPositiveNumber(body.pricePerUnit) : null;
   if (hasPrice && pricePerUnit === null) {
     return fail(res, 'VALIDATION_ERROR', { field: 'pricePerUnit' });
   }
-  // หุ้นไทย (และสินทรัพย์อื่นที่ไม่มีราคาสด) — บังคับกรอกราคาเอง ไม่งั้นเส้นทาง
-  // "จำนวนเงินอย่างเดียว" จะไปจบที่ PRICE_FEED_NOT_IMPLEMENTED ของ Service อยู่ดี
-  // (ตอบ 400 ที่นี่ก่อน เพื่อให้ผู้ใช้เว็บรู้ว่า "ต้องกรอกราคา" ตรงๆ ไม่ใช่ 503)
-  if (!hasPrice && !LIVE_PRICE_TYPES.includes(type)) {
+  if (isSell) {
+    // ขายแบบระบุจำนวนหน่วย ต้องมีราคาที่ขายได้เสมอ — Service รองรับ "จำนวนหน่วย
+    // อย่างเดียว" ไม่ได้ (resolveQuantityAndPrice จะโยน VALIDATION_ERROR ที่ความหมาย
+    // ไม่ตรงกับปัญหาจริง) ตอบ Code เฉพาะที่นี่เพื่อให้ข้อความบอกทางออกได้ตรง
+    if (!sellAll && !hasPrice) {
+      return fail(res, 'SELL_PRICE_REQUIRED', { symbol });
+    }
+  } else if (!hasPrice && !LIVE_PRICE_TYPES.includes(type)) {
+    // หุ้นไทย (และสินทรัพย์อื่นที่ไม่มีราคาสด) — บังคับกรอกราคาเอง ไม่งั้นเส้นทาง
+    // "จำนวนเงินอย่างเดียว" จะไปจบที่ PRICE_FEED_NOT_IMPLEMENTED ของ Service อยู่ดี
+    // (ตอบ 400 ที่นี่ก่อน เพื่อให้ผู้ใช้เว็บรู้ว่า "ต้องกรอกราคา" ตรงๆ ไม่ใช่ 503)
     return fail(res, 'PRICE_REQUIRED_FOR_ASSET', { symbol, type });
   }
 
   const params = {
     symbol,
-    type,
+    // type ใช้เฉพาะตอนซื้อ (validateBuy ต้องใช้สร้าง Asset ใหม่) — คำสั่งขายไม่ส่ง
+    // เหมือนเส้นทาง LINE เป๊ะ (validateSell หา Asset จาก symbol ที่ผู้ใช้ถืออยู่จริง)
+    ...(isSell ? {} : { type }),
     // ⚠️ จงใจ "ไม่" ส่ง name แม้จะมีชื่อสวยๆ ใน Registry (lookupName) — เส้นทาง LINE
     // ไม่ส่ง name เช่นกัน ทำให้ processBuyCommand ตั้ง assets.name = symbol เสมอ
     // ถ้าเว็บส่งชื่อเข้าไป สินทรัพย์ตัวเดียวกันจะมีชื่อไม่เหมือนกันขึ้นกับว่าถูกสร้าง
     // ครั้งแรกผ่านช่องทางไหน (เว็บ = "Apple แอปเปิล" / LINE = "AAPL") ซึ่งขัดหลัก
     // "เว็บ = LINE" ของรอบนี้ — ชื่อแสดงผลให้ Frontend Map เอาเองจาก
     // GET /api/v1/assets/symbols (เหตุผลที่มี Endpoint นั้น)
-    ...(currency === 'USD' ? { currency: 'USD' } : {}),
+    // "ขายทั้งหมด" ไม่ส่งสกุลเงินไปเลย — validateSell อนุมานสกุลจากประวัติธุรกรรมจริง
+    // ของสินทรัพย์นั้นเอง (deriveAssetCurrency) ซึ่งแม่นกว่าค่าที่ Client ส่งมา
+    ...(currency === 'USD' && !sellAll ? { currency: 'USD' } : {}),
     ...(date ? { date } : {}),
     ...(note ? { note } : {}),
     // ช่องทาง 'web' — Field เดียวที่ตั้งใจให้ต่างจากรายการที่บันทึกผ่าน LINE
     source: 'web',
   };
 
-  if (hasPrice) {
+  if (isSell) {
+    if (sellAll) {
+      // Service หา heldQuantity จาก Ledger + ราคาตลาด ณ ตอนนี้ให้เอง (เส้นทางเดียว
+      // กับคำสั่ง "ขาย BTC ทั้งหมด" ใน LINE) — Controller ไม่คำนวณจำนวนใดๆ ทั้งสิ้น
+      params.sellAll = true;
+    } else {
+      // ผู้ใช้กรอก "จำนวนหน่วย" มาตรงๆ อยู่แล้ว (ต่างจากซื้อที่กรอกเป็นเงิน) จึงส่ง
+      // เข้า Service ในรูปแบบเดิมของมันได้เลย ไม่ต้องแปลงหน่วย/หารอะไรที่ชั้นนี้
+      params.quantity = sellQuantity;
+      params.pricePerUnit = pricePerUnit;
+    }
+  } else if (hasPrice) {
     // ── เส้นทาง LINE #2: "ผู้ใช้ระบุราคาเอง" (quantity + pricePerUnit) ───────
     // ฟอร์มเว็บส่ง "จำนวนเงินรวม" มาเสมอ (ไม่ใช่จำนวนหน่วย) จึงต้องแปลงเป็นจำนวน
     // หน่วยก่อนส่งเข้า Service ในรูปแบบเดิมของมัน — ใช้ deriveQuantityFromAmount
@@ -280,14 +365,23 @@ async function createTransaction(req, res) {
     // plan/planExpiresAt จาก req.userRecord (requireAuth Query มาให้แล้ว) — Path
     // เดียวกับที่ webhook.controller ส่งให้ createPending (Freemium Asset Limit
     // ตัดสินใน validateBuy ที่เดียว) ถ้าไม่ส่ง Service จะ Fail-closed เป็น free
-    const result = await transactionService.processBuyCommand(req.user.id, params, {
-      plan: req.userRecord?.plan,
-      planExpiresAt: req.userRecord?.planExpiresAt,
-    });
+    //
+    // ขายไม่ส่ง options เลย (เหมือน pendingTransaction.service เรียก processSellCommand)
+    // — Freemium Asset Limit เป็นเรื่องของ "การสร้างสินทรัพย์ใหม่" เท่านั้น การขาย
+    // ไม่สร้าง Asset จึงไม่มีอะไรให้ Gate (validateSell เองก็ไม่รับ options)
+    const result = isSell
+      ? await transactionService.processSellCommand(req.user.id, params)
+      : await transactionService.processBuyCommand(req.user.id, params, {
+          plan: req.userRecord?.plan,
+          planExpiresAt: req.userRecord?.planExpiresAt,
+        });
 
     // สรุป "เดือนนี้" สำหรับการ์ดตอบกลับ — Reuse dcaStats.service ตัวเดียวกับที่
     // Dashboard ใช้ (นิยาม "เดือนนี้/นับยังไง" มีที่เดียว ตัวเลขบนการ์ดหลังบันทึกกับ
     // บนหน้า Dashboard จึงตรงกันเสมอโดยไม่ต้องคำนวณซ้ำ)
+    // หมายเหตุ: getMonthSummary นับเฉพาะ "รายการซื้อ" ตามนิยาม DCA เดิม — การขาย
+    // จึงไม่ทำให้ตัวเลขนี้ขยับ (ตั้งใจ ไม่ใช่บั๊ก) แต่ยังคืนมาให้ Frontend ใช้ค่าเดียว
+    // กับที่ Dashboard แสดง
     const summary = dcaStatsService.getMonthSummary(
       await transactionRepository.findAllByUser(req.user.id)
     );
@@ -295,18 +389,27 @@ async function createTransaction(req, res) {
     return res.status(201).json({
       transaction: {
         id: result.transactionId,
+        // ทิศทางที่บันทึกจริง — Frontend ใช้เลือกข้อความ/สีบนการ์ดยืนยัน ไม่ต้องจำเอง
+        // ว่ากดปุ่มไหนมา (เพิ่มใหม่รอบนี้ — Payload เดิมของฝั่งซื้อได้ side:'buy' ติดมา
+        // ด้วย ซึ่งเป็น Field เพิ่ม ไม่กระทบ Consumer เดิมที่ไม่ได้อ่าน)
+        side,
         symbol: result.symbol,
         units: result.quantity,
         pricePerUnit: result.pricePerUnit,
         // amountTotal = ยอดที่บันทึกจริง (สกุลตาม currency) — ชื่อ Field ฝั่ง Service
         // คือ amountThb ด้วยเหตุผล Backward Compat (ดู migration 012) แต่ Contract
         // ของเว็บใช้ชื่อกลางๆ ที่ตรงความหมายจริงกว่า
+        // ฝั่งขาย = "เงินที่ได้รับจากการขาย" (quantity × ราคาที่ขายได้)
         amountTotal: result.amountThb,
         currency: result.currency,
         date: result.date,
         note: result.note,
         priceSource: result.priceSource,
-        newAssetCreated: result.newAssetCreated,
+        // ซื้อ: บอกว่าเพิ่งสร้างสินทรัพย์ใหม่ไหม / ขาย: ยอดคงเหลือหลังขาย (Service
+        // คำนวณให้แล้วใน processSellCommand — Frontend ห้ามลบเอง)
+        ...(isSell
+          ? { remainingQuantity: result.remainingQuantity }
+          : { newAssetCreated: result.newAssetCreated }),
       },
       monthSummary: summary,
     });

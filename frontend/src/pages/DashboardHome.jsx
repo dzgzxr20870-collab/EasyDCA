@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { getToken, apiGet, apiPost, clearToken, stashReturnTo } from '../lib/api.js';
 import { getAssetSymbols } from '../lib/symbolsCache.js';
 import { undoErrorMessage } from '../lib/dcaErrors.js';
+import { buildHoldings } from '../lib/sellForm.js';
 import DcaForm from '../components/dashboard/DcaForm.jsx';
 import DcaPlansSection from '../components/dashboard/DcaPlansSection.jsx';
 import StatCards from '../components/dashboard/StatCards.jsx';
@@ -189,8 +190,9 @@ function DashboardHome() {
     navigate('/');
   }
 
-  function handleRecorded() {
-    showToast('✅ บันทึกสำเร็จ');
+  // response.transaction.side มาจาก Backend (ทิศทางที่บันทึกจริง) ไม่ใช่โหมดของฟอร์ม
+  function handleRecorded(response) {
+    showToast(response?.transaction?.side === 'sell' ? '✅ บันทึกการขายสำเร็จ' : '✅ บันทึกสำเร็จ');
     refetchOverview();
   }
 
@@ -263,6 +265,11 @@ function DashboardHome() {
       assetTypeBySymbol.set(asset.symbol, group.type);
     }
   }
+
+  // สินทรัพย์ที่ถืออยู่จริง (โหมดขายของ DcaForm) — มาจาก allocation ชุดเดียวกับด้านบน
+  // ที่ Backend คำนวณยอดคงเหลือจาก Ledger มาแล้ว (ไม่ยิง Endpoint เพิ่ม ไม่คำนวณเอง)
+  // Refetch overview หลังบันทึกทุกครั้งอยู่แล้ว รายการนี้จึงอัพเดตตามเองหลังขาย
+  const holdings = buildHoldings(overview.allocation);
 
   return (
     <div className="dh-app">
@@ -446,15 +453,16 @@ function DashboardHome() {
 
           <section className="dh-card" id="dh-dca">
             <div className="dh-card-h">
-              <h2>บันทึก DCA</h2>
-              <span className="dh-tag">ง่าย ครบ จบในกล่องเดียว</span>
+              <h2>บันทึกรายการ</h2>
+              <span className="dh-tag">ซื้อ / ขาย จบในกล่องเดียว</span>
               <div className="dh-sp" />
-              <span className="dh-link-static" title="พิมพ์คำสั่งซื้อในแชท LINE ได้เหมือนกัน">
+              <span className="dh-link-static" title="พิมพ์คำสั่งซื้อ/ขายในแชท LINE ได้เหมือนกัน">
                 หรือพิมพ์ในแชท LINE ก็ได้
               </span>
             </div>
             <DcaForm
               symbols={symbols}
+              holdings={holdings}
               pickerOpenSignal={pickerOpenSignal}
               onRecorded={handleRecorded}
               onRequestUndo={setUndoTarget}

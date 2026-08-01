@@ -33,6 +33,20 @@ describe('transactionErrorMessage', () => {
       expect(transactionErrorMessage(code)).not.toBe(transactionErrorMessage('SOME_UNKNOWN_CODE'));
     }
   });
+
+  test('Error Code ฝั่งขายมีข้อความไทยเฉพาะตัว (ไม่ตกไป Fallback "ผิดพลาดภายในระบบ")', () => {
+    // 4 Code นี้โยนมาจาก validateSell — ถ้าตารางนี้ไม่มี ผู้ใช้ที่ขายเกินยอดจะเห็น
+    // "เกิดข้อผิดพลาดภายในระบบ" ทั้งที่แก้เองได้ (ลดจำนวนที่ขาย)
+    const sellCodes = [
+      'ASSET_NOT_FOUND',
+      'NOTHING_TO_SELL',
+      'INSUFFICIENT_QUANTITY',
+      'SELL_PRICE_REQUIRED',
+    ];
+    for (const code of sellCodes) {
+      expect(transactionErrorMessage(code)).not.toBe(transactionErrorMessage('SOME_UNKNOWN_CODE'));
+    }
+  });
 });
 
 describe('undoErrorMessage', () => {

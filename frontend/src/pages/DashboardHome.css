@@ -133,6 +133,28 @@ label.dh-fl .dh-fl-opt { color: var(--muted); font-weight: 500; }
 .dh-form-note { font-size: 11.5px; color: var(--muted); }
 .dh-form-error { font-size: 12.5px; font-weight: 600; color: var(--red); background: var(--red-soft); border-radius: 10px; padding: 8px 12px; }
 
+/* ── Toggle ซื้อ/ขาย + โหมดขาย ────────────────────────────────────────────────
+   สีเขียว = ซื้อ (โทนหลักของแบรนด์เดิม) / สีแดง = ขาย โดยใช้ Token --red/--red-soft
+   ที่มีอยู่แล้ว (เดียวกับที่ Badge "ขาย" ในรายการล่าสุดใช้) ไม่เพิ่มสีใหม่เข้าระบบ
+   Prefix .dh-app ตามกฎเดิมของไฟล์นี้ (สู้กับ CSS Reset ของปุ่มระดับ Global) */
+.dh-side-toggle { display: flex; gap: 6px; background: #EEF1E9; border-radius: 12px; padding: 4px; }
+.dh-app .dh-side-tab { flex: 1; padding: 9px 12px; border-radius: 9px; font-size: 13.5px; font-weight: 700; color: var(--muted); background: transparent; transition: .13s; }
+.dh-app .dh-side-tab-buy-on { background: #fff; color: var(--green-ink); box-shadow: 0 1px 4px rgba(0,0,0,.09); }
+.dh-app .dh-side-tab-sell-on { background: #fff; color: var(--red); box-shadow: 0 1px 4px rgba(0,0,0,.09); }
+
+.dh-sell-held { display: flex; align-items: center; gap: 9px; background: var(--red-soft); border-radius: 11px; padding: 9px 13px; font-size: 13.5px; }
+.dh-sell-held-lbl { font-size: 12px; font-weight: 600; color: var(--ink2); }
+.dh-sell-held b { color: var(--red); }
+.dh-sell-held .dh-tbadge { margin-left: auto; }
+
+.dh-sell-actions { display: flex; gap: 9px; align-items: stretch; }
+.dh-sell-actions .dh-btn-main { flex: 1; }
+/* ปุ่มบันทึกการขายใช้โทนแดงแทนเขียว — กันกดผิดโหมดเพราะปุ่มหน้าตาเหมือนเดิมเป๊ะ */
+.dh-app .dh-btn-sell { background: linear-gradient(135deg, #E86A6A, var(--red)); box-shadow: 0 6px 16px rgba(222,80,80,.28); }
+.dh-app .dh-btn-sell:hover:not(:disabled) { box-shadow: 0 9px 20px rgba(222,80,80,.34); }
+.dh-app .dh-btn-sell-all { flex: none; border-color: #F0C9C9; color: var(--red); }
+.dh-app .dh-btn-sell-all:hover:not(:disabled) { border-color: var(--red); background: var(--red-soft); }
+
 /* แนบสลิปหลักฐาน (Premium) — ปุ่มต่างๆ ที่มี Base .dh-btn-ghost ถูก Prefix .dh-app แล้ว
    (ชนะ Reset .dh-app button) ส่วน .dh-slip-picker-btn เป็น <span> ไม่โดน Reset button */
 .dh-slip-field { display: flex; flex-direction: column; gap: 8px; }

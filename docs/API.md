@@ -683,18 +683,25 @@ Section 4 ร่างไว้ว่า Error ต้องเป็น `{ succe
 
 ### 15.2 POST `/api/v1/transactions`
 
-บันทึกรายการซื้อ (DCA) จากฟอร์มเว็บ — เรียก `transaction.service.processBuyCommand`
-ตัวเดียวกับที่ LINE ใช้หลังกดยืนยัน (ไม่มีตรรกะสร้างธุรกรรมแยกของเว็บ)
+บันทึกรายการ **ซื้อ (DCA)** หรือ **ขาย** จากฟอร์มเว็บ — เรียก
+`transaction.service.processBuyCommand` / `processSellCommand` ตัวเดียวกับที่ LINE ใช้
+หลังกดยืนยัน (ไม่มีตรรกะสร้างธุรกรรมแยกของเว็บ)
 
-**Request Body**
+**Request Body — ส่วนที่ใช้ร่วมกันทั้งซื้อและขาย**
 
 | Field | Type | บังคับ | คำอธิบาย |
 |---|---|---|---|
-| `symbol` | string | ✅ | ต้องอยู่ใน Registry (case-insensitive, ตัดช่องว่างให้) |
-| `amountTotal` | number | ✅ | **จำนวนเงินรวม** (ไม่ใช่จำนวนหน่วย) > 0 — หน่วยตาม `currency` |
-| `currency` | `"THB"` \| `"USD"` | — | Default `"THB"` — `"USD"` ใช้ได้เฉพาะ `crypto` / `stock_us` |
+| `side` | `"buy"` \| `"sell"` | — | Default `"buy"` — **ไม่ส่ง = ซื้อ** (Payload เดิมทุกตัวยังทำงานเหมือนเดิมเป๊ะ) |
+| `symbol` | string | ✅ | case-insensitive, ตัดช่องว่างให้ — `buy` ต้องอยู่ใน Registry / `sell` ไม่บังคับ (ดูหมายเหตุใต้ตารางฝั่งขาย) |
 | `date` | string `YYYY-MM-DD` | — | Default = วันนี้ (Asia/Bangkok) — ย้อนหลังได้, **อนาคตไม่ได้** |
 | `note` | string | — | ≤ 500 ตัวอักษร — ห้ามขึ้นต้นด้วย `UNDO_OF:` (Marker ของระบบ) |
+
+#### 15.2.1 `side: "buy"` (Default) — บันทึก DCA
+
+| Field | Type | บังคับ | คำอธิบาย |
+|---|---|---|---|
+| `amountTotal` | number | ✅ | **จำนวนเงินรวม** (ไม่ใช่จำนวนหน่วย) > 0 — หน่วยตาม `currency` |
+| `currency` | `"THB"` \| `"USD"` | — | Default `"THB"` — `"USD"` ใช้ได้เฉพาะ `crypto` / `stock_us` |
 | `pricePerUnit` | number | ⚠️ | **บังคับสำหรับ `stock_th`** (ไม่มี Price Feed) / ถ้าส่งมาสำหรับสินทรัพย์อื่น = ใช้ราคานี้แทนราคาตลาด (ตรงกับ LINE ที่พิมพ์ `"ซื้อ AAPL 10 หุ้น ราคา 190"` ได้) |
 
 **2 เส้นทางที่ Map เข้า Logic เดิมของ LINE:**
@@ -712,11 +719,45 @@ Section 4 ร่างไว้ว่า Error ต้องเป็น `{ succe
 { "symbol": "PTT", "amountTotal": 1700, "pricePerUnit": 34, "currency": "THB", "date": "2026-07-17" }
 ```
 
-**Response `201`**
+#### 15.2.2 `side: "sell"` — บันทึกการขาย
+
+| Field | Type | บังคับ | คำอธิบาย |
+|---|---|---|---|
+| `quantity` | number | ⚠️ | **จำนวนหน่วย** ที่ขาย (ไม่ใช่จำนวนเงิน) > 0 — บังคับเมื่อไม่ได้ส่ง `sellAll` |
+| `pricePerUnit` | number | ⚠️ | ราคาที่ขายได้ต่อหน่วย > 0 — บังคับคู่กับ `quantity` เสมอ |
+| `sellAll` | `true` | — | ขายยอดคงเหลือทั้งหมดตามราคาตลาด ณ ตอนนั้น — ต้องเป็น `true` แท้ๆ (`"true"` String ไม่นับ) |
+| `currency` | `"THB"` \| `"USD"` | — | ควรส่งให้ตรงกับสกุลของสินทรัพย์ที่ถืออยู่ — **ถูกละเว้นเมื่อ `sellAll: true`** (Service อนุมานจากประวัติจริงด้วย `deriveAssetCurrency`) |
+
+**2 รูปแบบที่รองรับ (ตรงกับคำสั่งพิมพ์ใน LINE เป๊ะ):**
+
+| กรณี | Payload | เทียบเท่าคำสั่ง LINE |
+|---|---|---|
+| ระบุจำนวนหน่วย + ราคาที่ขายได้ | `quantity` + `pricePerUnit` | `"ขาย PTT 50 หุ้น ราคา 34"` |
+| ขายเกลี้ยง | `sellAll: true` | `"ขาย BTC ทั้งหมด"` |
+
+> **จงใจไม่รับ "ขายด้วยจำนวนเงิน" (`amountTotal`) บนเว็บ** แม้ Service จะรองรับ (LINE
+> พิมพ์ `"ขาย BTC 1000"` ได้) — เส้นทางนั้นหาร `quantity` จากราคาตลาด ทำให้ผู้ใช้ที่
+> ตั้งใจขายหมดเหลือเศษค้างในพอร์ต และใช้กับ `stock_th` ไม่ได้เลย (ไม่มี Price Feed → 503)
+
+> **`symbol` ฝั่งขายไม่ต้องอยู่ใน Registry** — สินทรัพย์ที่ถืออยู่จริงอาจถูกสร้างผ่าน
+> Manual Quantity Fallback ทาง LINE (Round 10-B เช่น `EOSE`) ตัวตัดสินคือ Ledger
+> (`validateSell` → `ASSET_NOT_FOUND`) ไม่ใช่ Registry — มิฉะนั้นผู้ใช้จะ "ซื้อผ่าน LINE
+> ได้แต่ขายบนเว็บไม่ได้"
+
+**Request ตัวอย่าง**
+```json
+{ "side": "sell", "symbol": "PTT", "quantity": 50, "pricePerUnit": 36, "currency": "THB", "date": "2026-08-01" }
+```
+```json
+{ "side": "sell", "symbol": "BTC", "sellAll": true }
+```
+
+**Response `201` (ซื้อ)**
 ```json
 {
   "transaction": {
     "id": "9f1c2e6a-1234-4bcd-9876-0a1b2c3d4e5f",
+    "side": "buy",
     "symbol": "AAPL",
     "units": 5.24934383,
     "pricePerUnit": 190.5,
@@ -735,23 +776,58 @@ Section 4 ร่างไว้ว่า Error ต้องเป็น `{ succe
 }
 ```
 
+**Response `201` (ขาย)** — เหมือนกันทุก Field ยกเว้น `newAssetCreated` ถูกแทนด้วย
+`remainingQuantity` (ยอดคงเหลือหลังขาย ที่ `processSellCommand` คำนวณให้):
+```json
+{
+  "transaction": {
+    "id": "1a2b3c4d-5678-4abc-9def-1234567890ab",
+    "side": "sell",
+    "symbol": "PTT",
+    "units": 50,
+    "pricePerUnit": 36,
+    "amountTotal": 1800,
+    "currency": "THB",
+    "date": "2026-08-01",
+    "note": null,
+    "priceSource": "user",
+    "remainingQuantity": 50
+  },
+  "monthSummary": { "month": "2026-08", "count": 3, "amountByCurrency": { "THB": 3000, "USD": 50 } }
+}
+```
+
 > `amountTotal` ใน Response = **ยอดที่บันทึกจริง** (สกุลตาม `currency`) ให้ Frontend
 > แสดงค่านี้ ไม่ใช่ค่าที่ผู้ใช้กรอก — เส้นทาง "ระบุราคาเอง" คำนวณกลับจาก `units × price`
+> (ฝั่งขาย = เงินที่ได้รับจากการขาย)
 > `priceSource`: `coingecko` / `twelvedata` / `thaigold` / `secnav` / `user`
+>
+> `monthSummary` นับเฉพาะ **รายการซื้อ** ตามนิยาม DCA เดิม (`dcaStats.getMonthSummary`)
+> — การขายจึงไม่ทำให้ตัวเลขนี้ขยับ (ตั้งใจ ไม่ใช่บั๊ก)
 
 **Error ที่เป็นไปได้**
 
 | Code | HTTP | เมื่อไหร่ |
 |---|---|---|
-| `VALIDATION_ERROR` | 400 | `amountTotal` ไม่ใช่เลขบวก / `date` ผิดรูปแบบหรือไม่มีจริง / `currency` ไม่รู้จัก / `note` ยาวเกิน |
-| `SYMBOL_NOT_SUPPORTED` | 400 | Symbol ไม่อยู่ใน Registry |
-| `PRICE_REQUIRED_FOR_ASSET` | 400 | หุ้นไทย (หรือสินทรัพย์ไม่มีราคาสด) ไม่ส่ง `pricePerUnit` |
+| `VALIDATION_ERROR` | 400 | `side` ไม่รู้จัก / `amountTotal` (ซื้อ) หรือ `quantity` (ขาย) ไม่ใช่เลขบวก / `date` ผิดรูปแบบหรือไม่มีจริง / `currency` ไม่รู้จัก / `note` ยาวเกิน |
+| `SYMBOL_NOT_SUPPORTED` | 400 | Symbol ไม่อยู่ใน Registry (**ฝั่งซื้อเท่านั้น**) |
+| `PRICE_REQUIRED_FOR_ASSET` | 400 | หุ้นไทย (หรือสินทรัพย์ไม่มีราคาสด) ไม่ส่ง `pricePerUnit` (ฝั่งซื้อ) |
 | `CURRENCY_NOT_SUPPORTED_FOR_ASSET` | 400 | `USD` กับสินทรัพย์ที่ไม่ใช่ `crypto`/`stock_us` |
 | `DATE_IN_FUTURE` | 400 | วันที่เกินวันนี้ (เทียบ Asia/Bangkok) |
-| `AMOUNT_TOO_SMALL_FOR_PRICE` | 400 | เงินน้อยจน `quantity` ปัดแล้วเป็น 0 |
+| `AMOUNT_TOO_SMALL_FOR_PRICE` | 400 | เงินน้อยจน `quantity` ปัดแล้วเป็น 0 (ฝั่งซื้อ) |
 | `NOTE_RESERVED_PREFIX` | 400 | `note` ขึ้นต้นด้วย `UNDO_OF:` |
-| `ASSET_LIMIT_REACHED` | 403 | Free Plan ครบ 2 สินทรัพย์ แล้วจะสร้างตัวใหม่ |
-| `PRICE_FEED_NOT_IMPLEMENTED` / `MARKET_PRICE_UNAVAILABLE` / `GOLD_PRICE_UNAVAILABLE` | 503 | ดึงราคาตลาดไม่ได้ (ไม่เดาราคา ไม่บันทึก) |
+| `SELL_PRICE_REQUIRED` | 400 | **ขาย**: ส่ง `quantity` มาแต่ไม่ส่ง `pricePerUnit` (Service ไม่รองรับ "จำนวนหน่วยตามราคาตลาด") |
+| `ASSET_NOT_FOUND` | 400 | **ขาย**: ไม่เคยถือสินทรัพย์นี้ (`validateSell`) |
+| `NOTHING_TO_SELL` | 400 | **ขาย**: `sellAll` แต่ยอดคงเหลือ = 0 (เคยมีแต่ขายหมดแล้ว) |
+| `INSUFFICIENT_QUANTITY` | 400 | **ขาย**: เกินยอดคงเหลือจริง — `details: { requested, held }` |
+| `ASSET_LIMIT_REACHED` | 403 | Free Plan ครบ 2 สินทรัพย์ แล้วจะสร้างตัวใหม่ (**ฝั่งซื้อเท่านั้น** — การขายไม่สร้าง Asset จึงไม่โดน Gate) |
+| `PRICE_FEED_NOT_IMPLEMENTED` / `MARKET_PRICE_UNAVAILABLE` / `GOLD_PRICE_UNAVAILABLE` | 503 | ดึงราคาตลาดไม่ได้ (ไม่เดาราคา ไม่บันทึก) — ฝั่งขายเจอได้เฉพาะเส้นทาง `sellAll` |
+
+> ⚠️ **Race Condition ที่ยังเหลืออยู่ (ไม่ได้เกิดจากรอบนี้)** — การตรวจ
+> `INSUFFICIENT_QUANTITY` ใน `transaction.service.validateSell` เป็นแบบ
+> check-then-insert ที่ยัง **ไม่ Atomic** (`TODO(phase1)` ในไฟล์นั้น ต้องย้ายไปเป็น
+> Postgres RPC ตาม DATABASE.md § 12) — เส้นทางเว็บไม่มีช่วง Preview→Confirm แบบ LINE
+> หน้าต่างเสี่ยงจึงสั้นกว่า แต่ **ยังมีอยู่** เหมือนกันทั้งสองช่องทาง
 
 ---
 

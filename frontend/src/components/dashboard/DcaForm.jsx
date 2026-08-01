@@ -5,6 +5,7 @@ import { apiPost, apiUpload } from '../../lib/api.js';
 import { transactionErrorMessage, slipUploadErrorMessage } from '../../lib/dcaErrors.js';
 import { todayBangkokIso } from '../../lib/dateBangkok.js';
 import { resolvePrefillState } from '../../lib/dcaPlanPrefill.js';
+import { buildSellPayload, findHolding, formatUnits } from '../../lib/sellForm.js';
 
 const AMOUNT_CHIPS = [500, 1000, 3000, 5000, 10000];
 
@@ -31,7 +32,18 @@ function fmtAmountInput(n) {
   return n.toLocaleString('th-TH');
 }
 
-// DcaForm — กล่อง "บันทึก DCA" (งานที่ 2, หัวใจของรอบนี้)
+// DcaForm — กล่อง "บันทึกรายการ" ซื้อ (DCA) และขาย (งานที่ 2, หัวใจของรอบนี้)
+//
+// ── โหมดซื้อ vs โหมดขาย ─────────────────────────────────────────────────────
+// กล่องเดียวสลับด้วย Toggle ด้านบน (ไม่ทำ Modal/การ์ดที่สอง) เพราะ Field ส่วนใหญ่
+// (วันที่ / สินทรัพย์ / รายละเอียด) ใช้ร่วมกัน และช่องทางหลักของผู้ใช้คือ LIFF บน
+// มือถือที่พื้นที่จำกัด — สิ่งที่ "ต่างกันจริง" มีแค่ 3 อย่าง:
+//   1) รายการสินทรัพย์ให้เลือก — ซื้อ = Registry ทั้งหมด / ขาย = เฉพาะที่ถืออยู่จริง
+//   2) ช่องกรอก — ซื้อ = "จำนวนเงิน" (Backend หารเป็นหน่วยให้) /
+//      ขาย = "จำนวนหน่วย + ราคาที่ขายได้" (ธรรมชาติของการขาย และเป็นเส้นทางเดียว
+//      ที่ใช้ได้กับทุกประเภทสินทรัพย์รวมหุ้นไทยที่ไม่มี Price Feed)
+//   3) สกุลเงิน — ซื้อ = เลือกได้ (THB⇄USD สำหรับหุ้น US) / ขาย = ล็อกตามสกุลของ
+//      สินทรัพย์ที่ถืออยู่ (Backend อนุมานจากประวัติจริง — ให้เลือกเองจะทำ Ledger ปนสกุล)
 //
 // props:
 //   symbols: รายการสินทรัพย์จาก GET /api/v1/assets/symbols
@@ -50,6 +62,14 @@ function DcaForm({
   onRecorded,
   onRequestUndo,
   prefillSignal = null,
+  // holdings: [{symbol,name,type,units,currency}] — สินทรัพย์ที่ผู้ใช้ "ถืออยู่จริง"
+  // ที่ Parent สร้างจาก overview.allocation ผ่าน sellForm.buildHoldings (ยอดคงเหลือ
+  // คำนวณโดย Backend จาก Ledger — Component นี้ไม่บวกลบยอดเองเด็ดขาด)
+  // ว่าง = ยังไม่มีอะไรให้ขาย → โหมดขายจะขึ้น Empty State แทนฟอร์ม
+  holdings = [],
+  // โหมดที่ฟอร์มเปิดขึ้นมาครั้งแรก ('buy' = พฤติกรรมเดิมทุกประการ) — ผู้ใช้สลับเองได้
+  // ด้วย Toggle เสมอ ค่านี้แค่กำหนดค่าเริ่มต้น
+  defaultSide = 'buy',
   // แนบสลิปหลักฐาน (Premium) — isPremiumActive มาจาก planInfo ของ DashboardHome
   // (GET /dashboard/me) / onUpgrade พาไป /premium ทั้งคู่เป็น Presentation Gate เฉยๆ
   // Backend ยัง Gate ซ้ำเองที่ POST /transactions/:id/slip (Security Boundary จริง)
@@ -61,8 +81,15 @@ function DcaForm({
   // ผ่าน React Router (กฎข้อ 12 ห้าม <a href>/window.location ที่ทำ JWT ใน Memory หาย)
   const handleUpgrade = onUpgrade ?? (() => navigate('/premium'));
 
+  // 'buy' = บันทึก DCA (เดิม) | 'sell' = บันทึกการขาย — สลับด้วย Toggle ด้านบนฟอร์ม
+  const [side, setSide] = useState(defaultSide === 'sell' ? 'sell' : 'buy');
   const [date, setDate] = useState(todayBangkokIso());
   const [picked, setPicked] = useState(null);
+  // โหมดขาย: จำนวน "หน่วย" ที่ขาย + ราคาที่ขายได้ต่อหน่วย (คนละความหมายกับ
+  // amountInput ของโหมดซื้อที่เป็น "จำนวนเงิน" — จงใจแยก State กันสับสนข้ามโหมด)
+  const [sellQuantity, setSellQuantity] = useState('');
+  const [sellPrice, setSellPrice] = useState('');
+  const [sellFieldError, setSellFieldError] = useState(null); // 'quantity' | 'price' | 'date' | null
   const [amountInput, setAmountInput] = useState('');
   const [selectedChip, setSelectedChip] = useState(null);
   const [currency, setCurrency] = useState('THB');
@@ -93,14 +120,21 @@ function DcaForm({
   }, []);
 
   const today = todayBangkokIso();
-  const needsManualPrice = picked?.type === 'stock_th';
-  const supportsUsd = picked ? USD_TOGGLE_TYPES.includes(picked.type) : false;
+  const isSell = side === 'sell';
+  const needsManualPrice = !isSell && picked?.type === 'stock_th';
+  const supportsUsd = !isSell && picked ? USD_TOGGLE_TYPES.includes(picked.type) : false;
+  // ยอดคงเหลือของตัวที่เลือกในโหมดขาย — อ่านจาก holdings (Backend คำนวณมาแล้ว)
+  // ไม่ใช่ค่าที่คำนวณในหน้านี้ ดูหมายเหตุที่ props holdings
+  const heldHolding = isSell ? findHolding(holdings, picked?.symbol) : null;
 
   // Prefill จากปุ่ม "บันทึกเลย" (SidePanels) — ไม่ Prefill pricePerUnit เด็ดขาดแม้
   // เป็นหุ้นไทย (needsManualPrice) ต้องให้ผู้ใช้กรอกราคาเองเสมอ ไม่เดาราคาให้
   useEffect(() => {
     const resolved = resolvePrefillState(prefillSignal, symbols);
     if (!resolved) return;
+    // แผน DCA เป็นเรื่องของ "การซื้อ" เสมอ — ถ้าผู้ใช้ค้างอยู่โหมดขายแล้วกด "บันทึกเลย"
+    // ต้องดึงกลับมาโหมดซื้อ ไม่งั้นค่าที่ Prefill จะไปโผล่ในฟอร์มที่ตีความคนละแบบ
+    setSide('buy');
     setPicked(resolved.picked);
     setAmountInput(resolved.amountInputStr);
     setCurrency(resolved.currency);
@@ -126,10 +160,34 @@ function DcaForm({
     setPicked(item);
     // สลับสินทรัพย์ที่ไม่รองรับ USD ระหว่างกรอก → รีเซ็ตกลับ THB (กัน Payload
     // ค้างเป็น USD ของสินทรัพย์ที่ backend ปฏิเสธแน่ๆ)
-    if (!USD_TOGGLE_TYPES.includes(item.type)) {
+    // โหมดขายไม่แตะ currency เลย — สกุลล็อกตามสินทรัพย์ที่ถืออยู่ (holding.currency)
+    if (!isSell && !USD_TOGGLE_TYPES.includes(item.type)) {
       setCurrency('THB');
     }
     setFormError(null);
+    setSellFieldError(null);
+  }
+
+  // สลับโหมดซื้อ/ขาย — ล้างทุกช่องที่ "ตีความคนละแบบ" ระหว่างสองโหมดทิ้งเสมอ
+  // (จำนวนเงิน 1,000 ของโหมดซื้อ ≠ จำนวนหน่วย 1,000 ของโหมดขาย — ถ้าปล่อยค้างไว้
+  // ผู้ใช้อาจกดบันทึกทับโดยไม่ทันดู) รวมถึง picked เพราะรายการที่เลือกได้คนละชุดกัน
+  function handleSwitchSide(next) {
+    if (next === side) return;
+    setSide(next);
+    setPicked(null);
+    setAmountInput('');
+    setSelectedChip(null);
+    setCurrency('THB');
+    setPricePerUnit('');
+    setSellQuantity('');
+    setSellPrice('');
+    setFormError(null);
+    setAmountFieldError(false);
+    setSellFieldError(null);
+    setConfirmed(null);
+    // สลิปเป็นของฝั่งซื้อ (แนบเป็นหลักฐานตอน DCA) — ล้างไฟล์ที่ค้างไว้ด้วย
+    clearSlip();
+    setSlipNotice(null);
   }
 
   // ล้างสลิปที่เลือกไว้ + revoke Preview URL (เรียกทั้งตอนกด "ลบรูป" และหลังบันทึกสำเร็จ)
@@ -174,13 +232,61 @@ function DcaForm({
     setSelectedChip(null);
     setCurrency('THB');
     setPricePerUnit('');
+    setSellQuantity('');
+    setSellPrice('');
+    setSellFieldError(null);
     setNote('');
     setDate(todayBangkokIso());
     clearSlip();
   }
 
+  // ── บันทึกการขาย ──────────────────────────────────────────────────────────
+  // sellAll = true เมื่อกดปุ่ม "ขายทั้งหมด" (ไม่ส่งจำนวน/ราคาไปเลย ให้ Backend
+  // ดึงยอดคงเหลือ + ราคาตลาดเอง — ดูเหตุผลใน lib/sellForm.js)
+  async function submitSell(sellAll) {
+    setFormError(null);
+    setSellFieldError(null);
+    setConfirmed(null);
+
+    const built = buildSellPayload({
+      holding: heldHolding,
+      sellAll,
+      quantityInput: sellQuantity,
+      priceInput: sellPrice,
+      date,
+      today,
+      note,
+    });
+
+    if (built.error) {
+      setFormError(built.error);
+      setSellFieldError(built.field ?? null);
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const response = await apiPost('/api/v1/transactions', built.payload);
+      setConfirmed(response.transaction);
+      resetFormAfterSuccess();
+      onRecorded(response);
+    } catch (err) {
+      setFormError(transactionErrorMessage(err.message));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
+
+    // โหมดขายเดินคนละเส้นทางทั้งหมด (Payload/Validation/Endpoint Field ต่างกัน) —
+    // แยกฟังก์ชันไปเลยดีกว่าเสียบ if ซ้อนตลอดทั้งฟังก์ชันเดิมของฝั่งซื้อ
+    if (isSell) {
+      await submitSell(false);
+      return;
+    }
+
     setFormError(null);
     setConfirmed(null);
 
@@ -256,13 +362,41 @@ function DcaForm({
     }
   }
 
+  // โหมดขายที่ยังไม่มีอะไรให้ขาย — บอกตรงๆ ดีกว่าปล่อยให้เปิด Picker แล้วเจอ
+  // "ไม่พบรายการ" (ข้อความของ Picker ชวนให้แจ้งทีมงานเพิ่มสินทรัพย์ ซึ่งไม่ใช่ปัญหานี้)
+  const sellEmpty = isSell && holdings.length === 0;
+
   return (
     <div className={`dh-dca-grid${confirmed ? '' : ' dh-dca-grid-full'}`}>
       <form className="dh-dca-form" autoComplete="off" onSubmit={handleSubmit}>
+        {/* ── Toggle ซื้อ/ขาย ─────────────────────────────────────────────────
+            role="tablist" + aria-selected เพื่อให้ Screen Reader รู้ว่าเป็นการสลับ
+            "โหมดของฟอร์มเดียวกัน" ไม่ใช่ปุ่มสั่งงาน 2 ปุ่มที่กดแล้วบันทึกทันที */}
+        <div className="dh-side-toggle" role="tablist" aria-label="เลือกประเภทรายการ">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={!isSell}
+            className={`dh-side-tab${!isSell ? ' dh-side-tab-buy-on' : ''}`}
+            onClick={() => handleSwitchSide('buy')}
+          >
+            🟢 ซื้อ (DCA)
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={isSell}
+            className={`dh-side-tab${isSell ? ' dh-side-tab-sell-on' : ''}`}
+            onClick={() => handleSwitchSide('sell')}
+          >
+            🔴 ขาย
+          </button>
+        </div>
+
         <div className="dh-frow">
           <div>
             <label className="dh-fl" htmlFor="dh-f-date">
-              วันที่ลงทุน
+              {isSell ? 'วันที่ขาย' : 'วันที่ลงทุน'}
             </label>
             <input
               className="dh-inp"
@@ -270,22 +404,111 @@ function DcaForm({
               id="dh-f-date"
               value={date}
               max={today}
+              style={sellFieldError === 'date' ? { borderColor: 'var(--red)' } : undefined}
               onChange={(e) => setDate(e.target.value)}
             />
           </div>
           <div>
             <label className="dh-fl">
-              สินทรัพย์ <span className="dh-fl-opt">— เลื่อนดูหรือพิมพ์ค้นหา</span>
+              สินทรัพย์{' '}
+              <span className="dh-fl-opt">
+                {isSell ? '— เฉพาะที่คุณถืออยู่' : '— เลื่อนดูหรือพิมพ์ค้นหา'}
+              </span>
             </label>
+            {/* โหมดขายส่ง holdings (ที่ถืออยู่จริง) แทน symbols ทั้ง Registry —
+                Reuse Component เดิม เพราะ Shape {symbol,name,type} ตรงกันอยู่แล้ว */}
             <AssetPicker
-              symbols={symbols}
+              symbols={isSell ? holdings : symbols}
               value={picked}
               onChange={handlePickAsset}
-              openSignal={pickerOpenSignal}
+              disabled={sellEmpty}
+              openSignal={isSell ? undefined : pickerOpenSignal}
             />
           </div>
         </div>
 
+        {sellEmpty && (
+          <div className="dh-form-note">
+            ยังไม่มีสินทรัพย์ในพอร์ตให้ขาย — บันทึกการซื้อก่อน แล้วรายการจะมาแสดงตรงนี้เอง
+          </div>
+        )}
+
+        {/* ══════════════ โหมดขาย ══════════════ */}
+        {isSell && !sellEmpty && (
+          <>
+            {/* ยอดคงเหลือของตัวที่เลือก — ตัวเลขจาก Backend ตรงๆ (Ledger) ไม่ใช่ที่หน้านี้
+                คำนวณ แสดงก่อนช่องกรอกเสมอเพื่อให้ผู้ใช้เห็นเพดานก่อนพิมพ์จำนวน */}
+            {heldHolding && (
+              <div className="dh-sell-held">
+                <span className="dh-sell-held-lbl">ถืออยู่ตอนนี้</span>
+                <b>
+                  {formatUnits(heldHolding.units)} {heldHolding.symbol}
+                </b>
+                <span className="dh-tbadge dh-t-currency">{heldHolding.currency}</span>
+              </div>
+            )}
+
+            <div className="dh-frow">
+              <div>
+                <label className="dh-fl" htmlFor="dh-f-sell-qty">
+                  จำนวนหน่วยที่ขาย <span className="dh-fl-opt">(ไม่ใช่จำนวนเงิน)</span>
+                </label>
+                <input
+                  className="dh-inp"
+                  id="dh-f-sell-qty"
+                  inputMode="decimal"
+                  placeholder={heldHolding ? formatUnits(heldHolding.units) : '0'}
+                  value={sellQuantity}
+                  style={sellFieldError === 'quantity' ? { borderColor: 'var(--red)' } : undefined}
+                  onChange={(e) => {
+                    setSellQuantity(e.target.value);
+                    setSellFieldError(null);
+                  }}
+                />
+              </div>
+              <div>
+                <label className="dh-fl" htmlFor="dh-f-sell-price">
+                  ราคาที่ขายได้ / หน่วย{' '}
+                  <span className="dh-fl-opt">({heldHolding?.currency ?? 'THB'})</span>
+                </label>
+                <input
+                  className="dh-inp"
+                  id="dh-f-sell-price"
+                  inputMode="decimal"
+                  placeholder="เช่น 36.00"
+                  value={sellPrice}
+                  style={sellFieldError === 'price' ? { borderColor: 'var(--red)' } : undefined}
+                  onChange={(e) => {
+                    setSellPrice(e.target.value);
+                    setSellFieldError(null);
+                  }}
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="dh-fl" htmlFor="dh-f-sell-note">
+                รายละเอียด <span className="dh-fl-opt">(ไม่บังคับ)</span>
+              </label>
+              <input
+                className="dh-inp"
+                id="dh-f-sell-note"
+                placeholder="เช่น ขายทำกำไรบางส่วน"
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+              />
+            </div>
+
+            <div className="dh-form-note">
+              ระบบบันทึกการขายตามราคาที่คุณกรอกเท่านั้น ไม่มีการส่งคำสั่งขายจริงไปที่โบรกเกอร์ —
+              หากต้องการขายยอดคงเหลือทั้งหมด กด "ขายทั้งหมด" แล้วระบบจะใช้ยอดคงเหลือจริงกับราคาตลาด
+              ณ ตอนนั้นให้เอง (ไม่เหลือเศษค้างในพอร์ต)
+            </div>
+          </>
+        )}
+
+        {/* ══════════════ โหมดซื้อ (DCA) — ของเดิมทั้งหมด ══════════════ */}
+        {!isSell && (
         <div className="dh-frow">
           <div>
             <label className="dh-fl" htmlFor="dh-f-amt">
@@ -384,6 +607,7 @@ function DcaForm({
             </div>
           </div>
         </div>
+        )}
 
         {/* ช่องรายละเอียดยังต้องมีที่กรอกได้เสมอแม้เป็นหุ้นไทย (ราคา/หน่วยแทนที่ตำแหน่ง
             รายละเอียดในคอลัมน์ขวา) — ย้ายรายละเอียดมาไว้แถวถัดไปเมื่อเป็นหุ้นไทย */}
@@ -402,7 +626,11 @@ function DcaForm({
           </div>
         )}
 
-        {/* ── แนบสลิปซื้อหุ้นเป็นหลักฐาน (Premium เท่านั้น — เก็บรูปเฉยๆ ไม่มี AI อ่าน) ── */}
+        {/* ── แนบสลิปซื้อหุ้นเป็นหลักฐาน (Premium เท่านั้น — เก็บรูปเฉยๆ ไม่มี AI อ่าน) ──
+            โหมดขายยังไม่เปิดให้แนบสลิปในรอบนี้: Endpoint POST /transactions/:id/slip
+            รองรับได้ทางเทคนิคอยู่แล้ว แต่จงใจไม่เพิ่มพร้อมกันเพื่อไม่ให้รอบนี้ขยายเกิน
+            "เปิดปุ่มขาย" (ผู้ใช้ที่ต้องการแนบหลักฐานการขายยังทำผ่าน LINE ได้เหมือนเดิม) */}
+        {!isSell && (
         <div className="dh-slip-field">
           <label className="dh-fl">
             แนบสลิปซื้อหุ้นเป็นหลักฐาน <span className="dh-fl-opt">(ไม่บังคับ)</span>
@@ -451,12 +679,35 @@ function DcaForm({
 
           {slipNotice && <div className="dh-form-note dh-slip-notice">{slipNotice}</div>}
         </div>
+        )}
 
         {formError && <div className="dh-form-error">{formError}</div>}
 
-        <button className="dh-btn-main" type="submit" disabled={submitting}>
-          {submitting ? 'กำลังบันทึก...' : 'บันทึก DCA'}
-        </button>
+        {isSell ? (
+          <div className="dh-sell-actions">
+            <button
+              className="dh-btn-main dh-btn-sell"
+              type="submit"
+              disabled={submitting || sellEmpty}
+            >
+              {submitting ? 'กำลังบันทึก...' : 'บันทึกการขาย'}
+            </button>
+            {/* type="button" — ไม่ผ่าน onSubmit ของฟอร์ม เพราะเส้นทางนี้ "ไม่อ่าน"
+                ช่องจำนวน/ราคาที่กรอกไว้เลย (ส่ง sellAll:true ให้ Backend หาเอง) */}
+            <button
+              type="button"
+              className="dh-btn-ghost dh-btn-sell-all"
+              disabled={submitting || sellEmpty || !heldHolding}
+              onClick={() => submitSell(true)}
+            >
+              ขายทั้งหมด
+            </button>
+          </div>
+        ) : (
+          <button className="dh-btn-main" type="submit" disabled={submitting}>
+            {submitting ? 'กำลังบันทึก...' : 'บันทึก DCA'}
+          </button>
+        )}
         <div className="dh-form-note">
           * EasyDCA by JaydeX เป็นผู้ช่วยบันทึกและติดตามพอร์ต ไม่ใช่โบรกเกอร์ ไม่มีการส่งคำสั่งซื้อขายจริง
           และไม่แนะนำการซื้อขายหลักทรัพย์รายตัว
@@ -470,8 +721,11 @@ function DcaForm({
       <div className="dh-dca-side">
         {confirmed && (
           <div className="dh-confirm-box dh-confirm-box-show">
+            {/* confirmed.side มาจาก Response ของ Backend (ทิศทางที่ "บันทึกจริง")
+                ไม่ใช่ State ของ Toggle ในหน้านี้ — ถ้าอ่านจาก Toggle แล้วผู้ใช้สลับโหมด
+                หลังบันทึกสำเร็จ การ์ดจะเปลี่ยนคำโดยที่รายการจริงไม่ได้เปลี่ยนตาม */}
             <div className="dh-confirm-ok">
-              ✅ บันทึกสำเร็จ
+              {confirmed.side === 'sell' ? '✅ บันทึกการขายสำเร็จ' : '✅ บันทึกสำเร็จ'}
               <span className="dh-tbadge dh-t-currency" style={{ marginLeft: 'auto' }}>
                 {confirmed.currency}
               </span>
@@ -483,14 +737,14 @@ function DcaForm({
                   <td>{confirmed.symbol}</td>
                 </tr>
                 <tr>
-                  <td>จำนวนเงิน</td>
+                  <td>{confirmed.side === 'sell' ? 'เงินที่ได้รับ' : 'จำนวนเงิน'}</td>
                   <td>
                     {confirmed.amountTotal.toLocaleString('th-TH', { minimumFractionDigits: 2 })}{' '}
                     {confirmed.currency}
                   </td>
                 </tr>
                 <tr>
-                  <td>จำนวนหน่วย</td>
+                  <td>{confirmed.side === 'sell' ? 'จำนวนหน่วยที่ขาย' : 'จำนวนหน่วย'}</td>
                   <td>{confirmed.units.toLocaleString('th-TH', { maximumFractionDigits: 8 })}</td>
                 </tr>
                 <tr>
@@ -503,6 +757,14 @@ function DcaForm({
                         })})`}
                   </td>
                 </tr>
+                {/* ยอดคงเหลือหลังขาย — Backend คำนวณให้ (processSellCommand
+                    .remainingQuantity) ไม่ใช่ยอดเดิมลบเองในหน้านี้ */}
+                {confirmed.side === 'sell' && confirmed.remainingQuantity !== undefined && (
+                  <tr>
+                    <td>คงเหลือหลังขาย</td>
+                    <td>{formatUnits(confirmed.remainingQuantity)}</td>
+                  </tr>
+                )}
                 <tr>
                   <td>วันที่</td>
                   <td>{confirmed.date}</td>
@@ -528,7 +790,8 @@ function DcaForm({
                 className="dh-btn-ghost dh-btn-ghost-danger"
                 onClick={() =>
                   onRequestUndo({
-                    type: 'buy',
+                    // ทิศทางจริงจาก Backend — Modal ยืนยันแสดง "ซื้อ/ขาย" ตามนี้
+                    type: confirmed.side === 'sell' ? 'sell' : 'buy',
                     symbol: confirmed.symbol,
                     units: confirmed.units,
                     pricePerUnit: confirmed.pricePerUnit,
