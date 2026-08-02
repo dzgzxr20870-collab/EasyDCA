@@ -1919,14 +1919,7 @@ describe('handleEvent — Image (แนบสลิปตอนแจ้งช�
 });
 
 describe('handleEvent — Non-text events', () => {
-  test('Event ประเภท follow → ข้ามไป ไม่ประมวลผล', async () => {
-    await handleEvent({ type: 'follow', replyToken: 'rt', source: { userId: 'U123' } });
-
-    expect(userRepository.findByLineUserId).not.toHaveBeenCalled();
-    expect(lineService.replyMessage).not.toHaveBeenCalled();
-  });
-
-  test('Event ประเภท sticker → ข้ามไป ไม่ประมวลผล (ไม่ใช่ text/postback/image)', async () => {
+  test('Event ประเภท sticker → ข้ามไป ไม่ประมวลผล (ไม่ใช่ text/postback/image/follow)', async () => {
     await handleEvent({
       type: 'message',
       replyToken: 'rt',
@@ -1936,6 +1929,51 @@ describe('handleEvent — Non-text events', () => {
 
     expect(userRepository.findByLineUserId).not.toHaveBeenCalled();
     expect(lineService.replyMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleEvent — Follow Event (แอดเพื่อน/Unblock)', () => {
+  function followEvent(webhookEventId) {
+    const event = { type: 'follow', replyToken: 'reply-token-1', source: { userId: 'U123' } };
+    return webhookEventId ? { ...event, webhookEventId } : event;
+  }
+
+  test('แอดเพื่อนใหม่ → reply ข้อความต้อนรับ 3 ใบต่อกัน ไม่ resolveUser/ไม่เช็ค PDPA', async () => {
+    await handleEvent(followEvent());
+
+    expect(userRepository.findByLineUserId).not.toHaveBeenCalled();
+    expect(lineService.replyMessage).toHaveBeenCalledTimes(1);
+    const [replyToken, messages] = lineService.replyMessage.mock.calls[0];
+    expect(replyToken).toBe('reply-token-1');
+    expect(Array.isArray(messages)).toBe(true);
+    expect(messages).toHaveLength(3);
+  });
+
+  test('ข้อความใบสุดท้ายมีปุ่มเปิด External Browser ไปหน้า /premium — ไม่ Auto-grant Premium ตอน Follow', async () => {
+    await handleEvent(followEvent());
+
+    const [, messages] = lineService.replyMessage.mock.calls[0];
+    const last = messages[messages.length - 1];
+    const button = last.contents.footer.contents[0];
+    expect(button.action.type).toBe('uri');
+    expect(button.action.uri).toBe('https://app.easydca.test/premium?openExternalBrowser=1');
+    expect(button.action.label).toContain('Premium');
+  });
+
+  test('Dedup (migration 013): Follow Event webhookEventId ซ้ำ → reply แค่ครั้งเดียว', async () => {
+    lineWebhookEventRepository.claimEvent.mockResolvedValueOnce(true);
+    await handleEvent(followEvent('evt-follow-1'));
+    expect(lineService.replyMessage).toHaveBeenCalledTimes(1);
+
+    lineWebhookEventRepository.claimEvent.mockResolvedValueOnce(false);
+    await handleEvent(followEvent('evt-follow-1'));
+    expect(lineService.replyMessage).toHaveBeenCalledTimes(1);
+  });
+
+  test('replyMessage ล้มเหลว → ไม่ throw ออกไป (Error Isolation เหมือน handleImage)', async () => {
+    lineService.replyMessage.mockRejectedValueOnce(new Error('LINE API down'));
+
+    await expect(handleEvent(followEvent())).resolves.toBeUndefined();
   });
 });
 

@@ -1279,6 +1279,30 @@ async function handlePaymentSlipImage(event, pending, user) {
   );
 }
 
+// ── Follow Event (แอดเพื่อน/Unblock) — ส่งข้อความต้อนรับ 3 ใบต่อกัน ──────────
+// ไม่ resolveUser/ไม่เช็ค PDPA Gate (ยังไม่มีรายการอะไรให้บันทึก ณ จุดนี้) และไม่
+// Auto-grant Premium — ปุ่ม Premium ในข้อความที่ 3 พาไปหน้า /premium ให้ Guard/Logic
+// เดิม (payment.controller.js) ทำงานเหมือนกดจากที่อื่นทุกจุด ไม่สร้าง Path Grant
+// ใหม่ซ้อน (ดู flexMessage.util.js ส่วน Follow Event)
+//
+// Error Isolated เหมือน handleImage: Log อย่างเดียว ไม่ throw ออกไปกระทบ Event อื่น
+// ใน Promise.all ของ webhook.routes.js
+async function handleFollow(event) {
+  try {
+    const premiumUrl = buildExternalUrl('/premium');
+    await lineService.replyMessage(event.replyToken, [
+      flexMessage.buildWelcomeIntroMessage(),
+      flexMessage.buildWelcomeGuideMessage(),
+      flexMessage.buildWelcomeFreeTrialMessage(premiumUrl),
+    ]);
+  } catch (err) {
+    logger.error('handleFollow failed', {
+      webhookEventId: event.webhookEventId,
+      error: err.message,
+    });
+  }
+}
+
 // อัปโหลดรูปสลิปธุรกรรมขึ้น Storage แบบ Best-effort (S8) — คืน token ถ้าสำเร็จ,
 // null ถ้าล้มเหลว (ไม่ throw) เพื่อให้ Flow OCR เดิมทำงานต่อได้เสมอแม้ Storage ล่ม
 async function uploadOcrSlipBestEffort(userId, buffer, contentType) {
@@ -1346,11 +1370,17 @@ async function handleEvent(event) {
     }
   }
 
-  // รองรับ Text Message, Postback (ปุ่ม) และ Image Message (สลิปโอนเงิน)
-  // Event อื่น (follow/unfollow/sticker ฯลฯ) ข้ามไปก่อน
+  // รองรับ Text Message, Postback (ปุ่ม), Image Message (สลิปโอนเงิน) และ Follow
+  // Event (แอดเพื่อน/Unblock) — Event อื่น (unfollow/sticker ฯลฯ) ข้ามไปก่อน
   const isText = event.type === 'message' && event.message?.type === 'text';
   const isPostback = event.type === 'postback';
   const isImage = event.type === 'message' && event.message?.type === 'image';
+
+  // Follow แยกจากทุก Branch ด้านล่าง: ไม่มี user/PDPA เกี่ยวข้อง แค่ตอบข้อความต้อนรับ
+  if (event.type === 'follow') {
+    await handleFollow(event);
+    return;
+  }
 
   // Image แยกจาก Text/Postback: ห้าม reply ข้อความ Error หาผู้ใช้ (รูปอาจไม่เกี่ยวกับ
   // การชำระเงิน) — พลาดตรงไหนแค่ Log แล้วปล่อยผ่าน (Error Isolation เต็มรูปแบบ)

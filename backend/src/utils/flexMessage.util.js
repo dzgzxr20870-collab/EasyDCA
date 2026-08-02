@@ -2591,6 +2591,94 @@ function buildHelpMessage() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// Follow Event (แอดเพื่อน/Unblock) — ข้อความต้อนรับผู้ใช้ใหม่ (ทำงานคู่กับ
+// handleFollow ใน webhook.controller.js) ส่งเป็น 3 ข้อความต่อกัน: แนะนำตัว →
+// วิธีใช้งานเบื้องต้น → ชวนกด Premium ฟรี 1 เดือน
+//
+// ปุ่ม Premium "ไม่" Auto-grant เอง แค่พาไปหน้า /premium ให้ Guard/Logic เดิม
+// (payment.controller.js: checkEligibility/claim) ทำงานเหมือนกดจากที่อื่นทุกจุด
+// ไม่สร้าง Path Grant ใหม่ซ้อน — ถ้า Free Trial Flag ปิดอยู่ หน้าเว็บจะแจ้งเองว่า
+// ปิดรับสมัคร (FEATURE_DISABLED) เหมือน Entry Point อื่น
+// ═══════════════════════════════════════════════════════════════════════
+
+function buildWelcomeIntroMessage() {
+  return bubble({
+    headerText: '👋 ยินดีต้อนรับสู่ EasyDCA',
+    headerColor: COLOR.info,
+    headerBg: COLOR.profitBg,
+    bodyContents: [
+      textLine('EasyDCA ช่วยบันทึกและติดตามพอร์ตการลงทุนแบบ DCA ของคุณผ่าน LINE', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      textLine(
+        'พิมพ์คำสั่งซื้อ/ขายตรงๆ ได้เลย ระบบคำนวณต้นทุนเฉลี่ยและกำไร/ขาดทุนให้อัตโนมัติ',
+        { size: 'sm', color: COLOR.textSecondary }
+      ),
+    ],
+  });
+}
+
+function buildWelcomeGuideMessage() {
+  return bubble({
+    headerText: '📝 เริ่มใช้งานเบื้องต้น',
+    headerColor: COLOR.warning,
+    headerBg: COLOR.warningBg,
+    bodyContents: [
+      textLine('พิมพ์บันทึกรายการซื้อ/ขายได้ทันที เช่น', { size: 'sm', color: COLOR.textPrimary }),
+      textLine('• ซื้อ BTC 0.01 หุ้น ราคา 3400000', { size: 'sm', color: COLOR.textSecondary }),
+      textLine('• ขาย PTT 50 หุ้น ราคา 34', { size: 'sm', color: COLOR.textSecondary }),
+      textLine(
+        'หรือกดเมนูด้านล่างแชท (Rich Menu) เพื่อดูพอร์ต ตั้งเตือน DCA และเปิด Dashboard',
+        { size: 'sm', color: COLOR.textSecondary }
+      ),
+      textLine('พิมพ์ "วิธีใช้งาน" ได้ทุกเมื่อถ้าลืมคำสั่ง', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
+}
+
+// premiumUrl มาจาก buildExternalUrl('/premium') — เป็น null ได้ถ้ายังไม่ได้ตั้ง
+// FRONTEND_URL (Pattern เดียวกับ buildPremiumExpiringSoonMessage/buildDashboardLinkMessage)
+// กรณีนั้นไม่ใส่ปุ่ม กันข้อความถูก LINE ปฏิเสธทั้งใบเพราะ uri ว่าง
+function buildWelcomeFreeTrialMessage(premiumUrl) {
+  const message = bubble({
+    headerText: '🎁 Premium ฟรี 1 เดือน',
+    headerColor: COLOR.profit,
+    headerBg: COLOR.profitBg,
+    bodyContents: [
+      textLine('ทดลองใช้ Premium ฟรี 1 เดือน บันทึกสินทรัพย์ได้ไม่จำกัด', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      textLine('กดปุ่มด้านล่างเพื่อไปรับสิทธิ์ที่หน้าเว็บ', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
+
+  if (premiumUrl) {
+    message.contents.footer = {
+      type: 'box',
+      layout: 'vertical',
+      contents: [
+        {
+          type: 'button',
+          style: 'primary',
+          color: COLOR.profit,
+          action: { type: 'uri', label: '🎁 กดรับ Premium ฟรี 1 เดือน', uri: premiumUrl },
+        },
+      ],
+    };
+  }
+
+  return message;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // Bulk Import (Phase 3 Round 6 — นำเข้าพอร์ตแบบ Multi-line)
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -3494,4 +3582,7 @@ module.exports = {
   buildUnknownCommandMessage,
   buildFallbackMenuMessage,
   buildHelpMessage,
+  buildWelcomeIntroMessage,
+  buildWelcomeGuideMessage,
+  buildWelcomeFreeTrialMessage,
 };
