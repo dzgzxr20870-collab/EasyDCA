@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 ### Added
+- **Link Facebook Page จริงบนหน้า `/support`** — เดิมเป็น Placeholder `📘 Facebook`
+  พร้อมป้าย "เร็วๆ นี้" ที่กดไม่ได้
+  - ไอคอนโลโก้ Facebook จริง (Inline SVG วงกลมน้ำเงิน `#1877F2` + ตัว "f") แทน Emoji
+    — ใช้ Inline SVG แทนการเพิ่ม Icon Library ใหม่ทั้งก้อน (โปรเจกต์นี้ไม่มี
+    `lucide-react`/`react-icons` ติดตั้งอยู่เลย และใช้ไอคอนนี้ตัวเดียว)
+  - เปิดแท็บใหม่เสมอ (`target="_blank"` + `rel="noopener noreferrer"`) — ผู้ใช้กลับมา
+    หน้า `/support` ได้โดยไม่ต้อง Reload/Login ใหม่ (`noopener` กัน Tab ใหม่แตะ
+    `window.opener` ของหน้าเดิม)
+  - Instagram/TikTok **ยังเป็น Placeholder เดิม** (ยังไม่มี Account จริง) ไม่แตะ
+- **Push LINE แจ้งเมื่อกดรับ Premium ฟรีสำเร็จ** — เดิมกดรับแล้วรู้ผลแค่บนหน้าเว็บ
+  ไม่มีอะไรยืนยันในแชท
+  - แจ้งวันเริ่ม + วันหมดอายุจริงตรงกับที่เขียนลง DB พร้อมปุ่มไปหน้า `/premium`
+    (ผ่าน `externalUrl.util` — External Browser เหมือนลิงก์อื่นในแชท)
+  - Reuse Flex Pattern เดียวกับ `buildPaymentApprovedMessage` ของ Payment จริง
+    (มี Push ยืนยันอยู่แล้ว) — ไม่สร้าง Builder หน้าตาใหม่ที่ไม่เข้าชุดกัน
+  - **Best-effort**: Push ล้มเหลว (LINE API ล่ม/ผู้ใช้บล็อกบอท) **ไม่ Rollback การ
+    Claim** — สิทธิ์ถูกเขียนลง DB แบบ Atomic ไปแล้ว (Source of Truth) การตอบ Error
+    จะหลอกผู้ใช้ว่ากดรับไม่สำเร็จทั้งที่ได้สิทธิ์แล้ว
+  - Copy Banner หน้า `/premium`: ตัดคำอธิบายเงื่อนไข 3 ข้อใต้หัวข้อออก เหลือหัวข้อ +
+    ปุ่มกดรับ (ไม่แตะ Logic การ Claim/Guard ใดๆ)
 - **Cron เตือนก่อน Premium หมดอายุ 3 วัน** (`premiumExpiryReminder.job`, ทุกวันตี 2)
   — เดิมระบบมีแต่ Push *หลัง* หมดอายุแล้ว (`planDowngrade.job` — สายเกินจะต่อทัน)
   · **Migration 030** (`users.expiry_reminder_sent_at`)
@@ -40,6 +60,37 @@
   - โหมดขายเลือกได้เฉพาะสินทรัพย์ที่ถืออยู่จริง + แสดงยอดคงเหลือ + ปุ่ม "ขายทั้งหมด"
     (ส่ง `sellAll` ให้ Backend หายอด+ราคาตลาดเอง จึงไม่เหลือเศษค้างในพอร์ต)
 ### Fixed
+- **แถบไฮไลต์เมนู Sidebar/Bottom-nav บน Dashboard ไม่เคยขยับตาม Section เลย** — กดเมนู
+  "พอร์ตของฉัน"/"ประวัติรายการ" แล้วหน้าเลื่อนไปถูกที่ แต่ไฮไลต์ค้างที่ "แดชบอร์ด"
+  - Root Cause: **ไม่มี Scroll-Spy อยู่จริงตั้งแต่แรก** — `dh-nav-active`/`dh-bn-active`
+    ถูก Hardcode ไว้ที่ "แดชบอร์ด"/"หน้าหลัก" ตายตัวใน JSX และไม่มี
+    `IntersectionObserver`/Scroll Listener อยู่ที่ไหนเลยทั้ง Frontend (ไม่ใช่ Observer
+    ตามไม่ทัน — ไม่มีตัวที่จะตามตั้งแต่ต้น)
+  - เพิ่ม State `activeSection` + `IntersectionObserver` ที่หด Viewport เหลือแถบแคบ
+    ใกล้ขอบบนจอ (`rootMargin`) แทนเกณฑ์ % ของทั้ง Section — เพราะบาง Section สูงกว่า
+    จอมากจนเกณฑ์ % ไม่มีทาง Trigger ถูกจังหวะ
+  - **คลิกเมนูอัปเดตไฮไลต์ทันที (Optimistic)** ไม่รอ Observer ตามทัน (Smooth Scroll
+    ใช้เวลา) — Observer ทำหน้าที่ Sync ตอนผู้ใช้ Scroll เองเท่านั้น
+  - "พอร์ตของฉัน"/"ประวัติรายการ" ชี้ Anchor **เดียวกัน** (`#dh-legacy-tabs`) —
+    Observer แยกไม่ได้เองเพราะเป็น Section เดียวกันจริง จึงเช็ค `legacyActiveTab` ร่วม
+  - กด "แดชบอร์ด" ตอน Scroll ลงไปแล้ว เดิมไม่ทำอะไรเลย (Same-route `<Link>`) →
+    ตอนนี้ Scroll กลับบนสุด + คืนไฮไลต์
+- **Twelve Data ตอบ 429 "out of API credits" ทุกคืน** ตอน Cron `portfolioSnapshot.job`
+  รันเที่ยงคืน — ยืนยันจาก Railway Log จริง **4 คืนติดกัน** (30 ก.ค. – 2 ส.ค.) และเกิด
+  เฉพาะช่วง `00:00` เวลาไทยเท่านั้น ไม่ใช่ตอนผู้ใช้เปิด Dashboard
+  - Root Cause: Cron วนทุก User × ทุก Holding ยิง `/quote` 1 ครั้งต่อ 1 Symbol
+    **ไม่มี Throttle / Retry / Coalescing เลย** → พุ่งเกินเพดาน 8 credit/นาที ของ
+    Free Tier (Log เห็น Credit ไต่ 9→13 ในนาทีเดียว)
+  - ผลกระทบเดิม: Asset ที่โดน 429 ถูกนับเป็น `excludedAssetCount` **เงียบๆ** →
+    กราฟมูลค่าพอร์ต/กำไรของคืนนั้นขาดมูลค่าบาง Asset ไปโดยผู้ใช้ไม่เห็น Error อะไรเลย
+  - **Throttle**: Sliding Window 8 req/60s คุม `/quote` + `/exchange_rate` ด้วย Budget
+    เดียวกัน (Twelve Data นับ Credit รวมทุก Endpoint ต่อ API Key)
+  - **Retry with Backoff** (15s→30s→45s, สูงสุด 3 ครั้ง) เฉพาะเมื่อเจอ 429 **และเฉพาะ
+    Cron/Background** เท่านั้น — Live Path (Dashboard/ซื้อขาย/คำสั่ง LINE) ยัง Fail
+    Fast เหมือนเดิมทุกประการ ไม่ทำให้ผู้ใช้รอนานขึ้นแม้แต่วินาทีเดียว
+  - **Request Coalescing** สำหรับหุ้นสหรัฐ + FX Rate (ปิด Gap ที่ฝั่ง Crypto มีอยู่แล้ว
+    แต่ฝั่งหุ้นไม่มี) — Request พร้อมกันของ Symbol เดียวกันยุบเหลือครั้งเดียว
+  - ไม่แตะ Logic คำนวณ Ledger/มูลค่าพอร์ต · ไม่เปลี่ยน Provider ราคา · **ไม่มี Migration**
 - Error Code ฝั่งขาย (`ASSET_NOT_FOUND` / `NOTHING_TO_SELL` / `INSUFFICIENT_QUANTITY`)
   ที่ `validateSell` โยนมา ไม่เคยถูก Map ใน `transactions.controller` เลย — เดิมจะตกไป
   **500 "เกิดข้อผิดพลาดภายในระบบ"** ทั้งที่เป็น Business Rule ที่ผู้ใช้แก้เองได้
