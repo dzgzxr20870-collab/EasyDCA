@@ -39,10 +39,29 @@ function errorText(code) {
   return ERROR_MESSAGES[code] ?? ERROR_MESSAGES.INTERNAL_ERROR;
 }
 
-// Social Link — Placeholder เท่านั้น (ยังไม่มี Account จริง) ตั้งใจไม่ใส่ href จริง
-// และ Disabled ชัดเจน กัน User กดแล้วเจอ 404/หน้าอื่นที่ไม่ใช่ EasyDCA จริง
+// Facebook Page จริง (Account เดียวที่เปิดใช้งานแล้วตอนนี้) — เปิดผ่านแท็บใหม่เสมอ
+// (target="_blank" + rel="noopener noreferrer") ไม่ทับหน้า /support เดิม กัน User
+// กลับมาแล้วต้อง Reload/Login ใหม่ (noopener กัน Tab ใหม่แก้ window.opener ของหน้านี้ได้)
+const FACEBOOK_URL = 'https://www.facebook.com/profile.php?id=61591681353766';
+
+// ไอคอนโลโก้ Facebook มาตรฐาน (วงกลมน้ำเงิน + ตัว "f" ขาว) — Inline SVG แทนการเพิ่ม
+// Icon Library ใหม่ทั้งก้อน (โปรเจกต์นี้ยังไม่มี lucide-react/react-icons ติดตั้งอยู่
+// เลย และมีแค่ไอคอนนี้ตัวเดียวที่ต้องใช้จริงตอนนี้)
+function FacebookIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <circle cx="12" cy="12" r="12" fill="#1877F2" />
+      <path
+        fill="#FFFFFF"
+        d="M15.4 12.5h-2.1V19h-2.7v-6.5H9.1v-2.3h1.5V9.4c0-1.5.9-2.9 3.2-2.9.9 0 1.6.1 1.6.1v2.1h-1.1c-1.1 0-1.3.5-1.3 1.3v1.4h2.4l-.3 2.3z"
+      />
+    </svg>
+  );
+}
+
+// Instagram/TikTok — ยังเป็น Placeholder (ยังไม่มี Account จริง) ตั้งใจไม่ใส่ href
+// จริงและ Disabled ชัดเจน กัน User กดแล้วเจอ 404/หน้าอื่นที่ไม่ใช่ EasyDCA จริง
 const SOCIAL_PLACEHOLDERS = [
-  { icon: '📘', label: 'Facebook', note: 'เร็วๆ นี้' },
   { icon: '📷', label: 'Instagram', note: 'เร็วๆ นี้' },
   { icon: '🎵', label: 'TikTok', note: 'เร็วๆ นี้' },
 ];
@@ -95,10 +114,20 @@ function Support() {
       </header>
 
       <div className="dashboard-container">
-        {/* ── ช่องทางโซเชียล (Placeholder — ยังไม่มี Account จริง) ──────────────── */}
+        {/* ── ช่องทางโซเชียล — Facebook เปิดใช้งานจริงแล้ว, IG/TikTok ยังเป็น
+            Placeholder (ดู Comment ที่ SOCIAL_PLACEHOLDERS ด้านบน) ──────────────── */}
         <section className="dashboard-section">
           <h2>ช่องทางติดตาม EasyDCA</h2>
           <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <a
+              className="dashboard-chip"
+              href={FACEBOOK_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', textDecoration: 'none' }}
+            >
+              <FacebookIcon /> Facebook
+            </a>
             {SOCIAL_PLACEHOLDERS.map((s) => (
               <div
                 key={s.label}
@@ -111,7 +140,7 @@ function Support() {
             ))}
           </div>
           <p className="dashboard-card-sub" style={{ marginTop: '0.5rem' }}>
-            ช่องทางโซเชียลยังไม่เปิดใช้งาน — ติดต่อทีมงานผ่านฟอร์มด้านล่างได้เลยตอนนี้
+            ติดตามเพจ Facebook ได้แล้ววันนี้ — Instagram/TikTok ยังไม่เปิดใช้งาน แจ้งปัญหาผ่านฟอร์มด้านล่างได้เลยตอนนี้
           </p>
         </section>
 
