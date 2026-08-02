@@ -5,6 +5,7 @@ const config = require('./config/env');
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
+const { rateLimit } = require('express-rate-limit');
 
 const requestId = require('./middleware/requestId.middleware');
 const webhookRoutes = require('./routes/webhook.routes');
@@ -19,20 +20,65 @@ const dcaPlansRoutes = require('./routes/dcaPlans.routes');
 const supportRoutes = require('./routes/support.routes');
 const healthAlertService = require('./services/healthAlert.service');
 
+// ⚠️ Fail-fast ตั้งแต่ Boot ถ้าไม่ได้ตั้ง FRONTEND_URL — เดิม Fallback เป็น '*'
+// (เปิดให้ทุก Origin เรียก API ได้) ซึ่งเป็นค่าชั่วคราวสมัยยังไม่รู้ URL ของ React App
+// ตอน Deploy ครั้งแรก แต่ตอนนี้ตั้งค่าจริงครบทั้ง 2 Service บน Railway แล้ว การคง
+// Fallback ไว้มีแต่ความเสี่ยง: ถ้าวันหนึ่ง Variable หายไป (ตั้งชื่อผิด/ลืม Copy ตอน
+// สร้าง Environment ใหม่) ระบบจะ "เปิด CORS ให้ทุกเว็บเงียบๆ" โดยไม่มีสัญญาณเตือนเลย
+//
+// เลือก Fail-fast ที่นี่แทนการใส่ FRONTEND_URL ลง REQUIRED_ENV_VARS ใน config/env.js
+// โดยเจตนา เพราะ CORS เป็นเรื่องของ Web Server ตัวนี้เท่านั้น — worker.js (Cron) ไม่ได้
+// เปิด HTTP Server จึงไม่ควรถูกบังคับให้มี Variable ที่ตัวเองไม่ได้ใช้ (ถ้าใส่ที่ env.js
+// จะทำให้ทั้ง Worker และ Test ที่ requireActual('config/env') พังตามไปด้วยทั้งชุด)
+if (!config.app.frontendUrl) {
+  throw new Error(
+    'Missing required environment variable: FRONTEND_URL\n' +
+      'จำเป็นต่อการจำกัด CORS Origin (ห้าม Fallback เป็น Wildcard) — ' +
+      'ดูรายละเอียดที่ docs/ENV_VARIABLES.md'
+  );
+}
+
 const app = express();
 
 // Request ID (S6 Part B) — ต้องมาก่อน Middleware/Route อื่นทั้งหมด เพื่อให้ req.id
 // พร้อมใช้ตั้งแต่ต้น Request (รวมถึง Route Webhook ที่ต้องอ่าน Raw Body ด้านล่าง)
 app.use(requestId);
 
-// Fallback '*' เป็นค่าชั่วคราวเท่านั้น (ยังไม่รู้ Frontend URL จนกว่าจะ Deploy
-// React App สำเร็จ) ต้องตั้ง FRONTEND_URL จริงบน Railway ก่อน Production ใช้งานจริง
-// เพื่อความปลอดภัย (จำกัด Origin ที่เรียก API ได้ ไม่เปิดทุก Origin แบบ Wildcard)
+// ── Trust Proxy (จำเป็นต่อ Rate Limit ด้านล่าง) ────────────────────────────────
+// Railway วาง Reverse Proxy ไว้หน้า Container เสมอ → req.ip เป็น IP ของ Proxy
+// (เหมือนกันหมดทุกคน) ถ้าไม่ตั้งค่านี้ Rate Limit แบบต่อ IP จะกลายเป็น "ถังเดียว
+// รวมทุกคนบนโลก" ซึ่งอันตรายกว่าไม่มี Rate Limit เลย (ผู้ใช้คนเดียวยิงจนเต็มโควตา
+// แล้วทุกคนโดนบล็อกตาม) ตั้ง 1 = เชื่อ Proxy ชั้นแรกชั้นเดียว (ของ Railway)
+app.set('trust proxy', 1);
+
+// จำกัด Origin ที่เรียก API ได้ (ไม่มี Fallback Wildcard แล้ว — เช็คไว้ด้านบน)
 app.use(
   cors({
-    origin: config.app.frontendUrl || '*',
+    origin: config.app.frontendUrl,
   })
 );
+
+// ── Rate Limit ระดับ App (ด่านกว้างกันยิงรัวทั้งระบบ) ──────────────────────────
+// เพดานตั้งไว้ "หลวมพอที่ผู้ใช้จริงไม่มีวันชน" (300 ครั้ง/15 นาที/IP ≈ 20 ครั้ง/นาที)
+// จุดประสงค์คือกัน Abuse/Scraping ไม่ใช่คุมโควตารายฟีเจอร์ — ฟีเจอร์ที่ต้องคุมเข้ม
+// (อัปโหลดรูป Screenshot) มี Limiter เฉพาะทางของตัวเองที่ support.routes.js
+//
+// ⚠️ ต้อง skip 2 เส้นทางนี้เสมอ:
+//   - /api/v1/webhook  = LINE ยิงมาจาก IP ของ LINE เอง (ผู้ใช้ทุกคนรวมกันเป็น IP
+//     เดียวกันหมด) ถ้านับรวมด้วยจะบล็อก Event ของผู้ใช้จริงตอนมีคนใช้งานพร้อมกันเยอะ
+//     — ด่านจริงของเส้นทางนี้คือ HMAC Signature (lineSignature.middleware) ซึ่งของปลอม
+//     ผ่านไม่ได้อยู่แล้ว
+//   - /health = Railway/UptimeRobot Poll ถี่ตลอดเวลา ถ้าโดนบล็อกจะกลายเป็น False Alarm
+//     ว่าระบบล่มทั้งที่ปกติดี
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 300,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  skip: (req) => req.path === '/health' || req.path.startsWith('/api/v1/webhook'),
+  message: { error: 'TOO_MANY_REQUESTS' },
+});
+app.use(globalLimiter);
 
 // Route Webhook ต้องเก็บ Raw Body ไว้คำนวณ HMAC ก่อน Parse JSON เสมอ
 // (ดู docs/SECURITY.md § 4) จึงแยก JSON Parser เฉพาะ Route นี้ออกจาก Route อื่น

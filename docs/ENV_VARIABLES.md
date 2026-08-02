@@ -53,9 +53,22 @@ cp .env.example .env
 
 | Variable | จำเป็น | คำอธิบาย |
 |---|---|---|
-| `APP_URL` | ✅ | URL หลักของ Web Application เช่น `https://easydca.app` หรือ `http://localhost:3000` ใช้สำหรับสร้าง Redirect URL และ CORS |
+| `APP_URL` | ✅ | URL หลักของ Web Application เช่น `https://easydca.app` หรือ `http://localhost:3000` ใช้สำหรับสร้าง Redirect URL |
+| `FRONTEND_URL` | ✅ | URL ของ React App (เช่น `https://easydca-production-fcd3.up.railway.app`) ใช้ 2 อย่าง: (1) จำกัด **CORS Origin** และ (2) ประกอบลิงก์เปิด External Browser ในข้อความ LINE (`externalUrl.util.js`) |
 | `NODE_ENV` | ✅ | Environment ปัจจุบัน ค่าที่ใช้ได้: `development`, `staging`, `production` |
 | `PORT` | ❌ | Port ที่ Server รันอยู่ (Default: `3000`) |
+
+> ### ⚠️ `FRONTEND_URL` — Fail-fast ตั้งแต่ Boot (ไม่มี Fallback แล้ว)
+>
+> เดิม `src/index.js` Fallback CORS Origin เป็น `'*'` ถ้าไม่ได้ตั้งค่าตัวนี้ (ค่าชั่วคราว
+> สมัยยังไม่รู้ URL ของ React App ตอน Deploy ครั้งแรก) — **ถอดออกแล้ว** เพราะถ้า
+> Variable หายไปเงียบๆ (สะกดผิด / ลืม Copy ตอนสร้าง Environment ใหม่) ระบบจะเปิดให้
+> ทุก Origin เรียก API ได้โดยไม่มีสัญญาณเตือนเลย ตอนนี้ Web Service จะ **Throw
+> ตั้งแต่ Boot** แทน (เห็นทันทีใน Deploy Log ไม่ต้องรอให้มีคนมาโจมตี)
+>
+> ⚠️ **Local Dev:** ต้องเพิ่ม `FRONTEND_URL` ลง `backend/.env` ด้วย มิฉะนั้น
+> `npm run dev` จะไม่ Boot (ดู `.env.example`) — ส่วน `npm run worker` (Cron)
+> **ไม่ได้รับผลกระทบ** เพราะไม่ได้เปิด HTTP Server จึงไม่ต้องใช้ค่านี้
 
 ---
 
@@ -68,6 +81,7 @@ cp .env.example .env
 | `PREMIUM_PRICE_MONTHLY` | ❌ | ราคารายเดือน (Default: `59`) |
 | `PREMIUM_PRICE_YEARLY` | ❌ | ราคารายปี (Default: `590`) |
 | `PREMIUM_FREE_TRIAL_ENABLED` | ❌ | **แคมเปญชั่วคราว** — เปิดให้ผู้ใช้กดรับ Premium ฟรี 1 เดือนเองได้ (ครั้งเดียวตลอดชีพต่อบัญชี) ค่าที่เปิดคือ `true` **ตรงๆ เท่านั้น** (Default: ปิด) |
+| `FACEBOOK_LIKE_GRANT_ENABLED` | ❌ | **แคมเปญชั่วคราว** — เปิดให้ผู้ใช้ขอ Premium ฟรี 1 เดือนแลกกับการกด Like Facebook Page (ส่ง Screenshot → Admin ตรวจมือ → อนุมัติ) ค่าที่เปิดคือ `true` **ตรงๆ เท่านั้น** (Default: ปิด) |
 
 > ### ⚠️ `PREMIUM_FREE_TRIAL_ENABLED` — Fail-closed โดยเจตนา
 >
@@ -83,6 +97,28 @@ cp .env.example .env
 > ผลกระทบต่อ `/admin/stats`: **ไม่กระทบ `totalRevenue`/`revenueThisMonth`**
 > (Free Trial ไม่สร้างแถวใน `payments`) แต่ `premiumUsers` จะเพิ่มตามจริง —
 > ระหว่างแคมเปญ ตัวเลข Premium ≠ จำนวนลูกค้าที่จ่ายเงิน
+
+> ### ⚠️ `FACEBOOK_LIKE_GRANT_ENABLED` — Fail-closed เหมือนกันทุกประการ
+>
+> ต้องเป็นสตริง `true` เป๊ะๆ ถึงจะเปิด — ไม่ตั้งค่า / สะกดผิด / ค่าว่าง = **ปิด**
+> (เหตุผลเดียวกับ `PREMIUM_FREE_TRIAL_ENABLED` ด้านบน)
+>
+> **Flag แยกจากกันโดยเจตนา** — เป็นคนละแคมเปญที่เปิด/ปิดคนละเวลากันได้ (เช่นปิด
+> Facebook Like แต่เปิด Free Trial ธรรมดาไว้) ถ้าใช้ Flag เดียวกันจะบังคับให้ทั้งสอง
+> แคมเปญมีชะตากรรมเดียวกันตลอดไป
+>
+> **กันได้ฟรี 2 เดือน:** ผู้ใช้ 1 คนรับได้แค่แคมเปญเดียวเท่านั้น — `facebookLikeGrant`
+> เช็ค `users.free_trial_claimed_at` และ `freeTrial` เช็ค `premium_grant_logs` ที่
+> แคมเปญนี้เขียนลงไป (Guard ทำงานทั้งสองทิศ) แม้เปิด Flag ทั้งคู่พร้อมกันก็ตาม
+>
+> **วิธีปิดแคมเปญบน Production:** Railway → Variables → ตั้ง
+> `FACEBOOK_LIKE_GRANT_ENABLED=false` (ไม่ต้อง `git push` / ไม่ต้อง Build ใหม่) —
+> ผู้ใช้ที่ได้รับอนุมัติไปแล้วยังใช้ Premium จนครบกำหนดตามปกติ ส่วนคำขอที่ยังค้าง
+> `pending` อยู่จะ **อนุมัติไม่ได้อีก** (`approveRequest` เช็ค Flag ซ้ำตอน Admin กด)
+> ควรเคลียร์คำขอค้างให้หมดก่อนปิด Flag
+>
+> ผลกระทบต่อ `/admin/stats`: **ไม่กระทบ `totalRevenue`/`revenueThisMonth`**
+> (ไม่สร้างแถวใน `payments`) แต่ `premiumUsers` เพิ่มตามจริง — เหมือน Free Trial
 
 ---
 

@@ -210,6 +210,30 @@ async function uploadFacebookLikeScreenshot(req, res) {
   }
 }
 
+// ── ตรวจว่า screenshotPath เป็น "ไฟล์ของผู้ใช้คนนี้จริง" แบบเข้มงวด ──────────────
+// ต้อง Match ทั้งเส้นเท่านั้น: "{userId}-{timestamp≥10หลัก}.{jpg|png|webp|gif}"
+// ซึ่งเป็นรูปแบบเดียวที่ uploadFacebookLikeProof สร้างขึ้น (storage.service.js)
+//
+// ⚠️ เดิมเช็คแค่ startsWith(`${userId}-`) ซึ่ง "ไม่พอ" — ปล่อยให้ส่วนท้ายเป็นอะไรก็ได้
+// รวมถึง Path Traversal เช่น "{userId}-../../../reports/{เหยื่อ}.pdf" ซึ่งผ่าน Guard เดิม
+// แล้วถูกเก็บดิบลง DB → ตอน Admin เปิดหน้า /admin ระบบเอา path ไปต่อเป็น URL ให้
+// createSignedUrl ซึ่ง WHATWG URL "ยุบ .. ให้อัตโนมัติ" ทำให้ Signed URL หลุดออกจากถัง
+// facebook-like-proofs ไปชี้ถังอื่นได้จริง (ยืนยันแล้วว่าไปโผล่ถัง reports ที่เก็บรายงาน
+// การเงินของผู้ใช้คนอื่น) — Regex ที่ Anchor ทั้งสองด้านตัดทางนี้ทิ้งทั้งหมด
+//
+// Pattern เดียวกับ storage.buildTransactionSlipPath ที่ Sanitize token ด้วย Regex
+// เข้มอยู่แล้ว (จุดนั้นกันปัญหาชุดเดียวกันมาก่อน) — ไม่ประกอบ Regex จาก userId แบบ
+// Dynamic (กัน Regex Injection ถ้าวันหนึ่ง id ไม่ใช่ UUID) แต่แยกส่วนแล้วเทียบตรงๆ แทน
+const PROOF_TOKEN_PATTERN = /^\d{10,}\.(jpg|png|webp|gif)$/;
+
+function isOwnedProofPath(userId, screenshotPath) {
+  if (typeof screenshotPath !== 'string' || !userId) return false;
+  const prefix = `${userId}-`;
+  if (!screenshotPath.startsWith(prefix)) return false;
+  // JS: '$' Anchor ที่ปลายสตริงจริง (ไม่ยอมให้มี \n ต่อท้ายแบบ Python) จึงไม่ต้องกันเพิ่ม
+  return PROOF_TOKEN_PATTERN.test(screenshotPath.slice(prefix.length));
+}
+
 // POST /api/v1/support/facebook-like — Body: { screenshotPath, message? }
 // สร้างคำขอจริง (status='pending') แล้ว Push แจ้ง Admin ทุกคน
 //
@@ -221,7 +245,7 @@ async function submitFacebookLikeRequest(req, res) {
     // ถ้าไม่ตรวจจะแนบรูปของคนอื่น (ที่เดาชื่อไฟล์ได้) มาเป็นหลักฐานของตัวเองได้
     // ชื่อไฟล์ถูกกำหนดเป็น "{userId}-{timestamp}.{ext}" เสมอ (uploadFacebookLikeProof)
     const screenshotPath = req.body?.screenshotPath;
-    if (typeof screenshotPath !== 'string' || !screenshotPath.startsWith(`${req.user.id}-`)) {
+    if (!isOwnedProofPath(req.user.id, screenshotPath)) {
       return res.status(400).json({
         error: 'SCREENSHOT_REQUIRED',
         message: FB_LIKE_MESSAGES.SCREENSHOT_REQUIRED,
@@ -288,4 +312,6 @@ module.exports = {
   getFacebookLikeStatus,
   uploadFacebookLikeScreenshot,
   submitFacebookLikeRequest,
+  // Export ให้ Unit Test เรียกตรงได้ (Pure Function — ไม่ต้อง Mock req/res ทั้งก้อน)
+  isOwnedProofPath,
 };
