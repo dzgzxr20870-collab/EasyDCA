@@ -49,7 +49,12 @@ function roundToEight(value) {
 //
 // อาจ throw: ASSET_NOT_FOUND / NO_HOLDING_TO_CALCULATE_PROFIT /
 //            PRICE_FEED_NOT_IMPLEMENTED
-async function getAssetProfit(userId, symbol, portfolioId = null) {
+//
+// priceOptions (Optional) — ส่งต่อให้ priceFeedService.getCurrentPrice/getCurrentPriceUsd
+// ตรงๆ เฉพาะ { allowRetry: true } ที่ portfolioSnapshot.job.js (Cron เที่ยงคืน) ส่งมา
+// เพื่อให้ Twelve Data Throttle/Retry ทำงาน — Caller อื่น (Dashboard /profit, คำสั่ง
+// "กำไร" ทาง LINE) เป็น Live Path ไม่ส่ง จึง Default {} = Fail Fast เหมือนเดิมทุกประการ
+async function getAssetProfit(userId, symbol, portfolioId = null, priceOptions = {}) {
   const asset = await assetRepository.findByUserAndSymbol(userId, symbol, portfolioId);
   if (!asset) {
     throw new ProfitServiceError('ASSET_NOT_FOUND', `Asset ${symbol} not found for this user`, {
@@ -123,7 +128,7 @@ async function getAssetProfit(userId, symbol, portfolioId = null) {
     // ต้นทุน (USD) กับมูลค่าปัจจุบัน (USD) อยู่สกุลเดียวกัน คำนวณกำไรได้ถูกต้อง
     // ส่ง asset.type (จาก DB) เข้าไปด้วย — Asset ที่ Registry ยังไม่รู้จัก (สร้างผ่าน
     // Manual Quantity Fallback) จะยัง Route ไป Twelve Data ได้ถูกต้อง
-    currentPrice = await priceFeedService.getCurrentPriceUsd(symbol, asset.type);
+    currentPrice = await priceFeedService.getCurrentPriceUsd(symbol, asset.type, priceOptions);
     if (currentPrice === null) {
       throw new ProfitServiceError(
         'PRICE_FEED_NOT_IMPLEMENTED',
@@ -132,7 +137,7 @@ async function getAssetProfit(userId, symbol, portfolioId = null) {
       );
     }
   } else {
-    currentPrice = await priceFeedService.getCurrentPrice(symbol, asset.type);
+    currentPrice = await priceFeedService.getCurrentPrice(symbol, asset.type, priceOptions);
     if (currentPrice === null) {
       // Symbol ไม่รองรับ Price Feed (เช่นหุ้น) หรือ CoinGecko ล้มเหลว/Timeout —
       // ใช้ Error Code เดิมที่มีอยู่แล้ว ไม่สร้างใหม่ซ้ำซ้อน

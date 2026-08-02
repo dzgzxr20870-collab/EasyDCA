@@ -55,7 +55,11 @@ describe('runWeeklySummaryPush', () => {
 
     await runWeeklySummaryPush();
 
-    expect(portfolioSummaryService.buildSummaryForUser).toHaveBeenCalledWith('user-1', 'weekly');
+    // allowRetry:true — Cron นี้ไม่ Sensitive เรื่อง Latency ให้ Twelve Data Throttle/
+    // Retry ทำงานได้ (ดู priceFeed.service.js Rate Limiter)
+    expect(portfolioSummaryService.buildSummaryForUser).toHaveBeenCalledWith('user-1', 'weekly', {
+      allowRetry: true,
+    });
     expect(lineService.pushMessage).toHaveBeenCalledTimes(1);
     expect(lineService.pushMessage).toHaveBeenCalledWith('U123', expect.any(Object));
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('pushed 1/1'));
@@ -136,7 +140,9 @@ describe('runMonthlySummaryPush', () => {
 
     await runMonthlySummaryPush();
 
-    expect(portfolioSummaryService.buildSummaryForUser).toHaveBeenCalledWith('user-1', 'monthly');
+    expect(portfolioSummaryService.buildSummaryForUser).toHaveBeenCalledWith('user-1', 'monthly', {
+      allowRetry: true,
+    });
     expect(lineService.pushMessage).toHaveBeenCalledTimes(1);
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('pushed 1/1'));
   });

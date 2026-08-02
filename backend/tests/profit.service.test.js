@@ -73,7 +73,7 @@ describe('getAssetProfit — คำนวณกำไร/ขาดทุน', ()
     const result = await getAssetProfit(USER_ID, 'BTC');
 
     // ส่ง asset.type ('crypto') เข้าไปด้วย — Dynamic Symbol Resolution
-    expect(priceFeedService.getCurrentPrice).toHaveBeenCalledWith('BTC', 'crypto');
+    expect(priceFeedService.getCurrentPrice).toHaveBeenCalledWith('BTC', 'crypto', {});
     expect(result).toEqual({
       symbol: 'BTC',
       // Multi-Currency (Round 10) — สินทรัพย์ THB: currency='THB', fxThb=null
@@ -100,6 +100,24 @@ describe('getAssetProfit — คำนวณกำไร/ขาดทุน', ()
     expect(fxRateService.getUsdThbRate).not.toHaveBeenCalled();
   });
 
+  // portfolioSnapshot.job.js (Cron เที่ยงคืน) ส่ง { allowRetry: true } เป็น Argument
+  // ที่ 4 เพื่อให้ Twelve Data Throttle/Retry ทำงาน — ต้องส่งต่อถึง priceFeedService
+  // ตรงๆ ไม่ตกหล่นระหว่างทาง (Caller อื่นที่ไม่ส่งมาต้อง Default {} เหมือนเดิม ดู Test
+  // ด้านบน)
+  test('priceOptions (allowRetry) จาก Caller (Cron) ถูกส่งต่อให้ priceFeedService.getCurrentPrice ตรงๆ', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_BTC);
+    transactionRepository.findAllByAsset.mockResolvedValue([
+      { type: 'buy', quantity: 0.01, amountThb: 30000 },
+    ]);
+    priceFeedService.getCurrentPrice.mockResolvedValue(4000000);
+
+    await getAssetProfit(USER_ID, 'BTC', null, { allowRetry: true });
+
+    expect(priceFeedService.getCurrentPrice).toHaveBeenCalledWith('BTC', 'crypto', {
+      allowRetry: true,
+    });
+  });
+
   // ── Multi-Currency (Round 10): สินทรัพย์ USD คิดกำไรในสกุล USD ไม่ปนบาท ─────────
   test('สินทรัพย์ USD → ต้นทุน/กำไรคิดเป็น USD ล้วน (ใช้ getCurrentPriceUsd) + แนบยอดเทียบบาท', async () => {
     assetRepository.findByUserAndSymbol.mockResolvedValue({
@@ -119,7 +137,7 @@ describe('getAssetProfit — คำนวณกำไร/ขาดทุน', ()
 
     // ต้องใช้ราคา USD ไม่ใช่ THB (ไม่ปนสกุล) + ต้องส่ง asset.type เข้าไปด้วย เพื่อให้
     // Asset ที่ symbolRegistry ยังไม่รู้จัก Route ราคาได้ (Dynamic Symbol Resolution)
-    expect(priceFeedService.getCurrentPriceUsd).toHaveBeenCalledWith('MSFT', 'stock_us');
+    expect(priceFeedService.getCurrentPriceUsd).toHaveBeenCalledWith('MSFT', 'stock_us', {});
     expect(priceFeedService.getCurrentPrice).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       symbol: 'MSFT',

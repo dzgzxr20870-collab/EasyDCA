@@ -32,7 +32,11 @@ function roundToTwo(value) {
 // price = null เมื่อดึงราคาไม่ได้ (หุ้นไทยที่ยังไม่มี Feed / API ล่ม / NAV ดึงไม่ได้)
 // โดย "ไม่เดาราคา" ให้เด็ดขาด — Consumer ตัดสินใจเองว่าจะข้าม (นับ excluded) หรือ
 // ตีมูลค่าที่ต้นทุนแทน
-async function priceHoldings(holdings) {
+//
+// priceOptions (Optional) — ส่งต่อให้ priceFeedService.getCurrentPrice/getCurrentPriceUsd
+// ตรงๆ เฉพาะ { allowRetry: true } ที่ portfolioSummary.job.js (Cron รายสัปดาห์/เดือน)
+// ส่งมา — dashboardOverview.service.js (Live Path) ไม่ส่ง จึง Default {} = Fail Fast
+async function priceHoldings(holdings, priceOptions = {}) {
   const priced = [];
 
   for (const holding of holdings) {
@@ -58,9 +62,9 @@ async function priceHoldings(holdings) {
       // ส่ง holding.type (มาจาก assets.type ผ่าน portfolio.service) เข้าไปด้วย เพื่อให้
       // Asset ที่ symbolRegistry ยังไม่รู้จัก (สร้างผ่าน Manual Quantity Fallback)
       // ยัง Route หาราคาได้ถูกต้อง แทนที่จะกลายเป็น priceUnavailable ทั้งที่มี Type อยู่แล้ว
-      price = await priceFeedService.getCurrentPriceUsd(holding.symbol, holding.type);
+      price = await priceFeedService.getCurrentPriceUsd(holding.symbol, holding.type, priceOptions);
     } else {
-      price = await priceFeedService.getCurrentPrice(holding.symbol, holding.type);
+      price = await priceFeedService.getCurrentPrice(holding.symbol, holding.type, priceOptions);
     }
 
     const priceUnavailable = price === null || price === undefined;
@@ -75,7 +79,8 @@ async function priceHoldings(holdings) {
   return priced;
 }
 
-async function buildSummaryForUser(userId, periodLabel) {
+// priceOptions (Optional) — ส่งต่อให้ priceHoldings ตรงๆ ดู Comment ที่ priceHoldings
+async function buildSummaryForUser(userId, periodLabel, priceOptions = {}) {
   const summary = await portfolioService.getPortfolioSummary(userId);
 
   if (summary.isEmpty) return null;
@@ -91,7 +96,8 @@ async function buildSummaryForUser(userId, periodLabel) {
   let excludedCount = 0;
 
   for (const { holding, currency: cur, price, priceUnavailable } of await priceHoldings(
-    summary.holdings
+    summary.holdings,
+    priceOptions
   )) {
     // ไม่มีราคาตลาด (หุ้นไทยที่ยังไม่มี Feed / API ล้มเหลว) → ไม่รวมเข้ายอดคำนวณ
     // กำไร-ขาดทุน แต่นับไว้เพื่อบอก User ว่าตัวเลขนี้ไม่ครบทุก Asset

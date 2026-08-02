@@ -55,6 +55,25 @@ describe('runPortfolioSnapshot', () => {
     expect(portfolioSnapshotRepository.upsertSnapshot).not.toHaveBeenCalled();
   });
 
+  // Root Cause ของ 429 Burst ที่เจอใน Production (Twelve Data Free Tier 8 credit/นาที)
+  // — Cron นี้ต้องส่ง allowRetry:true ให้ profitService.getAssetProfit เพื่อให้
+  // priceFeedService Throttle/Retry ทำงานแทนที่จะทิ้ง Asset ไปเงียบๆ เหมือนเดิม
+  test('ส่ง { allowRetry: true } เป็น Argument ที่ 4 ให้ getAssetProfit เสมอ (Cron ไม่ Sensitive เรื่อง Latency)', async () => {
+    transactionRepository.findAllUserIdsWithTransactions.mockResolvedValue(['u1']);
+    portfolioService.getPortfolioSummary.mockResolvedValue({
+      holdings: [holding('AAPL')],
+      totalInvested: 30000,
+      isEmpty: false,
+    });
+    profitService.getAssetProfit.mockResolvedValue(profit());
+
+    await runPortfolioSnapshot(DATE);
+
+    expect(profitService.getAssetProfit).toHaveBeenCalledWith('u1', 'AAPL', null, {
+      allowRetry: true,
+    });
+  });
+
   test('Holding มีข้อมูล Profit ครบทุกตัว → Snapshot ด้วยค่ารวมถูกต้อง', async () => {
     transactionRepository.findAllUserIdsWithTransactions.mockResolvedValue(['u1']);
     portfolioService.getPortfolioSummary.mockResolvedValue({

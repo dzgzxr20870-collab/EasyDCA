@@ -37,7 +37,12 @@ async function runSummaryPush(periodLabel) {
         continue;
       }
 
-      const summary = await portfolioSummaryService.buildSummaryForUser(user.userId, periodLabel);
+      // allowRetry:true — Cron รายสัปดาห์/เดือนนี้ไม่ Sensitive เรื่อง Latency เหมือน
+      // portfolioSnapshot.job (Root Cause ของ 429 Burst ที่เจอจริง) จึงยอมให้ Twelve
+      // Data Throttle/Retry ทำงานแทนที่จะทิ้ง Asset หุ้นสหรัฐไปเงียบๆ เหมือนเดิม
+      const summary = await portfolioSummaryService.buildSummaryForUser(user.userId, periodLabel, {
+        allowRetry: true,
+      });
 
       // พอร์ตว่าง (ทุก Asset ขายหมด) → ไม่มีอะไรจะสรุป ข้ามไม่ Push
       if (!summary) continue;

@@ -55,7 +55,13 @@ async function runPortfolioSnapshot(snapshotDate = todayInBangkok()) {
 
       for (const holding of summary.holdings) {
         try {
-          const profit = await profitService.getAssetProfit(userId, holding.symbol);
+          // allowRetry:true — Cron เที่ยงคืนนี้เป็น Root Cause ของ 429 Burst ที่เจอใน
+          // Production (ยิงหลาย Symbol หุ้นสหรัฐรัวๆ เกิน 8 Credit/นาทีของ Twelve
+          // Data Free Tier) ไม่ Sensitive เรื่อง Latency จึงยอมรอ Throttle Slot +
+          // Retry เมื่อโดน 429 แทนที่จะทิ้ง Asset นั้นไปเงียบๆ เหมือนเดิม
+          const profit = await profitService.getAssetProfit(userId, holding.symbol, null, {
+            allowRetry: true,
+          });
           totalCurrentValue += profit.currentValue;
           totalProfitLoss += profit.profitLoss;
           hasAny = true;

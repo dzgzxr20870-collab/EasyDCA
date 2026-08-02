@@ -88,6 +88,121 @@ const fxRateCache = new Map();
 // (Entry เดียวกับราคา THB เพื่อยิง CoinGecko ครั้งเดียวได้ทั้งสองสกุล — แก้ Gap 2)
 const usdPriceCache = new Map();
 
+// ── Rate Limiter: Twelve Data Free Tier จำกัด 8 Credit/นาทีจริง (ยืนยันจาก
+// Production Log — Burst 429 เกิดทุกคืนตอน Cron portfolioSnapshot เที่ยงคืนยิงหลาย
+// Symbol รัวๆ ไม่มี Throttle คุมไว้เลย) ทั้ง /quote และ /exchange_rate ใช้ Budget
+// เดียวกัน (Twelve Data นับรวมทุก Endpoint ต่อ API Key) จึงต้องมี Sliding Window
+// เดียวคุมทั้งคู่
+//
+// Sliding Window (ไม่ใช่ Fixed Calendar-Minute แบบฝั่ง Twelve Data) ตั้งใจเข้มกว่า
+// ของจริงเล็กน้อย กัน Burst คร่อมนาที (ยิง 8 ครั้งตอน :59 แล้วยิงอีก 8 ครั้งตอน :00
+// ซึ่ง Fixed-Window ของเขาปล่อยผ่านได้ แต่ Sliding Window ของเรากันไว้)
+const TWELVE_DATA_RATE_LIMIT = 8;
+const TWELVE_DATA_WINDOW_MS = 60 * 1000;
+
+// Retry เฉพาะตอนโดน 429 และ Caller "ยอมรอ" (allowRetry:true) เท่านั้น — สงวนไว้ให้
+// Cron/Background Job (Latency ไม่สำคัญ) ส่วน Path ที่ User รอสด (Dashboard/ซื้อขาย)
+// ไม่ส่ง allowRetry เลย (Default false) จะ Fail Fast เหมือนพฤติกรรมเดิมทุกประการ
+const TWELVE_DATA_MAX_RETRIES = 3;
+const TWELVE_DATA_RETRY_BACKOFF_MS = 15 * 1000; // Linear: 15s → 30s → 45s
+
+let twelveDataTimestamps = []; // Sliding Window ของเวลาที่ "ยิงจริง" แต่ละ Request
+// Serialize เฉพาะ Caller ที่ยอมรอ (allowRetry) กันคำนวณเวลาว่างพร้อมกันแล้วจองซ้อนกัน
+// (Race) — Caller ที่ไม่ยอมรอ (Live) เช็ค/จองแบบ Sync ทันที ไม่ต้องเข้า Queue นี้
+let twelveDataQueueTail = Promise.resolve();
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function pruneTwelveDataWindow(now) {
+  while (twelveDataTimestamps.length && now - twelveDataTimestamps[0] >= TWELVE_DATA_WINDOW_MS) {
+    twelveDataTimestamps.shift();
+  }
+}
+
+function hasTwelveDataSlot(now) {
+  pruneTwelveDataWindow(now);
+  return twelveDataTimestamps.length < TWELVE_DATA_RATE_LIMIT;
+}
+
+// จองที่ตอน "จะยิง" ไม่ใช่ตอน "ยิงสำเร็จ" — Twelve Data นับ Credit ต่อ Request ที่ส่ง
+// ไปจริง ไม่ใช่ต่อ Request ที่สำเร็จ (ยืนยันจาก Production Log: เลข Credit ไต่ขึ้นแม้
+// Request นั้นเองโดน 429) นับผิดจะทำให้ Throttle ของเราหลวมกว่าของจริง
+function reserveTwelveDataSlot() {
+  twelveDataTimestamps.push(Date.now());
+}
+
+// รอจนกว่าจะมี Slot ว่างแล้วจองให้ทันที (Caller ที่ยอมรอ เช่น Cron) — ผ่าน Queue กลาง
+// เดียวกันทั้ง Module กัน 2 Caller เช็ค/จองพร้อมกันแล้วนับซ้อน (Race)
+function waitForTwelveDataSlot() {
+  const task = twelveDataQueueTail.then(async () => {
+    for (;;) {
+      const now = Date.now();
+      if (hasTwelveDataSlot(now)) {
+        reserveTwelveDataSlot();
+        return;
+      }
+      const waitMs = TWELVE_DATA_WINDOW_MS - (now - twelveDataTimestamps[0]) + 50;
+      await sleep(waitMs);
+    }
+  });
+  // กัน 1 Task Error ทำให้ Queue ตัน — Task ถัดไปต้องรันได้ต่อแม้ตัวก่อนหน้าพัง
+  twelveDataQueueTail = task.catch(() => {});
+  return task;
+}
+
+// ประตูเดียวก่อนยิง Twelve Data ทุกครั้ง (ทั้ง /quote และ /exchange_rate):
+//  - allowRetry:true (Cron/Background) → รอจนมี Slot ว่างเสมอ ไม่ทิ้ง Request
+//  - allowRetry:false (Live/Default) → มี Slot ว่างก็ยิงทันที ไม่มีก็คืน false ทันที
+//    (รู้อยู่แล้วว่ายิงไปก็โดน 429 แน่ๆ — คืน null ให้ Caller เร็วกว่าเดิมด้วยซ้ำ แทนที่จะ
+//    เปลือง Round-trip จริงไปโดนปฏิเสธ)
+async function acquireTwelveDataSlot(allowRetry) {
+  if (allowRetry) {
+    await waitForTwelveDataSlot();
+    return true;
+  }
+  if (hasTwelveDataSlot(Date.now())) {
+    reserveTwelveDataSlot();
+    return true;
+  }
+  return false;
+}
+
+// ── Request Coalescing สำหรับหุ้นสหรัฐ (Pattern เดียวกับ cryptoInFlightRequests
+// ด้านบน — ปิด Gap ที่ Comment เดิมเคยระบุไว้ว่ามีแค่ฝั่ง Crypto) กัน 2 Request พร้อม
+// กันของ Symbol/FX เดียวกันยิง Twelve Data ซ้ำตอน Cache หมดอายุพอดี (Dogpile) ซึ่ง
+// เปลืองทั้ง Credit และเสี่ยงชน Rate Limit เร็วขึ้นโดยไม่จำเป็น
+//
+// ⚠️ Options (allowRetry) ของ Request ที่ "มาสมทบทีหลัง" ระหว่างมี In-flight Promise
+// อยู่แล้วจะถูกละเว้น (ใช้ Options ของ Caller คนแรกที่สร้าง Promise) — Edge Case ที่
+// ยอมรับได้เพราะจุดประสงค์ของ Coalescing คือลด Request ซ้ำ ไม่ได้ออกแบบมาให้แยก
+// พฤติกรรมตาม Options ของแต่ละ Caller อยู่แล้ว
+const stockQuoteInFlightRequests = new Map(); // symbol → Promise<number|null>
+const fxRateInFlightRequests = new Map(); // USD_THB_PAIR → Promise<number|null>
+
+function fetchCoalescedUsStockPriceUsd(symbol, apiKey, options) {
+  const inFlight = stockQuoteInFlightRequests.get(symbol);
+  if (inFlight) return inFlight;
+
+  const promise = fetchUsStockPriceUsd(symbol, apiKey, options).finally(() => {
+    stockQuoteInFlightRequests.delete(symbol);
+  });
+  stockQuoteInFlightRequests.set(symbol, promise);
+  return promise;
+}
+
+function fetchCoalescedUsdThbRate(apiKey, options) {
+  const inFlight = fxRateInFlightRequests.get(USD_THB_PAIR);
+  if (inFlight) return inFlight;
+
+  const promise = fetchUsdThbRate(apiKey, options).finally(() => {
+    fxRateInFlightRequests.delete(USD_THB_PAIR);
+  });
+  fxRateInFlightRequests.set(USD_THB_PAIR, promise);
+  return promise;
+}
+
 // ── ทองคำไทย (Phase 3 Round 7) ─────────────────────────────────────────────
 // Community API ที่ Scrape ราคาจากสมาคมค้าทองคำแห่งประเทศไทย (ไม่มี API ทางการ /
 // ไม่ต้อง Auth) — ยิงครั้งเดียวได้ราคาทั้งทองคำแท่งและทองรูปพรรณพร้อมกัน
@@ -257,92 +372,129 @@ async function getCryptoUsdPrice(symbol, coingeckoId) {
 
 // ยิง Twelve Data /quote คืน "ราคาปิดล่าสุดเป็น USD" (Number) — คืน null ถ้า
 // ล้มเหลวทุกกรณี (เช่นเดียวกับ CoinGecko) ไม่ throw
-async function fetchUsStockPriceUsd(symbol, apiKey) {
+//
+// options.allowRetry (Default false): true = ยอมรอ Throttle Slot ว่าง + Retry ด้วย
+// Backoff เมื่อโดน 429 (สำหรับ Cron/Background ที่ไม่ Sensitive เรื่อง Latency) —
+// false (Live/Default) = ไม่รอคิว ไม่ Retry เลย, Throttle เต็มก็คืน null ทันที
+// (ประกันว่า User ไม่ต้องรอนานขึ้นจากที่เป็นอยู่)
+async function fetchUsStockPriceUsd(symbol, apiKey, options = {}) {
+  const { allowRetry = false } = options;
   const url =
     `${TWELVE_DATA_QUOTE_URL}?symbol=${encodeURIComponent(symbol)}&apikey=${encodeURIComponent(apiKey)}`;
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
-  try {
-    const response = await fetch(url, { method: 'GET', signal: controller.signal });
-
-    if (!response.ok) {
-      const detail = await response.text().catch(() => '');
-      console.error(`[priceFeed] Twelve Data quote API failed: ${response.status} ${detail}`);
-      return null;
-    }
-
-    const data = await response.json();
-    // /quote คืน field "close" เป็น String เช่น "185.92" (ราคาปิดล่าสุด) — เมื่อ
-    // Error Twelve Data คืน { status:'error', code, message } (ไม่มี close) ทำให้
-    // Number(undefined) = NaN แล้วถูกกรองด้วยเงื่อนไข Finite ด้านล่าง
-    const priceUsd = Number(data?.close);
-
-    if (!Number.isFinite(priceUsd) || priceUsd <= 0) {
+  for (let attempt = 0; ; attempt += 1) {
+    const acquired = await acquireTwelveDataSlot(allowRetry);
+    if (!acquired) {
       console.error(
-        `[priceFeed] Twelve Data returned no valid close for ${symbol}: ${data?.message ?? ''}`
+        `[priceFeed] Twelve Data throttled (8 credits/min ใช้ครบแล้ว) — ข้าม quote request สำหรับ ${symbol} โดยไม่ยิงจริง (Live Path ไม่รอคิว)`
       );
       return null;
     }
 
-    return priceUsd;
-  } catch (err) {
-    console.error(`[priceFeed] Twelve Data quote request error: ${err.message}`);
-    return null;
-  } finally {
-    clearTimeout(timeout);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(url, { method: 'GET', signal: controller.signal });
+
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        console.error(`[priceFeed] Twelve Data quote API failed: ${response.status} ${detail}`);
+
+        if (response.status === 429 && allowRetry && attempt < TWELVE_DATA_MAX_RETRIES) {
+          await sleep(TWELVE_DATA_RETRY_BACKOFF_MS * (attempt + 1));
+          continue;
+        }
+        return null;
+      }
+
+      const data = await response.json();
+      // /quote คืน field "close" เป็น String เช่น "185.92" (ราคาปิดล่าสุด) — เมื่อ
+      // Error Twelve Data คืน { status:'error', code, message } (ไม่มี close) ทำให้
+      // Number(undefined) = NaN แล้วถูกกรองด้วยเงื่อนไข Finite ด้านล่าง
+      const priceUsd = Number(data?.close);
+
+      if (!Number.isFinite(priceUsd) || priceUsd <= 0) {
+        console.error(
+          `[priceFeed] Twelve Data returned no valid close for ${symbol}: ${data?.message ?? ''}`
+        );
+        return null;
+      }
+
+      return priceUsd;
+    } catch (err) {
+      console.error(`[priceFeed] Twelve Data quote request error: ${err.message}`);
+      return null;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 }
 
 // ยิง Twelve Data /exchange_rate คืน "จำนวน THB ต่อ 1 USD" (Number) — คืน null
-// ถ้าล้มเหลว ไม่ throw
-async function fetchUsdThbRate(apiKey) {
+// ถ้าล้มเหลว ไม่ throw — options.allowRetry ความหมายเดียวกับ fetchUsStockPriceUsd
+async function fetchUsdThbRate(apiKey, options = {}) {
+  const { allowRetry = false } = options;
   const url =
     `${TWELVE_DATA_EXCHANGE_RATE_URL}?symbol=${encodeURIComponent(USD_THB_PAIR)}` +
     `&apikey=${encodeURIComponent(apiKey)}`;
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
-  try {
-    const response = await fetch(url, { method: 'GET', signal: controller.signal });
-
-    if (!response.ok) {
-      const detail = await response.text().catch(() => '');
-      console.error(`[priceFeed] Twelve Data exchange_rate API failed: ${response.status} ${detail}`);
-      return null;
-    }
-
-    const data = await response.json();
-    // /exchange_rate คืน { symbol:'USD/THB', rate: 35.xx, ... } — rate = THB ต่อ 1 USD
-    const rate = Number(data?.rate);
-
-    if (!Number.isFinite(rate) || rate <= 0) {
+  for (let attempt = 0; ; attempt += 1) {
+    const acquired = await acquireTwelveDataSlot(allowRetry);
+    if (!acquired) {
       console.error(
-        `[priceFeed] Twelve Data returned no valid USD/THB rate: ${data?.message ?? ''}`
+        `[priceFeed] Twelve Data throttled (8 credits/min ใช้ครบแล้ว) — ข้าม exchange_rate request โดยไม่ยิงจริง (Live Path ไม่รอคิว)`
       );
       return null;
     }
 
-    return rate;
-  } catch (err) {
-    console.error(`[priceFeed] Twelve Data exchange_rate request error: ${err.message}`);
-    return null;
-  } finally {
-    clearTimeout(timeout);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(url, { method: 'GET', signal: controller.signal });
+
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        console.error(`[priceFeed] Twelve Data exchange_rate API failed: ${response.status} ${detail}`);
+
+        if (response.status === 429 && allowRetry && attempt < TWELVE_DATA_MAX_RETRIES) {
+          await sleep(TWELVE_DATA_RETRY_BACKOFF_MS * (attempt + 1));
+          continue;
+        }
+        return null;
+      }
+
+      const data = await response.json();
+      // /exchange_rate คืน { symbol:'USD/THB', rate: 35.xx, ... } — rate = THB ต่อ 1 USD
+      const rate = Number(data?.rate);
+
+      if (!Number.isFinite(rate) || rate <= 0) {
+        console.error(
+          `[priceFeed] Twelve Data returned no valid USD/THB rate: ${data?.message ?? ''}`
+        );
+        return null;
+      }
+
+      return rate;
+    } catch (err) {
+      console.error(`[priceFeed] Twelve Data exchange_rate request error: ${err.message}`);
+      return null;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 }
 
 // อัตราแลกเปลี่ยน USD/THB พร้อม Cache 10 นาที (ห้าม Cache null — Retry ได้ทันที
 // เหมือน Pattern Crypto)
-async function getUsdThbRate(apiKey) {
+async function getUsdThbRate(apiKey, options = {}) {
   const cached = fxRateCache.get(USD_THB_PAIR);
   if (cached && cached.expiresAt > Date.now()) {
     return cached.rate;
   }
 
-  const rate = await fetchUsdThbRate(apiKey);
+  const rate = await fetchCoalescedUsdThbRate(apiKey, options);
   if (rate === null) return null;
 
   fxRateCache.set(USD_THB_PAIR, { rate, expiresAt: Date.now() + FX_RATE_CACHE_TTL_MS });
@@ -354,20 +506,26 @@ async function getUsdThbRate(apiKey) {
 // fxRateCache เดิม (ไม่เขียน FX Conversion ใหม่) อ่าน TWELVE_DATA_API_KEY จาก env
 // เองแบบเดียวกับ getUsStockPriceThb คืน null ถ้า Key ไม่ได้ตั้ง / ดึง Rate ไม่ได้
 // (Caller ต้องโยน Error ให้ผู้ใช้ ไม่ Fallback เป็นเรตเดา)
-async function getUsdThbFxRate() {
+// options ปกติไม่ถูกส่งมาจาก Caller ใดในโค้ดตอนนี้ (transaction.service เรียกตอน
+// ซื้อ/ขายด้วยจำนวนเงิน USD — เป็น Live Path เสมอ) จึง Default allowRetry:false
+// (Fail Fast) เหมือนเดิมทุกประการ — เก็บ Parameter ไว้เผื่ออนาคตมี Caller แบบ
+// Cron/Background ต้องการอัตรานี้เหมือนกัน
+async function getUsdThbFxRate(options = {}) {
   const apiKey = process.env.TWELVE_DATA_API_KEY;
   if (!apiKey) {
     console.error('[priceFeed] Twelve Data API key (TWELVE_DATA_API_KEY) is not configured');
     return null;
   }
 
-  return getUsdThbRate(apiKey);
+  return getUsdThbRate(apiKey, options);
 }
 
 // ราคาหุ้นสหรัฐเป็น THB = ราคา USD × อัตราแลกเปลี่ยน USD/THB
 // (rate = จำนวน THB ต่อ 1 USD จึงต้อง "คูณ" ไม่ใช่ "หาร") — Cache ราคา THB 60s
 // คืน null ถ้า Key ไม่ได้ตั้ง / ราคา / rate อย่างใดอย่างหนึ่งหาไม่ได้
-async function getUsStockPriceThb(symbol) {
+//
+// options.allowRetry: true เฉพาะ Caller ฝั่ง Cron/Background (ดู getCurrentPrice)
+async function getUsStockPriceThb(symbol, options = {}) {
   // อ่านจาก process.env โดยตรง (config/env.js ก็ Expose ไว้ที่ twelveData.apiKey)
   // เพื่อให้ไฟล์นี้ไม่ต้อง import config/env ที่มี Side Effect validateEnv ตอน require
   const apiKey = process.env.TWELVE_DATA_API_KEY;
@@ -382,10 +540,10 @@ async function getUsStockPriceThb(symbol) {
   }
 
   // ดึงราคาหุ้นก่อน — ถ้าหุ้นหาราคาไม่ได้ ไม่ต้องเปลือง Request ดึง FX ต่อ
-  const priceUsd = await fetchUsStockPriceUsd(symbol, apiKey);
+  const priceUsd = await fetchCoalescedUsStockPriceUsd(symbol, apiKey, options);
   if (priceUsd === null) return null;
 
-  const rate = await getUsdThbRate(apiKey);
+  const rate = await getUsdThbRate(apiKey, options);
   if (rate === null) return null;
 
   const priceThb = priceUsd * rate;
@@ -739,7 +897,7 @@ function resolveAssetType(normalizedSymbol, knownType) {
 // Type ที่ถูกต้องอยู่ในมือแล้ว (Root Cause ของบั๊ก EOSE/OKLO ที่เจอซ้ำ)
 // Registry ยังคงเป็น Fallback (Defense in Depth) เมื่อ knownType ว่าง/ผิดรูป และยังเป็น
 // แหล่งความจริงเดียวของ Path ฝั่ง "เขียน" (Validate Symbol ใหม่) ที่ไม่ได้แตะในงานนี้
-async function getCurrentPrice(symbol, knownType = null) {
+async function getCurrentPrice(symbol, knownType = null, options = {}) {
   if (typeof symbol !== 'string') return null;
   const normalized = symbol.trim().toUpperCase();
 
@@ -747,8 +905,11 @@ async function getCurrentPrice(symbol, knownType = null) {
 
   // หุ้นสหรัฐ (stock_us) → Twelve Data (แปลง USD→THB) — จัดเส้นทางก่อนแล้ว return
   // ไม่แตะ Logic Crypto (CoinGecko) ด้านล่างเลย
+  // options.allowRetry: true เฉพาะ Caller ฝั่ง Cron/Background (Throttle/Retry
+  // ของ Twelve Data ดู priceFeed.service.js ส่วน Rate Limiter) — CoinGecko/ทองคำ
+  // ด้านล่างไม่ใช้ options นี้เลย (Scope งานนี้คือ Twelve Data เท่านั้น)
   if (type === 'stock_us') {
-    return getUsStockPriceThb(normalized);
+    return getUsStockPriceThb(normalized, options);
   }
 
   // ทองคำ → ราคา "รับซื้อคืน" (buy) สำหรับตีมูลค่าพอร์ต/กำไร (Mark-to-market)
@@ -781,7 +942,7 @@ async function getCurrentPrice(symbol, knownType = null) {
 //
 // knownType (Optional) — เหตุผลและลำดับความสำคัญเหมือน getCurrentPrice ด้านบนทุกประการ
 // (assets.type มาก่อน Registry เป็น Fallback) ดูคำอธิบายเต็มที่ resolveAssetType
-async function getCurrentPriceUsd(symbol, knownType = null) {
+async function getCurrentPriceUsd(symbol, knownType = null, options = {}) {
   if (typeof symbol !== 'string') return null;
   const normalized = symbol.trim().toUpperCase();
 
@@ -807,7 +968,7 @@ async function getCurrentPriceUsd(symbol, knownType = null) {
       return null;
     }
 
-    const price = await fetchUsStockPriceUsd(normalized, apiKey);
+    const price = await fetchCoalescedUsStockPriceUsd(normalized, apiKey, options);
 
     // ห้าม Cache null (Retry ทันที เหมือน Pattern อื่น)
     if (price === null) return null;

@@ -586,6 +586,221 @@ describe('getCurrentPrice — หุ้นสหรัฐ (Twelve Data + แป�
   });
 });
 
+// ── Twelve Data Rate Limiter (Throttle 8/นาที) + Retry with Backoff + Coalescing ──
+// เพิ่มหลังพบ 429 Burst จริงใน Production Log (Cron portfolioSnapshot เที่ยงคืนยิงหลาย
+// Symbol รัวๆ เกิน 8 Credit/นาทีของ Twelve Data Free Tier ทุกคืน) — allowRetry:true
+// จำลอง Caller ฝั่ง Cron/Background, Default (ไม่ส่ง options) จำลอง Caller ฝั่ง Live
+describe('Twelve Data — Rate Limiter (Throttle 8 req/นาที)', () => {
+  beforeEach(() => {
+    process.env.TWELVE_DATA_API_KEY = 'test-twelve-key';
+  });
+
+  afterEach(() => {
+    delete process.env.TWELVE_DATA_API_KEY;
+  });
+
+  test('allowRetry:true + 9 Symbol พร้อมกัน → ไม่ยิง Request เกิน 8 ครั้งทันที ที่เหลือรอคิว', async () => {
+    jest.spyOn(global, 'fetch').mockImplementation(() =>
+      Promise.resolve({ ok: true, json: async () => ({ close: '100' }) })
+    );
+
+    const symbols = Array.from({ length: 9 }, (_, i) => `SYM${i}`);
+    const resultPromise = Promise.all(
+      symbols.map((s) => priceFeedService.getCurrentPriceUsd(s, 'stock_us', { allowRetry: true }))
+    );
+
+    // ปล่อยให้ Microtask ทุกตัวที่ "ยิงได้ทันที" (มี Slot ว่าง) วิ่งจนนิ่งก่อน Advance เวลา
+    for (let i = 0; i < 20; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await Promise.resolve();
+    }
+    await jest.advanceTimersByTimeAsync(0);
+
+    const callsBeforeWaiting = global.fetch.mock.calls.length;
+    // เกิน 8 ไม่ได้เด็ดขาด (Rate Limit จริงของ Twelve Data Free Tier)
+    expect(callsBeforeWaiting).toBeLessThanOrEqual(8);
+    // ต้องมีอย่างน้อย 1 ตัวถูกกันไว้รอคิว (พิสูจน์ว่า Throttle ทำงานจริง ไม่ใช่ปล่อยผ่านหมด)
+    expect(callsBeforeWaiting).toBeLessThan(9);
+
+    // เลื่อนเวลาเกิน 1 Window (60s + Buffer ของ waitForTwelveDataSlot) — ตัวที่รอคิว
+    // ต้องยิงจนครบทุก Symbol ในที่สุด
+    await jest.advanceTimersByTimeAsync(61 * 1000);
+    const prices = await resultPromise;
+
+    expect(prices.every((p) => p === 100)).toBe(true);
+    expect(global.fetch).toHaveBeenCalledTimes(9); // ครบทุก Symbol ไม่มีตัวไหนหลุดหาย
+  });
+
+  test('allowRetry:false (Live/Default) + Throttle เต็ม → คืน null ทันทีไม่รอคิว ไม่เปลือง Round-trip จริง', async () => {
+    jest.spyOn(global, 'fetch').mockImplementation(() =>
+      Promise.resolve({ ok: true, json: async () => ({ close: '100' }) })
+    );
+
+    // ยิง 8 ตัวแรกให้ใช้ Budget ครบก่อน (allowRetry:true กันไม่ให้ Test นี้เองพังจาก
+    // Throttle ของ Symbol อื่นที่ยังไม่ได้ยิง)
+    await Promise.all(
+      Array.from({ length: 8 }, (_, i) => `FILL${i}`).map((s) =>
+        priceFeedService.getCurrentPriceUsd(s, 'stock_us', { allowRetry: true })
+      )
+    );
+    expect(global.fetch).toHaveBeenCalledTimes(8);
+
+    // Symbol ที่ 9 (Live, ไม่ส่ง allowRetry) — Budget เต็มพอดี ต้องคืน null ทันที ไม่รอ
+    const price = await priceFeedService.getCurrentPriceUsd('LIVESYM', 'stock_us');
+
+    expect(price).toBeNull();
+    // ต้องไม่ยิง Fetch เพิ่มเลย (รู้อยู่แล้วว่าเกิน Budget จึงไม่เปลือง Round-trip จริง)
+    expect(global.fetch).toHaveBeenCalledTimes(8);
+  });
+});
+
+describe('Twelve Data — Retry with Backoff เมื่อโดน 429', () => {
+  beforeEach(() => {
+    process.env.TWELVE_DATA_API_KEY = 'test-twelve-key';
+  });
+
+  afterEach(() => {
+    delete process.env.TWELVE_DATA_API_KEY;
+  });
+
+  test('allowRetry:true เจอ 429 ครั้งแรก → รอ Backoff แล้ว Retry จนสำเร็จ', async () => {
+    const fetchMock = jest
+      .spyOn(global, 'fetch')
+      .mockResolvedValueOnce({ ok: false, status: 429, text: async () => 'rate limited' })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ close: '123.45' }) });
+
+    const pricePromise = priceFeedService.getCurrentPriceUsd('AAPL', 'stock_us', {
+      allowRetry: true,
+    });
+
+    // Backoff รอบแรก = 15 วินาที
+    await jest.advanceTimersByTimeAsync(15 * 1000);
+    const price = await pricePromise;
+
+    expect(price).toBeCloseTo(123.45, 5);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  test('allowRetry:true โดน 429 ติดต่อกันเกิน Max Retries → คืน null ไม่วนซ้ำไม่รู้จบ', async () => {
+    const fetchMock = jest
+      .spyOn(global, 'fetch')
+      .mockResolvedValue({ ok: false, status: 429, text: async () => 'rate limited' });
+
+    const pricePromise = priceFeedService.getCurrentPriceUsd('AAPL', 'stock_us', {
+      allowRetry: true,
+    });
+
+    // Backoff 3 รอบ (15s + 30s + 45s) แล้วต้องเลิกลองและคืน null
+    await jest.advanceTimersByTimeAsync(15 * 1000);
+    await jest.advanceTimersByTimeAsync(30 * 1000);
+    await jest.advanceTimersByTimeAsync(45 * 1000);
+    const price = await pricePromise;
+
+    expect(price).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(4); // ครั้งแรก + Retry 3 ครั้ง
+  });
+
+  test('allowRetry:false (Live/Default) เจอ 429 → ไม่ Retry คืน null ทันที ไม่ให้ User รอ', async () => {
+    const fetchMock = jest
+      .spyOn(global, 'fetch')
+      .mockResolvedValue({ ok: false, status: 429, text: async () => 'rate limited' });
+
+    const price = await priceFeedService.getCurrentPriceUsd('AAPL', 'stock_us');
+
+    expect(price).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1); // ไม่มี Retry เลย
+  });
+});
+
+describe('Twelve Data — Request Coalescing หุ้นสหรัฐ (Pattern เดียวกับ Crypto)', () => {
+  beforeEach(() => {
+    process.env.TWELVE_DATA_API_KEY = 'test-twelve-key';
+  });
+
+  afterEach(() => {
+    delete process.env.TWELVE_DATA_API_KEY;
+  });
+
+  test('2 Request พร้อมกันของหุ้นตัวเดียวกัน (getCurrentPriceUsd ซ้ำ) → ยิง /quote แค่ 1 ครั้ง (แก้ Dogpile)', async () => {
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ close: '150' }),
+    });
+
+    const [first, second] = await Promise.all([
+      priceFeedService.getCurrentPriceUsd('AAPL', 'stock_us'),
+      priceFeedService.getCurrentPriceUsd('AAPL', 'stock_us'),
+    ]);
+
+    expect(first).toBe(150);
+    expect(second).toBe(150);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('2 Request พร้อมกันของคนละ Symbol (AAPL, MSFT) → ยิงคนละ Request แยกกัน (ไม่ Over-coalesce)', async () => {
+    const fetchMock = jest.spyOn(global, 'fetch').mockImplementation((url) => {
+      if (url.includes('symbol=AAPL')) {
+        return Promise.resolve({ ok: true, json: async () => ({ close: '150' }) });
+      }
+      if (url.includes('symbol=MSFT')) {
+        return Promise.resolve({ ok: true, json: async () => ({ close: '400' }) });
+      }
+      return Promise.resolve({ ok: false, status: 404, text: async () => 'unexpected' });
+    });
+
+    const [aapl, msft] = await Promise.all([
+      priceFeedService.getCurrentPriceUsd('AAPL', 'stock_us'),
+      priceFeedService.getCurrentPriceUsd('MSFT', 'stock_us'),
+    ]);
+
+    expect(aapl).toBe(150);
+    expect(msft).toBe(400);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  test('2 Request พร้อมกันขอ FX Rate เดียวกัน (getCurrentPrice ผ่าน getUsStockPriceThb) → ยิง /exchange_rate แค่ 1 ครั้ง', async () => {
+    const fetchMock = mockTwelveData({ closeUsd: 100, rate: 35 });
+
+    // Symbol ต่างกันแต่ FX Rate (USD/THB) เป็น Key เดียวกันเสมอ — ต้อง Coalesce กัน
+    const [aapl, msft] = await Promise.all([
+      priceFeedService.getCurrentPrice('AAPL'),
+      priceFeedService.getCurrentPrice('MSFT'),
+    ]);
+
+    expect(aapl).toBe(3500);
+    expect(msft).toBe(3500);
+    // 2 Symbol × /quote (2 ครั้ง) + /exchange_rate Coalesce เหลือ 1 ครั้ง = 3 รวม
+    expect(countCalls(fetchMock, '/quote')).toBe(2);
+    expect(countCalls(fetchMock, '/exchange_rate')).toBe(1);
+  });
+});
+
+// ── Regression: Crypto Path (CoinGecko) ต้องไม่ได้รับผลกระทบจาก Throttle/Retry/
+// Coalescing ที่เพิ่มใหม่ (Scope เฉพาะ Twelve Data เท่านั้น) ──────────────────────
+describe('Regression — Crypto (CoinGecko) ไม่ถูกกระทบจากการเพิ่ม Throttle/Retry/Coalescing ของหุ้นสหรัฐ', () => {
+  test('BTC ยังทำงานปกติทุกประการ (1 Fetch, ราคาตรง, ไม่มี Throttle มาเกี่ยวข้อง)', async () => {
+    mockCoinGeckoSuccess('bitcoin', 3400000);
+
+    const price = await priceFeedService.getCurrentPrice('BTC');
+
+    expect(price).toBe(3400000);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  test('Crypto ยิงเกิน 8 Request ในนาทีเดียว (คนละ Symbol) ก็ยังไม่ถูก Throttle เลย (Twelve Data Rate Limiter ไม่แตะ CoinGecko)', async () => {
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ bitcoin: { thb: 3400000 }, ethereum: { thb: 120000 } }),
+    });
+
+    const symbols = ['BTC', 'ETH', 'USDT', 'BNB', 'XRP', 'SOL', 'DOGE', 'ADA'];
+    await Promise.all(symbols.map((s) => priceFeedService.getCurrentPrice(s)));
+
+    // 8 Symbol Crypto ต่างกัน → 8 Fetch ทันที ไม่มีตัวไหนถูกกันไว้รอคิว
+    expect(fetchMock).toHaveBeenCalledTimes(8);
+  });
+});
+
 // ── ทองคำไทย (Phase 3 Round 7) ─────────────────────────────────────────────
 const THAI_GOLD_URL = 'https://api.chnwt.dev/thai-gold-api/latest';
 
