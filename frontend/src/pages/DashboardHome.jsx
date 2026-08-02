@@ -92,6 +92,13 @@ function DashboardHome() {
   const [legacyLoadError, setLegacyLoadError] = useState(null);
   const [legacyActiveTab, setLegacyActiveTab] = useState('portfolio');
 
+  // Scroll-Spy — ไฮไลต์เมนู Sidebar/Bottom-nav ตาม Section ที่กำลังมองเห็นจริง
+  // ('dashboard' | 'dca-plans' | 'legacy-tabs' — ตรงกับ 3 กลุ่ม Section ที่มี Sidebar
+  // Item ชี้มา ไม่รวม #dh-dca เพราะไม่มี Sidebar Item ไหนถือว่ามันเป็น "ปลายทาง" ของ
+  // ตัวเอง (มีแค่ปุ่ม + ตรงกลาง Bottom Nav ที่เป็นปุ่ม Action ไม่ใช่ Nav Destination)
+  // ค่าเริ่มต้น 'dashboard' ตรงกับตำแหน่ง Scroll บนสุดตอนโหลดหน้าเสมอ
+  const [activeSection, setActiveSection] = useState('dashboard');
+
   const showToast = useCallback((message) => {
     setToast(message);
     clearTimeout(toastTimerRef.current);
@@ -185,6 +192,44 @@ function DashboardHome() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Scroll-Spy จริง — คอย Sync activeSection ตอน User Scroll เอง (ไม่ใช่แค่ตอนกด
+  // เมนู) ใช้ IntersectionObserver กับ rootMargin ที่หด Viewport เหลือแถบแคบๆ ใกล้
+  // ขอบบนจอ (แทนดูว่าทั้ง Section โผล่กี่ % ของจอ) เพราะบาง Section (พอร์ตของฉัน/
+  // ประวัติรายการ) สูงกว่าจอมาก ถ้าใช้เกณฑ์ % ของทั้ง Section จะไม่มีทาง Trigger ถูก
+  // จังหวะ — Pattern เดียวกับ TOC Highlight ของเว็บเอกสารทั่วไป
+  //
+  // ไม่ Reset activeSection เมื่อ isIntersecting เป็น false — ตั้งใจให้ค่าค้างไว้จนกว่า
+  // Section ถัดไปจะเข้าแถบแทน (แถบเดียวมีได้แค่ 1 Section ที่ "กำลังผ่าน" ในแต่ละจังหวะ
+  // ทั้ง Scroll ขึ้น/ลง) ต้องรอ ready ก่อนเพราะ Section เหล่านี้ยังไม่ Mount ตอน Loading
+  useEffect(() => {
+    if (!ready) return undefined;
+
+    const sections = [
+      { key: 'dashboard', id: 'dh-dashboard-top' },
+      { key: 'dca-plans', id: 'dh-dca-plans' },
+      { key: 'legacy-tabs', id: 'dh-legacy-tabs' },
+    ]
+      .map(({ key, id }) => ({ key, el: document.getElementById(id) }))
+      .filter(({ el }) => el);
+
+    if (sections.length === 0) return undefined;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const matched = sections.find(({ el }) => el === entry.target);
+          if (matched) setActiveSection(matched.key);
+        }
+      },
+      { rootMargin: '-15% 0px -75% 0px', threshold: 0 }
+    );
+
+    sections.forEach(({ el }) => observer.observe(el));
+
+    return () => observer.disconnect();
+  }, [ready]);
+
   function handleLogout() {
     clearToken();
     navigate('/');
@@ -229,6 +274,9 @@ function DashboardHome() {
   // (Pattern เดียวกับ handleLegacyNavClick — ไม่ Navigate ข้ามหน้า)
   function handleDcaPlansNavClick(e) {
     e.preventDefault();
+    // Optimistic — ตั้งไฮไลต์ทันทีตอนกด ไม่รอ IntersectionObserver ตามทัน (ซึ่งจะ
+    // ล่าช้ากว่านี้เพราะ Scroll แบบ smooth ใช้เวลา + Observer ต้องรอ Section เข้าแถบก่อน)
+    setActiveSection('dca-plans');
     document.getElementById('dh-dca-plans')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
@@ -238,7 +286,19 @@ function DashboardHome() {
   function handleLegacyNavClick(e, tab) {
     e.preventDefault();
     setLegacyActiveTab(tab);
+    // Optimistic — เหตุผลเดียวกับ handleDcaPlansNavClick ด้านบน
+    setActiveSection('legacy-tabs');
     document.getElementById('dh-legacy-tabs')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  // Sidebar/Bottom-nav "แดชบอร์ด"/"หน้าหลัก": เดิมเป็น <Link to="/dashboard"> เฉยๆ —
+  // กดตอนอยู่ที่ /dashboard อยู่แล้วไม่ทำอะไรเลย (Route เดิม) ตอนนี้มี activeSection
+  // จริงแล้ว จึงต้อง Scroll กลับขึ้นบนสุด + คืนไฮไลต์ด้วย ไม่งั้นกด "แดชบอร์ด" จะไม่มี
+  // ทางกลับมาไฮไลต์ Section นี้ได้อีกเลยหลัง Scroll ผ่านไปแล้ว
+  function handleDashboardNavClick(e) {
+    e.preventDefault();
+    setActiveSection('dashboard');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   if (loadError) {
@@ -292,22 +352,33 @@ function DashboardHome() {
                   GET /dashboard/classic ตามด้วย GET / ภายใน 1 วินาที) — เปลี่ยนทุกจุด
                   ที่นำทางข้ามหน้าเป็น <Link to> (Client-side Route, ไม่ Reload)
                   Pattern เดียวกับที่เคยแก้บั๊กนี้ให้ปุ่ม Admin ใน Dashboard.jsx มาก่อน */}
-              <Link className="dh-nav-item dh-nav-active" to="/dashboard">
+              <Link
+                className={`dh-nav-item${activeSection === 'dashboard' ? ' dh-nav-active' : ''}`}
+                to="/dashboard"
+                onClick={handleDashboardNavClick}
+              >
                 <span className="dh-ic">🏠</span> แดชบอร์ด
               </Link>
               {/* S8 R3 รอบ 2: ฟีเจอร์ "พอร์ตของฉัน"/"ประวัติรายการ" ย้ายเข้ามาอยู่ใน
                   หน้าเดียวกันแล้ว (PortfolioDetailSection, #dh-legacy-tabs) — เดิมชี้ไป
                   /dashboard/classic (Cross-route) เปลี่ยนเป็น Anchor + Scroll + สลับแท็บ
-                  ในหน้าเดียวกัน (Pattern เดียวกับ #dh-dca) ไม่ Navigate ข้ามหน้าอีกต่อไป */}
+                  ในหน้าเดียวกัน (Pattern เดียวกับ #dh-dca) ไม่ Navigate ข้ามหน้าอีกต่อไป
+                  ทั้งสอง Item ชี้ Anchor เดียวกัน (#dh-legacy-tabs) ต่างกันแค่ Tab ที่เปิด
+                  จึงต้องเช็ค legacyActiveTab ร่วมด้วยตอนตัดสินว่าอันไหนควรไฮไลต์ —
+                  IntersectionObserver แยกไม่ได้เองเพราะเป็น Section เดียวกันจริงๆ */}
               <a
-                className="dh-nav-item"
+                className={`dh-nav-item${
+                  activeSection === 'legacy-tabs' && legacyActiveTab === 'portfolio' ? ' dh-nav-active' : ''
+                }`}
                 href="#dh-legacy-tabs"
                 onClick={(e) => handleLegacyNavClick(e, 'portfolio')}
               >
                 <span className="dh-ic">💼</span> พอร์ตของฉัน
               </a>
               <a
-                className="dh-nav-item"
+                className={`dh-nav-item${
+                  activeSection === 'legacy-tabs' && legacyActiveTab === 'history' ? ' dh-nav-active' : ''
+                }`}
                 href="#dh-legacy-tabs"
                 onClick={(e) => handleLegacyNavClick(e, 'history')}
               >
@@ -316,7 +387,11 @@ function DashboardHome() {
               {/* S8 R3 รอบ 3: เดิมเป็น Dead Link ชี้ไปตั้งเตือนผ่าน LINE เท่านั้น
                   (dh-nav-disabled) — ตอนนี้มีหน้าจัดการแผนจริงในเว็บแล้ว (#dh-dca-plans)
                   เปลี่ยนเป็น Anchor + Scroll เหมือน Pattern อื่นในไฟล์นี้ */}
-              <a className="dh-nav-item" href="#dh-dca-plans" onClick={handleDcaPlansNavClick}>
+              <a
+                className={`dh-nav-item${activeSection === 'dca-plans' ? ' dh-nav-active' : ''}`}
+                href="#dh-dca-plans"
+                onClick={handleDcaPlansNavClick}
+              >
                 <span className="dh-ic">🔔</span> ตั้งเตือน DCA
               </a>
               <div className="dh-nav-sep" />
@@ -398,7 +473,10 @@ function DashboardHome() {
             </button>
           </div>
 
-          <div className="dh-topbar">
+          {/* id นี้เป็น Marker สำหรับ Scroll-Spy เท่านั้น (ดู useEffect ด้านบน) — ไม่มี
+              Section เดียวที่ครอบคลุมทั้งพื้นที่ "แดชบอร์ด" (กระจายหลาย <section> พี่น้อง
+              กัน) จึงใช้ Element บนสุดนี้เป็นจุดอ้างอิงแทน */}
+          <div className="dh-topbar" id="dh-dashboard-top">
             <div className="dh-hello">
               <h1>
                 สวัสดีครับ <span className="dh-leaf">🌱</span>
@@ -527,22 +605,39 @@ function DashboardHome() {
 
       {/* ════ Bottom Nav — เฉพาะมือถือแนวตั้ง (LIFF — ช่องทางหลัก) ════ */}
       <nav className="dh-bottomnav">
-        <Link className="dh-bn-item dh-bn-active" to="/dashboard">
+        <Link
+          className={`dh-bn-item${activeSection === 'dashboard' ? ' dh-bn-active' : ''}`}
+          to="/dashboard"
+          onClick={handleDashboardNavClick}
+        >
           <span className="dh-bn-i">🏠</span>หน้าหลัก
         </Link>
         {/* S8 R3 รอบ 2 — เดิมชี้ไป /dashboard/classic (Cross-route) เปลี่ยนเป็น
             Anchor + Scroll + สลับแท็บใน PortfolioDetailSection (Pattern เดียวกับ
             #dh-dca ด้านล่าง — ไม่ Navigate ข้ามหน้าอีกต่อไป) */}
-        <a className="dh-bn-item" href="#dh-legacy-tabs" onClick={(e) => handleLegacyNavClick(e, 'portfolio')}>
+        <a
+          className={`dh-bn-item${
+            activeSection === 'legacy-tabs' && legacyActiveTab === 'portfolio' ? ' dh-bn-active' : ''
+          }`}
+          href="#dh-legacy-tabs"
+          onClick={(e) => handleLegacyNavClick(e, 'portfolio')}
+        >
           <span className="dh-bn-i">💼</span>พอร์ต
         </a>
         {/* Anchor ภายในหน้าเดียวกัน (Scroll ไปฟอร์ม ไม่ใช่นำทางข้ามหน้า) — ไม่ใช้ Link
-            ตามที่ระบุไว้ชัดเจนว่าไม่ต้องแก้จุดนี้ */}
+            ตามที่ระบุไว้ชัดเจนว่าไม่ต้องแก้จุดนี้ — ปุ่ม Action ตรงกลาง ไม่ใช่ Nav
+            Destination จึงไม่มี Logic ไฮไลต์ (ไม่มี Sidebar Item ไหนชี้มาที่ #dh-dca ด้วย) */}
         <a className="dh-bn-item dh-bn-rec" href="#dh-dca" onClick={handleBottomNavRecordClick}>
           <span className="dh-bn-btn">＋</span>
           <span className="dh-bn-lbl">บันทึก</span>
         </a>
-        <a className="dh-bn-item" href="#dh-legacy-tabs" onClick={(e) => handleLegacyNavClick(e, 'history')}>
+        <a
+          className={`dh-bn-item${
+            activeSection === 'legacy-tabs' && legacyActiveTab === 'history' ? ' dh-bn-active' : ''
+          }`}
+          href="#dh-legacy-tabs"
+          onClick={(e) => handleLegacyNavClick(e, 'history')}
+        >
           <span className="dh-bn-i">🕐</span>ประวัติ
         </a>
         {/* เดิมผูกกับ handleLogout (บั๊ก: แท็บชื่อ "โปรไฟล์" แต่กด Logout จริง — ดูเหมือน
