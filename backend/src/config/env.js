@@ -126,6 +126,17 @@ module.exports = {
     // วิธีปิดบน Production: Railway → Variables → PREMIUM_FREE_TRIAL_ENABLED=false
     // (Service Restart อัตโนมัติ ~1-2 นาที ไม่ต้อง git push / ไม่ต้อง Build ใหม่)
     freeTrialEnabled: process.env.PREMIUM_FREE_TRIAL_ENABLED === 'true',
+    // ── แคมเปญ Premium ฟรี 1 เดือน แลกกด Like Facebook Page (ชั่วคราว) ──────────
+    // Flag แยกจาก freeTrialEnabled โดยเจตนา: เป็นคนละแคมเปญที่เปิด/ปิดคนละเวลากันได้
+    // (เช่นปิด Free Trial แต่ยังเปิดแคมเปญ Facebook ต่อ) ถ้าใช้ Flag เดียวกันจะบังคับ
+    // ให้ทั้งสองแคมเปญมีชะตากรรมเดียวกันตลอดไป
+    //
+    // ⚠️ Fail-closed เหมือนกัน: ต้องเป็น 'true' ตรงๆ เท่านั้นถึงจะเปิด — ไม่ตั้งค่า /
+    // สะกดผิด / ค่าว่าง = ปิด (แคมเปญแจกของฟรีที่เปิดค้างเพราะพิมพ์ผิดกระทบรายได้
+    // ทางเดียว จึงยอมให้พลาดไปทาง "ปิด")
+    //
+    // วิธีปิดบน Production: Railway → Variables → FACEBOOK_LIKE_GRANT_ENABLED=false
+    facebookLikeGrantEnabled: process.env.FACEBOOK_LIKE_GRANT_ENABLED === 'true',
   },
   // Nightly Backup (Infra ก่อน Beta) — Cloudflare R2 (S3-compatible, ไม่ผูก OAuth)
   // ⚠️ ไม่บังคับใน REQUIRED_ENV_VARS — ถ้าไม่ตั้งค่า dbBackup.job จะ Alert Admin

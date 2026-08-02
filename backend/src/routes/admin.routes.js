@@ -27,4 +27,11 @@ router.post('/broadcast', adminController.broadcast);
 // Update users.plan ตรงๆ (ไม่ผ่าน payments/ไม่นับรายได้) + บันทึก premium_grant_logs
 router.post('/users/:id/grant-premium', adminController.grantPremium);
 
+// แคมเปญ Premium ฟรี (Like Facebook) — Admin ตรวจ Screenshot แล้วอนุมัติ/ปฏิเสธ
+// อนุมัติ = Update users.plan ตรงๆ ผ่าน Atomic Grant (ไม่ผ่าน payments/ไม่นับรายได้)
+// + บันทึก premium_grant_logs เหมือน grant-premium ด้านบน
+router.get('/facebook-like-requests', adminController.listFacebookLikeRequests);
+router.post('/facebook-like-requests/:id/approve', adminController.approveFacebookLikeRequest);
+router.post('/facebook-like-requests/:id/reject', adminController.rejectFacebookLikeRequest);
+
 module.exports = router;

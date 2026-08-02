@@ -21,6 +21,9 @@ function toUser(row) {
     // Self-service Free Trial (migration 029) — NULL = ยังไม่เคยกดรับ Premium ฟรี
     // (สิทธิ์ครั้งเดียวตลอดชีพ ห้าม Reset — ดู freeTrial.service)
     freeTrialClaimedAt: row.free_trial_claimed_at ?? null,
+    // แคมเปญ Like Facebook (migration 031) — NULL = ยังไม่เคยได้สิทธิ์จากแคมเปญนี้
+    // แยกจาก freeTrialClaimedAt เพราะเป็นคนละแคมเปญ (ดู facebookLikeGrant.service)
+    facebookLikeGrantedAt: row.facebook_like_granted_at ?? null,
     // NULL = ยังไม่เคยถูกเตือน "Premium ใกล้หมดอายุ" ในรอบบิลปัจจุบัน (migration 030)
     // ถูก Reset ทุกครั้งที่ updatePlan (ดูเหตุผลในฟังก์ชันนั้น)
     expiryReminderSentAt: row.expiry_reminder_sent_at ?? null,
@@ -242,6 +245,38 @@ async function claimFreeTrial(userId, expiresAt, now = new Date()) {
   return toUser(data);
 }
 
+// ── Atomic Grant: Premium ฟรี 1 เดือน จากแคมเปญ Like Facebook (Admin อนุมัติ) ──
+// หลักการเดียวกับ claimFreeTrial ด้านบนเป๊ะ ต่างกันแค่คอลัมน์ Guard: ให้สิทธิ์
+// (plan + plan_expires_at) กับปั๊มว่าใช้สิทธิ์แล้ว (facebook_like_granted_at) เกิดใน
+// UPDATE Statement เดียวกัน พร้อมเงื่อนไข WHERE facebook_like_granted_at IS NULL
+//
+// ⚠️ ใช้คอลัมน์แยกจาก free_trial_claimed_at โดยเจตนา (migration 031) — คนละแคมเปญกัน
+// การกัน "ได้ทั้งสองแคมเปญ" เป็นหน้าที่ของ Service (checkEligibility) ไม่ใช่คอลัมน์นี้
+//
+// คืน null = "เคยได้สิทธิ์แคมเปญนี้ไปแล้ว/มีคนชิงไปก่อน" ให้ Caller ตอบ ALREADY_GRANTED
+// คืน user = Grant สำเร็จ (สิทธิ์ถูกเขียนลง DB เรียบร้อยแล้วจริง)
+async function grantFacebookLikePremium(userId, expiresAt, now = new Date()) {
+  const { data, error } = await supabaseAdmin
+    .from('users')
+    .update({
+      plan: 'premium',
+      plan_expires_at: expiresAt instanceof Date ? expiresAt.toISOString() : expiresAt,
+      facebook_like_granted_at: now.toISOString(),
+      // รอบบิลใหม่ → เริ่มนับการเตือนใหม่ (เหตุผลเดียวกับ updatePlan/claimFreeTrial)
+      expiry_reminder_sent_at: null,
+    })
+    .eq('id', userId)
+    .is('facebook_like_granted_at', null)
+    .select('*')
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Failed to grant facebook like premium for user ${userId}: ${error.message}`);
+  }
+
+  return toUser(data);
+}
+
 // ── Cron เตือนก่อน Premium หมดอายุ ────────────────────────────────────────────
 // หาคนที่ plan='premium' + วันหมดอายุอยู่ในช่วง (now, cutoff] + ยังไม่เคยเตือนรอบนี้
 //
@@ -285,6 +320,7 @@ module.exports = {
   findExpiredPremiumUsers,
   updatePlan,
   claimFreeTrial,
+  grantFacebookLikePremium,
   findPremiumExpiringBefore,
   markExpiryReminderSent,
   updateDisplayName,

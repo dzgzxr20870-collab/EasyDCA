@@ -4,6 +4,12 @@ const assetRepository = require('../repositories/asset.repository');
 const entitlementService = require('../services/entitlement.service');
 const broadcastService = require('../services/broadcast.service');
 const adminGrantService = require('../services/adminGrant.service');
+const facebookLikeGrantService = require('../services/facebookLikeGrant.service');
+const facebookLikeRequestRepository = require('../repositories/facebookLikeGrantRequest.repository');
+const storageService = require('../services/storage.service');
+const lineService = require('../services/line.service');
+const flexMessage = require('../utils/flexMessage.util');
+const { buildExternalUrl } = require('../utils/externalUrl.util');
 const { bangkokYearMonth } = require('../utils/thaiDate.util');
 
 // สถานะ Payment ที่รับได้เป็น Query Param (ค่าจริงใน DB — "อนุมัติแล้ว" = 'confirmed'
@@ -203,4 +209,155 @@ async function grantPremium(req, res) {
   }
 }
 
-module.exports = { ping, listUsers, listPayments, getStats, broadcast, grantPremium };
+// ═══════════════════════════════════════════════════════════════════════
+// แคมเปญ Premium ฟรี (Like Facebook) — ฝั่ง Admin ตรวจคำขอ
+// ═══════════════════════════════════════════════════════════════════════
+// ⚠️ ไม่ผ่าน payments (ไม่นับเป็นรายได้ใน getStats) — Update users.plan ตรงๆ ผ่าน
+// Atomic Grant + บันทึก premium_grant_logs (ดู facebookLikeGrant.service)
+
+const FB_LIKE_ADMIN_STATUS_BY_CODE = {
+  REQUEST_NOT_FOUND: 404,
+  USER_NOT_FOUND: 404,
+  ALREADY_RESOLVED: 409,
+  ALREADY_GRANTED: 409,
+  ALREADY_USED_FREE_TRIAL: 409,
+  ALREADY_PREMIUM: 409,
+  ALREADY_PAID_BEFORE: 409,
+  ALREADY_GRANTED_BEFORE: 409,
+  ACCOUNT_NOT_ELIGIBLE: 409,
+  FEATURE_DISABLED: 403,
+};
+
+function handleFbLikeAdminError(res, err, context) {
+  if (err instanceof facebookLikeGrantService.FacebookLikeGrantError) {
+    const status = FB_LIKE_ADMIN_STATUS_BY_CODE[err.code];
+    if (status) {
+      return res.status(status).json({ error: err.code });
+    }
+  }
+  console.error(`[admin] ${context} failed: ${err.message}`);
+  return res.status(500).json({ error: 'INTERNAL_ERROR' });
+}
+
+// GET /api/v1/admin/facebook-like-requests?status=pending — รายการคำขอรอตรวจ
+// แนบ Signed URL ของ Screenshot (อายุ 5 นาที) + ชื่อผู้ใช้ ให้ Admin ดูได้ในหน้าเดียว
+async function listFacebookLikeRequests(req, res) {
+  const status = req.query?.status ?? 'pending';
+  if (!['pending', 'approved', 'rejected'].includes(status)) {
+    return res.status(400).json({ error: 'INVALID_STATUS' });
+  }
+
+  try {
+    const requests = await facebookLikeRequestRepository.listByStatus(status);
+
+    // Enrich ทีละใบแบบขนาน: ชื่อผู้ใช้ + Signed URL รูป
+    // Signed URL คืน null ได้ (ไฟล์ถูกลบตาม PDPA Erasure ไปแล้ว/Sign ไม่สำเร็จ) —
+    // หน้า Admin ต้องแสดงรายการต่อได้ แค่ไม่มีรูปให้ดู (ไม่ทำให้ทั้ง Endpoint พัง)
+    const enriched = await Promise.all(
+      requests.map(async (r) => {
+        const [user, screenshotUrl] = await Promise.all([
+          userRepository.findById(r.userId).catch(() => null),
+          storageService.createFacebookLikeProofSignedUrl(r.screenshotPath).catch(() => null),
+        ]);
+        return {
+          id: r.id,
+          userId: r.userId,
+          displayName: user?.displayName ?? null,
+          lineUserId: user?.lineUserId ?? null,
+          message: r.message,
+          status: r.status,
+          screenshotUrl,
+          reviewedBy: r.reviewedBy,
+          reviewedAt: r.reviewedAt,
+          rejectReason: r.rejectReason,
+          createdAt: r.createdAt,
+        };
+      })
+    );
+
+    return res.status(200).json({ requests: enriched });
+  } catch (err) {
+    console.error(`[admin] listFacebookLikeRequests failed: ${err.message}`);
+    return res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+}
+
+// POST /api/v1/admin/facebook-like-requests/:id/approve — อนุมัติ → ให้ Premium 1 เดือน
+async function approveFacebookLikeRequest(req, res) {
+  let result;
+  try {
+    result = await facebookLikeGrantService.approveRequest(req.params.id, req.user.lineUserId);
+  } catch (err) {
+    return handleFbLikeAdminError(res, err, 'approveFacebookLikeRequest');
+  }
+
+  // Push แจ้งผู้ใช้แบบ Best-effort — สิทธิ์ถูกให้แล้วจริง (Source of Truth คือ DB)
+  // ถ้า Push พังห้ามทำให้ Admin เห็น Error ว่าอนุมัติไม่สำเร็จ (Pattern เดียวกับ
+  // approve_payment ใน webhook.controller)
+  try {
+    if (result.user?.lineUserId) {
+      await lineService.pushMessage(
+        result.user.lineUserId,
+        flexMessage.buildFacebookLikeApprovedMessage(
+          result.user.facebookLikeGrantedAt,
+          result.newExpiry,
+          buildExternalUrl('/premium')
+        )
+      );
+    }
+  } catch (pushErr) {
+    console.error(`[admin] approveFacebookLikeRequest: push to user failed: ${pushErr.message}`);
+  }
+
+  return res.status(200).json({
+    status: 'approved',
+    requestId: result.request.id,
+    userId: result.user.id,
+    plan: result.user.plan,
+    planExpiresAt: result.newExpiry.toISOString(),
+  });
+}
+
+// POST /api/v1/admin/facebook-like-requests/:id/reject — Body: { reason? }
+// ไม่แตะ plan/สิทธิ์ของผู้ใช้เลย — ผู้ใช้ส่งคำขอใหม่ได้ทันที
+async function rejectFacebookLikeRequest(req, res) {
+  let result;
+  try {
+    result = await facebookLikeGrantService.rejectRequest(
+      req.params.id,
+      req.user.lineUserId,
+      req.body?.reason ?? null
+    );
+  } catch (err) {
+    return handleFbLikeAdminError(res, err, 'rejectFacebookLikeRequest');
+  }
+
+  try {
+    const owner = await userRepository.findById(result.request.userId);
+    if (owner?.lineUserId) {
+      await lineService.pushMessage(
+        owner.lineUserId,
+        flexMessage.buildFacebookLikeRejectedMessage(
+          result.request.rejectReason,
+          buildExternalUrl('/support')
+        )
+      );
+    }
+  } catch (pushErr) {
+    console.error(`[admin] rejectFacebookLikeRequest: push to user failed: ${pushErr.message}`);
+  }
+
+  return res.status(200).json({ status: 'rejected', requestId: result.request.id });
+}
+
+module.exports = {
+  ping,
+  listUsers,
+  listPayments,
+  getStats,
+  broadcast,
+  grantPremium,
+  listFacebookLikeRequests,
+  approveFacebookLikeRequest,
+  rejectFacebookLikeRequest,
+};

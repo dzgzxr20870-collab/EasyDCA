@@ -107,6 +107,14 @@ function Admin() {
   const [grantError, setGrantError] = useState(null);
   const [grantResult, setGrantResult] = useState(null);
 
+  // ── แคมเปญ Premium ฟรี (Like Facebook) — คำขอรอตรวจ ─────────────────────────
+  // fbRequests = รายการจาก GET /api/v1/admin/facebook-like-requests?status=pending
+  // (แต่ละใบมี screenshotUrl เป็น Signed URL อายุ 5 นาที — Refresh หน้าถ้าหมดอายุ)
+  const [fbRequests, setFbRequests] = useState([]);
+  const [fbBusyId, setFbBusyId] = useState(null);
+  const [fbError, setFbError] = useState(null);
+  const [fbResult, setFbResult] = useState(null);
+
   // ── Route Guard (เหมือน Round 4a ทุกประการ) ──────────────────────────────
   useEffect(() => {
     // ยังไม่ Login → กลับหน้า Login (replace: ไม่ให้กด Back กลับมาหน้านี้ค้าง)
@@ -155,6 +163,18 @@ function Admin() {
     }
 
     loadCore();
+  }, [ready]);
+
+  // โหลดคำขอแคมเปญ Like Facebook ที่รอตรวจ — แยก useEffect/แยก try-catch จาก loadCore
+  // โดยเจตนา: ถ้า Endpoint นี้ล่ม (หรือแคมเปญยังไม่เคยมีคำขอ) ต้องไม่ทำให้ stats/users
+  // ซึ่งเป็นหน้าที่หลักของหน้า Admin โหลดไม่ขึ้นไปด้วย
+  useEffect(() => {
+    if (!ready) return;
+
+    loadFacebookLikeRequests().catch(() => {
+      setFbError('โหลดคำขอ Premium ฟรี (Like Facebook) ไม่สำเร็จ');
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready]);
 
   // โหลด Payment ใหม่ทุกครั้งที่เปลี่ยน Filter (และครั้งแรกหลัง ready) — เรียก
@@ -287,6 +307,65 @@ function Admin() {
     }
   }
 
+  // ── แคมเปญ Premium ฟรี (Like Facebook) ───────────────────────────────────────
+  async function loadFacebookLikeRequests() {
+    const data = await apiGet('/api/v1/admin/facebook-like-requests?status=pending');
+    setFbRequests(data.requests);
+  }
+
+  // อนุมัติ → ผู้ใช้ได้ Premium 1 เดือนทันที (ไม่นับเป็นรายได้) — Confirm ก่อนเสมอ
+  // Pattern เดียวกับ handleGrantPremium ด้านบน + Reload stats ด้วยเพื่อยืนยันว่า
+  // "รายได้ไม่ขยับ แต่ premiumUsers เพิ่ม" ตามที่ตั้งใจ (§ 4.2)
+  async function handleApproveFbLike(r) {
+    const ok = window.confirm(
+      `ยืนยันอนุมัติคำขอของ "${r.displayName ?? r.userId}"?\n` +
+        `• ผู้ใช้จะได้ Premium ฟรี 1 เดือนทันที\n` +
+        `• ไม่นับเป็นรายได้ (ไม่ผ่านระบบชำระเงิน)\n` +
+        `• กรุณาเปิดดู Screenshot ให้แน่ใจก่อนว่ากดไลก์เพจจริง`
+    );
+    if (!ok) return;
+
+    setFbBusyId(r.id);
+    setFbError(null);
+    setFbResult(null);
+    try {
+      const res = await apiPost(`/api/v1/admin/facebook-like-requests/${r.id}/approve`, {});
+      await Promise.all([loadFacebookLikeRequests(), reloadUsersAndStats()]);
+      setFbResult(
+        `✅ อนุมัติให้ "${r.displayName ?? r.userId}" แล้ว (Premium ถึง ${formatDate(res.planExpiresAt)})`
+      );
+    } catch (err) {
+      setFbError(`อนุมัติไม่สำเร็จ: ${err.message}`);
+    } finally {
+      setFbBusyId(null);
+    }
+  }
+
+  // ปฏิเสธ → ไม่แตะสิทธิ์ผู้ใช้เลย และผู้ใช้ส่งคำขอใหม่ได้ทันที (ต้องบอก Admin ให้ชัด
+  // ว่าการปฏิเสธไม่ได้ตัดสิทธิ์ถาวร จะได้ไม่ลังเลที่จะปฏิเสธรูปที่ดูไม่ออก)
+  async function handleRejectFbLike(r) {
+    const reason = window.prompt(
+      `เหตุผลที่ปฏิเสธคำขอของ "${r.displayName ?? r.userId}"?\n` +
+        `(ผู้ใช้จะเห็นข้อความนี้ทาง LINE และส่งคำขอใหม่ได้ทันที — ไม่เสียสิทธิ์)`,
+      'รูปไม่ชัด กรุณาถ่ายให้เห็นว่ากดไลก์เพจแล้ว'
+    );
+    // กด Cancel → null = ยกเลิกการปฏิเสธ (ต่างจากใส่ค่าว่างแล้วกด OK)
+    if (reason === null) return;
+
+    setFbBusyId(r.id);
+    setFbError(null);
+    setFbResult(null);
+    try {
+      await apiPost(`/api/v1/admin/facebook-like-requests/${r.id}/reject`, { reason: reason || null });
+      await loadFacebookLikeRequests();
+      setFbResult(`ปฏิเสธคำขอของ "${r.displayName ?? r.userId}" แล้ว (ผู้ใช้ส่งใหม่ได้)`);
+    } catch (err) {
+      setFbError(`ปฏิเสธไม่สำเร็จ: ${err.message}`);
+    } finally {
+      setFbBusyId(null);
+    }
+  }
+
   if (!ready) {
     return (
       <div className="dashboard-page">
@@ -338,6 +417,89 @@ function Admin() {
             </div>
           </div>
         </div>
+
+        {/* ── คำขอ Premium ฟรี (Like Facebook) รอตรวจ ──────────────────────────
+            วางไว้บนสุดเหนือตาราง User โดยเจตนา: เป็น "งานค้างที่ต้องลงมือทำ" ต่างจาก
+            ตาราง User/Payment ที่เป็นข้อมูลไว้ดู — Admin เปิดหน้านี้แล้วต้องเห็นคิวงาน
+            ก่อน ซ่อนทั้ง Section เมื่อไม่มีคำขอค้าง (ไม่รกหน้าจอตอนไม่มีงาน) */}
+        {(fbRequests.length > 0 || fbError || fbResult) && (
+          <section className="dashboard-section">
+            <h2>🎁 คำขอ Premium ฟรี — Like Facebook ({fbRequests.length} รอตรวจ)</h2>
+
+            {fbError && <p className="dashboard-message error">{fbError}</p>}
+            {fbResult && <p className="dashboard-message">{fbResult}</p>}
+
+            {fbRequests.length === 0 ? (
+              <p className="dashboard-card-sub">ไม่มีคำขอรอตรวจในขณะนี้</p>
+            ) : (
+              <>
+                <p className="dashboard-card-sub" style={{ marginBottom: '0.75rem' }}>
+                  ⚠️ กรุณาเปิดดู Screenshot ทุกใบก่อนอนุมัติ — อนุมัติแล้วผู้ใช้ได้ Premium
+                  1 เดือนทันทีและ<b>ขอซ้ำไม่ได้อีกตลอดไป</b> (ลิงก์รูปหมดอายุใน 5 นาที
+                  รีเฟรชหน้าถ้าเปิดไม่ขึ้น)
+                </p>
+                <div className="dashboard-table-wrap">
+                  <table className="dashboard-table">
+                    <thead>
+                      <tr>
+                        <th>ผู้ใช้</th>
+                        <th>ข้อความ</th>
+                        <th>หลักฐาน</th>
+                        <th>ส่งเมื่อ</th>
+                        <th>จัดการ</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {fbRequests.map((r) => (
+                        <tr key={r.id}>
+                          <td>{r.displayName ?? '–'}</td>
+                          <td style={{ maxWidth: 220, whiteSpace: 'pre-wrap' }}>
+                            {r.message || <span className="dashboard-card-sub">–</span>}
+                          </td>
+                          <td>
+                            {r.screenshotUrl ? (
+                              <a
+                                href={r.screenshotUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="dashboard-chip"
+                              >
+                                🖼️ เปิดดูรูป
+                              </a>
+                            ) : (
+                              <span className="dashboard-card-sub">เปิดรูปไม่ได้</span>
+                            )}
+                          </td>
+                          <td>{formatDate(r.createdAt)}</td>
+                          <td>
+                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                              <button
+                                type="button"
+                                className="dashboard-chip"
+                                onClick={() => handleApproveFbLike(r)}
+                                disabled={fbBusyId === r.id}
+                              >
+                                {fbBusyId === r.id ? 'กำลังดำเนินการ...' : '✅ อนุมัติ'}
+                              </button>
+                              <button
+                                type="button"
+                                className="dashboard-chip"
+                                onClick={() => handleRejectFbLike(r)}
+                                disabled={fbBusyId === r.id}
+                              >
+                                ❌ ปฏิเสธ
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </section>
+        )}
 
         {/* ตาราง User */}
         <section className="dashboard-section">

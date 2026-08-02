@@ -53,6 +53,19 @@ const TRANSACTION_SLIP_BUCKET = 'transaction-slips';
 // ความเสี่ยงให้แคบที่สุดเท่าที่ยังใช้งานได้จริง
 const TRANSACTION_SLIP_SIGNED_URL_TTL_SECONDS = 5 * 60;
 
+// Bucket ส่วนตัวสำหรับ Screenshot หลักฐานการกด Like Facebook (แคมเปญ Premium ฟรี)
+//
+// ⚠️ Private โดยเจตนา (ต่างจาก payment-slips ที่ Public) ด้วยเหตุผลเดียวกับ
+// transaction-slips: Screenshot หน้า Facebook มักติดชื่อจริง รูปโปรไฟล์ และบางครั้ง
+// รายชื่อเพื่อนของผู้ใช้ — เป็น PII ที่ถ้าเป็น Public URL หลุดออกไปครั้งเดียวจะเปิดดูได้
+// ตลอดกาลโดยไม่ต้อง Login (§ 4.3 PDPA) Admin เข้าถึงผ่าน Signed URL อายุสั้นเท่านั้น
+const FACEBOOK_LIKE_PROOF_BUCKET = 'facebook-like-proofs';
+
+// อายุ Signed URL ของ Screenshot = 5 นาที (เท่า transaction-slips) — Admin เปิดดูรูป
+// แล้วตัดสินทันที ไม่ต้องมีเวลาดาวน์โหลดไฟล์ใหญ่เหมือนรายงาน จึงลดหน้าต่างความเสี่ยง
+// ให้แคบที่สุดเท่าที่ยังใช้งานได้จริง
+const FACEBOOK_LIKE_PROOF_SIGNED_URL_TTL_SECONDS = 5 * 60;
+
 const REPORT_EXT = { pdf: 'pdf', excel: 'xlsx' };
 const REPORT_CONTENT_TYPE = {
   pdf: 'application/pdf',
@@ -334,6 +347,111 @@ async function deleteAllTransactionSlipsForUser(userId) {
   return matchedPaths.length;
 }
 
+// ── Screenshot หลักฐาน Like Facebook (แคมเปญ Premium ฟรี) ────────────────────
+// อัปโหลดขึ้น Bucket facebook-like-proofs (Private) คืน path เต็ม
+//
+// ตั้งชื่อ "{userId}-{timestamp}.{ext}" — Pattern เดียวกับ transaction-slips: userId
+// (UUID) เป็นส่วนนำที่ไม่เปลี่ยน ทำให้ (1) กวาดลบตอน PDPA Erasure ด้วย Prefix ได้ปลอดภัย
+// และ (2) ตรวจความเป็นเจ้าของไฟล์จาก path ได้โดยไม่ต้อง Query DB
+//
+// ⚠️ ต่างจาก uploadTransactionSlip ตรงที่ "คืน path เต็ม ไม่ใช่ token" เพราะ path นี้
+// ถูกเก็บลง DB (facebook_like_grant_requests.screenshot_path) ทันทีในคำขอเดียวกัน
+// ไม่ได้ถูกพกผ่าน LINE Postback ที่ Client แก้ค่าได้ จึงไม่มี Attack Surface แบบนั้น
+//
+// ใช้ Guard MIME/ขนาดชุดเดียวกับ uploadPaymentSlip (Reuse ค่าคงที่เดิม ไม่ตั้งใหม่)
+async function uploadFacebookLikeProof(userId, buffer, contentType) {
+  if (!ALLOWED_SLIP_CONTENT_TYPES.includes(contentType)) {
+    throw new StorageServiceError(
+      'INVALID_SLIP_CONTENT_TYPE',
+      `Unsupported content type for facebook like proof: ${contentType}`,
+      { userId, contentType }
+    );
+  }
+
+  if (buffer.length > MAX_SLIP_SIZE_BYTES) {
+    throw new StorageServiceError(
+      'SLIP_TOO_LARGE',
+      `Facebook like proof exceeds max size (${buffer.length} > ${MAX_SLIP_SIZE_BYTES} bytes)`,
+      { userId, size: buffer.length, maxSize: MAX_SLIP_SIZE_BYTES }
+    );
+  }
+
+  const path = `${userId}-${Date.now()}.${extensionFromContentType(contentType)}`;
+
+  const { error } = await supabaseAdmin.storage
+    .from(FACEBOOK_LIKE_PROOF_BUCKET)
+    .upload(path, buffer, { contentType, upsert: false });
+
+  if (error) {
+    throw new Error(`Failed to upload facebook like proof for ${userId}: ${error.message}`);
+  }
+
+  return path;
+}
+
+// สร้าง Signed URL อายุสั้นให้ Admin เปิดดู Screenshot — คืน null ถ้า path ว่าง/Sign
+// ไม่สำเร็จ (ไม่ throw: หน้า Admin ต้องแสดงรายการคำขอได้ต่อแม้เปิดรูปบางใบไม่ได้)
+async function createFacebookLikeProofSignedUrl(path) {
+  if (!path) return null;
+
+  const { data, error } = await supabaseAdmin.storage
+    .from(FACEBOOK_LIKE_PROOF_BUCKET)
+    .createSignedUrl(path, FACEBOOK_LIKE_PROOF_SIGNED_URL_TTL_SECONDS);
+
+  if (error || !data?.signedUrl) {
+    console.error(
+      `[storage] failed to sign facebook like proof ${path}: ${error?.message ?? 'no signedUrl'}`
+    );
+    return null;
+  }
+
+  return data.signedUrl;
+}
+
+// PDPA Erasure (userErasure.service) — ลบ Screenshot ทั้งหมดของ User คนหนึ่งออกจาก
+// Bucket facebook-like-proofs จริง (Hard Delete — เหตุผลเดียวกับ
+// deleteAllTransactionSlipsForUser: รูปคือข้อมูลระบุตัวตนชัดเจนที่สุด และไม่มีประโยชน์
+// เมื่อไม่มี User ระบุตัวตนผูกอยู่แล้ว) — แถวใน facebook_like_grant_requests ยังอยู่ครบ
+// (มีแค่ "ไฟล์รูป" ที่หายไป path ค้างชี้ไปไฟล์ที่ไม่มีแล้ว ซึ่ง Signed URL จะคืน null เอง)
+//
+// ⚠️ List Bucket แล้ว Filter ด้วย Prefix "{userId}-" (ไม่ใช่ Query screenshot_path
+// มาลบทีละ Path) ด้วยเหตุผลเดียวกับ deleteAllTransactionSlipsForUser: ผู้ใช้อาจอัปโหลด
+// รูปแล้วไม่ได้กดส่งคำขอจริง (หรือส่งไม่สำเร็จ) → ไฟล์ค้างในถังโดยไม่มีแถวไหนอ้างถึง
+// การลบจาก screenshot_path อย่างเดียวจะทิ้งไฟล์เหล่านั้นไว้ตลอดกาล = รูรั่ว PDPA
+// คืนจำนวนไฟล์ที่ลบสำเร็จ — ไม่ throw ถ้าไม่มีไฟล์เลย (ผู้ใช้อาจไม่เคยส่งคำขอ)
+async function deleteAllFacebookLikeProofsForUser(userId) {
+  if (!userId) {
+    return 0;
+  }
+
+  const { data: files, error: listError } = await supabaseAdmin.storage
+    .from(FACEBOOK_LIKE_PROOF_BUCKET)
+    .list('', { search: userId });
+
+  if (listError) {
+    throw new Error(`Failed to list facebook like proofs: ${listError.message}`);
+  }
+
+  const prefix = `${userId}-`;
+  const matchedPaths = (files ?? [])
+    .filter((file) => file.name.startsWith(prefix))
+    .map((file) => file.name);
+
+  if (matchedPaths.length === 0) {
+    return 0;
+  }
+
+  const { error: removeError } = await supabaseAdmin.storage
+    .from(FACEBOOK_LIKE_PROOF_BUCKET)
+    .remove(matchedPaths);
+
+  if (removeError) {
+    throw new Error(`Failed to delete facebook like proofs: ${removeError.message}`);
+  }
+
+  return matchedPaths.length;
+}
+
 module.exports = {
   StorageServiceError,
   SLIP_BUCKET,
@@ -341,6 +459,8 @@ module.exports = {
   REPORT_SIGNED_URL_TTL_SECONDS,
   TRANSACTION_SLIP_BUCKET,
   TRANSACTION_SLIP_SIGNED_URL_TTL_SECONDS,
+  FACEBOOK_LIKE_PROOF_BUCKET,
+  FACEBOOK_LIKE_PROOF_SIGNED_URL_TTL_SECONDS,
   MAX_SLIP_SIZE_BYTES,
   uploadPaymentSlip,
   deleteAllSlipsForUser,
@@ -350,4 +470,7 @@ module.exports = {
   createTransactionSlipSignedUrl,
   deleteTransactionSlip,
   deleteAllTransactionSlipsForUser,
+  uploadFacebookLikeProof,
+  createFacebookLikeProofSignedUrl,
+  deleteAllFacebookLikeProofsForUser,
 };

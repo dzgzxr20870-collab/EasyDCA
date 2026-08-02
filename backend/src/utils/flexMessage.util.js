@@ -10,6 +10,10 @@ const COLOR = {
   warning: '#D97706',
   warningBg: '#FEF3C7',
   info: '#2563EB',
+  // คู่พื้นหลังอ่อนของ info — เดิมมีแต่สีเข้ม (info) ที่ใช้กับปุ่ม/ตัวอักษร ยังไม่เคยมี
+  // การ์ดไหนใช้ info เป็นสีหัวการ์ดจึงไม่เคยต้องมี Bg มาก่อน (ตั้งค่าตามชุดเดียวกับ
+  // profitBg/lossBg/warningBg — โทนอ่อนของสีหลักเดียวกัน)
+  infoBg: '#DBEAFE',
   textPrimary: '#1E293B',
   textSecondary: '#64748B',
 };
@@ -1936,6 +1940,161 @@ function buildFreeTrialClaimedMessage(claimedAt, expiresAt, premiumUrl) {
   return message;
 }
 
+// ── Push หา Admin: มีคำขอ Premium ฟรี (Like Facebook) ใหม่รอตรวจ ──────────────
+// จงใจ "ไม่มีปุ่ม Approve/Reject" ในการ์ดนี้ (ต่างจาก buildAdminPaymentRequestMessage
+// ที่มี Postback อนุมัติในตัว) — Admin ต้องเปิดดู Screenshot ก่อนตัดสินเสมอ ซึ่งการ์ด
+// LINE แสดงรูปจาก Private Bucket ไม่ได้ (ต้อง Signed URL ที่หมดอายุใน 5 นาที) จึงส่ง
+// เป็น "แจ้งเตือน + ลิงก์ไปหน้า Admin" แทน กัน Admin เผลอกดอนุมัติโดยไม่ได้ดูรูปจริง
+//
+// adminUrl = null ได้ (ยังไม่ได้ตั้ง FRONTEND_URL) → การ์ดไม่มีปุ่ม แต่ยังแจ้งได้
+function buildAdminFacebookLikeRequestMessage(user, message, timestamp, adminUrl) {
+  const body = [
+    textLine(`ผู้ใช้: ${user.displayName ?? '-'}`, { size: 'sm', color: COLOR.textSecondary }),
+    textLine(`LINE User ID: ${user.lineUserId ?? '-'}`, { size: 'xs', color: COLOR.textSecondary }),
+    textLine(`เวลา: ${formatThaiDateTime(timestamp)}`, { size: 'xs', color: COLOR.textSecondary }),
+    separator(),
+    textLine('เปิดหน้า Admin เพื่อดู Screenshot แล้วกดอนุมัติ/ปฏิเสธ', {
+      size: 'sm',
+      color: COLOR.textPrimary,
+      wrap: true,
+    }),
+  ];
+
+  if (message) {
+    body.push(textLine(`ข้อความจากผู้ใช้: ${message}`, {
+      size: 'xs',
+      color: COLOR.textSecondary,
+      wrap: true,
+    }));
+  }
+
+  const card = bubble({
+    headerText: '👍 คำขอ Premium ฟรี (Like Facebook)',
+    headerColor: COLOR.info,
+    headerBg: COLOR.infoBg,
+    bodyContents: body,
+  });
+
+  if (adminUrl) {
+    card.contents.footer = {
+      type: 'box',
+      layout: 'vertical',
+      contents: [
+        {
+          type: 'button',
+          style: 'primary',
+          color: COLOR.info,
+          action: { type: 'uri', label: '🛠️ ไปหน้า Admin', uri: adminUrl },
+        },
+      ],
+    };
+  }
+
+  return card;
+}
+
+// ── Push หาผู้ใช้: คำขอ Like Facebook ได้รับอนุมัติ → ได้ Premium 1 เดือน ──────────
+// รูปแบบเดียวกับ buildFreeTrialClaimedMessage (แคมเปญพี่น้องกัน) เพื่อให้ผู้ใช้ที่เคย
+// เห็นการ์ดหนึ่งอ่านอีกการ์ดได้ทันทีโดยไม่ต้องเรียนรู้ใหม่
+function buildFacebookLikeApprovedMessage(grantedAt, expiresAt, premiumUrl) {
+  const message = bubble({
+    headerText: '🎉 ได้รับ Premium ฟรี 1 เดือนแล้ว',
+    headerColor: COLOR.profit,
+    headerBg: COLOR.profitBg,
+    bodyContents: [
+      textLine('ขอบคุณที่กดไลก์เพจ EasyDCA! ทีมงานตรวจสอบเรียบร้อยแล้ว', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+        wrap: true,
+      }),
+      textLine(`เริ่มใช้งาน: ${formatDateBangkok(grantedAt)}`, {
+        size: 'sm',
+        color: COLOR.textSecondary,
+      }),
+      textLine(`ใช้งาน Premium ได้ถึง: ${formatDateBangkok(expiresAt)}`, {
+        size: 'md',
+        weight: 'bold',
+        color: COLOR.textPrimary,
+      }),
+      textLine('หากต้องการใช้ต่อหลังหมดอายุ ต่ออายุได้ผ่านเว็บ Dashboard', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+        wrap: true,
+      }),
+    ],
+  });
+
+  if (premiumUrl) {
+    message.contents.footer = {
+      type: 'box',
+      layout: 'vertical',
+      contents: [
+        {
+          type: 'button',
+          style: 'primary',
+          color: COLOR.profit,
+          action: { type: 'uri', label: '👑 ไปที่ Dashboard', uri: premiumUrl },
+        },
+      ],
+    };
+  }
+
+  return message;
+}
+
+// ── Push หาผู้ใช้: คำขอ Like Facebook ไม่ผ่านการตรวจสอบ ────────────────────────
+// ต้องบอกให้ชัดว่า "ส่งใหม่ได้" (Partial Unique Index ครอบเฉพาะ pending — คำขอที่ถูก
+// ปฏิเสธไม่บล็อกการส่งใหม่) มิฉะนั้นผู้ใช้จะเข้าใจว่าเสียสิทธิ์ไปแล้วถาวร
+function buildFacebookLikeRejectedMessage(rejectReason, supportUrl) {
+  const body = [
+    textLine('คำขอ Premium ฟรี (กดไลก์เพจ) ยังไม่ผ่านการตรวจสอบ', {
+      size: 'sm',
+      color: COLOR.textPrimary,
+      wrap: true,
+    }),
+  ];
+
+  if (rejectReason) {
+    body.push(textLine(`เหตุผล: ${rejectReason}`, {
+      size: 'sm',
+      color: COLOR.textSecondary,
+      wrap: true,
+    }));
+  }
+
+  body.push(
+    textLine('แก้ไขแล้วส่งคำขอใหม่ได้ทันทีที่หน้าติดต่อทีมงาน — สิทธิ์ของคุณยังไม่ถูกใช้ไป', {
+      size: 'xs',
+      color: COLOR.textSecondary,
+      wrap: true,
+    })
+  );
+
+  const card = bubble({
+    headerText: '⚠️ คำขอยังไม่ผ่านการตรวจสอบ',
+    headerColor: COLOR.warning,
+    headerBg: COLOR.warningBg,
+    bodyContents: body,
+  });
+
+  if (supportUrl) {
+    card.contents.footer = {
+      type: 'box',
+      layout: 'vertical',
+      contents: [
+        {
+          type: 'button',
+          style: 'primary',
+          color: COLOR.warning,
+          action: { type: 'uri', label: 'ส่งคำขอใหม่', uri: supportUrl },
+        },
+      ],
+    };
+  }
+
+  return card;
+}
+
 // ยอดเงินบาททศนิยม 2 ตำแหน่งเป๊ะเสมอ (เช่น 59.17 / 590.05) — ยอดชำระมีเศษ
 // สตางค์เฉพาะ (satang tag) ที่ต้องโอนให้ตรงทุกหลัก ต่างจาก formatNumber ที่ตัด
 // ศูนย์ท้าย (59.10 → "59.1") ซึ่งอาจทำให้ผู้ใช้โอนยอดผิด
@@ -3312,6 +3471,9 @@ module.exports = {
   buildPaymentApprovedMessage,
   buildPaymentRejectedMessage,
   buildFreeTrialClaimedMessage,
+  buildAdminFacebookLikeRequestMessage,
+  buildFacebookLikeApprovedMessage,
+  buildFacebookLikeRejectedMessage,
   buildPremiumOfferMessage,
   buildPremiumStatusMessage,
   buildPaymentQrMessage,

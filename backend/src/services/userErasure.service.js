@@ -39,6 +39,22 @@ async function eraseUserData(userId, { hadPendingPayment = false } = {}) {
     });
   }
 
+  // Screenshot หลักฐาน Like Facebook (Bucket facebook-like-proofs — แคมเปญ Premium
+  // ฟรี) — Error Isolated ด้วยเหตุผลเดียวกับสลิปธุรกรรมด้านบนทุกประการ
+  // ⚠️ รูปพวกนี้เป็น Screenshot หน้า Facebook ที่มักติดชื่อจริง/รูปโปรไฟล์ของผู้ใช้
+  // จึงต้องถูกลบตามคำขอ Erasure เช่นเดียวกับสลิป (แถวใน facebook_like_grant_requests
+  // ยังอยู่ครบ — screenshot_path จะชี้ไปไฟล์ที่ไม่มีแล้ว ซึ่ง Signed URL คืน null เอง)
+  let deletedFacebookProofCount = 0;
+  try {
+    deletedFacebookProofCount =
+      await storageService.deleteAllFacebookLikeProofsForUser(userId);
+  } catch (err) {
+    logger.error('failed to delete facebook like proofs during erasure', {
+      userId,
+      error: err.message,
+    });
+  }
+
   await userRepository.anonymize(userId);
 
   try {
@@ -55,10 +71,16 @@ async function eraseUserData(userId, { hadPendingPayment = false } = {}) {
     paymentCount: paymentIds.length,
     deletedSlipCount,
     deletedTransactionSlipCount,
+    deletedFacebookProofCount,
     hadPendingPayment,
   });
 
-  return { paymentCount: paymentIds.length, deletedSlipCount, deletedTransactionSlipCount };
+  return {
+    paymentCount: paymentIds.length,
+    deletedSlipCount,
+    deletedTransactionSlipCount,
+    deletedFacebookProofCount,
+  };
 }
 
 module.exports = { eraseUserData };
