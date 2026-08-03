@@ -392,13 +392,16 @@ async function validateBuy(userId, params, options = {}) {
     );
   }
 
-  return { asset: null, assetType: params.type, newAsset: true, amounts };
+  // assetLimit ติดไปกับผลลัพธ์ด้วย (ไม่ใช่แค่ใช้ตรวจแล้วทิ้ง) — processBuyCommand
+  // ต้องใช้ค่าเดียวกันนี้ส่งต่อให้ assetRepository.create() (RPC create_asset_locked
+  // — migration 035) เป็นด่านตัดสินจริงตอน Insert อีกชั้น ไม่คำนวณซ้ำสองที่
+  return { asset: null, assetType: params.type, newAsset: true, amounts, assetLimit };
 }
 
 async function processBuyCommand(userId, params, options = {}) {
   const portfolioId = params.portfolioId ?? null;
 
-  const { asset: existingAsset, assetType, newAsset, amounts } = await validateBuy(
+  const { asset: existingAsset, assetType, newAsset, amounts, assetLimit } = await validateBuy(
     userId,
     params,
     options
@@ -408,16 +411,46 @@ async function processBuyCommand(userId, params, options = {}) {
 
   let asset = existingAsset;
   if (newAsset) {
-    asset = await assetRepository.create(
-      userId,
-      portfolioId,
-      params.symbol,
-      params.name ?? params.symbol,
-      assetType,
-      // กองทุนรวม (Round 7) — เก็บ Class ที่เลือกไว้ถาวรเพื่อ Mark-to-market ตรง Class
-      // (สินทรัพย์อื่น projId/fundClassName = undefined → คอลัมน์เป็น null)
-      { projId: params.projId, fundClassName: params.fundClassName }
-    );
+    try {
+      asset = await assetRepository.create(
+        userId,
+        portfolioId,
+        params.symbol,
+        params.name ?? params.symbol,
+        assetType,
+        // กองทุนรวม (Round 7) — เก็บ Class ที่เลือกไว้ถาวรเพื่อ Mark-to-market ตรง Class
+        // (สินทรัพย์อื่น projId/fundClassName = undefined → คอลัมน์เป็น null)
+        { projId: params.projId, fundClassName: params.fundClassName },
+        assetLimit
+      );
+    } catch (err) {
+      // ── ด่านจริงของ "เกินเพดาน Free Plan" อยู่ที่ DB (migration 035) ───────────
+      // Pre-check ใน validateBuy ด้านบนเป็นแค่ค่าที่ตอบผู้ใช้ได้เร็ว/สวยตอน Preview
+      // แต่ไม่ Atomic — ถ้ามีคำสั่งซื้อ Symbol ใหม่ตัวอื่นแทรกเข้ามาระหว่างที่เราตรวจ
+      // เสร็จแล้วยังไม่ทัน INSERT (Race) RPC จะเป็นคนปฏิเสธแทน ต้องแปลงกลับเป็น
+      // TransactionServiceError ให้ "เหมือนกับที่ Pre-check throw ทุกประการ" — Caller
+      // ทั้งเว็บ (instanceof) และ LINE (err.code) จึงไม่รู้เลยว่าถูกปฏิเสธจากด่านไหน
+      if (err.code === 'ASSET_LIMIT_REACHED') {
+        throw new TransactionServiceError(
+          'ASSET_LIMIT_REACHED',
+          `Free plan is limited to ${assetLimit} active assets`,
+          // details ของ RPC เป็นยอดจริง ณ วินาทีที่ Lock — แม่นกว่าค่าที่ Pre-check
+          // อ่านมาก่อนหน้า (ซึ่งล้าสมัยไปแล้วในเคส Race นี้พอดี)
+          { limit: err.details?.limit ?? assetLimit, current: err.details?.current }
+        );
+      }
+      // Symbol เดียวกันถูกสร้างไปแล้วพอดี (กดซ้ำ/สองแท็บ) — ไม่ใช่เกินเพดาน แต่เป็น
+      // เงื่อนไขคนละแบบที่ผู้ใช้ควรรู้ว่า "รายการนี้อาจถูกบันทึกไปแล้ว" ให้ไปตรวจพอร์ต
+      // แทนที่จะลองซื้อ Symbol เดิมซ้ำ (Code ใหม่ — เพิ่ง Map เป็นข้อความไทยรอบนี้)
+      if (err.code === 'ASSET_ALREADY_EXISTS') {
+        throw new TransactionServiceError(
+          'ASSET_ALREADY_EXISTS',
+          `Asset ${params.symbol} already exists for this user`,
+          { symbol: params.symbol }
+        );
+      }
+      throw err;
+    }
   }
 
   const transaction = await transactionRepository.create({

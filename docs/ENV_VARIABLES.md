@@ -142,6 +142,26 @@ cp .env.example .env
 | Variable | จำเป็น | คำอธิบาย |
 |---|---|---|
 | `TWELVE_DATA_API_KEY` | ❌ | API Key ของ [Twelve Data](https://twelvedata.com) Free Tier สำหรับดึงราคาหุ้นสหรัฐ (`stock_us`) และอัตราแลกเปลี่ยน USD/THB เพื่อแปลงราคาเป็นบาท ถ้าไม่ตั้งค่า ราคาหุ้นสหรัฐจะคืน `null` (ระบบไม่ Crash) |
+| `TWELVE_DATA_RATE_LIMIT` | ❌ | โควตา Rate Limiter ของ Twelve Data (Credit/นาที) สำหรับ **Process นี้เท่านั้น** (Default: `8`) |
+
+> ### ⚠️ `TWELVE_DATA_RATE_LIMIT` — ต้องตั้งแยกราย Service รวมกันไม่เกิน 8
+>
+> Twelve Data Free Tier จำกัด **8 Credit/นาทีต่อ API Key** (ไม่ใช่ต่อ Process) แต่
+> Rate Limiter ของระบบนี้เป็น In-memory ผูกกับ Process เดียว — ระบบรัน 2 Service
+> ที่ใช้ Key เดียวกัน (`EasyDCA` = API, `easydca-worker` = Cron) ถ้าไม่ตั้ง Variable
+> นี้ ทั้งสองฝั่งจะ Default เป็น 8 เท่ากัน รวมกันยิงได้ถึง 16/นาที เกิน Budget จริง
+>
+> **ตั้งค่าจริงบน Railway (บังคับ ก่อนเปิดสาธารณะ):**
+> - `EasyDCA` (Web API — Live Path) → `TWELVE_DATA_RATE_LIMIT=3`
+> - `easydca-worker` (Cron) → `TWELVE_DATA_RATE_LIMIT=5`
+>
+> Worker ได้โควตามากกว่าเพราะเป็นฝั่งที่เคย Burst จริง (Cron `portfolioSnapshot`
+> เที่ยงคืนยิงหลาย Symbol รัวๆ) ส่วน Live มี Cache 60 วินาที + Request Coalescing
+> คุมอยู่แล้วจึงไม่ค่อยยิงพร้อมกันหลาย Symbol ในเวลาเดียวกัน — ตัวเลขนี้ปรับได้ตาม
+> Traffic จริง ตราบใดที่ผลรวมสองฝั่งไม่เกิน 8 เสมอ
+>
+> ไม่ตั้งค่า = Default `8` ทั้งสองฝั่ง (ปลอดภัยสำหรับ Local Dev ที่รันแค่ Process
+> เดียว แต่ **ไม่ปลอดภัยถ้าลืมตั้งบน Production ทั้งสอง Service**)
 
 ---
 

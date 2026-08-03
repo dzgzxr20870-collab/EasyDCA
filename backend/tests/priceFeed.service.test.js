@@ -654,6 +654,69 @@ describe('Twelve Data — Rate Limiter (Throttle 8 req/นาที)', () => {
   });
 });
 
+// Security Audit MEDIUM-4 — ระบบรัน 2 Process (API + Worker) ที่ใช้ Twelve Data API
+// Key เดียวกัน แต่เดิม Rate Limiter เป็น In-memory ผูกกับ Process เดียว แต่ละฝั่งนับ
+// 8/นาทีของตัวเอง รวมกันยิงได้ถึง 16/นาที เกิน Budget จริง — ต้องแบ่งโควตาตายตัวผ่าน
+// Env Var TWELVE_DATA_RATE_LIMIT ได้ (Default ยังเป็น 8 เท่าเดิม — Test กลุ่มบนนี้
+// ทั้งหมดพิสูจน์แล้วว่า Default ไม่เปลี่ยน)
+describe('Twelve Data — Rate Limiter อ่านโควตาจาก config.twelveData.rateLimit', () => {
+  beforeEach(() => {
+    process.env.TWELVE_DATA_API_KEY = 'test-twelve-key';
+  });
+
+  afterEach(() => {
+    delete process.env.TWELVE_DATA_API_KEY;
+    delete process.env.TWELVE_DATA_RATE_LIMIT;
+  });
+
+  test('ตั้ง TWELVE_DATA_RATE_LIMIT=3 (จำลองฝั่ง API หลังแบ่งโควตา) → ยิงได้ทันทีแค่ 3 ไม่ใช่ 8', async () => {
+    process.env.TWELVE_DATA_RATE_LIMIT = '3';
+    // Env Var ถูกอ่านตอน require('config/env') — ต้อง resetModules + re-require
+    // หลังตั้งค่า Env ให้ Module ใหม่เห็นค่านี้ (Pattern เดียวกับ beforeEach ด้านบนไฟล์)
+    jest.resetModules();
+    priceFeedService = require('../src/services/priceFeed.service');
+
+    jest.spyOn(global, 'fetch').mockImplementation(() =>
+      Promise.resolve({ ok: true, json: async () => ({ close: '100' }) })
+    );
+
+    const symbols = Array.from({ length: 5 }, (_, i) => `SYM${i}`);
+    const resultPromise = Promise.all(
+      symbols.map((s) => priceFeedService.getCurrentPriceUsd(s, 'stock_us', { allowRetry: true }))
+    );
+
+    for (let i = 0; i < 20; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await Promise.resolve();
+    }
+    await jest.advanceTimersByTimeAsync(0);
+
+    // ยิงได้ทันทีแค่ 3 (โควตาที่ตั้งใหม่) ไม่ใช่ 8 (Default เดิม)
+    expect(global.fetch.mock.calls.length).toBe(3);
+
+    await jest.advanceTimersByTimeAsync(61 * 1000);
+    await resultPromise;
+    expect(global.fetch).toHaveBeenCalledTimes(5); // ครบทุก Symbol ในที่สุด
+  });
+
+  test('ไม่ตั้ง TWELVE_DATA_RATE_LIMIT (Local Dev/Test ปกติ) → Default ยังเป็น 8 เท่าเดิม', async () => {
+    jest.resetModules();
+    priceFeedService = require('../src/services/priceFeed.service');
+
+    jest.spyOn(global, 'fetch').mockImplementation(() =>
+      Promise.resolve({ ok: true, json: async () => ({ close: '100' }) })
+    );
+
+    await Promise.all(
+      Array.from({ length: 8 }, (_, i) => `FILL${i}`).map((s) =>
+        priceFeedService.getCurrentPriceUsd(s, 'stock_us', { allowRetry: true })
+      )
+    );
+
+    expect(global.fetch).toHaveBeenCalledTimes(8);
+  });
+});
+
 describe('Twelve Data — Retry with Backoff เมื่อโดน 429', () => {
   beforeEach(() => {
     process.env.TWELVE_DATA_API_KEY = 'test-twelve-key';

@@ -83,7 +83,10 @@ describe('processBuyCommand', () => {
       'PTT PCL',
       'stock_th',
       // Round 7 — fundInfo arg (proj_id/fund_class_name = undefined สำหรับสินทรัพย์ที่ไม่ใช่กองทุน)
-      { projId: undefined, fundClassName: undefined }
+      { projId: undefined, fundClassName: undefined },
+      // migration 035 — assetLimit ที่ validateBuy คำนวณไว้แล้วส่งต่อให้ RPC ตัดสินอีกชั้น
+      // (plan: 'free' → FREE_TIER_ASSET_LIMIT = 2)
+      2
     );
     expect(result.newAssetCreated).toBe(true);
   });
@@ -763,7 +766,9 @@ describe('กองทุนรวมไทย (Round 7) — BUY Default รา�
 
     expect(assetRepository.create).toHaveBeenCalledWith(
       USER_ID, null, 'K-SELECT', 'K Select Equity Fund', 'fund',
-      { projId: 'M0001', fundClassName: 'K-SELECT-A(A)' }
+      { projId: 'M0001', fundClassName: 'K-SELECT-A(A)' },
+      // migration 035 — ไม่ส่ง options → plan Default 'free' → assetLimit = 2
+      2
     );
   });
 
@@ -809,7 +814,9 @@ describe('กองทุนรวมไทย (Round 7) — BUY Default รา�
     expect(result.priceSource).toBe('user');
     expect(assetRepository.create).toHaveBeenCalledWith(
       USER_ID, null, 'K-SELECT', 'K Select', 'fund',
-      { projId: 'M0001', fundClassName: 'K-SELECT-A(A)' }
+      { projId: 'M0001', fundClassName: 'K-SELECT-A(A)' },
+      // migration 035 — ไม่ส่ง options → plan Default 'free' → assetLimit = 2
+      2
     );
   });
 

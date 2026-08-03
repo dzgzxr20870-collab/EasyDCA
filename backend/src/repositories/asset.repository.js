@@ -1,5 +1,31 @@
 const { supabaseAdmin } = require('../config/supabase');
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Error ของชั้น Repository สำหรับ "เงื่อนไขทางธุรกิจที่ DB เป็นคนตัดสิน"
+// ═══════════════════════════════════════════════════════════════════════════
+// Pattern เดียวกับ LedgerWriteError ใน transaction.repository.js เป๊ะ (เหตุผล
+// เดียวกัน: transaction.service require ไฟล์นี้อยู่แล้ว การ throw
+// TransactionServiceError ตรงจากที่นี่จะเกิด Circular Dependency) — ชั้น Service
+// เป็นคนแปลงเป็น Error ของโดเมนตัวเองแทน
+class AssetWriteError extends Error {
+  constructor(code, message, details = {}) {
+    super(message);
+    this.name = 'AssetWriteError';
+    this.code = code;
+    this.details = details;
+  }
+}
+
+// แกะ DETAIL ที่ RPC ส่งมาในรูป 'limit=0;current=6' เป็นตัวเลขจริง (Pattern เดียวกับ
+// parseQuantityDetail ใน transaction.repository.js) คืน {} ถ้ารูปแบบไม่ตรง
+function parseLimitDetail(detail) {
+  if (typeof detail !== 'string') return {};
+  const limit = detail.match(/limit=([\d.]+)/);
+  const current = detail.match(/current=([\d.]+)/);
+  if (!limit || !current) return {};
+  return { limit: Number(limit[1]), current: Number(current[1]) };
+}
+
 function toAsset(row) {
   if (!row) return null;
 
@@ -39,29 +65,72 @@ async function findByUserAndSymbol(userId, symbol, portfolioId) {
   return toAsset(data);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ทางเข้า "เดียว" ของการสร้าง Asset ใหม่ทั้งระบบ — ผ่าน RPC ที่ Lock แถว users เสมอ
+// ═══════════════════════════════════════════════════════════════════════════
+// เดิมเป็น .insert() ตรงๆ ซึ่งทำให้การตรวจ "เกินเพดาน Free Plan" ในชั้น Service
+// (validateBuy) เป็น check-then-insert ที่ไม่ Atomic: สองคำสั่งซื้อ Symbol ใหม่
+// คนละตัวที่เข้ามาพร้อมกันจะอ่านจำนวน Asset ปัจจุบันชุดเดียวกัน (Stale Read) แล้ว
+// ผ่านการตรวจทั้งคู่ → ได้ Asset เกินเพดาน 2 ตัวของ Free Plan
+//
+// migration 035 ย้าย [Lock แถว users → นับ Asset Active → Validate เพดาน → INSERT]
+// ไปอยู่ใน Postgres Function เดียว (Pattern เดียวกับ migration 034 ที่ทำกับ
+// transactions/assets แค่เปลี่ยนแถวที่ Lock เป็น users เพราะเพดานนับรวมทั้ง User)
+//
+// assetLimit: null = ไม่จำกัด (Premium ที่ยัง Active) — คำนวณจาก
+// entitlement.getActiveAssetLimit() ในชั้น Service เหมือนเดิม (Single Source of
+// Truth ของเลข "2" ยังอยู่ที่ entitlement.service.js ไม่ Hardcode ซ้ำใน SQL)
+//
+// throw AssetWriteError:
+//   - 'ASSET_LIMIT_REACHED' — เกินเพดาน Free Plan
+//   - 'ASSET_ALREADY_EXISTS' — Symbol เดียวกันถูกสร้างไปแล้ว (ชนกันพอดี/กดซ้ำ —
+//     UNIQUE NULLS NOT DISTINCT กันไว้ที่ระดับ DB, RPC แปลงเป็นข้อความอ่านง่ายให้)
+//   - 'USER_NOT_FOUND' — Defensive เท่านั้น แทบไม่ถึงในทางปฏิบัติ (Foreign Key
+//     บังคับให้ userId ต้องมีอยู่จริงตั้งแต่ Auth แล้ว)
+//
 // fundInfo (Optional) = { projId, fundClassName } สำหรับ Asset ประเภทกองทุนรวม
-// (Round 7) — สินทรัพย์อื่นไม่ส่งมา → เป็น null ตามปกติ (Backward Compatible กับ
-// Caller เดิมที่เรียกด้วย 5 Argument)
-async function create(userId, portfolioId, symbol, name, type, fundInfo = {}) {
-  const { data, error } = await supabaseAdmin
-    .from('assets')
-    .insert({
-      user_id: userId,
-      portfolio_id: portfolioId,
-      symbol,
-      name,
-      type,
-      proj_id: fundInfo.projId ?? null,
-      fund_class_name: fundInfo.fundClassName ?? null,
-    })
-    .select('*')
-    .single();
+// (Round 7) — สินทรัพย์อื่นไม่ส่งมา → เป็น null ตามปกติ
+async function create(userId, portfolioId, symbol, name, type, fundInfo = {}, assetLimit = null) {
+  const { data: rows, error } = await supabaseAdmin.rpc('create_asset_locked', {
+    p_user_id: userId,
+    p_portfolio_id: portfolioId,
+    p_symbol: symbol,
+    p_name: name,
+    p_type: type,
+    p_asset_limit: assetLimit,
+    p_proj_id: fundInfo.projId ?? null,
+    p_fund_class_name: fundInfo.fundClassName ?? null,
+  });
 
   if (error) {
+    // RPC RAISE ด้วย MESSAGE เป็นชื่อ Code ตรงๆ (ดู migration 035) — ทั้งสามเคสนี้
+    // คือ "คำสั่งนี้ทำไม่ได้ตามกติกา" ไม่ใช่ระบบพัง จึงต้องแยกจาก Error ทั่วไป
+    if (error.message === 'ASSET_LIMIT_REACHED') {
+      throw new AssetWriteError(
+        'ASSET_LIMIT_REACHED',
+        `Free plan is limited to ${assetLimit} active assets`,
+        parseLimitDetail(error.details)
+      );
+    }
+    if (error.message === 'ASSET_ALREADY_EXISTS') {
+      throw new AssetWriteError(
+        'ASSET_ALREADY_EXISTS',
+        `Asset ${symbol} already exists for this user`,
+        { userId, symbol }
+      );
+    }
+    if (error.message === 'USER_NOT_FOUND') {
+      throw new AssetWriteError('USER_NOT_FOUND', `User ${userId} not found`, { userId });
+    }
     throw new Error(`Failed to create asset: ${error.message}`);
   }
 
-  return toAsset(data);
+  const row = Array.isArray(rows) ? rows[0] : rows;
+  if (!row) {
+    throw new Error('Failed to create asset: RPC returned no row');
+  }
+
+  return toAsset(row);
 }
 
 async function findActiveByUser(userId) {
@@ -166,6 +235,7 @@ async function countActiveByUser(userId) {
 }
 
 module.exports = {
+  AssetWriteError,
   findByUserAndSymbol,
   create,
   findActiveByUser,

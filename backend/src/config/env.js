@@ -88,6 +88,24 @@ module.exports = {
   // ค่า priceFeed.service จะคืน null สำหรับหุ้นสหรัฐ (Fallback ตามเดิม ไม่ Crash)
   twelveData: {
     apiKey: process.env.TWELVE_DATA_API_KEY || null,
+    // ── โควตา Rate Limiter แยกราย Process (Security Audit — MEDIUM-4) ──────────
+    // Twelve Data Free Tier จำกัด 8 Credit/นาที "ต่อ API Key" (ไม่ใช่ต่อ Process)
+    // แต่ priceFeed.service.js เก็บ Sliding Window เป็น In-memory (ผูกกับ Process
+    // เดียว) — ระบบรัน 2 Service แยก Container ที่ใช้ Key เดียวกัน (`EasyDCA` /
+    // `easydca-worker`) ถ้าไม่แบ่งโควตา แต่ละฝั่งจะนับ 8/นาทีของตัวเอง รวมกันยิงได้
+    // ถึง 16/นาที เกิน Budget จริงของ Twelve Data ได้อยู่ดี
+    //
+    // Default 8 (ค่าเดิมก่อนแบ่งโควตา) เมื่อไม่ได้ตั้งค่า — สำคัญมากสำหรับ Local Dev
+    // (รันแค่ Process เดียว ไม่ต้องแบ่ง) และ Test Suite (Hardcode คาดหวัง 8 อยู่แล้ว
+    // หลายจุดใน priceFeed.service.test.js ถ้า Default เปลี่ยนจะพังทั้งไฟล์)
+    //
+    // ตั้งค่าจริงบน Railway แยกราย Service (รวมกันต้องไม่เกิน 8 เสมอ):
+    //   EasyDCA (API, Live Path)      → TWELVE_DATA_RATE_LIMIT=3
+    //   easydca-worker (Cron)         → TWELVE_DATA_RATE_LIMIT=5
+    // Worker ได้โควตามากกว่าเพราะเป็นฝั่งที่เคย Burst จริง (Cron portfolioSnapshot
+    // เที่ยงคืนยิงหลาย Symbol รัวๆ) ส่วน Live มี Cache 60s + Request Coalescing
+    // คุมอยู่แล้วจึงไม่ค่อยยิง Twelve Data พร้อมกันหลาย Symbol ในเวลาเดียวกัน
+    rateLimit: Number(process.env.TWELVE_DATA_RATE_LIMIT) || 8,
   },
   // SEC Open Data API — Price Feed กองทุนรวมไทย (Round 7)
   // ⚠️ ไม่บังคับใน REQUIRED_ENV_VARS — ถ้าไม่ตั้งค่า priceFeed/mutualFund service จะ

@@ -1,13 +1,14 @@
 // Mock Supabase Client เป็น Query Builder แบบ Chainable — select คืน query เดิม
 // (Fluent) ส่วน eq เป็น Terminal ของ findUserIdsWithActiveAssets จึง Resolve เป็น
-// { data, error } เหมือน PostgREST จริง
+// { data, error } เหมือน PostgREST จริง — rpc แยกเป็น jest.fn() ของตัวเอง เพราะ
+// create() (migration 035) เรียกผ่าน .rpc('create_asset_locked', ...) ไม่ใช่
+// .from('assets').insert() ตรงๆ อีกต่อไป (ดู tests/oversellRace.test.js ที่ใช้
+// Pattern เดียวกันกับ transactionRepository.create)
 jest.mock('../src/config/supabase', () => {
   const query = {};
   query.select = jest.fn(() => query);
   query.eq = jest.fn();
-  query.insert = jest.fn(() => query);
-  query.single = jest.fn();
-  const supabaseAdmin = { from: jest.fn(() => query) };
+  const supabaseAdmin = { from: jest.fn(() => query), rpc: jest.fn() };
   return { supabaseAdmin, __query: query };
 });
 
@@ -18,48 +19,100 @@ beforeEach(() => {
   jest.clearAllMocks();
 });
 
-// migration 014 — assets UNIQUE (user_id, symbol, portfolio_id) เปลี่ยนเป็น
-// NULLS NOT DISTINCT แล้ว: Insert Asset ซ้ำ (user_id+symbol เดิม, portfolio_id
-// เป็น NULL ทั้งคู่) ต้องโดน Reject ด้วย Unique Violation จาก DB ตรงๆ (ก่อนแก้
-// Migration นี้ Insert ซ้ำแบบนี้จะผ่านเงียบๆ เพราะ Postgres ถือ NULL <> NULL)
-describe('create — Unique Violation (migration 014, portfolio_id = NULL)', () => {
-  test('Insert user_id+symbol ซ้ำ (portfolio_id = NULL ทั้งคู่) → throw พร้อมข้อความ Unique Violation จาก DB', async () => {
-    // จำลอง Error ที่ Supabase/Postgres คืนจริงเมื่อชน Unique Constraint (Pattern
-    // เดียวกับ payment.service.test.js — code 23505 + ข้อความ duplicate key)
-    __query.single.mockResolvedValue({
+// migration 035 — create() เรียก RPC create_asset_locked ที่ Lock แถว users ก่อน
+// นับ+Insert ในธุรกรรมเดียว (แก้ Free-tier Asset Limit Race) แทน .insert() ตรงๆ
+// เดิม — ครอบทั้งกรณีสำเร็จ, เกินเพดาน (ASSET_LIMIT_REACHED), และ Symbol ซ้ำที่ชน
+// UNIQUE NULLS NOT DISTINCT ของ migration 014 (ASSET_ALREADY_EXISTS — RPC แปลง
+// 23505 ดิบให้เป็น Message อ่านง่ายแล้วตั้งแต่ชั้น DB)
+describe('create — เรียกผ่าน RPC create_asset_locked (migration 035)', () => {
+  test('สำเร็จตามปกติ → ส่ง Argument ครบ + คืน Asset ที่สร้างแล้ว', async () => {
+    supabaseAdmin.rpc.mockResolvedValue({
+      data: [
+        {
+          id: 'asset-1',
+          user_id: 'user-1',
+          portfolio_id: null,
+          symbol: 'BTC',
+          name: 'Bitcoin',
+          type: 'crypto',
+          proj_id: null,
+          fund_class_name: null,
+          is_active: true,
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+      error: null,
+    });
+
+    const result = await assetRepository.create('user-1', null, 'BTC', 'Bitcoin', 'crypto', {}, 2);
+
+    expect(result.symbol).toBe('BTC');
+    expect(supabaseAdmin.rpc).toHaveBeenCalledWith('create_asset_locked', {
+      p_user_id: 'user-1',
+      p_portfolio_id: null,
+      p_symbol: 'BTC',
+      p_name: 'Bitcoin',
+      p_type: 'crypto',
+      p_asset_limit: 2,
+      p_proj_id: null,
+      p_fund_class_name: null,
+    });
+  });
+
+  test('ไม่ส่ง assetLimit (Premium ที่ยัง Active) → p_asset_limit เป็น null ไม่ใช่ undefined', async () => {
+    supabaseAdmin.rpc.mockResolvedValue({
+      data: [{ id: 'asset-1', symbol: 'BTC', is_active: true }],
+      error: null,
+    });
+
+    await assetRepository.create('user-1', null, 'BTC', 'Bitcoin', 'crypto');
+
+    expect(supabaseAdmin.rpc).toHaveBeenCalledWith(
+      'create_asset_locked',
+      expect.objectContaining({ p_asset_limit: null })
+    );
+  });
+
+  test('เกินเพดาน Free Plan → throw AssetWriteError(ASSET_LIMIT_REACHED) พร้อม details จาก DB', async () => {
+    supabaseAdmin.rpc.mockResolvedValue({
       data: null,
-      error: {
-        message:
-          'duplicate key value violates unique constraint "assets_user_id_symbol_portfolio_id_key"',
-        code: '23505',
-      },
+      error: { message: 'ASSET_LIMIT_REACHED', details: 'limit=2;current=2' },
+    });
+
+    await expect(
+      assetRepository.create('user-1', null, 'ETH', 'Ethereum', 'crypto', {}, 2)
+    ).rejects.toMatchObject({
+      name: 'AssetWriteError',
+      code: 'ASSET_LIMIT_REACHED',
+      details: { limit: 2, current: 2 },
+    });
+  });
+
+  // migration 014 — assets UNIQUE (user_id, symbol, portfolio_id) เปลี่ยนเป็น
+  // NULLS NOT DISTINCT แล้ว ยัง Reject Insert ซ้ำเหมือนเดิมทุกประการ ต่างแค่ตอนนี้
+  // RPC จับ unique_violation แล้วแปลงเป็น Message 'ASSET_ALREADY_EXISTS' ให้แทนที่
+  // จะโผล่เป็น 23505 ดิบ (Security Audit ตามมาจาก migration 034)
+  test('Insert Symbol ซ้ำ (ชนกันพอดี) → throw AssetWriteError(ASSET_ALREADY_EXISTS) ไม่ใช่ Error ดิบ', async () => {
+    supabaseAdmin.rpc.mockResolvedValue({
+      data: null,
+      error: { message: 'ASSET_ALREADY_EXISTS' },
     });
 
     await expect(
       assetRepository.create('user-1', null, 'BTC', 'Bitcoin', 'crypto')
-    ).rejects.toThrow(/duplicate key value violates unique constraint/);
+    ).rejects.toMatchObject({ name: 'AssetWriteError', code: 'ASSET_ALREADY_EXISTS' });
   });
 
-  test('Insert Asset ใหม่ไม่ซ้ำ → สำเร็จตามปกติ (ไม่ Regression)', async () => {
-    __query.single.mockResolvedValue({
-      data: {
-        id: 'asset-1',
-        user_id: 'user-1',
-        portfolio_id: null,
-        symbol: 'BTC',
-        name: 'Bitcoin',
-        type: 'crypto',
-        is_active: true,
-      },
-      error: null,
+  test('Error อื่นของ DB (ไม่ใช่เงื่อนไขธุรกิจ) → โยนต่อเป็น Error ทั่วไปเหมือนเดิม', async () => {
+    supabaseAdmin.rpc.mockResolvedValue({
+      data: null,
+      error: { message: 'connection terminated' },
     });
 
-    const result = await assetRepository.create('user-1', null, 'BTC', 'Bitcoin', 'crypto');
-
-    expect(result.symbol).toBe('BTC');
-    expect(__query.insert).toHaveBeenCalledWith(
-      expect.objectContaining({ user_id: 'user-1', portfolio_id: null, symbol: 'BTC' })
-    );
+    await expect(
+      assetRepository.create('user-1', null, 'BTC', 'Bitcoin', 'crypto')
+    ).rejects.toThrow(/Failed to create asset/);
   });
 });
 

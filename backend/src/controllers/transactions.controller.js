@@ -77,6 +77,10 @@ const WEB_ERROR_MESSAGES = {
   SELL_PRICE_REQUIRED: 'กรุณากรอก "ราคาที่ขายได้ต่อหน่วย" ด้วย (หรือกดปุ่ม "ขายทั้งหมด" เพื่อใช้ราคาตลาด)',
   ASSET_LIMIT_REACHED:
     'คุณใช้ครบ 2 สินทรัพย์ตามแพ็กเกจ Free แล้ว หากต้องการเพิ่มสินทรัพย์ใหม่ กรุณาอัพเกรดเป็น Premium',
+  // เกิดเมื่อสองคำสั่งซื้อ Symbol ใหม่เดียวกันชนกันพอดี (กดปุ่มซ้ำ/สองแท็บ) —
+  // Pattern เดียวกับ flexMessage.util.js (ข้อความไทยเดียวกัน — คนละ Channel
+  // แต่ผู้ใช้ควรเห็นคำอธิบายตรงกัน)
+  ASSET_ALREADY_EXISTS: 'สินทรัพย์นี้เพิ่งถูกเพิ่มเข้าพอร์ตไปแล้ว (อาจกดซ้ำ) กรุณาตรวจสอบพอร์ตของคุณอีกครั้ง',
   PRICE_FEED_NOT_IMPLEMENTED:
     'ดึงราคาตลาดของสินทรัพย์นี้ไม่ได้ในขณะนี้ กรุณาลองใหม่ภายหลัง หรือกรอกราคาต่อหน่วยเอง',
   MARKET_PRICE_UNAVAILABLE:
@@ -122,6 +126,9 @@ const ERROR_STATUS = {
   ALREADY_UNDONE: 400,
   CANNOT_UNDO_QUANTITY_MISMATCH: 400,
   ASSET_LIMIT_REACHED: 403,
+  // Symbol เดียวกันถูกสร้างไปแล้ว = ขัดสถานะปัจจุบัน (ไม่ใช่สิทธิ์ไม่พอ/Input ผิด)
+  // → 409 (Pattern เดียวกับ SLIP_ALREADY_ATTACHED/CANNOT_ATTACH_TO_REVERSAL ด้านล่าง)
+  ASSET_ALREADY_EXISTS: 409,
   PRICE_FEED_NOT_IMPLEMENTED: 503,
   MARKET_PRICE_UNAVAILABLE: 503,
   GOLD_PRICE_UNAVAILABLE: 503,

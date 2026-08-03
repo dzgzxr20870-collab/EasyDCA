@@ -12,6 +12,7 @@
 // (symbolRegistry ไม่ได้ import ไฟล์นี้กลับ จึงไม่เกิด Circular Dependency)
 
 const symbolRegistry = require('./symbolRegistry.service');
+const config = require('../config/env');
 
 const COINGECKO_SIMPLE_PRICE_URL = 'https://api.coingecko.com/api/v3/simple/price';
 
@@ -97,7 +98,13 @@ const usdPriceCache = new Map();
 // Sliding Window (ไม่ใช่ Fixed Calendar-Minute แบบฝั่ง Twelve Data) ตั้งใจเข้มกว่า
 // ของจริงเล็กน้อย กัน Burst คร่อมนาที (ยิง 8 ครั้งตอน :59 แล้วยิงอีก 8 ครั้งตอน :00
 // ซึ่ง Fixed-Window ของเขาปล่อยผ่านได้ แต่ Sliding Window ของเรากันไว้)
-const TWELVE_DATA_RATE_LIMIT = 8;
+//
+// ⚠️ อ่านจาก config.twelveData.rateLimit (Env `TWELVE_DATA_RATE_LIMIT`, Default 8)
+// ไม่ Hardcode ตรงๆ อีกต่อไป — ระบบรัน 2 Process (API + Worker) ที่ใช้ API Key
+// เดียวกัน ถ้าแต่ละฝั่งนับ 8/นาทีของตัวเอง (In-memory ผูกกับ Process) รวมกันจะยิงได้
+// ถึง 16/นาที เกิน Budget จริงของ Twelve Data — ต้องแบ่งโควตาตายตัวราย Service บน
+// Railway (ดูรายละเอียดที่ config/env.js) รวมกันทั้งสองฝั่งต้องไม่เกิน 8 เสมอ
+const TWELVE_DATA_RATE_LIMIT = config.twelveData.rateLimit;
 const TWELVE_DATA_WINDOW_MS = 60 * 1000;
 
 // Retry เฉพาะตอนโดน 429 และ Caller "ยอมรอ" (allowRetry:true) เท่านั้น — สงวนไว้ให้
