@@ -139,7 +139,9 @@ async function undoLastTransaction(userId, options = {}) {
   // ตั้ง fee_thb = 0 (ไม่คิดค่าธรรมเนียมซ้ำจากการย้อน — fee ไม่ถูกใช้ในสูตร
   // ยอดคงเหลือ/เงินลงทุนอยู่แล้ว จึงไม่กระทบความถูกต้อง) date = วันนี้ตาม
   // Asia/Bangkok เพื่อให้ Reversal เป็นรายการล่าสุด (สอดคล้อง Double-Undo guard)
-  const reversal = await transactionRepository.create({
+  let reversal;
+  try {
+    reversal = await transactionRepository.create({
     userId,
     assetId: latest.assetId,
     type: reversalType,
@@ -163,7 +165,23 @@ async function undoLastTransaction(userId, options = {}) {
     date: todayInBangkok(),
     note: buildReversalNote(latest.id),
     source: options.source ?? 'line',
-  });
+    });
+  } catch (err) {
+    // ── ด่านจริงของ "ย้อนแล้วยอดติดลบ" อยู่ที่ DB (migration 034) ──────────────
+    // Guard ด้านบน (heldQuantity เทียบ latest.quantity) เป็น Pre-check ที่ไม่ Atomic
+    // เหมือนกับฝั่ง processSellCommand — ถ้ามีคำสั่งขายแทรกเข้ามาระหว่างที่เราตรวจ
+    // เสร็จแล้วยังไม่ทัน INSERT (เช่น กด "ยกเลิกล่าสุด" บน LINE พร้อมกับกดขายบนเว็บ)
+    // RPC จะปฏิเสธแทน — แปลงเป็น Error Code เดิมของ Flow นี้ (ไม่ใช่
+    // INSUFFICIENT_QUANTITY ของฝั่งขาย) เพื่อให้ข้อความที่ผู้ใช้เห็นตรงกับสิ่งที่กดจริง
+    if (err.code === 'INSUFFICIENT_QUANTITY') {
+      throw new UndoTransactionError(
+        'CANNOT_UNDO_QUANTITY_MISMATCH',
+        'Cannot undo this buy because the current holding is lower than the purchased quantity',
+        { requested: err.details?.requested ?? Number(latest.quantity), held: err.details?.held }
+      );
+    }
+    throw err;
+  }
 
   // transactions เก็บแค่ asset_id — ดึง symbol มาแสดงผลข้อความยืนยัน
   const [asset] = await assetRepository.findByIds([latest.assetId]);

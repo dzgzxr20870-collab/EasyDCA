@@ -1,5 +1,35 @@
 const { supabaseAdmin } = require('../config/supabase');
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Error ของชั้น Repository สำหรับ "เงื่อนไขทางธุรกิจที่ DB เป็นคนตัดสิน"
+// ═══════════════════════════════════════════════════════════════════════════
+// จงใจ "ไม่" throw TransactionServiceError ตรงจากที่นี่ เพราะ transaction.service
+// require ไฟล์นี้อยู่แล้ว การ require กลับจะเกิด Circular Dependency (ตอน Load
+// module.exports ของ service ยังไม่ถูกกำหนด → ได้ undefined)
+//
+// ชั้น Service เป็นคนแปลง Error นี้เป็น Error ของโดเมนตัวเองแทน ซึ่งถูกต้องกว่าด้วย
+// เพราะเงื่อนไข "ขายเกินยอด" มีชื่อ Code ต่างกันตาม Flow:
+//   - processSellCommand  → INSUFFICIENT_QUANTITY
+//   - undoLastTransaction → CANNOT_UNDO_QUANTITY_MISMATCH
+class LedgerWriteError extends Error {
+  constructor(code, message, details = {}) {
+    super(message);
+    this.name = 'LedgerWriteError';
+    this.code = code;
+    this.details = details;
+  }
+}
+
+// แกะ DETAIL ที่ RPC ส่งมาในรูป 'requested=1050;held=50.00000000' เป็นตัวเลขจริง
+// คืน {} ถ้ารูปแบบไม่ตรง (ไม่ให้การอ่าน Detail ที่เพี้ยนทำให้ Error หลักหายไป)
+function parseQuantityDetail(detail) {
+  if (typeof detail !== 'string') return {};
+  const requested = detail.match(/requested=([\d.]+)/);
+  const held = detail.match(/held=([\d.]+)/);
+  if (!requested || !held) return {};
+  return { requested: Number(requested[1]), held: Number(held[1]) };
+}
+
 function toTransaction(row) {
   if (!row) return null;
 
@@ -26,31 +56,67 @@ function toTransaction(row) {
   };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ทางเข้า "เดียว" ของการเขียน Ledger ทั้งระบบ — ผ่าน RPC ที่ Lock แถว asset เสมอ
+// ═══════════════════════════════════════════════════════════════════════════
+// เดิมเป็น .insert() ตรงๆ ซึ่งทำให้การตรวจ "ขายเกินยอดคงเหลือ" ในชั้น Service เป็น
+// check-then-insert ที่ไม่ Atomic: สองคำสั่งขาย Asset เดียวกันที่เข้ามาพร้อมกันจะ
+// อ่านประวัติชุดเดียวกัน (Stale Read) แล้วผ่านการตรวจทั้งคู่ → ยอดคงเหลือติดลบ
+// (เส้นทางเว็บยิงขนานได้ทันทีเพราะไม่มีขั้น Preview/Confirm คั่น)
+//
+// migration 034 ย้าย [Lock → คำนวณยอด → Validate → INSERT] ไปอยู่ใน Postgres
+// Function เดียว (DATABASE.md § 12) — Supabase JS ทำ Row Lock/Multi-statement
+// Transaction จาก Client ไม่ได้ จึงต้องเป็น RPC เท่านั้น
+//
+// ⚠️ เปลี่ยนที่ฟังก์ชันนี้จุดเดียวโดยเจตนา: จุด INSERT ของทั้งระบบมี 3 ที่
+// (processBuyCommand / processSellCommand / undo Reversal) และทุกที่เรียกผ่าน
+// create() ตัวนี้หมด → ได้ Lock ครบทุก Path โดยไม่ต้องแก้ Call Site และ "ไม่มีทาง
+// ลืม Path ใหม่ในอนาคต" เพราะเหลือทางเข้า Ledger ทางเดียวจริงๆ
+//
+// คืน Transaction ที่บันทึกแล้ว + heldAfter (ยอดคงเหลือหลังบันทึก คำนวณจากยอดที่
+// Lock ไว้แล้วจริง — แม่นกว่าให้ Caller คำนวณเองจาก Snapshot ก่อน Insert)
+// throw LedgerWriteError('INSUFFICIENT_QUANTITY'|'ASSET_NOT_FOUND') ตามที่ DB ตัดสิน
 async function create(data) {
-  const { data: row, error } = await supabaseAdmin
-    .from('transactions')
-    .insert({
-      user_id: data.userId,
-      asset_id: data.assetId,
-      type: data.type,
-      amount_thb: data.amountThb,
-      price_per_unit: data.pricePerUnit,
-      quantity: data.quantity,
-      // Multi-Currency (Round 10) — Default 'THB' เมื่อ Caller ไม่ส่ง (Path เดิม)
-      currency: data.currency ?? 'THB',
-      fee_thb: data.feeThb,
-      date: data.date,
-      note: data.note,
-      source: data.source,
-    })
-    .select('*')
-    .single();
+  const { data: rows, error } = await supabaseAdmin.rpc('create_transaction_locked', {
+    p_user_id: data.userId,
+    p_asset_id: data.assetId,
+    p_type: data.type,
+    p_amount_thb: data.amountThb,
+    p_price_per_unit: data.pricePerUnit,
+    p_quantity: data.quantity,
+    // Multi-Currency (Round 10) — Default 'THB' เมื่อ Caller ไม่ส่ง (Path เดิม)
+    p_currency: data.currency ?? 'THB',
+    p_fee_thb: data.feeThb ?? 0,
+    p_date: data.date,
+    p_note: data.note ?? null,
+    p_source: data.source ?? 'line',
+  });
 
   if (error) {
+    // RPC RAISE ด้วย MESSAGE เป็นชื่อ Code ตรงๆ (ดู migration 034) — ทั้งสองเคสนี้
+    // คือ "คำสั่งนี้ทำไม่ได้ตามกติกา" ไม่ใช่ระบบพัง จึงต้องแยกจาก Error ทั่วไป
+    if (error.message === 'INSUFFICIENT_QUANTITY') {
+      throw new LedgerWriteError(
+        'INSUFFICIENT_QUANTITY',
+        'Cannot sell more than the currently held quantity',
+        parseQuantityDetail(error.details)
+      );
+    }
+    if (error.message === 'ASSET_NOT_FOUND') {
+      throw new LedgerWriteError('ASSET_NOT_FOUND', `Asset ${data.assetId} not found`, {
+        assetId: data.assetId,
+      });
+    }
     throw new Error(`Failed to create transaction: ${error.message}`);
   }
 
-  return toTransaction(row);
+  // RETURNS TABLE → PostgREST คืนเป็น Array เสมอ (แม้แถวเดียว)
+  const row = Array.isArray(rows) ? rows[0] : rows;
+  if (!row) {
+    throw new Error('Failed to create transaction: RPC returned no row');
+  }
+
+  return { ...toTransaction(row), heldAfter: Number(row.held_after) };
 }
 
 async function findRecentByUser(userId, limit) {
@@ -210,6 +276,7 @@ async function findByIdForUser(id, userId) {
 }
 
 module.exports = {
+  LedgerWriteError,
   create,
   findRecentByUser,
   findAllByUser,

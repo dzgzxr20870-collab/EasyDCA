@@ -555,20 +555,40 @@ async function processSellCommand(userId, params) {
   const { quantity, pricePerUnit, amountThb, priceSource } = amounts;
   const currency = amounts.currency ?? 'THB';
 
-  const transaction = await transactionRepository.create({
-    userId,
-    assetId: asset.id,
-    type: 'sell',
-    amountThb,
-    pricePerUnit,
-    quantity,
-    currency,
-    feeThb: params.feeThb ?? 0,
-    date: params.date ?? todayInBangkok(),
-    note: params.note ?? null,
-    // Default 'line' = Path เดิมทั้งหมดได้ค่าเท่าเดิม (เหตุผลเดียวกับ processBuyCommand)
-    source: params.source ?? 'line',
-  });
+  let transaction;
+  try {
+    transaction = await transactionRepository.create({
+      userId,
+      assetId: asset.id,
+      type: 'sell',
+      amountThb,
+      pricePerUnit,
+      quantity,
+      currency,
+      feeThb: params.feeThb ?? 0,
+      date: params.date ?? todayInBangkok(),
+      note: params.note ?? null,
+      // Default 'line' = Path เดิมทั้งหมดได้ค่าเท่าเดิม (เหตุผลเดียวกับ processBuyCommand)
+      source: params.source ?? 'line',
+    });
+  } catch (err) {
+    // ── ด่านจริงของ "ขายเกินยอด" อยู่ที่ DB (migration 034) ────────────────────
+    // validateSell ด้านบนเป็นแค่ Pre-check ที่ตอบผู้ใช้ได้เร็วและมีข้อความสวย แต่
+    // ไม่ Atomic — ถ้ามีคำสั่งขายอื่นแทรกเข้ามาระหว่างที่เราตรวจเสร็จแล้วยังไม่ทัน
+    // INSERT (Race) RPC จะเป็นคนปฏิเสธแทน ต้องแปลงกลับเป็น TransactionServiceError
+    // ให้ "เหมือนกับที่ validateSell throw ทุกประการ" — Caller ทั้งเว็บ (instanceof)
+    // และ LINE (err.code) จึงไม่รู้เลยว่าถูกปฏิเสธจากด่านไหน Contract ไม่เปลี่ยน
+    if (err.code === 'INSUFFICIENT_QUANTITY') {
+      throw new TransactionServiceError(
+        'INSUFFICIENT_QUANTITY',
+        'Cannot sell more than the currently held quantity',
+        // details ของ RPC เป็นยอดจริง ณ วินาทีที่ Lock — แม่นกว่า heldQuantity ที่
+        // Pre-check อ่านมาก่อนหน้า (ซึ่งเป็นค่าที่ล้าสมัยไปแล้วในเคส Race นี้พอดี)
+        { requested: err.details?.requested ?? quantity, held: err.details?.held ?? heldQuantity }
+      );
+    }
+    throw err;
+  }
 
   return {
     transactionId: transaction.id,
@@ -577,7 +597,9 @@ async function processSellCommand(userId, params) {
     pricePerUnit,
     amountThb,
     currency,
-    remainingQuantity: roundToEight(heldQuantity - quantity),
+    // ใช้ยอดหลังบันทึกที่ RPC คำนวณจากค่าที่ Lock ไว้จริง — Fallback เป็นวิธีเดิม
+    // เผื่อ RPC ไม่ได้ส่ง heldAfter มา (Caller ที่ Mock Repository ในเทสต์เดิม)
+    remainingQuantity: transaction.heldAfter ?? roundToEight(heldQuantity - quantity),
     priceSource,
     date: transaction.date,
     note: transaction.note,

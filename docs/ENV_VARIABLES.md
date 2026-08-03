@@ -55,8 +55,23 @@ cp .env.example .env
 |---|---|---|
 | `APP_URL` | ✅ | URL หลักของ Web Application เช่น `https://easydca.app` หรือ `http://localhost:3000` ใช้สำหรับสร้าง Redirect URL |
 | `FRONTEND_URL` | ✅ | URL ของ React App (เช่น `https://easydca-production-fcd3.up.railway.app`) ใช้ 2 อย่าง: (1) จำกัด **CORS Origin** และ (2) ประกอบลิงก์เปิด External Browser ในข้อความ LINE (`externalUrl.util.js`) |
+| `PUBLIC_BASE_URL` | ❌ | URL สาธารณะของ **Backend ตัวนี้เอง** (เช่น `https://easydca-production.up.railway.app`) — ใช้ประกอบ URL รูป QR PromptPay ที่ LINE ต้อง Fetch ได้จากภายนอก ถ้าไม่ตั้ง จะ Fallback ไป `APP_URL` และถ้าไม่มีทั้งคู่ = `null` (**สร้างการ์ดชำระเงินไม่ได้**) |
 | `NODE_ENV` | ✅ | Environment ปัจจุบัน ค่าที่ใช้ได้: `development`, `staging`, `production` |
 | `PORT` | ❌ | Port ที่ Server รันอยู่ (Default: `3000`) |
+
+> ### 💡 `PUBLIC_BASE_URL` vs `FRONTEND_URL` — คนละตัว อย่าสลับกัน
+>
+> สับสนกันได้ง่ายเพราะเป็น URL ทั้งคู่ แต่ชี้คนละ Service:
+>
+> | | ชี้ไปที่ | ใช้ทำอะไร |
+> |---|---|---|
+> | `FRONTEND_URL` | **React App** (เว็บที่ผู้ใช้เปิด) | CORS Origin + ปุ่ม/ลิงก์ในข้อความ LINE ที่พาไปหน้าเว็บ |
+> | `PUBLIC_BASE_URL` | **Backend API** (Service นี้) | URL รูป QR (`/api/v1/payment/:id/qr.png`) ที่ LINE Server ต้อง Fetch เอง |
+>
+> ⚠️ ต้องเป็น URL ที่ **เข้าถึงได้จากอินเทอร์เน็ตจริงและเป็น `https`** — LINE Fetch รูป
+> จาก Server ของตัวเอง ไม่ได้ Fetch จากเครื่องผู้ใช้ ดังนั้น `localhost` ใช้ไม่ได้
+> (ตอน Dev ต้องใช้ ngrok หรือเทียบเท่า) ถ้าตั้งผิด/ไม่ตั้ง ผู้ใช้จะเห็นการ์ด Premium
+> แบบ **ไม่มีรูป QR** ทั้งที่ระบบไม่ขึ้น Error
 
 > ### ⚠️ `FRONTEND_URL` — Fail-fast ตั้งแต่ Boot (ไม่มี Fallback แล้ว)
 >
