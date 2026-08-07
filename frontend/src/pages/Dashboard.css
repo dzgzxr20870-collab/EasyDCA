@@ -790,6 +790,11 @@
 
 @media (max-width: 640px) {
   .premium-freetrial { flex-direction: column; align-items: stretch; }
+  /* flex-basis: 320px ใน .premium-freetrial-body ตั้งใจไว้เป็น "ความกว้าง"
+     ขั้นต่ำตอนจัดแนวนอน (Desktop) — พอสลับเป็น flex-direction: column ที่นี่
+     แกนหลักเปลี่ยนเป็นแนวตั้ง ค่าเดิมเลยกลายเป็น "ความสูง" ขั้นต่ำแทน ทำให้
+     เกิดช่องว่างเปล่าใต้หัวข้อก่อนถึงปุ่ม ต้อง Reset กลับเป็น auto ที่นี่ */
+  .premium-freetrial-body { flex: 0 1 auto; }
   .premium-freetrial-action { align-items: stretch; }
   .premium-freetrial-error { max-width: none; }
 }
