@@ -39,3 +39,6 @@ coverage/
 
 # ===== Local Tools =====
 ngrok.exe
+
+# ===== Claude Code (personal config, not repo config) =====
+.claude/

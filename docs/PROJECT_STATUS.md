@@ -1,0 +1,167 @@
+# EasyDCA — Blueprint รวม + สถานะปัจจุบัน (ฉบับรวม 25 ก.ค. 2026)
+
+> ไฟล์นี้รวม 2 เอกสารเดิม (`JaydeX_Master_Plan_v2.md` + `PROJECT-HANDOFF-updated.md`)
+> ไว้ในที่เดียว เพื่อให้ Paste เป็นข้อความตรงในแชทใหม่ได้เลย (ไม่ต้องแนบไฟล์ —
+> เผื่อแชทติด Limit จำนวนไฟล์แนบ) ยังคง 2 ไฟล์เดิมไว้ใน Project Knowledge ตามปกติ
+> ไฟล์นี้เป็นแค่ Snapshot สรุปรวมสำหรับ Handoff ด่วน
+>
+> **หมายเหตุ**: ไฟล์นี้ Sync มาจากไฟล์ Working Copy ที่ใช้อัปเดตระหว่าง Session
+> วางแผน (Cowork) — เก็บไว้ใน Repo เพื่อ Backup ประวัติการตัดสินใจทั้งหมดไว้ใน
+> GitHub ด้วย ไม่ให้ขึ้นอยู่กับที่เดียว
+
+---
+
+## ส่วนที่ 1: Blueprint (กลยุทธ์ — จาก Master Plan v2, ไม่เปลี่ยนแปลง)
+
+### วิสัยทัศน์
+**JaydeX** = แพลตฟอร์มผู้ช่วยการเงินส่วนตัวสำหรับคนไทย พัฒนาเป็น 3 ระยะ:
+1. **EasyDCA** (ปัจจุบัน) — บันทึก/ติดตามการลงทุนแบบ DCA ผ่าน LINE + เว็บ
+2. **EasyTax** (ระยะถัดไป) — ผู้ช่วยคำนวณภาษีจากข้อมูลการลงทุน
+3. **JaydeX App** (ระยะสุดท้าย) — แพลตฟอร์มการเงินส่วนตัวแบบเต็มรูปแบบ
+
+**Gate A** (เงื่อนไขก่อนไประยะถัดไป): Retention ≥50% ของ Activated Users +
+≥10 User Interviews เชิงลึก — **ยังไม่ผ่าน Gate นี้** (อยู่ระหว่าง Closed
+Beta Wave 1)
+
+### หลักการทางธุรกิจที่ตั้งไว้แต่ต้น
+- แบรนด์ "EasyDCA by JaydeX" เท่านั้น — ห้ามสร้างแบรนด์ JaydeX แยก (ต้นทุนศูนย์)
+- **ไม่มี Level/XP/Mascot/ตัวละคร** — ใช้ Streak สื่อวินัยเพียงอย่างเดียว
+  (⚠️ Rich Menu/หน้า Premium ปัจจุบันมี Mascot เป็นข้อยกเว้นที่ตกลงไว้แล้ว)
+- เขตกฎหมาย: ห้ามแนะนำซื้อ/ขาย/ถือรายตัว, ไม่มี Trade Execution, ไม่การันตี
+  ผลตอบแทน — ทุก Copy ต้องระวังจุดนี้เสมอ
+- Business Model: Freemium — Free จำกัด Asset/DCA Plan, Premium ปลดล็อกไม่จำกัด
+  + Export รายงาน + AI OCR อ่านสลิป
+
+---
+
+## ส่วนที่ 2: สถานะปัจจุบัน
+
+### Stack
+Node.js/Express + React/Vite + Supabase (Postgres 17.6) + Railway (2 Services:
+`EasyDCA` + `easydca-worker`) + LINE Messaging API + LIFF + Cloudflare R2
+(Nightly Backup, พิสูจน์ Restore แล้ว) — Migration ล่าสุดที่ Apply บน
+Production: **035**
+
+### ✅ ปิดสมบูรณ์แล้วทั้งหมด (ห้ามทำซ้ำ)
+
+**Core Correctness**: P&L Engine (Moving Average), Webhook Idempotency,
+Ownership Filter ทุก Query, Unique Constraint, PDPA (Consent+Erasure)
+
+**S8 ทั้งชุด**: Dashboard เว็บใหม่ (`/dashboard`), DCA Planner (CRUD ผ่านเว็บ),
+Guided Buy Flow (บันทึก DCA แบบกดปุ่มใน LINE, รองรับ USD สำหรับ crypto/stock_us)
+
+**Infra**: `/health` เช็ค Supabase จริง + Admin Alert Push, Nightly Backup
+เข้ารหัส AES-256-GCM ไป Cloudflare R2 (Cron จริงยืนยันแล้ว + Restore Test
+เต็มรูปแบบผ่านจริง 23/23 Table), `railpack.json` Vendor `pg_dump`/`psql` 17
+เอง (Supabase รัน PG17 แต่ Debian Default ให้แค่ PG15)
+
+**Business Model (Beta)**: Export Gate, DCA Planner Gate (Free จำกัด 2 แผน),
+QR จ่ายเงินในเว็บ (`/premium`), Admin Grant Premium ฟรี, **Self-service Free
+Trial** (User กดรับเอง 1 เดือน ครั้งเดียวตลอดชีพ), **Facebook Like Campaign**
+(พร้อมใช้แต่ปิด Flag ไว้ก่อน)
+
+**หน้า Premium** — Redesign เต็มรูปแบบ + Hero Banner + Mascot (ข้อยกเว้น) +
+การ์ดเทียบแผน 3 คอลัมน์
+
+**Rich Menu** — Redesign เต็มรูปแบบ, Activate บน LINE จริง, ปุ่มเปิด External
+Browser แทน LIFF In-App Browser (แก้ปัญหาเปิดไม่ขึ้น)
+
+**บั๊ก AI OCR อ่านสลิป "ขาย" เป็น "ซื้อ"** — แก้ 2 ชั้น (Normalize/Parsing +
+เปลี่ยน Model เป็น Sonnet 5 พร้อม Evidence-based Extraction + Numeric
+Cross-check) รวม Bug วันที่ พ.ศ./ค.ศ. สลับกัน
+
+**บั๊ก Limit Order "รอจับคู่" ถูกบันทึกเป็นธุรกรรมทันที** — เพิ่ม
+`order_status`/`order_status_evidence` + Deterministic Parser
+
+**Policy การ Push ครอบ 5 หมวด** — สร้าง `docs/AI_WORK_POLICY.md`
+(Model Selection, Git Hygiene, DoD 4 ชั้น, 5 หมวดไฟล์ตาม Risk)
+
+**SEC Fund Master List** — แก้ Error Message ทางง่าย (ทางยาว/สมัคร SEC API
+จริง ยังเป็น TODO)
+
+**ช่องทางติดต่อ Admin/Support** — หน้าเว็บ `/support` (Dropdown หมวดปัญหา +
+ฟอร์ม + Social Link) แทน LINE Chat Flow เดิม (ขัดกับ OA Manager Chat Mode)
+
+**บั๊ก "รวมเงินลงทุนทั้งพอร์ต" ขึ้น 0 บาท** — แก้ 3 จุดที่ยังอ่าน
+`summary.totalInvested` (Legacy THB-only) แทน `investedByCurrency`
+
+**Supabase Security Advisor Warning** — ล็อก `search_path` ของ Function
+สำคัญ (Migration 028)
+
+**Backup Job** — ปิดสมบูรณ์ 100% ทั้ง Dump→Encrypt→Upload→Cron อัตโนมัติ
+และ Restore→Verify เต็มวงจร (5 Root Cause สะสม: R2 Credentials, pg_dump
+ENOENT, DATABASE_URL Placeholder, IPv6/IPv4, Version Mismatch — แก้ครบ
+พร้อม Race Condition Bug ที่ทำให้ Backup รายงานสำเร็จทั้งที่ไฟล์ว่างเปล่า)
+
+**Dashboard เว็บ — Feature ชุดใหญ่ (1 ส.ค.)**: ปุ่มขาย (Toggle ซื้อ/ขาย),
+โลโก้สินทรัพย์อัตโนมัติ (CoinGecko/tickerlogos), เลิกใช้ LIFF In-App Browser,
+Self-service Free Trial + Expiry Reminder Cron + LINE Push แจ้งผล, Twelve
+Data 429 Rate Limit Fix, Sidebar Scroll-Spy (สร้างใหม่ทั้งหมด — เดิมไม่มีเลย),
+Facebook Link จริงบน `/support`
+
+**Premium ฟรี 1 เดือนเงื่อนไข Like Facebook** — Guard แยกคอลัมน์
+`facebook_like_granted_at`, Table แยก `facebook_like_grant_requests`,
+Bucket Private, Admin ตรวจ Screenshot มือ — พร้อมใช้ทันที (ปิด Flag ไว้ก่อน)
+
+**LINE Follow Event** — ข้อความต้อนรับใหม่ 3 ใบ (แนะนำตัว → วิธีใช้งาน →
+ปุ่ม Premium ฟรี)
+
+**Full System Security Audit (Opus, 2 ส.ค.)** — ตรวจครบ 5 หมวดตาม
+`AI_WORK_POLICY.md`, ปิดครบทุกจุดรวมถึง:
+- **HIGH-1 Oversell Race**: Migration 034 `create_transaction_locked` RPC
+  (`SELECT ... FOR UPDATE` + Atomic Insert) ครอบ Buy/Sell/Undo ทุก Path —
+  พิสูจน์ด้วย 20 Request ขนานจริงบน Production (ปฏิเสธครบ 20/20)
+- **Free-tier Asset Limit Race**: Migration 035 `create_asset_locked` RPC
+  (Lock ที่ User) — พิสูจน์ด้วย 20 Request ขนานจริงเช่นกัน
+- Path Traversal (`screenshotPath`), Rate Limiting ทั้งระบบ, CORS Fail-fast,
+  Twelve Data Quota Split ระหว่าง 2 Service (`TWELVE_DATA_RATE_LIMIT`)
+
+**สถานะ: Security Audit ทั้งชุดปิดสมบูรณ์ 100%**
+
+### ⏳ ยังไม่ปิด (TODO ที่เหลือ)
+
+1. **จดโดเมน** — กำลังดำเนินการ (`easydca.co` ผ่าน Z.com, ~1,177 บาท/ปี
+   รวม VAT) ไม่ซื้อ Web Hosting เพิ่ม (ใช้ Railway เดิม) รอ Setup DNS ชี้มา
+   Railway
+2. **สร้าง Landing Page แนะนำระบบ** — รอหลังจดโดเมนเสร็จ (แยกจาก Dashboard)
+3. **Closed Beta Wave 1** — เปิดให้ Tester กดรับ Free Trial เองผ่าน
+   Dashboard แล้ว (`PREMIUM_FREE_TRIAL_ENABLED=true`)
+4. SEC Fund Master List ทางยาว (สมัคร SEC API จริง) — External Dependency
+5. Social Link IG/TikTok — ยังเป็น Placeholder รอ Link จริง
+6. Real-time Chat Widget — ตกลงว่าทำหลัง Beta
+7. Known Limitation (ไม่บล็อก): `portfolioSummary.service.js`'s
+   `byCurrency` นับเฉพาะ Asset ที่ดึงราคาสำเร็จ
+
+---
+
+## ส่วนที่ 3: กฎยืนสำคัญที่สุด
+
+1. Single Source of Truth ต่อ 1 สูตรเงิน — ห้าม Copy Logic
+2. Immutable Ledger — ห้าม `DELETE`/`UPDATE` Transaction, ห้าม `DELETE` User
+   ตรงๆ (ใช้ Erasure/Anonymize เท่านั้น) — เขียน Ledger ทุกจุดต้องผ่าน RPC
+   ที่ Lock ถูกต้อง (`create_transaction_locked`, `create_asset_locked`)
+3. Backend คือ Security Boundary เดียว — ทุก Query กรอง `userId`
+4. Migration ใหม่ต้อง Apply+Verify บน Supabase ก่อน Deploy Code เสมอ
+5. Label ปุ่ม LINE Quick Reply ≤20 ตัวอักษร (Unicode Code Point)
+6. Internal Navigation ต้องใช้ React Router (`<Link>`/`navigate()`) ห้าม
+   `<a href>` — ทำ JWT (Memory-only) หาย
+7. ทุกงาน Claude Code ต้องระบุ Sonnet/Opus + เหตุผล, ก่อน Push เช็ค
+   `git status` เสมอ, งานเงินใช้ DoD 4 ชั้น (Unit→Integration→Regression→
+   Production Verification)
+8. Railway/Cloudflare/Supabase Dashboard ไม่ Sync กับ Git — ยืนยันสถานะ
+   Production แยกจาก Code เสมอ (ใช้ `railway api`/`railway ssh` เช็ค
+   commitHash จริง ไม่ใช่แค่ `/health`)
+9. Railway มี 2 Services แยกกัน (`EasyDCA` + `easydca-worker`) — Env Var
+   ต้องเช็ค/ตั้งแยกทีละ Service เสมอ
+10. Live Path (Dashboard/LINE ที่ User รอสด) ห้ามเพิ่ม Latency โดยไม่จำเป็น
+    (Retry/Backoff ใช้ได้เฉพาะ Cron ที่ไม่ Sensitive เวลา)
+11. Silent Default เป็น Anti-pattern เสมอ — พาร์สข้อมูลไม่ชัดเจนต้องถามผู้ใช้
+    หรือ Reject ไม่ใช่เดาค่า Default
+
+---
+
+## หมายเหตุสำหรับแชทใหม่
+
+ไฟล์นี้เป็น Snapshot สรุปสำหรับ Handoff ด่วน หากต้องการรายละเอียดเชิงลึกกว่านี้
+(Diff เต็มของแต่ละ Bug Fix, เหตุผลละเอียดของแต่ละการตัดสินใจ) ดูจาก
+`docs/CHANGELOG.md`, `docs/AI_WORK_POLICY.md`, และ Git Commit History โดยตรง
