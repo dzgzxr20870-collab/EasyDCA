@@ -338,7 +338,7 @@ function DashboardHome() {
         <aside className="dh-sidebar">
           <div className="dh-side-card">
             <div className="dh-brand">
-              <div className="dh-brand-logo">🌱</div>
+              <img className="dh-brand-logo" src="/logo/easydca-icon-192.png" alt="EasyDCA" />
               <div>
                 <b>EasyDCA</b>
                 <small>by JaydeX · Investment Companion</small>
@@ -443,7 +443,7 @@ function DashboardHome() {
         {/* ════ MAIN ════ */}
         <main className="dh-main">
           <div className="dh-m-brand">
-            <div className="dh-brand-logo">🌱</div>
+            <img className="dh-brand-logo" src="/logo/easydca-icon-192.png" alt="EasyDCA" />
             <div>
               <b>EasyDCA</b>
               <small>by JaydeX</small>
