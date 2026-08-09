@@ -1,4 +1,5 @@
 const { supabaseAdmin } = require('../config/supabase');
+const { queryForUser, queryAcrossUsers } = require('../utils/ownership.util');
 
 // ตารางคำขอชำระเงิน Premium (migrations/004_create_payments.sql) — Immutable Ledger
 // ทุก Query ใช้ supabaseAdmin (service_role) เพราะ RLS เปิดแบบ service_role เท่านั้น
@@ -86,9 +87,32 @@ async function findAll({ status } = {}) {
   }));
 }
 
-async function findById(id) {
-  const { data, error } = await supabaseAdmin
-    .from('payments')
+// ⚠️ Security Audit (Cross-User Isolation, รอบ 2): แยกเป็น 2 ฟังก์ชันชัดเจนแทน
+// findById(id) เดิมตัวเดียว เพราะ Call Site จริงมี 2 กลุ่มที่ต้องการ Guarantee
+// ต่างกัน (ไม่ใช่ Flag เดียวกัน — ตาม Design queryForUser/queryAcrossUsers)
+
+// ใช้เมื่อรู้ userId แล้ว (notifyPaymentSubmitted / assertPaymentClaimableByUser)
+// — กรอง user_id ที่ชั้น Query จริง คืน null ทั้งกรณี "ไม่มีจริง" และ "ไม่ใช่
+// ของ User คนนั้น" แยกไม่ออกโดยเจตนา (Pattern เดียวกับ transaction.findByIdForUser)
+async function findByIdForUser(id, userId) {
+  const { data, error } = await queryForUser('payments', userId, (q) =>
+    q.select('*').eq('id', id)
+  ).maybeSingle();
+
+  if (error) {
+    throw new Error(`Failed to find payment ${id}: ${error.message}`);
+  }
+
+  return toPayment(data);
+}
+
+// ใช้เฉพาะ GET /api/v1/payment/:id/qr.png — Endpoint เปิด Public ตามดีไซน์ (LINE
+// ต้อง Fetch รูป QR โดยไม่มี Authorization Header เลย ไม่มี Session ผู้ใช้ให้ใช้)
+// reason='public-endpoint' บังคับให้ผู้เรียกรู้ตัวว่ากำลังข้าม User โดยเจตนา —
+// ปลอดภัยเพราะ payment.service.getPendingPaymentForQr ใช้แค่ amountThb ประกอบ QR
+// (ไม่มี PII) และ Payment ID เดาไม่ได้ (UUIDv4)
+async function findByIdPublic(id) {
+  const { data, error } = await queryAcrossUsers('payments', 'public-endpoint')
     .select('*')
     .eq('id', id)
     .maybeSingle();
@@ -222,16 +246,20 @@ async function claimForRejection(id, adminLineUserId) {
 //
 // slipHash เป็น Parameter Optional (undefined = ไม่ส่งมา) เพื่อไม่ Break Caller เดิมที่
 // ยังไม่รู้จัก slip_hash — ใส่ Key เข้า Update เฉพาะตอนที่ Caller ส่งค่ามาจริงเท่านั้น
-async function updateSlipImageUrl(id, slipImageUrl, slipHash) {
+//
+// ⚠️ Security Audit (Cross-User Isolation, รอบ 2): เดิมรับแค่ id — ปลอดภัยอยู่
+// เพราะทุก Caller ตรวจ Ownership ก่อนเรียกอยู่แล้ว (assertPaymentClaimableByUser
+// ที่เว็บ / pending.userId ที่ LINE) แต่เป็นวินัยของ Caller ไม่ใช่โครงสร้างบังคับ —
+// เพิ่ม userId เป็น Parameter บังคับ ผ่าน queryForUser
+async function updateSlipImageUrl(id, slipImageUrl, slipHash, userId) {
   const update = { slip_image_url: slipImageUrl };
   if (slipHash !== undefined) {
     update.slip_hash = slipHash;
   }
 
-  const { data, error } = await supabaseAdmin
-    .from('payments')
-    .update(update)
-    .eq('id', id)
+  const { data, error } = await queryForUser('payments', userId, (q) =>
+    q.update(update).eq('id', id)
+  )
     .select('*')
     .maybeSingle();
 
@@ -246,9 +274,11 @@ async function updateSlipImageUrl(id, slipImageUrl, slipHash) {
 // Fraud: ส่งสลิปโอนเงินจริงใบเดียวมาขอ Premium ซ้ำสองรอบ (ดู payment.service.
 // assertSlipNotReused) คืน Payment แถวแรกที่ตรง หรือ null ถ้าไม่มี — Payment ที่
 // rejected/expired/pending มี slip_hash เดียวกันไม่ถือว่าเป็นปัญหา (ไม่ Query กรอง)
+//
+// ข้าม User โดยเจตนา (reason='fraud-check'): ต้องค้นหา slip_hash "ข้ามทุก User"
+// เพื่อตรวจจับว่าสลิปใบเดียวกันถูกใช้ขอ Premium ซ้ำหรือไม่ ไม่ใช่การรั่วข้อมูล
 async function findConfirmedBySlipHash(slipHash) {
-  const { data, error } = await supabaseAdmin
-    .from('payments')
+  const { data, error } = await queryAcrossUsers('payments', 'fraud-check')
     .select('*')
     .eq('slip_hash', slipHash)
     .eq('status', 'confirmed')
@@ -325,7 +355,8 @@ async function releaseStaleAmounts(cutoffIso) {
 module.exports = {
   create,
   findAll,
-  findById,
+  findByIdForUser,
+  findByIdPublic,
   findAllByUserId,
   findPendingByUserId,
   findPendingSatangTagsByBaseAmount,

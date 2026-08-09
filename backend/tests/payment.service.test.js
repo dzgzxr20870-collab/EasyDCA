@@ -163,7 +163,7 @@ describe('findPendingByUserId', () => {
 describe('getPendingPaymentForQr', () => {
   test('พบและยัง unresolved (amountReleasedAt เป็น null) → คืน payment', async () => {
     const payment = { id: 'pay-1', status: 'pending', amountThb: 59.17, amountReleasedAt: null };
-    paymentRepository.findById.mockResolvedValue(payment);
+    paymentRepository.findByIdPublic.mockResolvedValue(payment);
 
     expect(await paymentService.getPendingPaymentForQr('pay-1')).toBe(payment);
   });
@@ -173,20 +173,20 @@ describe('getPendingPaymentForQr', () => {
   // null) — เดิม (ก่อน migration 016) Endpoint นี้จะ 404 ทันทีที่ status ไม่ใช่ 'pending'
   test('status เป็น expired แต่ยัง unresolved (amountReleasedAt เป็น null) → คืน payment (ไม่ 404)', async () => {
     const payment = { id: 'pay-1', status: 'expired', amountThb: 59.17, amountReleasedAt: null };
-    paymentRepository.findById.mockResolvedValue(payment);
+    paymentRepository.findByIdPublic.mockResolvedValue(payment);
 
     expect(await paymentService.getPendingPaymentForQr('pay-1')).toBe(payment);
   });
 
   test('ไม่พบ → PAYMENT_NOT_FOUND', async () => {
-    paymentRepository.findById.mockResolvedValue(null);
+    paymentRepository.findByIdPublic.mockResolvedValue(null);
     await expect(paymentService.getPendingPaymentForQr('x')).rejects.toMatchObject({
       code: 'PAYMENT_NOT_FOUND',
     });
   });
 
   test('Resolve ไปแล้ว (amountReleasedAt ไม่ใช่ null) → PAYMENT_NOT_FOUND (Endpoint แปลงเป็น 404)', async () => {
-    paymentRepository.findById.mockResolvedValue({
+    paymentRepository.findByIdPublic.mockResolvedValue({
       id: 'pay-1',
       status: 'confirmed',
       amountThb: 59.17,
@@ -198,7 +198,7 @@ describe('getPendingPaymentForQr', () => {
   });
 
   test('Auto-release ไปแล้ว (amountReleasedAt ไม่ใช่ null แต่ status ยังเป็น expired) → PAYMENT_NOT_FOUND', async () => {
-    paymentRepository.findById.mockResolvedValue({
+    paymentRepository.findByIdPublic.mockResolvedValue({
       id: 'pay-1',
       status: 'expired',
       amountThb: 59.17,
@@ -212,29 +212,33 @@ describe('getPendingPaymentForQr', () => {
 
 // Web slip upload (Feature 3) — Assert Ownership + pending ก่อนรับสลิปจากเว็บ
 describe('assertPaymentClaimableByUser', () => {
-  test('คำขอเป็นของ user เอง + pending → คืน payment', async () => {
+  test('คำขอเป็นของ user เอง + pending → คืน payment (ผ่าน findByIdForUser ที่กรอง Ownership ที่ Query)', async () => {
     const payment = { id: 'pay-1', userId: USER_ID, status: 'pending' };
-    paymentRepository.findById.mockResolvedValue(payment);
+    paymentRepository.findByIdForUser.mockResolvedValue(payment);
     const result = await paymentService.assertPaymentClaimableByUser('pay-1', USER_ID);
+    expect(paymentRepository.findByIdForUser).toHaveBeenCalledWith('pay-1', USER_ID);
     expect(result).toBe(payment);
   });
 
   test('ไม่พบคำขอ → PAYMENT_NOT_FOUND', async () => {
-    paymentRepository.findById.mockResolvedValue(null);
+    paymentRepository.findByIdForUser.mockResolvedValue(null);
     await expect(
       paymentService.assertPaymentClaimableByUser('pay-x', USER_ID)
     ).rejects.toMatchObject({ code: 'PAYMENT_NOT_FOUND' });
   });
 
+  // Security Audit (Cross-User Isolation, รอบ 2): Ownership กรองที่ชั้น Query
+  // (findByIdForUser) แล้ว — คำขอของคนอื่นจึงคืน null เหมือนกรณี "ไม่มีจริง" เป๊ะ
+  // (ไม่ใช่คืน Payment ของคนอื่นมาให้ Service เทียบเองเหมือนก่อน)
   test('คำขอเป็นของคนอื่น → PAYMENT_NOT_FOUND (กัน Enumerate)', async () => {
-    paymentRepository.findById.mockResolvedValue({ id: 'pay-1', userId: 'someone-else', status: 'pending' });
+    paymentRepository.findByIdForUser.mockResolvedValue(null);
     await expect(
       paymentService.assertPaymentClaimableByUser('pay-1', USER_ID)
     ).rejects.toMatchObject({ code: 'PAYMENT_NOT_FOUND' });
   });
 
   test('คำขอ Resolve ไปแล้ว (ไม่ pending) → PAYMENT_NOT_PENDING', async () => {
-    paymentRepository.findById.mockResolvedValue({ id: 'pay-1', userId: USER_ID, status: 'confirmed' });
+    paymentRepository.findByIdForUser.mockResolvedValue({ id: 'pay-1', userId: USER_ID, status: 'confirmed' });
     await expect(
       paymentService.assertPaymentClaimableByUser('pay-1', USER_ID)
     ).rejects.toMatchObject({ code: 'PAYMENT_NOT_PENDING' });
@@ -249,16 +253,17 @@ describe('notifyPaymentSubmitted', () => {
       status: 'pending',
       slipImageUrl: 'https://cdn.test/slip.jpg',
     };
-    paymentRepository.findById.mockResolvedValue(payment);
+    paymentRepository.findByIdForUser.mockResolvedValue(payment);
 
     const result = await paymentService.notifyPaymentSubmitted('pay-1', USER_ID);
+    expect(paymentRepository.findByIdForUser).toHaveBeenCalledWith('pay-1', USER_ID);
     expect(result).toBe(payment);
   });
 
   // Lock-Until-Resolved (migration 016) — ปิดช่องที่ User กด "แจ้งชำระแล้ว" ได้โดยไม่
   // เคยส่งรูปสลิปมาเลย (เดิมเช็คแค่ status='pending' ทำให้ Admin ได้การ์ดที่ไม่มีสลิป)
   test('pending แต่ยังไม่มีสลิปแนบ (slipImageUrl ว่าง) → SLIP_NOT_ATTACHED', async () => {
-    paymentRepository.findById.mockResolvedValue({
+    paymentRepository.findByIdForUser.mockResolvedValue({
       id: 'pay-1',
       userId: USER_ID,
       status: 'pending',
@@ -271,25 +276,23 @@ describe('notifyPaymentSubmitted', () => {
   });
 
   test('ไม่พบคำขอ → PAYMENT_NOT_FOUND', async () => {
-    paymentRepository.findById.mockResolvedValue(null);
+    paymentRepository.findByIdForUser.mockResolvedValue(null);
     await expect(paymentService.notifyPaymentSubmitted('pay-x', USER_ID)).rejects.toMatchObject({
       code: 'PAYMENT_NOT_FOUND',
     });
   });
 
+  // Security Audit (Cross-User Isolation, รอบ 2): Ownership กรองที่ชั้น Query
+  // (findByIdForUser) แล้ว — คำขอของคนอื่นจึงคืน null เหมือนกรณี "ไม่มีจริง" เป๊ะ
   test('คำขอเป็นของคนอื่น → PAYMENT_NOT_FOUND (กัน Enumerate)', async () => {
-    paymentRepository.findById.mockResolvedValue({
-      id: 'pay-1',
-      userId: 'someone-else',
-      status: 'pending',
-    });
+    paymentRepository.findByIdForUser.mockResolvedValue(null);
     await expect(paymentService.notifyPaymentSubmitted('pay-1', USER_ID)).rejects.toMatchObject({
       code: 'PAYMENT_NOT_FOUND',
     });
   });
 
   test('คำขอไม่ได้ pending แล้ว → PAYMENT_NOT_PENDING', async () => {
-    paymentRepository.findById.mockResolvedValue({
+    paymentRepository.findByIdForUser.mockResolvedValue({
       id: 'pay-1',
       userId: USER_ID,
       status: 'confirmed',
@@ -460,14 +463,18 @@ describe('attachSlipImage', () => {
 
     const result = await paymentService.attachSlipImage(
       'pay-1',
+      USER_ID,
       'https://cdn.test/slip.jpg',
       'hash-abc'
     );
 
+    // Security Audit: userId ต้องถูกส่งต่อให้ Repository ผ่าน queryForUser (Argument
+    // ที่ 4 ตาม Signature ของ updateSlipImageUrl(id, slipImageUrl, slipHash, userId))
     expect(paymentRepository.updateSlipImageUrl).toHaveBeenCalledWith(
       'pay-1',
       'https://cdn.test/slip.jpg',
-      'hash-abc'
+      'hash-abc',
+      USER_ID
     );
     expect(result).toMatchObject({ id: 'pay-1', slipImageUrl: 'https://cdn.test/slip.jpg' });
   });
@@ -505,6 +512,23 @@ describe('assertSlipNotReused', () => {
       code: 'SLIP_ALREADY_USED',
     });
     expect(paymentRepository.findConfirmedBySlipHash).toHaveBeenCalledWith('hash-reused');
+  });
+
+  // ── Security Audit (Cross-User Isolation, รอบ 2): ปิดช่องรั่ว UUID ของคนอื่น ──
+  // เดิม details ยัด existingPaymentId (Payment ID ของ "คนอื่น" ที่เคยใช้สลิปนี้
+  // ไปแล้ว) ซึ่งเสี่ยงรั่วออกไปถ้า Controller ในอนาคตเปลี่ยนมา Include err.details
+  // (Pattern ที่ dcaPlans/transactions controller ทำอยู่แล้วกับ Error Class อื่น)
+  test('Error details ต้องไม่มี existingPaymentId ของคนอื่นรั่วออกมา', async () => {
+    paymentRepository.findConfirmedBySlipHash.mockResolvedValue({
+      id: 'pay-of-someone-else',
+      status: 'confirmed',
+    });
+
+    const err = await paymentService.assertSlipNotReused('hash-reused').catch((e) => e);
+
+    expect(err.code).toBe('SLIP_ALREADY_USED');
+    expect(err.details).not.toHaveProperty('existingPaymentId');
+    expect(JSON.stringify(err.details)).not.toContain('pay-of-someone-else');
   });
 
   test('slip_hash ไม่เคยมี Payment ที่ confirmed ตรงกันเลย → ผ่านปกติ (ไม่ throw)', async () => {

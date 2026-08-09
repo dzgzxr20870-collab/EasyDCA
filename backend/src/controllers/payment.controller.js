@@ -125,7 +125,7 @@ async function uploadSlip(req, res) {
 
     // 3) Upload (Validate MIME/ขนาดในตัว) แล้วผูก URL+hash เข้าคำขอ (Service เดียวกับ LINE)
     const slipImageUrl = await storageService.uploadPaymentSlip(req.params.id, buffer, contentType);
-    await paymentService.attachSlipImage(req.params.id, slipImageUrl, slipHash);
+    await paymentService.attachSlipImage(req.params.id, req.user.id, slipImageUrl, slipHash);
 
     return res.status(200).json({ status: 'slip_attached', slipImageUrl });
   } catch (err) {

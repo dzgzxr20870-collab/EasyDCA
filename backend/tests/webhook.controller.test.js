@@ -1664,6 +1664,7 @@ describe('handleEvent — Image (แนบสลิปตอนแจ้งช�
     );
     expect(paymentService.attachSlipImage).toHaveBeenCalledWith(
       'pay-1',
+      'user-1',
       'https://cdn.test/payment-slips/pay-1-1.jpg',
       'hash-abc'
     );
@@ -1734,6 +1735,7 @@ describe('handleEvent — Image (แนบสลิปตอนแจ้งช�
     expect(storageService.uploadPaymentSlip).toHaveBeenCalled();
     expect(paymentService.attachSlipImage).toHaveBeenCalledWith(
       'pay-1',
+      'user-1',
       'https://cdn.test/payment-slips/pay-1-new2.jpg',
       'hash-second'
     );
@@ -1917,8 +1919,8 @@ describe('handleEvent — Image (แนบสลิปตอนแจ้งช�
     await handleEvent(imageEvent('img-1'));
     await handleEvent(imageEvent('img-2'));
 
-    expect(paymentService.attachSlipImage).toHaveBeenNthCalledWith(1, 'pay-1', 'https://cdn.test/slip-1.jpg', 'hash-1');
-    expect(paymentService.attachSlipImage).toHaveBeenNthCalledWith(2, 'pay-1', 'https://cdn.test/slip-2.jpg', 'hash-2');
+    expect(paymentService.attachSlipImage).toHaveBeenNthCalledWith(1, 'pay-1', 'user-1', 'https://cdn.test/slip-1.jpg', 'hash-1');
+    expect(paymentService.attachSlipImage).toHaveBeenNthCalledWith(2, 'pay-1', 'user-1', 'https://cdn.test/slip-2.jpg', 'hash-2');
   });
 });
 

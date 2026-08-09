@@ -1266,7 +1266,7 @@ async function handlePaymentSlipImage(event, pending, user) {
   const isFirstSlip = !pending.slipImageUrl;
 
   const slipImageUrl = await storageService.uploadPaymentSlip(pending.id, buffer, contentType);
-  await paymentService.attachSlipImage(pending.id, slipImageUrl, slipHash);
+  await paymentService.attachSlipImage(pending.id, user.id, slipImageUrl, slipHash);
 
   // ⚠️ Bug Fix: เดิมจบแค่ตรงนี้ — บันทึก URL แล้วตอบผู้ใช้ว่า "รอ Admin ตรวจสอบ" ทั้งที่
   // ไม่มีอะไรถูกส่งไปหา Admin เลย ต้องรอผู้ใช้กดปุ่ม "แจ้งชำระแล้ว" บนการ์ด QR อีกทีถึงจะ

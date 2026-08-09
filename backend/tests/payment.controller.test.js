@@ -297,7 +297,12 @@ describe('POST /payment/:id/slip — uploadSlip', () => {
 
     expect(paymentService.assertPaymentClaimableByUser).toHaveBeenCalledWith('pay-1', 'user-1');
     expect(storageService.uploadPaymentSlip).toHaveBeenCalledWith('pay-1', expect.any(Buffer), 'image/jpeg');
-    expect(paymentService.attachSlipImage).toHaveBeenCalledWith('pay-1', 'https://cdn.test/pay-1.jpg', 'deadbeef');
+    expect(paymentService.attachSlipImage).toHaveBeenCalledWith(
+      'pay-1',
+      'user-1',
+      'https://cdn.test/pay-1.jpg',
+      'deadbeef'
+    );
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith({ status: 'slip_attached', slipImageUrl: 'https://cdn.test/pay-1.jpg' });
   });

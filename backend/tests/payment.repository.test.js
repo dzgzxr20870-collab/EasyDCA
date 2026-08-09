@@ -160,7 +160,7 @@ describe('findPendingByUserId', () => {
 });
 
 describe('updateSlipImageUrl', () => {
-  test('อัปเดตเฉพาะ slip_image_url ตาม id (ไม่แตะ status) → คืน payment ที่อัปเดต', async () => {
+  test('อัปเดตเฉพาะ slip_image_url ตาม id + user_id (ไม่แตะ status) → คืน payment ที่อัปเดต', async () => {
     __query.maybeSingle.mockResolvedValue({
       data: {
         id: 'pay-1',
@@ -172,24 +172,31 @@ describe('updateSlipImageUrl', () => {
       error: null,
     });
 
-    const result = await paymentRepository.updateSlipImageUrl('pay-1', 'https://cdn.test/slip.jpg');
+    const result = await paymentRepository.updateSlipImageUrl(
+      'pay-1',
+      'https://cdn.test/slip.jpg',
+      undefined,
+      'user-1'
+    );
 
     expect(supabaseAdmin.from).toHaveBeenCalledWith('payments');
     expect(__query.update).toHaveBeenCalledWith({ slip_image_url: 'https://cdn.test/slip.jpg' });
     expect(__query.eq).toHaveBeenCalledWith('id', 'pay-1');
-    // ไม่มี Guard status='pending' (ต่างจาก claimForApproval) — .eq เรียกครั้งเดียว (id)
-    expect(__query.eq).toHaveBeenCalledTimes(1);
+    // Security Audit: queryForUser ต้องต่อ .eq('user_id', userId) ให้เสมอ
+    expect(__query.eq).toHaveBeenCalledWith('user_id', 'user-1');
     expect(result).toMatchObject({ id: 'pay-1', slipImageUrl: 'https://cdn.test/slip.jpg' });
   });
 
   test('ไม่พบ id → คืน null', async () => {
     __query.maybeSingle.mockResolvedValue({ data: null, error: null });
-    expect(await paymentRepository.updateSlipImageUrl('nope', 'url')).toBeNull();
+    expect(await paymentRepository.updateSlipImageUrl('nope', 'url', undefined, 'user-1')).toBeNull();
   });
 
   test('DB error → throw', async () => {
     __query.maybeSingle.mockResolvedValue({ data: null, error: { message: 'boom' } });
-    await expect(paymentRepository.updateSlipImageUrl('pay-1', 'url')).rejects.toThrow('boom');
+    await expect(
+      paymentRepository.updateSlipImageUrl('pay-1', 'url', undefined, 'user-1')
+    ).rejects.toThrow('boom');
   });
 
   // Payment Beta (migration 015) — slipHash เป็น Parameter ที่ 3 (Optional)
@@ -209,7 +216,8 @@ describe('updateSlipImageUrl', () => {
     const result = await paymentRepository.updateSlipImageUrl(
       'pay-1',
       'https://cdn.test/slip.jpg',
-      'hash-abc'
+      'hash-abc',
+      'user-1'
     );
 
     expect(__query.update).toHaveBeenCalledWith({
@@ -217,6 +225,71 @@ describe('updateSlipImageUrl', () => {
       slip_hash: 'hash-abc',
     });
     expect(result).toMatchObject({ id: 'pay-1', slipHash: 'hash-abc' });
+  });
+
+  // ── Security Audit (Cross-User Isolation, รอบ 2) ─────────────────────────
+  test.each([
+    ['undefined', undefined],
+    ['null', null],
+    ['สตริงว่าง', ''],
+  ])('userId = %s → throw MISSING_USER_ID ไม่ยิง Query เลย', async (_label, bad) => {
+    await expect(
+      paymentRepository.updateSlipImageUrl('pay-1', 'url', undefined, bad)
+    ).rejects.toMatchObject({ code: 'MISSING_USER_ID' });
+  });
+});
+
+// ── Security Audit (Cross-User Isolation, รอบ 2) ────────────────────────────
+// findById(id) เดิมแยกเป็น findByIdForUser (User-owned, Ownership กรองที่ Query)
+// และ findByIdPublic (Endpoint QR ที่ Public ตามดีไซน์ — reason='public-endpoint')
+describe('findByIdForUser', () => {
+  test('คืน Payment ที่ตรง id + user_id', async () => {
+    __query.maybeSingle.mockResolvedValue({
+      data: { id: 'pay-1', user_id: 'user-1', amount_thb: 59.17, status: 'pending' },
+      error: null,
+    });
+
+    const result = await paymentRepository.findByIdForUser('pay-1', 'user-1');
+
+    expect(supabaseAdmin.from).toHaveBeenCalledWith('payments');
+    expect(__query.eq).toHaveBeenCalledWith('id', 'pay-1');
+    expect(__query.eq).toHaveBeenCalledWith('user_id', 'user-1');
+    expect(result).toMatchObject({ id: 'pay-1', userId: 'user-1' });
+  });
+
+  test.each([
+    ['undefined', undefined],
+    ['null', null],
+    ['สตริงว่าง', ''],
+  ])('userId = %s → throw MISSING_USER_ID', async (_label, bad) => {
+    await expect(paymentRepository.findByIdForUser('pay-1', bad)).rejects.toMatchObject({
+      code: 'MISSING_USER_ID',
+    });
+  });
+
+  test('DB error → throw', async () => {
+    __query.maybeSingle.mockResolvedValue({ data: null, error: { message: 'boom' } });
+    await expect(paymentRepository.findByIdForUser('pay-1', 'user-1')).rejects.toThrow('boom');
+  });
+});
+
+describe('findByIdPublic', () => {
+  test('คืน Payment โดยไม่กรอง user_id (ใช้เฉพาะ Endpoint QR ที่ Public ตามดีไซน์)', async () => {
+    __query.maybeSingle.mockResolvedValue({
+      data: { id: 'pay-1', user_id: 'user-1', amount_thb: 59.17, status: 'pending' },
+      error: null,
+    });
+
+    const result = await paymentRepository.findByIdPublic('pay-1');
+
+    expect(supabaseAdmin.from).toHaveBeenCalledWith('payments');
+    expect(__query.eq).toHaveBeenCalledWith('id', 'pay-1');
+    expect(result).toMatchObject({ id: 'pay-1' });
+  });
+
+  test('DB error → throw', async () => {
+    __query.maybeSingle.mockResolvedValue({ data: null, error: { message: 'boom' } });
+    await expect(paymentRepository.findByIdPublic('pay-1')).rejects.toThrow('boom');
   });
 });
 

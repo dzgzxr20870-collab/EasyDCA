@@ -136,11 +136,11 @@ async function requestPayment(userId, billingPeriod) {
 // เป็นของผู้ใช้คนนี้ และยัง pending คืน payment ให้ Controller ไปสร้างข้อความ
 // Push หา Admin เอง (ไม่ยิง LINE API ที่ Service Layer ตาม Pattern เดิมของโปรเจค)
 async function notifyPaymentSubmitted(paymentId, userId) {
-  const payment = await paymentRepository.findById(paymentId);
+  // Ownership กรองที่ชั้น Query จริงแล้ว (queryForUser) — คืน null ทั้งกรณี
+  // "ไม่มีจริง" และ "ไม่ใช่เจ้าของ" แยกไม่ออกโดยเจตนา (กัน Enumerate)
+  const payment = await paymentRepository.findByIdForUser(paymentId, userId);
 
-  // ตรวจ user_id ตรงกับผู้ขอ — กันคนอื่นมา notify คำขอที่ไม่ใช่ของตน
-  // (ตอบ NOT_FOUND เหมือนกันทั้งกรณีไม่มีจริงและไม่ใช่เจ้าของ กัน Enumerate)
-  if (!payment || payment.userId !== userId) {
+  if (!payment) {
     throw new PaymentServiceError('PAYMENT_NOT_FOUND', `Payment ${paymentId} not found`, {
       paymentId,
     });
@@ -175,9 +175,11 @@ async function notifyPaymentSubmitted(paymentId, userId) {
 // ตอบ PAYMENT_NOT_FOUND เหมือนกันทั้งกรณีไม่มีจริงและไม่ใช่เจ้าของ (กัน Enumerate —
 // Pattern เดียวกับ notifyPaymentSubmitted) — คืน payment ให้ Controller ทำงานต่อ
 async function assertPaymentClaimableByUser(paymentId, userId) {
-  const payment = await paymentRepository.findById(paymentId);
+  // Ownership กรองที่ชั้น Query จริงแล้ว (queryForUser) — Pattern เดียวกับ
+  // notifyPaymentSubmitted
+  const payment = await paymentRepository.findByIdForUser(paymentId, userId);
 
-  if (!payment || payment.userId !== userId) {
+  if (!payment) {
     throw new PaymentServiceError('PAYMENT_NOT_FOUND', `Payment ${paymentId} not found`, {
       paymentId,
     });
@@ -206,8 +208,12 @@ async function findPendingByUserId(userId) {
 // API ที่ชั้นนี้ (Controller เป็นผู้ดึง Content + อัปโหลดแล้วส่ง URL ที่ได้เข้ามา)
 // slipHash (Payment Beta — migration 015) เป็น Optional: Controller คำนวณผ่าน
 // hashSlipImage แล้วส่งเข้ามาพร้อมกัน เพื่อบันทึกไว้ตรวจจับการส่งสลิปซ้ำในอนาคต
-async function attachSlipImage(paymentId, slipImageUrl, slipHash) {
-  return paymentRepository.updateSlipImageUrl(paymentId, slipImageUrl, slipHash);
+//
+// ⚠️ Security Audit (Cross-User Isolation, รอบ 2): userId เป็น Parameter บังคับ
+// (Thread ต่อให้ Repository ผ่าน queryForUser) — ทั้งสอง Caller (Web Controller /
+// LINE Webhook) ตรวจ Ownership ของ Payment มาก่อนเรียกฟังก์ชันนี้อยู่แล้ว
+async function attachSlipImage(paymentId, userId, slipImageUrl, slipHash) {
+  return paymentRepository.updateSlipImageUrl(paymentId, slipImageUrl, slipHash, userId);
 }
 
 // คำนวณ SHA-256 Hash (Hex) ของรูปสลิป — ใช้ Node built-in crypto (ไม่เพิ่ม Dependency)
@@ -227,10 +233,19 @@ function hashSlipImage(buffer) {
 async function assertSlipNotReused(slipHash) {
   const existing = await paymentRepository.findConfirmedBySlipHash(slipHash);
   if (existing) {
+    // ⚠️ Security Audit: ห้ามใส่ existing.id (Payment ID ของ "คนอื่น" ที่เคยใช้
+    // สลิปนี้ไปแล้ว) ลงใน details — details ของ PaymentServiceError อาจถูกส่งกลับ
+    // Client ได้ในอนาคตถ้า Controller เปลี่ยนมา Include (Pattern ที่ dcaPlans.
+    // controller/transactions.controller ทำอยู่แล้วกับ Error Class อื่น) แม้จะ
+    // เป็นแค่ UUID ก็ไม่ควรให้ผู้ใช้คนหนึ่งรู้ Payment ID ของอีกคน — Log ฝั่ง
+    // Server ไว้เพื่อ Audit แทน (ไม่ใช่ข้อมูลที่ผู้ใช้ปลายทางควรเห็น)
+    console.warn(
+      `[payment] assertSlipNotReused: slip already used by another confirmed payment (existingPaymentId=${existing.id})`
+    );
     throw new PaymentServiceError(
       'SLIP_ALREADY_USED',
       'This slip image has already been used for an approved payment',
-      { slipHash, existingPaymentId: existing.id }
+      { slipHash }
     );
   }
 }
@@ -243,7 +258,7 @@ async function assertSlipNotReused(slipHash) {
 // เป็น 404 เหมือนกัน) — ผู้เรียกต้องใช้ payment.amountThb จากที่นี่ (ค่าใน DB)
 // สร้าง QR เท่านั้น ห้ามเชื่อยอดจาก Query String ใด ๆ (กันปลอมยอดในรูป QR)
 async function getPendingPaymentForQr(paymentId) {
-  const payment = await paymentRepository.findById(paymentId);
+  const payment = await paymentRepository.findByIdPublic(paymentId);
 
   if (!payment || payment.amountReleasedAt !== null) {
     throw new PaymentServiceError(
