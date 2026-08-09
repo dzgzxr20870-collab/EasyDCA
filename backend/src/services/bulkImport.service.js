@@ -136,12 +136,14 @@ async function previewBatch(userId, rawText, options = {}) {
 
 // ยืนยัน/ยกเลิก Batch — Wrapper บาง ๆ ให้ Controller เรียกผ่าน Service Layer เดียวกัน
 // (ไม่แตะ pendingTransactionService ตรงจาก Controller — Layering เดียวกับจุดอื่น)
-async function confirmBatch(batchId, options = {}) {
-  return pendingTransactionService.confirmBatch(batchId, options);
+// ⚠️ userId บังคับ (Security Audit — Cross-User Isolation): ส่งต่อให้ชั้นล่างกรอง
+// user_id ที่ตัว Query ห้ามตัดทิ้งเพราะ "Wrapper บางๆ" — batchId มาจาก Postback
+async function confirmBatch(batchId, userId, options = {}) {
+  return pendingTransactionService.confirmBatch(batchId, userId, options);
 }
 
-async function cancelBatch(batchId) {
-  return pendingTransactionService.cancelBatch(batchId);
+async function cancelBatch(batchId, userId) {
+  return pendingTransactionService.cancelBatch(batchId, userId);
 }
 
 module.exports = {

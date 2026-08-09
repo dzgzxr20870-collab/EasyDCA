@@ -73,10 +73,16 @@ function setupPendingFake() {
     pendingStore.set(id, row);
     return row;
   });
-  pendingRepository.findById.mockImplementation(async (id) => pendingStore.get(id) ?? null);
-  pendingRepository.claimForConfirm.mockImplementation(async (id) => {
+  // ⚠️ Fake ต้องบังคับ Ownership เหมือน `.eq('user_id', userId)` ของจริง — ถ้า Fake
+  // ปล่อยผ่านทุก userId เทสต์จะเขียวทั้งที่ของจริงรั่ว (Test หลอกแบบที่
+  // AI_WORK_POLICY § 6 เตือนไว้)
+  pendingRepository.findByIdForUser.mockImplementation(async (id, userId) => {
     const row = pendingStore.get(id);
-    if (!row || row.status !== 'pending') return null;
+    return row && row.userId === userId ? row : null;
+  });
+  pendingRepository.claimForConfirm.mockImplementation(async (id, userId) => {
+    const row = pendingStore.get(id);
+    if (!row || row.userId !== userId || row.status !== 'pending') return null;
     row.status = 'confirmed';
     return row;
   });

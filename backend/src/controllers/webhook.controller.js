@@ -548,10 +548,18 @@ async function routePostback(user, data) {
 
   switch (action) {
     case 'confirm': {
-      const { commandType, result, pending } = await pendingService.confirmPending(pendingId, {
-        plan: user.plan,
-        planExpiresAt: user.planExpiresAt,
-      });
+      // ⚠️ user.id มาจาก resolveUser(event.source.userId) ที่ผ่าน LINE Signature
+      // verify แล้วเท่านั้น — ไม่ใช่ค่าจาก Postback (pendingId คือค่าจาก Postback)
+      // ชั้นล่างกรอง user_id ที่ตัว Query ทำให้กด pendingId ของคนอื่นได้แค่
+      // PENDING_NOT_FOUND (Security Audit — Cross-User Isolation)
+      const { commandType, result, pending } = await pendingService.confirmPending(
+        pendingId,
+        user.id,
+        {
+          plan: user.plan,
+          planExpiresAt: user.planExpiresAt,
+        }
+      );
 
       // แนบรูปสลิป (S8) — ทำ "หลัง" ธุรกรรมถูกบันทึกสำเร็จแล้วเสมอ และ Fail Isolated
       // เต็มรูปแบบ: ถ้าแนบไม่สำเร็จ (Storage/DB ล่ม) ห้าม Rollback ธุรกรรมที่บันทึกไป
@@ -571,7 +579,7 @@ async function routePostback(user, data) {
     }
 
     case 'cancel': {
-      await pendingService.cancelPending(pendingId);
+      await pendingService.cancelPending(pendingId, user.id);
       return flexMessage.buildCancelledMessage();
     }
 
@@ -579,7 +587,7 @@ async function routePostback(user, data) {
       // Phase นี้ยังไม่มี Stateful Edit — ยกเลิกรายการเดิมแบบ Best-effort
       // (ถ้า resolve ไปแล้วก็ไม่เป็นไร) แล้วแนะนำให้พิมพ์คำสั่งใหม่
       try {
-        await pendingService.cancelPending(pendingId);
+        await pendingService.cancelPending(pendingId, user.id);
       } catch (cancelErr) {
         console.error(`[webhook] edit: best-effort cancel failed: ${cancelErr.message}`);
       }
@@ -728,7 +736,7 @@ async function routePostback(user, data) {
     // เดียวกัน (migration 008) ปุ่มเดียวจัดการทั้งก้อน — Error (BATCH_NOT_FOUND
     // ถ้า Batch ไม่พบเลย) ทะลุขึ้นไปให้ replyWithError แปลไทยตามปกติ
     case 'confirm_bulk_import': {
-      const result = await bulkImportService.confirmBatch(params.get('batchId'), {
+      const result = await bulkImportService.confirmBatch(params.get('batchId'), user.id, {
         plan: user.plan,
         planExpiresAt: user.planExpiresAt,
       });
@@ -736,7 +744,7 @@ async function routePostback(user, data) {
     }
 
     case 'cancel_bulk_import': {
-      await bulkImportService.cancelBatch(params.get('batchId'));
+      await bulkImportService.cancelBatch(params.get('batchId'), user.id);
       return flexMessage.buildCancelledMessage();
     }
 

@@ -279,12 +279,12 @@ describe('confirmBatch / cancelBatch — Wrapper บาง ๆ', () => {
   test('confirmBatch ส่งต่อ batchId + options ให้ pendingTransactionService.confirmBatch (Bug Fix: Thread options)', async () => {
     pendingTransactionService.confirmBatch.mockResolvedValue({ total: 2, succeeded: [], failed: [] });
 
-    const result = await bulkImportService.confirmBatch('batch-1', {
+    const result = await bulkImportService.confirmBatch('batch-1', 'user-1', {
       plan: 'premium',
       planExpiresAt: '2026-08-04T00:00:00.000Z',
     });
 
-    expect(pendingTransactionService.confirmBatch).toHaveBeenCalledWith('batch-1', {
+    expect(pendingTransactionService.confirmBatch).toHaveBeenCalledWith('batch-1', 'user-1', {
       plan: 'premium',
       planExpiresAt: '2026-08-04T00:00:00.000Z',
     });
@@ -294,15 +294,29 @@ describe('confirmBatch / cancelBatch — Wrapper บาง ๆ', () => {
   test('confirmBatch ไม่ส่ง options มา → ส่งต่อ {} (Default) ไม่ throw', async () => {
     pendingTransactionService.confirmBatch.mockResolvedValue({ total: 1, succeeded: [], failed: [] });
 
-    await bulkImportService.confirmBatch('batch-2');
+    await bulkImportService.confirmBatch('batch-2', 'user-1');
 
-    expect(pendingTransactionService.confirmBatch).toHaveBeenCalledWith('batch-2', {});
+    expect(pendingTransactionService.confirmBatch).toHaveBeenCalledWith('batch-2', 'user-1', {});
+  });
+
+  // ── Security Audit (Cross-User Isolation) ─────────────────────────────────
+  // Wrapper บางๆ ต้องส่ง userId ต่อให้ชั้นล่างเสมอ — ถ้าตัดทิ้ง (เช่น Refactor
+  // แล้วลืม) ชั้นล่างจะกลายเป็น Query ข้ามบัญชี Test นี้ Lock Contract นั้นไว้
+  test('confirmBatch/cancelBatch ต้องส่ง userId ต่อให้ชั้นล่างเสมอ (ห้ามตัดทิ้ง)', async () => {
+    pendingTransactionService.confirmBatch.mockResolvedValue({ total: 0, succeeded: [], failed: [] });
+    pendingTransactionService.cancelBatch.mockResolvedValue({ total: 0, cancelled: 0, failed: [] });
+
+    await bulkImportService.confirmBatch('batch-9', 'user-owner');
+    await bulkImportService.cancelBatch('batch-9', 'user-owner');
+
+    expect(pendingTransactionService.confirmBatch.mock.calls[0][1]).toBe('user-owner');
+    expect(pendingTransactionService.cancelBatch.mock.calls[0][1]).toBe('user-owner');
   });
 
   test('cancelBatch ส่งต่อให้ pendingTransactionService.cancelBatch', async () => {
     pendingTransactionService.cancelBatch.mockResolvedValue({ total: 2, cancelled: 2, failed: [] });
-    const result = await bulkImportService.cancelBatch('batch-1');
-    expect(pendingTransactionService.cancelBatch).toHaveBeenCalledWith('batch-1');
+    const result = await bulkImportService.cancelBatch('batch-1', 'user-1');
+    expect(pendingTransactionService.cancelBatch).toHaveBeenCalledWith('batch-1', 'user-1');
     expect(result).toEqual({ total: 2, cancelled: 2, failed: [] });
   });
 });

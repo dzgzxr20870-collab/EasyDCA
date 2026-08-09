@@ -124,11 +124,20 @@ async function createPending(userId, parsed, options = {}) {
 // เปลี่ยนไประหว่างรอ Confirm) แถวจะค้างสถานะ 'confirmed' + transaction_id = NULL
 // ซึ่งแปลว่า "ผู้ใช้ยืนยันแล้วแต่ Execute ไม่สำเร็จ" — เป็นข้อมูล Debug ที่มี
 // ประโยชน์ และ Error จะถูกโยนต่อให้ Controller แปลเป็นข้อความไทยตามเดิม
-async function confirmPending(pendingId, options = {}) {
-  const claimed = await pendingRepository.claimForConfirm(pendingId);
+// ⚠️ Security Audit (Cross-User Isolation): userId เป็น Parameter "บังคับ" ตัวที่ 2
+// ไม่ใช่ Optional และต้องมาจากแหล่งที่ยืนยันตัวตนแล้วเท่านั้น (LINE `event.source.userId`
+// ที่ผ่าน Signature verify → resolveUser, หรือ JWT `sub`) — ห้ามรับจาก Postback/Body
+// เพราะ pendingId เองมาจากฝั่ง Client การกรอง user_id ทำที่ชั้น Query ทุกจุด
+// (claimForConfirm / findByIdForUser / markExpired) ไม่ใช่ดึงมาแล้วค่อยเทียบทีหลัง
+async function confirmPending(pendingId, userId, options = {}) {
+  const claimed = await pendingRepository.claimForConfirm(pendingId, userId);
 
   if (!claimed) {
-    const current = await pendingRepository.findById(pendingId);
+    // Claim ไม่ได้ = ไม่ใช่ของ User คนนี้ / ไม่มีจริง / resolve ไปแล้ว / หมดอายุ
+    // — findByIdForUser กรอง user_id ด้วย จึงคืน null สำหรับ pending ของคนอื่น
+    // ทำให้ผู้โจมตีที่ถือ pendingId ของเหยื่อได้ PENDING_NOT_FOUND เหมือนกรณี
+    // id ไม่มีจริงเป๊ะ (ไม่บอกใบ้ว่ามีอยู่จริงและเป็นของใคร)
+    const current = await pendingRepository.findByIdForUser(pendingId, userId);
 
     if (!current) {
       throw new PendingTransactionError('PENDING_NOT_FOUND', `Pending ${pendingId} not found`, {
@@ -138,7 +147,7 @@ async function confirmPending(pendingId, options = {}) {
 
     // ยัง 'pending' อยู่แต่ Claim ไม่ได้ = หมดอายุแล้ว (expires_at ผ่านไป)
     if (current.status === 'pending') {
-      await pendingRepository.markExpired(pendingId);
+      await pendingRepository.markExpired(pendingId, userId);
       throw new PendingTransactionError('PENDING_EXPIRED', `Pending ${pendingId} has expired`, {
         pendingId,
       });
@@ -171,7 +180,7 @@ async function confirmPending(pendingId, options = {}) {
   // (เพราะรายการเกิดขึ้นจริงแล้ว) ผลที่ตามมาคือ pending row นั้นค้างสถานะ
   // 'confirmed' + transaction_id = NULL ซึ่งยอมรับได้ (เป็นแค่ Trace ที่ขาดไป)
   try {
-    await pendingRepository.attachTransaction(pendingId, result.transactionId);
+    await pendingRepository.attachTransaction(pendingId, result.transactionId, userId);
   } catch (attachErr) {
     console.error(
       `[pending] attachTransaction failed AFTER commit (pendingId=${pendingId}, ` +
@@ -187,11 +196,12 @@ async function confirmPending(pendingId, options = {}) {
 }
 
 // ยกเลิก Pending (SRS.md § 2.3 — ปุ่ม ❌ ยกเลิก)
-async function cancelPending(pendingId) {
-  const cancelled = await pendingRepository.markCancelled(pendingId);
+// userId บังคับเหมือน confirmPending (เหตุผลเดียวกัน — ดู Comment ที่นั้น)
+async function cancelPending(pendingId, userId) {
+  const cancelled = await pendingRepository.markCancelled(pendingId, userId);
 
   if (!cancelled) {
-    const current = await pendingRepository.findById(pendingId);
+    const current = await pendingRepository.findByIdForUser(pendingId, userId);
 
     if (!current) {
       throw new PendingTransactionError('PENDING_NOT_FOUND', `Pending ${pendingId} not found`, {
@@ -271,8 +281,11 @@ async function createBatch(userId, validatedItems) {
 // 'free' เสมอ (Fail-closed Default ที่ transaction.service ตั้งใจไว้) ทำให้
 // Premium โดนเช็คเป็น Free ผิดๆ ตอน Confirm (Preview ตอนนั้นถูกอยู่แล้วเพราะ
 // bulkImportService.previewBatch ส่ง options มาถูกทาง แยกคนละ Call Chain กับ Confirm)
-async function confirmBatch(batchId, options = {}) {
-  const rows = await pendingRepository.findByBatchId(batchId);
+// ⚠️ userId บังคับ (Security Audit): batchId มาจาก Postback เช่นกัน — findByBatchIdForUser
+// กรอง user_id ทำให้ผู้โจมตีที่ถือ batchId ของเหยื่อได้ 0 แถว → BATCH_NOT_FOUND
+// เหมือนกรณี Batch ไม่มีจริง และ confirmPending ต่อแถวยังกรอง user_id ซ้ำอีกชั้น
+async function confirmBatch(batchId, userId, options = {}) {
+  const rows = await pendingRepository.findByBatchIdForUser(batchId, userId);
 
   if (rows.length === 0) {
     throw new PendingTransactionError('BATCH_NOT_FOUND', `Batch ${batchId} not found`, { batchId });
@@ -283,7 +296,7 @@ async function confirmBatch(batchId, options = {}) {
 
   for (const row of rows) {
     try {
-      const { result } = await confirmPending(row.id, options);
+      const { result } = await confirmPending(row.id, userId, options);
       succeeded.push(result);
     } catch (err) {
       failed.push({
@@ -301,8 +314,9 @@ async function confirmBatch(batchId, options = {}) {
 // ทีละแถว Best-effort เช่นเดียวกับ confirmBatch (Idempotent ต่อแถวที่ resolve
 // ไปแล้ว — cancelPending เดิม throw PENDING_ALREADY_RESOLVED ซึ่งถูกจับเป็น
 // failed แยกรายการ ไม่ทำให้แถวอื่นในก้อนเดียวกันไม่ถูกยกเลิกตาม)
-async function cancelBatch(batchId) {
-  const rows = await pendingRepository.findByBatchId(batchId);
+// userId บังคับเหมือน confirmBatch (เหตุผลเดียวกัน)
+async function cancelBatch(batchId, userId) {
+  const rows = await pendingRepository.findByBatchIdForUser(batchId, userId);
 
   if (rows.length === 0) {
     throw new PendingTransactionError('BATCH_NOT_FOUND', `Batch ${batchId} not found`, { batchId });
@@ -313,7 +327,7 @@ async function cancelBatch(batchId) {
 
   for (const row of rows) {
     try {
-      await cancelPending(row.id);
+      await cancelPending(row.id, userId);
       cancelledCount += 1;
     } catch (err) {
       failed.push({ id: row.id, code: err.code ?? 'INTERNAL_ERROR' });

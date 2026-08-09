@@ -1,8 +1,18 @@
 const { supabaseAdmin } = require('../config/supabase');
+const { requireUserId } = require('../utils/ownership.util');
 
 // ตารางเก็บธุรกรรมที่รอ Confirm (migrations/001_create_pending_transactions.sql)
 // ทุก Query ใช้ supabaseAdmin (service_role) เพราะ RLS เปิดแบบ service_role
 // เท่านั้น — LINE User ไม่มี auth.uid() session
+//
+// ⚠️ Security Audit (Cross-User Isolation): ทุกฟังก์ชันที่แตะแถวราย `id`/`batch_id`
+// ต้องรับ userId แล้วกรอง `.eq('user_id', userId)` ไปพร้อมกันในคำสั่งเดียว "เสมอ"
+// — ห้ามดึงมาแล้วค่อยเทียบเจ้าของในชั้น Service (Race + ลืมง่าย) และห้ามให้ userId
+// เป็น Optional เพราะ id เหล่านี้มาจาก LINE Postback ซึ่งเป็นค่าจากฝั่ง Client
+// requireUserId() ทำให้ "ลืมส่ง userId" พังทันทีแทนที่จะกลายเป็น Query ข้ามบัญชี
+//
+// ยกเว้น 2 ฟังก์ชันท้ายไฟล์ (expireOverdue / purgeResolvedBefore) ที่เป็น Cron
+// ระดับระบบโดยเจตนา — ไม่มี HTTP surface และไม่คืนข้อมูลผู้ใช้ออกไปที่ใดเลย
 function toPending(row) {
   if (!row) return null;
 
@@ -78,11 +88,17 @@ async function create(data) {
   return toPending(row);
 }
 
-async function findById(id) {
+// ดึงแถวเดียวโดยตรวจความเป็นเจ้าของไปพร้อมกัน (Pattern เดียวกับ
+// transaction.repository.findByIdForUser) — คืน null ทั้งกรณี "ไม่มีจริง" และ
+// "ไม่ใช่ของ User คนนั้น" แยกไม่ออกโดยเจตนา (ไม่บอกใบ้ว่า id นั้นมีอยู่จริงไหม)
+async function findByIdForUser(id, userId) {
+  requireUserId(userId, 'pendingTransaction.findByIdForUser');
+
   const { data, error } = await supabaseAdmin
     .from('pending_transactions')
     .select('*')
     .eq('id', id)
+    .eq('user_id', userId)
     .maybeSingle();
 
   if (error) {
@@ -95,11 +111,14 @@ async function findById(id) {
 // ทุกแถวที่มาจาก Bulk Import Batch เดียวกัน (Phase 3 Round 6 — migration 008)
 // ใช้ตอน Confirm/Cancel ทั้งก้อนด้วยปุ่มเดียว (Postback พก batch_id ตัวเดียว
 // แทนที่จะพก pending id ทีละตัวซึ่งจะเกิน Limit ความยาวของ LINE Postback data)
-async function findByBatchId(batchId) {
+async function findByBatchIdForUser(batchId, userId) {
+  requireUserId(userId, 'pendingTransaction.findByBatchIdForUser');
+
   const { data, error } = await supabaseAdmin
     .from('pending_transactions')
     .select('*')
-    .eq('batch_id', batchId);
+    .eq('batch_id', batchId)
+    .eq('user_id', userId);
 
   if (error) {
     throw new Error(`Failed to find pending transactions for batch ${batchId}: ${error.message}`);
@@ -113,13 +132,16 @@ async function findByBatchId(batchId) {
 // Request สองตัวเข้ามาพร้อมกัน มีเพียงตัวเดียวที่ Match แถวและได้ row กลับ
 // อีกตัวได้ null (แถวถูกเปลี่ยนสถานะไปแล้ว) → ไม่ Execute ซ้ำ
 // คืน record ที่ Claim สำเร็จ หรือ null ถ้า Claim ไม่ได้ (resolve แล้ว/หมดอายุ)
-async function claimForConfirm(id) {
+async function claimForConfirm(id, userId) {
+  requireUserId(userId, 'pendingTransaction.claimForConfirm');
+
   const nowIso = new Date().toISOString();
 
   const { data, error } = await supabaseAdmin
     .from('pending_transactions')
     .update({ status: 'confirmed', resolved_at: nowIso })
     .eq('id', id)
+    .eq('user_id', userId)
     .eq('status', 'pending')
     .gt('expires_at', nowIso)
     .select('*')
@@ -134,11 +156,14 @@ async function claimForConfirm(id) {
 
 // ผูก transaction_id หลัง Execute สำเร็จ (status เป็น 'confirmed' อยู่แล้วจาก
 // claimForConfirm — ผ่าน CHECK pending_tx_txn_id_only_when_confirmed)
-async function attachTransaction(id, transactionId) {
+async function attachTransaction(id, transactionId, userId) {
+  requireUserId(userId, 'pendingTransaction.attachTransaction');
+
   const { data, error } = await supabaseAdmin
     .from('pending_transactions')
     .update({ transaction_id: transactionId })
     .eq('id', id)
+    .eq('user_id', userId)
     .select('*')
     .single();
 
@@ -150,13 +175,16 @@ async function attachTransaction(id, transactionId) {
 }
 
 // ยกเลิกแบบ Atomic (เฉพาะแถวที่ยัง 'pending') คืน record หรือ null ถ้า resolve แล้ว
-async function markCancelled(id) {
+async function markCancelled(id, userId) {
+  requireUserId(userId, 'pendingTransaction.markCancelled');
+
   const nowIso = new Date().toISOString();
 
   const { data, error } = await supabaseAdmin
     .from('pending_transactions')
     .update({ status: 'cancelled', resolved_at: nowIso })
     .eq('id', id)
+    .eq('user_id', userId)
     .eq('status', 'pending')
     .select('*')
     .maybeSingle();
@@ -169,13 +197,16 @@ async function markCancelled(id) {
 }
 
 // ทำเครื่องหมายหมดอายุแถวเดียว (ใช้ตอน Confirm มาช้าเกิน expires_at)
-async function markExpired(id) {
+async function markExpired(id, userId) {
+  requireUserId(userId, 'pendingTransaction.markExpired');
+
   const nowIso = new Date().toISOString();
 
   const { data, error } = await supabaseAdmin
     .from('pending_transactions')
     .update({ status: 'expired', resolved_at: nowIso })
     .eq('id', id)
+    .eq('user_id', userId)
     .eq('status', 'pending')
     .select('*')
     .maybeSingle();
@@ -226,8 +257,8 @@ async function purgeResolvedBefore(cutoffIso) {
 
 module.exports = {
   create,
-  findById,
-  findByBatchId,
+  findByIdForUser,
+  findByBatchIdForUser,
   claimForConfirm,
   attachTransaction,
   markCancelled,

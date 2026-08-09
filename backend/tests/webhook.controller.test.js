@@ -308,7 +308,11 @@ describe('handleEvent — Postback (Confirm/Cancel/Edit)', () => {
 
     await handleEvent(postbackEvent('action=confirm&pendingId=pending-1'));
 
-    expect(pendingService.confirmPending).toHaveBeenCalledWith('pending-1', { plan: 'free' });
+    // Security Audit: ต้องส่ง user.id (จาก resolveUser หลัง Signature verify) ไปด้วย
+    // เสมอ — ชั้นล่างใช้กรอง user_id กันกด pendingId ของคนอื่น
+    expect(pendingService.confirmPending).toHaveBeenCalledWith('pending-1', FREE_USER.id, {
+      plan: 'free',
+    });
     const reply = lastReplyText();
     expect(reply).toContain('ยืนยันรายการซื้อ'); // Success Message
     expect(reply).toContain('1,700');
@@ -353,7 +357,7 @@ describe('handleEvent — Postback (Confirm/Cancel/Edit)', () => {
 
     await handleEvent(postbackEvent('action=cancel&pendingId=pending-1'));
 
-    expect(pendingService.cancelPending).toHaveBeenCalledWith('pending-1');
+    expect(pendingService.cancelPending).toHaveBeenCalledWith('pending-1', FREE_USER.id);
     const reply = lastReplyText();
     expect(reply).toContain('ยกเลิกรายการแล้ว');
   });
@@ -363,7 +367,7 @@ describe('handleEvent — Postback (Confirm/Cancel/Edit)', () => {
 
     await handleEvent(postbackEvent('action=edit&pendingId=pending-1'));
 
-    expect(pendingService.cancelPending).toHaveBeenCalledWith('pending-1');
+    expect(pendingService.cancelPending).toHaveBeenCalledWith('pending-1', FREE_USER.id);
     const reply = lastReplyText();
     expect(reply).toContain('แก้ไขรายการ');
   });
@@ -1415,7 +1419,7 @@ describe('handleEvent — Bulk Import (Phase 3 Round 6)', () => {
     // Bug Fix: ต้อง Thread options เดียวกับ case 'confirm' เดี่ยว ไม่ใช่แค่ batchId
     // (ถ้าไม่ส่ง options ไป confirmBatch จะ Fallback plan='free' ที่ transaction.
     // service ทำให้ Premium โดนเช็ค Asset Limit ผิดเป็น Free)
-    expect(bulkImportService.confirmBatch).toHaveBeenCalledWith('batch-1', {
+    expect(bulkImportService.confirmBatch).toHaveBeenCalledWith('batch-1', FREE_USER.id, {
       plan: 'free',
       planExpiresAt: undefined,
     });
@@ -1436,7 +1440,7 @@ describe('handleEvent — Bulk Import (Phase 3 Round 6)', () => {
 
     await handleEvent(postbackEvent('action=confirm_bulk_import&batchId=batch-premium'));
 
-    expect(bulkImportService.confirmBatch).toHaveBeenCalledWith('batch-premium', {
+    expect(bulkImportService.confirmBatch).toHaveBeenCalledWith('batch-premium', FREE_USER.id, {
       plan: 'premium',
       planExpiresAt: '2026-08-04T00:00:00.000Z',
     });
@@ -1474,7 +1478,7 @@ describe('handleEvent — Bulk Import (Phase 3 Round 6)', () => {
 
     await handleEvent(postbackEvent('action=cancel_bulk_import&batchId=batch-1'));
 
-    expect(bulkImportService.cancelBatch).toHaveBeenCalledWith('batch-1');
+    expect(bulkImportService.cancelBatch).toHaveBeenCalledWith('batch-1', FREE_USER.id);
     expect(lastReplyText()).toContain('ยกเลิกรายการแล้ว');
   });
 });

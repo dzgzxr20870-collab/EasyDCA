@@ -79,9 +79,15 @@ describe('create — batch_id (Phase 3 Round 6)', () => {
   });
 });
 
-describe('findByBatchId', () => {
+// findByBatchIdForUser chain: .select().eq('batch_id',..).eq('user_id',..)
+// → eq ตัวแรกต้องคืน query ต่อ, ตัวที่สองเป็นตัวที่ await ผล
+function mockBatchQueryResult(result) {
+  __query.eq.mockReturnValueOnce(__query).mockResolvedValueOnce(result);
+}
+
+describe('findByBatchIdForUser', () => {
   test('คืนทุกแถวที่มี batch_id ตรงกัน (Map เป็น camelCase)', async () => {
-    __query.eq.mockResolvedValueOnce({
+    mockBatchQueryResult({
       data: [
         { id: 'p1', batch_id: 'batch-1', status: 'pending', asset_symbol: 'BTC' },
         { id: 'p2', batch_id: 'batch-1', status: 'pending', asset_symbol: 'ETH' },
@@ -89,7 +95,7 @@ describe('findByBatchId', () => {
       error: null,
     });
 
-    const result = await pendingTransactionRepository.findByBatchId('batch-1');
+    const result = await pendingTransactionRepository.findByBatchIdForUser('batch-1', 'user-1');
 
     expect(supabaseAdmin.from).toHaveBeenCalledWith('pending_transactions');
     expect(__query.eq).toHaveBeenCalledWith('batch_id', 'batch-1');
@@ -97,13 +103,63 @@ describe('findByBatchId', () => {
     expect(result[0]).toMatchObject({ id: 'p1', batchId: 'batch-1', assetSymbol: 'BTC' });
   });
 
+  // ── Security Audit (Cross-User Isolation) ────────────────────────────────
+  // batchId มาจาก LINE Postback (ค่าฝั่ง Client) — Query ต้องกรอง user_id
+  // ไปพร้อมกันในคำสั่งเดียว ไม่ใช่ดึงมาแล้วค่อยเทียบเจ้าของทีหลัง
+  test('กรอง user_id ไปพร้อมกับ batch_id เสมอ (กันดึง Batch ของคนอื่น)', async () => {
+    mockBatchQueryResult({ data: [], error: null });
+
+    await pendingTransactionRepository.findByBatchIdForUser('batch-1', 'user-1');
+
+    expect(__query.eq).toHaveBeenCalledWith('batch_id', 'batch-1');
+    expect(__query.eq).toHaveBeenCalledWith('user_id', 'user-1');
+  });
+
   test('ไม่มีแถวเลย → คืน []', async () => {
-    __query.eq.mockResolvedValueOnce({ data: [], error: null });
-    expect(await pendingTransactionRepository.findByBatchId('batch-x')).toEqual([]);
+    mockBatchQueryResult({ data: [], error: null });
+    expect(await pendingTransactionRepository.findByBatchIdForUser('batch-x', 'user-1')).toEqual([]);
   });
 
   test('DB error → throw', async () => {
-    __query.eq.mockResolvedValueOnce({ data: null, error: { message: 'boom' } });
-    await expect(pendingTransactionRepository.findByBatchId('batch-1')).rejects.toThrow('boom');
+    mockBatchQueryResult({ data: null, error: { message: 'boom' } });
+    await expect(
+      pendingTransactionRepository.findByBatchIdForUser('batch-1', 'user-1')
+    ).rejects.toThrow('boom');
   });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+// Unit — Ownership Guard: ลืมส่ง userId ต้อง "พัง" ไม่ใช่ Query ข้ามบัญชี
+// ═════════════════════════════════════════════════════════════════════════
+// ห้าม Silent Default เด็ดขาด — "ไม่มี userId = ดึงทั้งหมด" คือรูปแบบความผิดพลาด
+// ที่อันตรายที่สุดของงานนี้ ทุกฟังก์ชันที่แตะแถวราย id ต้อง throw MISSING_USER_ID
+// ทันที และต้อง "ไม่เคยยิง Query ออกไปเลย" (ยืนยันด้วย supabaseAdmin.from)
+describe('Ownership Guard — userId เป็นพารามิเตอร์ที่ไม่ใส่ไม่ได้', () => {
+  const CASES = [
+    ['findByIdForUser', (uid) => pendingTransactionRepository.findByIdForUser('p1', uid)],
+    [
+      'findByBatchIdForUser',
+      (uid) => pendingTransactionRepository.findByBatchIdForUser('batch-1', uid),
+    ],
+    ['claimForConfirm', (uid) => pendingTransactionRepository.claimForConfirm('p1', uid)],
+    ['attachTransaction', (uid) => pendingTransactionRepository.attachTransaction('p1', 'tx-1', uid)],
+    ['markCancelled', (uid) => pendingTransactionRepository.markCancelled('p1', uid)],
+    ['markExpired', (uid) => pendingTransactionRepository.markExpired('p1', uid)],
+  ];
+
+  const BAD_USER_IDS = [
+    ['undefined', undefined],
+    ['null', null],
+    ['สตริงว่าง', ''],
+    ['ช่องว่างล้วน', '   '],
+  ];
+
+  for (const [fnName, call] of CASES) {
+    for (const [label, badUserId] of BAD_USER_IDS) {
+      test(`${fnName} — userId = ${label} → throw MISSING_USER_ID และไม่ยิง Query`, async () => {
+        await expect(call(badUserId)).rejects.toMatchObject({ code: 'MISSING_USER_ID' });
+        expect(supabaseAdmin.from).not.toHaveBeenCalled();
+      });
+    }
+  }
 });

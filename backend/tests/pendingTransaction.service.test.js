@@ -214,14 +214,14 @@ describe('confirmPending — สำเร็จ', () => {
       priceSource: 'user',
     });
 
-    const out = await confirmPending(PENDING_ID, { plan: 'free' });
+    const out = await confirmPending(PENDING_ID, USER_ID, { plan: 'free' });
 
     expect(transactionService.processBuyCommand).toHaveBeenCalledWith(
       USER_ID,
       expect.objectContaining({ symbol: 'BTC', quantity: 0.01, pricePerUnit: 3400000, type: 'crypto', date: '2026-07-02' }),
       { plan: 'free' }
     );
-    expect(pendingRepository.attachTransaction).toHaveBeenCalledWith(PENDING_ID, 'tx-1');
+    expect(pendingRepository.attachTransaction).toHaveBeenCalledWith(PENDING_ID, 'tx-1', USER_ID);
     // priceSource มาจาก result ของ processBuyCommand โดยตรง (คำนวณใหม่ตอน Commit)
     // ไม่ได้อ่านจาก Pending record ใน DB
     expect(out).toMatchObject({ commandType: 'buy', result: { transactionId: 'tx-1', priceSource: 'user' } });
@@ -242,38 +242,38 @@ describe('confirmPending — สำเร็จ', () => {
     });
     transactionService.processSellCommand.mockResolvedValue({ transactionId: 'tx-2' });
 
-    await confirmPending(PENDING_ID);
+    await confirmPending(PENDING_ID, USER_ID);
 
     expect(transactionService.processSellCommand).toHaveBeenCalledWith(
       USER_ID,
       expect.objectContaining({ symbol: 'PTT', quantity: 10, pricePerUnit: 40 })
     );
-    expect(pendingRepository.attachTransaction).toHaveBeenCalledWith(PENDING_ID, 'tx-2');
+    expect(pendingRepository.attachTransaction).toHaveBeenCalledWith(PENDING_ID, 'tx-2', USER_ID);
   });
 });
 
 describe('confirmPending — Claim ไม่ได้', () => {
   test('ไม่พบ Pending (ถูก Purge/ไม่มีจริง) → PENDING_NOT_FOUND', async () => {
     pendingRepository.claimForConfirm.mockResolvedValue(null);
-    pendingRepository.findById.mockResolvedValue(null);
+    pendingRepository.findByIdForUser.mockResolvedValue(null);
 
-    await expect(confirmPending(PENDING_ID)).rejects.toMatchObject({ code: 'PENDING_NOT_FOUND' });
+    await expect(confirmPending(PENDING_ID, USER_ID)).rejects.toMatchObject({ code: 'PENDING_NOT_FOUND' });
     expect(transactionService.processBuyCommand).not.toHaveBeenCalled();
   });
 
   test('ยัง pending แต่ Claim ไม่ได้ = หมดอายุ → markExpired + PENDING_EXPIRED', async () => {
     pendingRepository.claimForConfirm.mockResolvedValue(null);
-    pendingRepository.findById.mockResolvedValue({ id: PENDING_ID, status: 'pending' });
+    pendingRepository.findByIdForUser.mockResolvedValue({ id: PENDING_ID, status: 'pending' });
 
-    await expect(confirmPending(PENDING_ID)).rejects.toMatchObject({ code: 'PENDING_EXPIRED' });
-    expect(pendingRepository.markExpired).toHaveBeenCalledWith(PENDING_ID);
+    await expect(confirmPending(PENDING_ID, USER_ID)).rejects.toMatchObject({ code: 'PENDING_EXPIRED' });
+    expect(pendingRepository.markExpired).toHaveBeenCalledWith(PENDING_ID, USER_ID);
   });
 
   test('resolve ไปแล้ว (กดยืนยันซ้ำ) → PENDING_ALREADY_RESOLVED พร้อม status เดิม', async () => {
     pendingRepository.claimForConfirm.mockResolvedValue(null);
-    pendingRepository.findById.mockResolvedValue({ id: PENDING_ID, status: 'confirmed' });
+    pendingRepository.findByIdForUser.mockResolvedValue({ id: PENDING_ID, status: 'confirmed' });
 
-    await expect(confirmPending(PENDING_ID)).rejects.toMatchObject({
+    await expect(confirmPending(PENDING_ID, USER_ID)).rejects.toMatchObject({
       code: 'PENDING_ALREADY_RESOLVED',
       details: { status: 'confirmed' },
     });
@@ -298,7 +298,7 @@ describe('confirmPending — Execute ล้มเหลวหลัง Claim', (
     err.code = 'INSUFFICIENT_QUANTITY';
     transactionService.processSellCommand.mockRejectedValue(err);
 
-    await expect(confirmPending(PENDING_ID)).rejects.toMatchObject({ code: 'INSUFFICIENT_QUANTITY' });
+    await expect(confirmPending(PENDING_ID, USER_ID)).rejects.toMatchObject({ code: 'INSUFFICIENT_QUANTITY' });
     expect(pendingRepository.attachTransaction).not.toHaveBeenCalled();
   });
 });
@@ -323,7 +323,7 @@ describe('confirmPending — attachTransaction พังหลัง Commit (GAP
     pendingRepository.attachTransaction.mockRejectedValue(new Error('network down'));
 
     // ต้องไม่ throw — ผู้ใช้ต้องเห็นว่าสำเร็จเพราะ Transaction เกิดขึ้นจริงแล้ว
-    const out = await confirmPending(PENDING_ID, { plan: 'free' });
+    const out = await confirmPending(PENDING_ID, USER_ID, { plan: 'free' });
 
     expect(out).toMatchObject({ commandType: 'buy', result: { transactionId: 'tx-1' } });
     // processBuyCommand ถูกเรียกครั้งเดียว — ไม่ Retry สร้าง Transaction ซ้ำ
@@ -335,23 +335,23 @@ describe('cancelPending', () => {
   test('ยกเลิกสำเร็จ (ยัง pending) → คืน record', async () => {
     pendingRepository.markCancelled.mockResolvedValue({ id: PENDING_ID, status: 'cancelled' });
 
-    const out = await cancelPending(PENDING_ID);
+    const out = await cancelPending(PENDING_ID, USER_ID);
 
     expect(out).toMatchObject({ status: 'cancelled' });
   });
 
   test('ไม่พบ Pending → PENDING_NOT_FOUND', async () => {
     pendingRepository.markCancelled.mockResolvedValue(null);
-    pendingRepository.findById.mockResolvedValue(null);
+    pendingRepository.findByIdForUser.mockResolvedValue(null);
 
-    await expect(cancelPending(PENDING_ID)).rejects.toMatchObject({ code: 'PENDING_NOT_FOUND' });
+    await expect(cancelPending(PENDING_ID, USER_ID)).rejects.toMatchObject({ code: 'PENDING_NOT_FOUND' });
   });
 
   test('resolve ไปแล้ว → PENDING_ALREADY_RESOLVED', async () => {
     pendingRepository.markCancelled.mockResolvedValue(null);
-    pendingRepository.findById.mockResolvedValue({ id: PENDING_ID, status: 'confirmed' });
+    pendingRepository.findByIdForUser.mockResolvedValue({ id: PENDING_ID, status: 'confirmed' });
 
-    await expect(cancelPending(PENDING_ID)).rejects.toMatchObject({
+    await expect(cancelPending(PENDING_ID, USER_ID)).rejects.toMatchObject({
       code: 'PENDING_ALREADY_RESOLVED',
       details: { status: 'confirmed' },
     });
@@ -436,7 +436,7 @@ describe('confirmBatch (Phase 3 Round 6 — Best-effort)', () => {
   const BATCH_ID = 'batch-uuid-1';
 
   test('ทุกแถวสำเร็จ → succeeded ครบ, failed ว่าง', async () => {
-    pendingRepository.findByBatchId.mockResolvedValue([
+    pendingRepository.findByBatchIdForUser.mockResolvedValue([
       { id: 'p1', assetSymbol: 'BTC', status: 'pending', commandType: 'buy' },
       { id: 'p2', assetSymbol: 'ETH', status: 'pending', commandType: 'buy' },
     ]);
@@ -453,16 +453,17 @@ describe('confirmBatch (Phase 3 Round 6 — Best-effort)', () => {
     }));
     transactionService.processBuyCommand.mockResolvedValue({ transactionId: 'tx-x', symbol: 'BTC' });
 
-    const result = await confirmBatch(BATCH_ID);
+    const result = await confirmBatch(BATCH_ID, USER_ID);
 
-    expect(pendingRepository.findByBatchId).toHaveBeenCalledWith(BATCH_ID);
+    // Security Audit: ต้องดึง Batch แบบ scope ด้วย userId เสมอ
+    expect(pendingRepository.findByBatchIdForUser).toHaveBeenCalledWith(BATCH_ID, USER_ID);
     expect(result.total).toBe(2);
     expect(result.succeeded).toHaveLength(2);
     expect(result.failed).toEqual([]);
   });
 
   test('1 แถวล้มเหลว (DB Error ชั่วคราว) → แถวอื่นยังสำเร็จต่อ ไม่หยุดทั้ง Batch', async () => {
-    pendingRepository.findByBatchId.mockResolvedValue([
+    pendingRepository.findByBatchIdForUser.mockResolvedValue([
       { id: 'p1', assetSymbol: 'BTC', status: 'pending', commandType: 'buy' },
       { id: 'p2', assetSymbol: 'ETH', status: 'pending', commandType: 'buy' },
     ]);
@@ -481,7 +482,7 @@ describe('confirmBatch (Phase 3 Round 6 — Best-effort)', () => {
       .mockRejectedValueOnce(Object.assign(new Error('db blip'), { code: 'INTERNAL_ERROR' }))
       .mockResolvedValueOnce({ transactionId: 'tx-2', symbol: 'ETH' });
 
-    const result = await confirmBatch(BATCH_ID);
+    const result = await confirmBatch(BATCH_ID, USER_ID);
 
     expect(result.total).toBe(2);
     expect(result.succeeded).toHaveLength(1);
@@ -489,9 +490,9 @@ describe('confirmBatch (Phase 3 Round 6 — Best-effort)', () => {
   });
 
   test('batchId ไม่พบแถวใดเลย → throw BATCH_NOT_FOUND', async () => {
-    pendingRepository.findByBatchId.mockResolvedValue([]);
+    pendingRepository.findByBatchIdForUser.mockResolvedValue([]);
 
-    await expect(confirmBatch(BATCH_ID)).rejects.toMatchObject({ code: 'BATCH_NOT_FOUND' });
+    await expect(confirmBatch(BATCH_ID, USER_ID)).rejects.toMatchObject({ code: 'BATCH_NOT_FOUND' });
   });
 
   // ── Bug Fix: confirmBatch ต้อง Thread options (plan/planExpiresAt) ให้ทุกแถว ──
@@ -510,7 +511,7 @@ describe('confirmBatch (Phase 3 Round 6 — Best-effort)', () => {
     ];
 
     beforeEach(() => {
-      pendingRepository.findByBatchId.mockResolvedValue(ROWS);
+      pendingRepository.findByBatchIdForUser.mockResolvedValue(ROWS);
       pendingRepository.claimForConfirm.mockImplementation(async (id) => ({
         id,
         commandType: 'buy',
@@ -535,7 +536,7 @@ describe('confirmBatch (Phase 3 Round 6 — Best-effort)', () => {
     });
 
     test('Premium (options.plan=premium ส่งเข้ามาจริง) + 3 Asset ใหม่ → สำเร็จหมด ไม่โดน ASSET_LIMIT_REACHED', async () => {
-      const result = await confirmBatch(BATCH_ID, {
+      const result = await confirmBatch(BATCH_ID, USER_ID, {
         plan: 'premium',
         planExpiresAt: '2026-08-04T00:00:00.000Z',
       });
@@ -552,7 +553,7 @@ describe('confirmBatch (Phase 3 Round 6 — Best-effort)', () => {
     });
 
     test('Free plan (Regression) → ยังโดน ASSET_LIMIT_REACHED เหมือนเดิม ไม่ใช่ผ่านหมดเพราะแก้บั๊กผิดจุด', async () => {
-      const result = await confirmBatch(BATCH_ID, { plan: 'free', planExpiresAt: null });
+      const result = await confirmBatch(BATCH_ID, USER_ID, { plan: 'free', planExpiresAt: null });
 
       expect(result.total).toBe(3);
       expect(result.succeeded).toHaveLength(0);
@@ -564,7 +565,7 @@ describe('confirmBatch (Phase 3 Round 6 — Best-effort)', () => {
     });
 
     test('ไม่ส่ง options มาเลย (Caller เก่า/ลืมส่ง) → Default {} → เห็นเหมือน Free ทุกแถว (ยืนยัน Fail-closed Default เดิมยังทำงาน)', async () => {
-      const result = await confirmBatch(BATCH_ID);
+      const result = await confirmBatch(BATCH_ID, USER_ID);
 
       expect(result.succeeded).toHaveLength(0);
       expect(result.failed).toHaveLength(3);
@@ -579,13 +580,13 @@ describe('cancelBatch (Phase 3 Round 6)', () => {
   const BATCH_ID = 'batch-uuid-1';
 
   test('ยกเลิกทุกแถวในก้อน → cancelled ครบ, ไม่บันทึกอะไรลงพอร์ต', async () => {
-    pendingRepository.findByBatchId.mockResolvedValue([
+    pendingRepository.findByBatchIdForUser.mockResolvedValue([
       { id: 'p1', status: 'pending' },
       { id: 'p2', status: 'pending' },
     ]);
     pendingRepository.markCancelled.mockResolvedValue({ status: 'cancelled' });
 
-    const result = await cancelBatch(BATCH_ID);
+    const result = await cancelBatch(BATCH_ID, USER_ID);
 
     expect(pendingRepository.markCancelled).toHaveBeenCalledTimes(2);
     expect(result).toEqual({ total: 2, cancelled: 2, failed: [] });
@@ -593,7 +594,7 @@ describe('cancelBatch (Phase 3 Round 6)', () => {
   });
 
   test('batchId ไม่พบแถวใดเลย → throw BATCH_NOT_FOUND', async () => {
-    pendingRepository.findByBatchId.mockResolvedValue([]);
-    await expect(cancelBatch(BATCH_ID)).rejects.toMatchObject({ code: 'BATCH_NOT_FOUND' });
+    pendingRepository.findByBatchIdForUser.mockResolvedValue([]);
+    await expect(cancelBatch(BATCH_ID, USER_ID)).rejects.toMatchObject({ code: 'BATCH_NOT_FOUND' });
   });
 });
