@@ -12,8 +12,8 @@
 // ออกมาตามความจริงของ PostgREST → เทสต์แดงทันที นี่คือคุณสมบัติที่ต้องรักษาไว้
 // ห้ามแก้ Fake ให้ "ยอมผ่าน" เพื่อให้เทสต์เขียว
 //
-// รองรับเท่าที่ pendingTransaction.repository ใช้จริง (ไม่ทำเกินความจำเป็น):
-//   from / select / insert / update / delete / eq / neq / gt / lt / order /
+// รองรับเท่าที่ Repository ในโปรเจกต์ใช้จริง (ไม่ทำเกินความจำเป็น):
+//   from / select / insert / update / delete / eq / neq / gt / lt / in / order /
 //   single / maybeSingle + await ตัว Builder ตรงๆ (Thenable)
 
 const tables = {};
@@ -79,7 +79,18 @@ class FakeQuery {
     return this;
   }
 
+  in(col, values) {
+    const set = new Set(values);
+    this.filters.push((r) => set.has(r[col]));
+    return this;
+  }
+
   order() {
+    return this;
+  }
+
+  limit(n) {
+    this.limitN = n;
     return this;
   }
 
@@ -102,7 +113,10 @@ class FakeQuery {
       return [row];
     }
 
-    const matched = rows.filter((row) => this.filters.every((f) => f(row)));
+    let matched = rows.filter((row) => this.filters.every((f) => f(row)));
+    if (this.op === 'select' && typeof this.limitN === 'number') {
+      matched = matched.slice(0, this.limitN);
+    }
 
     if (this.op === 'update') {
       for (const row of matched) Object.assign(row, this.patch);
@@ -148,8 +162,11 @@ class FakeQuery {
   }
 }
 
+// from() ห่อด้วย jest.fn() ให้ Test เรียก .toHaveBeenCalled()/.toHaveBeenCalledWith()
+// ตรวจ "ไม่มีการยิง Query เลย" ได้ (เช่น กรณี Guard throw ก่อนถึง .from()) — พฤติกรรม
+// เดิมไม่เปลี่ยน (ยัง new FakeQuery(tableName) เหมือนเดิมทุกประการ แค่ Spy ได้เพิ่ม)
 function createClient() {
-  return { from: (tableName) => new FakeQuery(tableName) };
+  return { from: jest.fn((tableName) => new FakeQuery(tableName)) };
 }
 
 module.exports = { createClient, tables, resetTables, table };
