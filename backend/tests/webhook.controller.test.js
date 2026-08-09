@@ -2122,6 +2122,30 @@ describe('handleEvent — กองทุนรวมไทย (Round 7)', () =>
     expect(lastReplyText()).toContain('ไม่รู้จักสินทรัพย์นี้');
   });
 
+  // ── Bug Fix (2026-08-09, SPCX) ────────────────────────────────────────
+  // เดิม Symbol ทุกตัวที่ lookupType หาไม่เจอ (ไม่ว่าจะหน้าตาเป็น Ticker ต่างประเทศ
+  // หรือกองทุนไทย) จะถูกส่งเข้า tryResolveFundBuy (ยิง SEC API) เหมือนกันหมด — Symbol
+  // ที่หน้าตาเป็น Ticker หุ้นสหรัฐ/ตลาดอื่นชัดเจน (ตัวอักษรล้วน 1-5 ตัว) ไม่ควรหลุดไป
+  // เรียก SEC เลย เพราะ SEC ไม่ Config บน Production (SEC_NOT_CONFIGURED) → ผู้ใช้เจอ
+  // ข้อความ "กองทุนรวมยังไม่พร้อมใช้งาน" ผิดฝาผิดตัว ทั้งที่ไม่ใช่กองทุน — Regression
+  // Guard: ต้องได้ VALIDATION_ERROR ทั่วไปแทน (ไม่เดา Type ไม่ Silent Default)
+  test('(h) Symbol ไม่รู้จัก แต่หน้าตาเป็น Ticker ต่างประเทศ (1-5 ตัวอักษรล้วน) → ไม่เรียก SEC เลย ตอบ "ไม่รู้จักสินทรัพย์" ตรงๆ', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.BUY,
+      params: { symbol: 'ZQKX', quantity: 1, pricePerUnit: 10 },
+    });
+    const err = new Error('Creating a new asset requires an asset type');
+    err.code = 'VALIDATION_ERROR';
+    pendingService.createPending.mockRejectedValue(err);
+
+    await handleEvent(textEvent('ซื้อ ZQKX 1 หุ้น ราคา 10'));
+
+    expect(mutualFundService.resolveFundForBuy).not.toHaveBeenCalled();
+    const reply = lastReplyText();
+    expect(reply).toContain('ไม่รู้จักสินทรัพย์นี้');
+    expect(reply).not.toContain('กองทุนรวม');
+  });
+
   // ⚠️ Behavior เปลี่ยนโดยตั้งใจ (Bug Fix 2026-07-26): เดิม Test นี้ยืนยันว่า SEC ไม่
   // Config ต้องตกไปเป็น "ไม่รู้จักสินทรัพย์นี้" เหมือน User พิมพ์ผิด — ซึ่งเป็นการ
   // "ล็อกบั๊กไว้เป็นสเปก" จริงๆ แล้ว SEC_API_SUBSCRIPTION_KEY ไม่เคยถูกตั้งค่าบน
@@ -2510,6 +2534,35 @@ describe('handleEvent — AI Slip OCR Postback (Round 9)', () => {
     await handleEvent(postbackEvent('action=ocr_confirm&sym=BTC&side=Sell&qty=0.5&price=1500000'));
 
     expect(pendingService.createPending).not.toHaveBeenCalled();
+  });
+
+  // ── Regression: ซื้อ SPCX ผ่านสลิป AI (Bug Fix 2026-08-09) ─────────────────
+  // จำลอง Flow เดียวกับที่ผู้ใช้เจอจริงบน Production: อัปโหลดสลิปซื้อ SPCX (โบรกเกอร์
+  // Dime!) → OCR อ่านจำนวนหุ้น+ราคาต่อหน่วยถูกต้องครบ (ไม่ใช่ Amount-only) → กด
+  // "ยืนยันบันทึก" (ocr_confirm) — ก่อนแก้ ตกไปโดน SEC_NOT_CONFIGURED (ข้อความกองทุน
+  // รวมผิดฝาผิดตัว) เพราะ SPCX ยังไม่อยู่ใน symbolRegistry ตอนนั้น
+  test('ocr_confirm สลิป SPCX (หุ้นสหรัฐนอก Whitelist เดิม) → บันทึกเป็น stock_us ปกติ ไม่ตกไปโดน Error กองทุนรวม', async () => {
+    entitlement.isPremiumActive.mockReturnValue(true);
+    pendingService.createPending.mockResolvedValue({
+      id: 'p-spcx', commandType: 'buy', assetSymbol: 'SPCX',
+      quantity: 100, pricePerUnit: 5.2, amountThb: 520, priceSource: 'user',
+    });
+
+    await handleEvent(postbackEvent('action=ocr_confirm&sym=SPCX&side=buy&qty=100&price=5.2'));
+
+    // ไม่เรียก SEC เลย (SPCX Resolve type ได้จาก symbolRegistry ตรงๆ ไม่ต้องเดา)
+    expect(mutualFundService.resolveFundForBuy).not.toHaveBeenCalled();
+    expect(pendingService.createPending).toHaveBeenCalledWith(
+      FREE_USER.id,
+      expect.objectContaining({
+        command: COMMANDS.BUY,
+        params: expect.objectContaining({ symbol: 'SPCX', type: 'stock_us', quantity: 100, pricePerUnit: 5.2 }),
+      }),
+      { plan: 'free' }
+    );
+    const reply = lastReplyText();
+    expect(reply).toContain('SPCX');
+    expect(reply).not.toContain('กองทุนรวม');
   });
 
   test('ocr_edit ไม่มี side (AI อ่านไม่ชัด) → Prefill <ซื้อ/ขาย> ให้ผู้ใช้เลือกเอง', async () => {

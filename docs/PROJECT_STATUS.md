@@ -126,11 +126,19 @@ Bucket Private, Admin ตรวจ Screenshot มือ — พร้อมใ�
 2. **สร้าง Landing Page แนะนำระบบ** — รอหลังจดโดเมนเสร็จ (แยกจาก Dashboard)
 3. **Closed Beta Wave 1** — เปิดให้ Tester กดรับ Free Trial เองผ่าน
    Dashboard แล้ว (`PREMIUM_FREE_TRIAL_ENABLED=true`)
-4. SEC Fund Master List ทางยาว (สมัคร SEC API จริง) — External Dependency
+4. SEC Fund Master List ทางยาว (สมัคร SEC API จริง) — External Dependency —
+   ผลคือ Symbol ที่หน้าตาเข้าเกณฑ์กองทุนไทย (มีขีด/ยาว ≥5 ตัวอักษร) ยังเจอ
+   "ระบบข้อมูลกองทุนรวมยังไม่พร้อมใช้งาน" (`SEC_NOT_CONFIGURED`) จนกว่าจะสมัครจริง
 5. Social Link IG/TikTok — ยังเป็น Placeholder รอ Link จริง
 6. Real-time Chat Widget — ตกลงว่าทำหลัง Beta
 7. Known Limitation (ไม่บล็อก): `portfolioSummary.service.js`'s
    `byCurrency` นับเฉพาะ Asset ที่ดึงราคาสำเร็จ
+8. **`symbolRegistry.service.js` ยังเป็น Whitelist Hardcode** (227 Symbol) —
+   Bug Fix 9 ส.ค. เพิ่ม SPCX + กัน Ticker ที่ไม่อยู่ใน Whitelist หลุดไปโดน
+   Error กองทุนรวมผิดฝาผิดตัว (`looksLikeThaiFundSymbol` เช็คก่อนเรียก SEC) แต่
+   Ticker ใหม่ที่ไม่อยู่ใน Whitelist ยังต้องเพิ่มเข้า `SYMBOL_TYPES` มือทีละตัวอยู่ดี
+   (จะได้ `VALIDATION_ERROR` "ไม่รู้จักสินทรัพย์นี้" ที่ถูกต้อง แทน Error กองทุนผิดๆ
+   แต่ยังบันทึกไม่ได้จนกว่าจะเพิ่ม) — Dynamic Symbol Resolution ทางยาวยังไม่ทำ
 
 ---
 

@@ -60,6 +60,34 @@
   - โหมดขายเลือกได้เฉพาะสินทรัพย์ที่ถืออยู่จริง + แสดงยอดคงเหลือ + ปุ่ม "ขายทั้งหมด"
     (ส่ง `sellAll` ให้ Backend หายอด+ราคาตลาดเอง จึงไม่เหลือเศษค้างในพอร์ต)
 ### Fixed
+- **ซื้อหุ้นสหรัฐฯ ที่ไม่อยู่ใน Whitelist (เช่น SPCX) ขึ้น Error กองทุนรวมผิดฝาผิดตัว**
+  — ผู้ใช้อัปโหลดสลิปซื้อ SPCX (NASDAQ, ผ่านโบรกเกอร์ Dime!) จริงบน Production, OCR
+  อ่านตัวเลขถูกครบ แต่กด "ยืนยันบันทึก" แล้วได้ข้อความ "ระบบข้อมูลกองทุนรวมยังไม่พร้อม
+  ใช้งาน" (ยืนยันจาก Railway Log จริง 2026-08-09 07:30 — `webhookEventId=
+  01KZJPX5RAA9PCHF5TDMR37DAB`, `code=SEC_NOT_CONFIGURED`)
+  - Root Cause: `symbolRegistry.service.js` เป็น Whitelist Hardcode — SPCX ยังไม่อยู่
+    ในนั้น `lookupType` จึงคืน `null` แล้ว `routeCommand` (`webhook.controller.js`)
+    Fallback ไป `tryResolveFundBuy` **กับ Symbol ที่ไม่รู้ type ทุกตัวโดยไม่แยกแยะ** —
+    ยิง SEC Open Data API ที่ไม่เคยถูกสมัคร/ตั้งค่าบน Production เลย
+    (`SEC_API_SUBSCRIPTION_KEY`/`SEC_FUND_MASTER_LIST_PATH` ว่าง) แล้ว Re-throw
+    `SEC_NOT_CONFIGURED` กลายเป็นข้อความกองทุนรวมที่ผู้ใช้เห็น — ไม่ใช่ SPCX ถูกเข้าใจ
+    ผิดว่าเป็นกองทุน แต่เป็น **Ticker ไหนก็ตามที่ไม่อยู่ใน Whitelist โดนเหมือนกันหมด**
+  - แก้เร่งด่วน: เพิ่ม `SPCX: 'stock_us'` เข้า `SYMBOL_TYPES` (ตรวจ Railway Log ย้อนหลัง
+    ทุก Deployment ที่ยังดึงได้ — เจอเคสเดียวคือ SPCX)
+  - แก้ระยะยาว (กันปัญหาซ้ำกับ Ticker ในอนาคตที่ไม่มีทางใส่ Whitelist ได้ครบ): เพิ่ม
+    `symbolRegistry.looksLikeThaiFundSymbol()` เช็ค "รูปร่าง" Symbol ก่อนเรียก
+    `tryResolveFundBuy` — Ticker ต่างประเทศล้วนตัวอักษร 1-4 ตัว (เช่น SPCX, AAPL) **ไม่
+    เรียก SEC เลย** ปล่อยผ่านไปตอบ `VALIDATION_ERROR` "ไม่รู้จักสินทรัพย์นี้" ที่ถูกต้อง
+    กว่าแทน ส่วน Symbol ที่มีขีด/ยาวตั้งแต่ 5 ตัวอักษรขึ้นไป (หน้าตากองทุนไทยจริง เช่น
+    K-SELECT, SCBRM) ยังค้น SEC ตามปกติ — ไม่มี Silent Default: กรณีไม่มั่นใจ (ยาว ≥5
+    ตัวอักษรแต่ไม่ใช่กองทุนจริง) ยังปล่อยให้ลองค้น SEC ก่อนเสมอ ไม่เดาตัดสินใจแทน
+  - ⚠️ **Production Verification ค้างอยู่**: ยังไม่ได้ทดสอบซื้อ SPCX จริงผ่าน LINE ซ้ำ
+    หลัง Deploy (ตาม AI_WORK_POLICY.md § 3 ข้อ 4) — ต้องเห็นบันทึกสำเร็จจริงก่อนถือว่า
+    ปิดงาน ไม่ใช่แค่ Log ไม่มี Error
+  - Known Limitation ที่ยังไม่แก้ (แยก Scope): SEC Open Data API ยังไม่เคยถูก Config
+    บน Production เลย — กองทุนรวมไทยที่ Symbol หน้าตาเข้าเกณฑ์ (ผ่าน Heuristic ข้างต้น)
+    จะยังเจอข้อความ "ระบบข้อมูลกองทุนรวมยังไม่พร้อมใช้งาน" (`SEC_NOT_CONFIGURED`) ต่อไป
+    จนกว่าจะสมัคร/ตั้งค่า Credentials จริง
 - **แถบไฮไลต์เมนู Sidebar/Bottom-nav บน Dashboard ไม่เคยขยับตาม Section เลย** — กดเมนู
   "พอร์ตของฉัน"/"ประวัติรายการ" แล้วหน้าเลื่อนไปถูกที่ แต่ไฮไลต์ค้างที่ "แดชบอร์ด"
   - Root Cause: **ไม่มี Scroll-Spy อยู่จริงตั้งแต่แรก** — `dh-nav-active`/`dh-bn-active`

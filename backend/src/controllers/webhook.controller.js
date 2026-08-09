@@ -301,7 +301,19 @@ async function routeCommand(user, parsed) {
 
       // กองทุนรวม (Round 7) — BUY Symbol ที่ยังไม่รู้ type (ไม่ใช่ Crypto/หุ้น/ทอง)
       // อาจเป็นกองทุน → Resolve จาก SEC ก่อน (อาจตอบ Class Picker กลับไปเลย)
-      if (parsed.command === COMMANDS.BUY && !parsed.params.type) {
+      //
+      // Bug Fix (2026-08-09, SPCX): เดิมเรียก tryResolveFundBuy (ยิง SEC API) กับ
+      // Symbol ที่ไม่รู้ type "ทุกตัว" ไม่ว่าหน้าตาจะเป็นกองทุนไทยหรือไม่ — Symbol ที่เป็น
+      // Ticker หุ้นสหรัฐ/ตลาดอื่นแต่ยังไม่ได้เพิ่มเข้า symbolRegistry (เช่น SPCX ก่อนหน้านี้)
+      // จะหลุดไปโดน SEC_NOT_CONFIGURED (ข้อความ "กองทุนรวมยังไม่พร้อมใช้งาน") ผิดฝาผิดตัว
+      // ทั้งที่ไม่ใช่กองทุนเลย — เช็ค looksLikeThaiFundSymbol ก่อนเสมอ ถ้าไม่เข้าเกณฑ์
+      // กองทุนไทยเลย ปล่อยผ่านไปให้ Manual Quantity Fallback/createPending ด้านล่างตัดสิน
+      // VALIDATION_ERROR "ไม่รู้จักสินทรัพย์นี้" ตามปกติ (ไม่เดา Type ไม่ Silent Default)
+      if (
+        parsed.command === COMMANDS.BUY &&
+        !parsed.params.type &&
+        symbolRegistry.looksLikeThaiFundSymbol(parsed.params.symbol)
+      ) {
         const fundReply = await tryResolveFundBuy(user, parsed);
         if (fundReply) return fundReply;
       }

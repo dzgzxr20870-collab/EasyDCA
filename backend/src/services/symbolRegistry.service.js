@@ -285,6 +285,14 @@ const SYMBOL_TYPES = {
   // Small-cap อีกตัวที่เคยถูก Flag ไว้คู่กับ EOSE (บั๊กเดียวกัน — ยืนยัน Twelve Data
   // /quote จริงแล้วว่ามี Ticker นี้: name="Oklo Inc.", exchange="NYSE", currency="USD")
   OKLO: 'stock_us', // Oklo Inc. (NYSE)
+  // Bug Fix 2026-08-09: ผู้ใช้ส่งสลิปซื้อจริงบน Production (ผ่านโบรกเกอร์ Dime!) —
+  // Symbol ไม่อยู่ใน Whitelist ทำให้หลุดไป tryResolveFundBuy (webhook.controller.js)
+  // แล้วโดน SEC_NOT_CONFIGURED (กองทุนรวมยังไม่พร้อมใช้งาน) ผิดฝาผิดตัว ทั้งที่เป็น
+  // หุ้นสหรัฐธรรมดา — Space Exploration Technologies Corp. (SpaceX) เข้า IPO บน NASDAQ
+  // 12 มิ.ย. 2569 (ดูการแก้ Fallback Path คู่กันที่ webhook.controller.js —
+  // looksLikeThaiFundSymbol กัน Ticker ในอนาคตที่ไม่อยู่ใน Whitelist ไม่ให้หลุดไป
+  // Fund Path แบบนี้อีก)
+  SPCX: 'stock_us', // Space Exploration Technologies Corp. / SpaceX (NASDAQ)
 
   // ── ทองคำ (Phase 3 Round 7) — ราคาเป็น "บาททองคำ" (น้ำหนัก) ผ่าน Thai Gold API ──
   // แยก 2 Symbol ตาม 2 ประเภทที่ราคาต่างกัน (ทองรูปพรรณมีค่ากำเหน็จ):
@@ -536,6 +544,7 @@ const SYMBOL_NAMES = {
   TWLO: 'Twilio',
   EOSE: 'Eos Energy Enterprises',
   OKLO: 'Oklo Inc.',
+  SPCX: 'Space Exploration Technologies (SpaceX)',
 
   // ── ทองคำ ───────────────────────────────────────────────────
   GOLD: 'ทองคำแท่ง (ราคาสมาคมฯ)',
@@ -555,6 +564,31 @@ function lookupType(symbol) {
 function lookupName(symbol) {
   if (typeof symbol !== 'string') return null;
   return SYMBOL_NAMES[symbol.trim().toUpperCase()] ?? null;
+}
+
+// Bug Fix (2026-08-09, SPCX): Heuristic เดา "รูปร่าง" ของ Symbol ที่ lookupType หา
+// ไม่เจอ ว่าน่าจะเป็นชื่อย่อกองทุนรวมไทยหรือไม่ — ใช้กรอง "ก่อน" เรียก tryResolveFundBuy
+// (webhook.controller.js, ยิง SEC Open Data API) เพราะเดิมทุก Symbol ที่ไม่รู้จัก
+// (ไม่ว่าจะเป็น Ticker หุ้นสหรัฐ/ตลาดอื่นที่ยังไม่ได้เพิ่มเข้า SYMBOL_TYPES ก็ตาม) จะ
+// หลุดไปเข้า Path นี้เหมือนกันหมด แล้วโดน SEC_NOT_CONFIGURED (ข้อความ "กองทุนรวมยังไม่
+// พร้อมใช้งาน") ผิดฝาผิดตัว ทั้งที่ไม่ใช่กองทุนเลย (เคสจริง: SPCX ผ่านสลิป OCR)
+//
+// ชื่อย่อกองทุนรวมไทยจาก บลจ. จริงมักมีขีด "-" ตัวเลข หรือยาวตั้งแต่ 5 ตัวอักษรขึ้นไป
+// (เช่น K-SELECT, ONE-UGG-RA, SCBRM) ขณะที่ Ticker หุ้นสหรัฐ/ตลาดอื่นส่วนใหญ่ที่ยังไม่
+// อยู่ใน Whitelist (เช่น SPCX) สั้นแค่ 1-4 ตัวอักษรล้วน — ใช้ตัดที่ ≤4 ตัวอักษรโดยเจตนา
+// (ไม่ใช่ ≤5) เพราะ SCBRM (5 ตัวอักษร ไม่มีขีด) เป็นตัวอย่างกองทุนไทยจริงที่ระบบต้อง
+// ยังค้น SEC ได้อยู่ — ใช้ Pattern นี้แยกแบบระมัดระวังไปทาง False Negative (เดาว่า
+// "ไม่ใช่กองทุน" ทั้งที่อาจจะใช่) เพราะปลอดภัยกว่า False Positive: ผลคือแค่ Symbol
+// กองทุนสั้นมากๆ (≤4 ตัวอักษรล้วน ไม่มีขีด) ต้องไปตกที่ VALIDATION_ERROR "ไม่รู้จัก
+// สินทรัพย์นี้" แทน — ยังสื่อสารชัดเจนกับผู้ใช้อยู่ดี ไม่ใช่ Silent Default ที่บันทึก
+// อะไรผิดๆ ลง Ledger
+function looksLikeThaiFundSymbol(symbol) {
+  if (typeof symbol !== 'string') return false;
+  const s = symbol.trim().toUpperCase();
+  if (!s) return false;
+  // ตัวอักษร A-Z ล้วน 1-4 ตัว = หน้าตา Ticker ต่างประเทศทั่วไป → ไม่เข้าเกณฑ์กองทุนไทย
+  if (/^[A-Z]{1,4}$/.test(s)) return false;
+  return true;
 }
 
 // รายการสินทรัพย์ทั้งหมดที่ระบบรองรับ สำหรับ Dropdown ค้นหาบนเว็บ
@@ -577,6 +611,7 @@ function listSymbols() {
 module.exports = {
   lookupType,
   lookupName,
+  looksLikeThaiFundSymbol,
   listSymbols,
   SYMBOL_TYPES,
   SYMBOL_NAMES,
