@@ -136,19 +136,44 @@ Cross-User Isolation รายจุด Query** จึงไม่ครอบ�
   เป็นพารามิเตอร์บังคับที่ throw `MISSING_USER_ID` ถ้าว่าง (`utils/ownership.util.js`)
 - **🟠 1 จุดใน RPC (แก้แล้ว — migration 036)** — `create_transaction_locked` รับ
   `p_user_id` แต่ Lock asset ด้วย `WHERE a.id = p_asset_id` เฉยๆ ไม่เทียบเจ้าของ
-- **🟠 8 จุดที่ยังไม่แก้** — ไม่มี user filter ในตัว Query แต่ปลอดภัยอยู่เพราะ
-  Caller มีวินัย (ไม่ใช่เพราะโครงสร้างบังคับ): `transaction.findAllByAsset`,
-  `transaction.attachSlipImagePath`, `asset.findByIds`, `payment.findById`,
-  `payment.updateSlipImageUrl`, `payment.findConfirmedBySlipHash`,
-  `facebookLikeGrantRequest.findById`, `facebookLikeGrantRequest.updateStatus`
+- **🟠 8 จุด (แก้แล้ว — Data Access Helper กลาง)** — เดิมไม่มี user filter ในตัว
+  Query แต่ปลอดภัยอยู่เพราะ Caller มีวินัย (ไม่ใช่เพราะโครงสร้างบังคับ) ย้ายผ่าน
+  `queryForUser(table, userId, buildQuery)` / `queryAcrossUsers(table, reason)`
+  ใน `utils/ownership.util.js` (Registry รายชื่อตารางที่เดียวครอบทุกตารางที่มี
+  อยู่จริง + Enum เหตุผล 5 ค่า: `admin`/`cron`/`system-table`/`fraud-check`/
+  `public-endpoint`):
+  - `transaction.findAllByAsset`, `attachSlipImagePath` → `queryForUser`
+  - `asset.findByIds` → `queryForUser`
+  - `payment.findById` แยกเป็น `findByIdForUser` (`queryForUser`) กับ
+    `findByIdPublic` (`queryAcrossUsers('public-endpoint')` — เฉพาะ Endpoint QR
+    ที่เปิด Public ตามดีไซน์), `updateSlipImageUrl` → `queryForUser`
+  - `payment.findConfirmedBySlipHash` → `queryAcrossUsers('fraud-check')` (ข้าม
+    User โดยเจตนา — ตรวจจับสลิปซ้ำ) + แก้ไม่ให้ยัด `existingPaymentId` ของ
+    ผู้ใช้คนอื่นลง Error Details อีกต่อไป (เสี่ยงรั่ว UUID ถ้า Controller ในอนาคต
+    เปลี่ยนมา Include Details กลับ Client)
+  - `facebookLikeGrantRequest.findById`, `claimForReview` →
+    `queryAcrossUsers('admin')` (Admin ดู/เปลี่ยนสถานะคำขอของผู้ใช้คนอื่น)
 - **🟢 77 จุด** — 52 จุดมี `.eq('user_id', …)` ตรงๆ + 25 จุดข้ามผู้ใช้โดยเจตนา
   (Admin หลัง `requireAdmin` / Cron บน worker / ตารางระบบ `line_webhook_events`,
-  `broadcast_logs` / คืนค่าที่ไม่ใช่ข้อมูลผู้ใช้)
+  `broadcast_logs` / คืนค่าที่ไม่ใช่ข้อมูลผู้ใช้) — ยังเป็น `supabaseAdmin` ตรงๆ
+  ไม่ได้ Migrate ผ่าน Helper ในรอบนี้ (นอกขอบเขตที่ตกลงไว้)
 - **ผลดี**: ไม่พบจุดใดเลยที่รับ `userId` จาก request body/query/param — `userId`
   มาจาก JWT `sub` หรือ `event.source.userId` หลัง LINE Signature verify เท่านั้น
-- **Regression**: `tests/crossUserIsolation.regression.test.js` (19 tests) รัน
-  Repository ตัวจริงทับ Fake Supabase ที่บังคับ `.eq()` จริง — พิสูจน์ Red-Green
-  แล้ว (ถอด `.eq('user_id')` ออก → แดง 16/19 โดย Positive Control ของ B ยังเขียว 3)
+- **Regression**: `tests/crossUserIsolation.regression.test.js` (19 tests, รอบ
+  pending_transactions) + `tests/crossUserIsolationOrangePoints.regression.test.js`
+  (15 tests, รอบ 8 จุดสีส้ม) รัน Repository ตัวจริงทับ Fake Supabase ที่บังคับ
+  `.eq()` จริง — พิสูจน์ Red-Green แล้วทั้งคู่ (รอบแรก: ถอด `.eq('user_id')` ออก
+  → แดง 16/19 โดย Positive Control ยังเขียว 3; รอบสอง: ปิด `queryForUser` ไม่ให้
+  ต่อ Filter → แดงตรง 5/5 Adversarial Test โดย Positive Control + Guard Test
+  10 จุดยังเขียวครบ)
+- **Production Verification (9 ส.ค. 2026, รอบ pending_transactions)**: Push
+  `1eba7df` ขึ้น `main` แล้ว, Apply Migration 036 บน Supabase จริง (Verify Query
+  `has_owner_check = true` ผ่าน), ทดสอบซื้อ/ยกเลิกจริงผ่าน LINE ปกติ, ยืนยัน
+  Railway Deploy ทั้ง 2 Service (`EasyDCA` + `easydca-worker`) เป็น Commit นี้
+  จริงผ่านแท็บ Details (ไม่ใช่แค่ `/health`) — 6 จุดแดง + RPC ปิดสมบูรณ์จริงครบ
+  DoD 4 ชั้น
+- **Production Verification (รอบ Data Access Helper/8 จุดสีส้ม): ยังไม่ทำ** —
+  รอ Push + Deploy ก่อน (Commit อยู่ใน Local เท่านั้น ณ ตอนที่เขียนบรรทัดนี้)
 
 ### ⏳ ยังไม่ปิด (TODO ที่เหลือ)
 
@@ -165,14 +190,20 @@ Cross-User Isolation รายจุด Query** จึงไม่ครอบ�
 6. Real-time Chat Widget — ตกลงว่าทำหลัง Beta
 7. Known Limitation (ไม่บล็อก): `portfolioSummary.service.js`'s
    `byCurrency` นับเฉพาะ Asset ที่ดึงราคาสำเร็จ
-8. **Cross-User Isolation — งานที่เหลือจาก Audit 9 ส.ค.** (ไม่บล็อก Beta แต่เป็น
-   หนี้เชิงโครงสร้าง):
-   - **Data Access Helper กลาง** ยังไม่ทำ — ตกลงรูปแบบไว้แล้วว่าจะเป็น Registry
-     รายชื่อตารางที่เดียว + `queryForUser(table, userId)` (throw ถ้า userId ว่าง)
-     คู่กับ **ฟังก์ชันแยกชื่อ `queryAcrossUsers(table, reason)` ที่บังคับใส่เหตุผล**
-     สำหรับ Admin/Cron 25 จุด (grep เจอทุกจุด review ง่าย ไม่มีทางลืมแบบเงียบ)
-     ตอนนี้ `utils/ownership.util.js` เป็นแค่ Guard ขั้นต่ำของจุดที่ปิดไปแล้ว
-   - **🟠 8 จุดที่เหลือ** (รายชื่อในหัวข้อ Audit ด้านบน) ยังพึ่งวินัยของ Caller
+8. **Cross-User Isolation — ปิดครบแล้ว (9 ส.ค. 2026), เหลือ RLS เป็นหนี้เชิง
+   โครงสร้างที่ตัดสินใจเลื่อนไปหลัง Beta**:
+   - ✅ **Data Access Helper กลาง** สร้างเสร็จแล้ว — `utils/ownership.util.js`
+     มี `TABLE_REGISTRY` (ครอบทุกตารางที่มีอยู่จริงตาม `docs/DATABASE.md` § 2
+     รวมตารางที่ยังไม่มี Repository Code ด้วย กันของใหม่ในอนาคตหลุด Pattern) +
+     `queryForUser(table, userId, buildQuery)` (throw `MISSING_USER_ID` ถ้า
+     userId ว่าง) + `queryAcrossUsers(table, reason)` (`reason` ต้องอยู่ใน Enum
+     5 ค่า throw `INVALID_CROSS_USER_REASON` ถ้าไม่ตรง)
+   - ✅ **🟠 8 จุดที่เคยเหลือ ปิดครบทั้งหมดแล้ว** ผ่าน Helper ด้านบน (รายละเอียด
+     ในหัวข้อ Audit ด้านบน) — ไม่ต้องพึ่งวินัยของ Caller อีกต่อไป
+   - ⏳ **25 จุด Admin/Cron ที่ข้าม User โดยเจตนา ยังไม่ Migrate ผ่าน
+     `queryAcrossUsers`** — Registry รองรับแล้ว แต่ตัว Query ยังเป็น
+     `supabaseAdmin` ตรงๆ เหมือนเดิม (นอกขอบเขตรอบนี้ — ทำได้ทีละจุดในอนาคต
+     โดยไม่กระทบ Behavior เพราะ `queryAcrossUsers` ไม่กรองอะไรเพิ่ม)
    - **ยังไม่เปิด RLS** — `service_role` bypass RLS ทั้งหมด แปลว่า **โค้ดเป็นกำแพง
      ชั้นเดียว** ตัดสินใจแล้วว่ายังไม่ทำในรอบนี้ เพราะการเปิด RLS จะไม่ช่วยอะไรเลย
      จนกว่าจะเปลี่ยนวิธีเชื่อมต่อ (ต้องเลิกใช้ service_role สำหรับ Query ของผู้ใช้
