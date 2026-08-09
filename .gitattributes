@@ -1,0 +1,28 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# บังคับ Line Ending — กัน CRLF Churn เวลาอ่าน Repo ผ่าน Environment ต่างกัน
+# ═══════════════════════════════════════════════════════════════════════════
+# ปัญหาเดิม: Repo ไม่เคยกำหนด Line Ending Policy ไว้เลย ทำให้ Environment ที่มี
+# core.autocrlf ต่างกัน (เช่น Windows core.autocrlf=true เทียบกับ WSL/Docker/
+# Sandbox ที่ core.autocrlf=false หรือ input) ตีความ Working Tree ต่างกัน —
+# git status ขึ้น Modified เป็นสิบๆ ไฟล์ทั้งที่เนื้อหาไม่ได้เปลี่ยนแม้แต่บรรทัด
+# เดียว (บรรทัดเดิมถูกมองว่าต่างเพราะ Line Ending คนละแบบ)
+#
+# ไฟล์นี้ทำให้ Git Normalize Line Ending "ที่ระดับ Object Store" เอง โดยไม่พึ่ง
+# core.autocrlf ของแต่ละเครื่อง — ทุก Environment ที่ Clone Repo นี้ได้ผลลัพธ์
+# เหมือนกันเสมอ (Text = LF ใน Repo, Binary ไม่ถูกแตะเลย)
+
+* text=auto eol=lf
+
+# ── Binary — ห้าม Git แปลง Line Ending เด็ดขาด (จะทำไฟล์เสีย) ──────────────────
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.ttf binary
+*.woff binary
+*.woff2 binary
+*.eot binary
+*.pdf binary
+*.zip binary
+*.exe binary
