@@ -45,7 +45,13 @@ Production: **035**
 ### ✅ ปิดสมบูรณ์แล้วทั้งหมด (ห้ามทำซ้ำ)
 
 **Core Correctness**: P&L Engine (Moving Average), Webhook Idempotency,
-Ownership Filter ทุก Query, Unique Constraint, PDPA (Consent+Erasure)
+Unique Constraint, PDPA (Consent+Erasure)
+
+⚠️ **แก้ข้อความที่เคยเคลมเกิน**: บรรทัดนี้เคยเขียนว่า "Ownership Filter ทุก Query"
+ปิดสมบูรณ์แล้ว — **ไม่จริง** Cross-User Isolation Audit (9 ส.ค. 2026) พบว่าตาราง
+`pending_transactions` ถูกแตะด้วย `id`/`batch_id` จาก LINE Postback โดยไม่เทียบ
+`user_id` เลย 6 จุด และ RPC `create_transaction_locked` รับ `p_user_id` แต่ไม่เคย
+ใช้ตรวจสิทธิ์เจ้าของ asset — ดูสถานะจริงในหัวข้อ Cross-User Isolation Audit ด้านล่าง
 
 **S8 ทั้งชุด**: Dashboard เว็บใหม่ (`/dashboard`), DCA Planner (CRUD ผ่านเว็บ),
 Guided Buy Flow (บันทึก DCA แบบกดปุ่มใน LINE, รองรับ USD สำหรับ crypto/stock_us)
@@ -116,7 +122,33 @@ Bucket Private, Admin ตรวจ Screenshot มือ — พร้อมใ�
 - Path Traversal (`screenshotPath`), Rate Limiting ทั้งระบบ, CORS Fail-fast,
   Twelve Data Quota Split ระหว่าง 2 Service (`TWELVE_DATA_RATE_LIMIT`)
 
-**สถานะ: Security Audit ทั้งชุดปิดสมบูรณ์ 100%**
+**สถานะ Audit รอบ 2 ส.ค.: ปิดครบตามขอบเขตที่ตรวจรอบนั้น** (เดิมเขียนว่า
+"Security Audit ทั้งชุดปิดสมบูรณ์ 100%" — ปรับถ้อยคำเพราะรอบนั้น**ไม่ได้ตรวจ
+Cross-User Isolation รายจุด Query** จึงไม่ครอบคลุมช่องที่เจอวันที่ 9 ส.ค.)
+
+**Cross-User Isolation Audit (Opus, 9 ส.ค. 2026)** — ตรวจจุดเข้าถึง DB ครบ
+**91 จุด** (+ Storage 15 op + Postgres Function 3 ตัว ตรวจข้างในทุกตัว):
+- **🔴 6 จุด (แก้แล้ว)** — `pending_transactions` ถูกยืนยัน/ยกเลิก/expire/ผูก
+  `transaction_id` ด้วย `id`/`batch_id` จาก LINE Postback **โดยไม่เทียบ `user_id`**
+  → ผู้ใช้ A ที่ถือ `pendingId` ของ B สั่งยืนยันธุรกรรมของ B ได้ (เขียนเข้า Ledger
+  ของ B ด้วย `claimed.userId`) และรายละเอียดของ B (symbol/จำนวน/ยอดเงิน/ยอดคงเหลือ)
+  ถูกตอบกลับไปในแชทของ A — แก้โดยกรอง `user_id` ที่ชั้น Query ทุกจุด + `userId`
+  เป็นพารามิเตอร์บังคับที่ throw `MISSING_USER_ID` ถ้าว่าง (`utils/ownership.util.js`)
+- **🟠 1 จุดใน RPC (แก้แล้ว — migration 036)** — `create_transaction_locked` รับ
+  `p_user_id` แต่ Lock asset ด้วย `WHERE a.id = p_asset_id` เฉยๆ ไม่เทียบเจ้าของ
+- **🟠 8 จุดที่ยังไม่แก้** — ไม่มี user filter ในตัว Query แต่ปลอดภัยอยู่เพราะ
+  Caller มีวินัย (ไม่ใช่เพราะโครงสร้างบังคับ): `transaction.findAllByAsset`,
+  `transaction.attachSlipImagePath`, `asset.findByIds`, `payment.findById`,
+  `payment.updateSlipImageUrl`, `payment.findConfirmedBySlipHash`,
+  `facebookLikeGrantRequest.findById`, `facebookLikeGrantRequest.updateStatus`
+- **🟢 77 จุด** — 52 จุดมี `.eq('user_id', …)` ตรงๆ + 25 จุดข้ามผู้ใช้โดยเจตนา
+  (Admin หลัง `requireAdmin` / Cron บน worker / ตารางระบบ `line_webhook_events`,
+  `broadcast_logs` / คืนค่าที่ไม่ใช่ข้อมูลผู้ใช้)
+- **ผลดี**: ไม่พบจุดใดเลยที่รับ `userId` จาก request body/query/param — `userId`
+  มาจาก JWT `sub` หรือ `event.source.userId` หลัง LINE Signature verify เท่านั้น
+- **Regression**: `tests/crossUserIsolation.regression.test.js` (19 tests) รัน
+  Repository ตัวจริงทับ Fake Supabase ที่บังคับ `.eq()` จริง — พิสูจน์ Red-Green
+  แล้ว (ถอด `.eq('user_id')` ออก → แดง 16/19 โดย Positive Control ของ B ยังเขียว 3)
 
 ### ⏳ ยังไม่ปิด (TODO ที่เหลือ)
 
@@ -133,7 +165,20 @@ Bucket Private, Admin ตรวจ Screenshot มือ — พร้อมใ�
 6. Real-time Chat Widget — ตกลงว่าทำหลัง Beta
 7. Known Limitation (ไม่บล็อก): `portfolioSummary.service.js`'s
    `byCurrency` นับเฉพาะ Asset ที่ดึงราคาสำเร็จ
-8. **`symbolRegistry.service.js` ยังเป็น Whitelist Hardcode** (227 Symbol) —
+8. **Cross-User Isolation — งานที่เหลือจาก Audit 9 ส.ค.** (ไม่บล็อก Beta แต่เป็น
+   หนี้เชิงโครงสร้าง):
+   - **Data Access Helper กลาง** ยังไม่ทำ — ตกลงรูปแบบไว้แล้วว่าจะเป็น Registry
+     รายชื่อตารางที่เดียว + `queryForUser(table, userId)` (throw ถ้า userId ว่าง)
+     คู่กับ **ฟังก์ชันแยกชื่อ `queryAcrossUsers(table, reason)` ที่บังคับใส่เหตุผล**
+     สำหรับ Admin/Cron 25 จุด (grep เจอทุกจุด review ง่าย ไม่มีทางลืมแบบเงียบ)
+     ตอนนี้ `utils/ownership.util.js` เป็นแค่ Guard ขั้นต่ำของจุดที่ปิดไปแล้ว
+   - **🟠 8 จุดที่เหลือ** (รายชื่อในหัวข้อ Audit ด้านบน) ยังพึ่งวินัยของ Caller
+   - **ยังไม่เปิด RLS** — `service_role` bypass RLS ทั้งหมด แปลว่า **โค้ดเป็นกำแพง
+     ชั้นเดียว** ตัดสินใจแล้วว่ายังไม่ทำในรอบนี้ เพราะการเปิด RLS จะไม่ช่วยอะไรเลย
+     จนกว่าจะเปลี่ยนวิธีเชื่อมต่อ (ต้องเลิกใช้ service_role สำหรับ Query ของผู้ใช้
+     แล้วส่ง JWT ของผู้ใช้ให้ Postgres ตรวจ `auth.uid()` เอง) ซึ่งเป็นงานใหญ่แยก
+     ต่างหาก — ควรทำเป็นกำแพงชั้น 2 หลัง Beta
+9. **`symbolRegistry.service.js` ยังเป็น Whitelist Hardcode** (227 Symbol) —
    Bug Fix 9 ส.ค. เพิ่ม SPCX + กัน Ticker ที่ไม่อยู่ใน Whitelist หลุดไปโดน
    Error กองทุนรวมผิดฝาผิดตัว (`looksLikeThaiFundSymbol` เช็คก่อนเรียก SEC) แต่
    Ticker ใหม่ที่ไม่อยู่ใน Whitelist ยังต้องเพิ่มเข้า `SYMBOL_TYPES` มือทีละตัวอยู่ดี
@@ -148,7 +193,14 @@ Bucket Private, Admin ตรวจ Screenshot มือ — พร้อมใ�
 2. Immutable Ledger — ห้าม `DELETE`/`UPDATE` Transaction, ห้าม `DELETE` User
    ตรงๆ (ใช้ Erasure/Anonymize เท่านั้น) — เขียน Ledger ทุกจุดต้องผ่าน RPC
    ที่ Lock ถูกต้อง (`create_transaction_locked`, `create_asset_locked`)
-3. Backend คือ Security Boundary เดียว — ทุก Query กรอง `userId`
+3. Backend คือ Security Boundary เดียว — ทุก Query กรอง `userId` **ที่ชั้น Query
+   เอง** (ใส่ `.eq('user_id', …)` ไปในคำสั่งเดียวกัน) ห้ามดึงมาแล้วค่อย `if` เทียบ
+   เจ้าของทีหลัง และ `userId` ต้องมาจาก JWT `sub` / `event.source.userId` ที่ผ่าน
+   LINE Signature verify เท่านั้น — **ห้ามรับจาก request body/param/postback**
+   ⚠️ บทเรียน 9 ส.ค. 2026: `id` ที่มาจาก Postback คือค่าฝั่ง Client ไม่ใช่หลักฐาน
+   ความเป็นเจ้าของ — การรับ `userId` เข้ามาใน Signature แล้วไม่ได้ใช้ตรวจสิทธิ์จริง
+   (เช่น RPC `create_transaction_locked` เดิม) อันตรายเท่ากับไม่มี `userId` เลย
+   แต่ตรวจจับยากกว่าเพราะ "อ่านผ่านๆ เหมือนปลอดภัยแล้ว"
 4. Migration ใหม่ต้อง Apply+Verify บน Supabase ก่อน Deploy Code เสมอ
 5. Label ปุ่ม LINE Quick Reply ≤20 ตัวอักษร (Unicode Code Point)
 6. Internal Navigation ต้องใช้ React Router (`<Link>`/`navigate()`) ห้าม
