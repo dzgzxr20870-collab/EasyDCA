@@ -1,4 +1,5 @@
 const { supabaseAdmin } = require('../config/supabase');
+const { queryAcrossUsers } = require('../utils/ownership.util');
 
 // ═══════════════════════════════════════════════════════════════════════════
 // facebookLikeGrantRequest.repository — คำขอ Premium ฟรีจากแคมเปญ Like Facebook
@@ -62,9 +63,13 @@ async function create(data) {
   return toRequest(row);
 }
 
+// ⚠️ Security Audit (Cross-User Isolation, รอบ 2): เดิม Query ตรงด้วย id เฉยๆ —
+// ปลอดภัยอยู่เพราะ Caller (approveRequest/rejectRequest) มาจาก Route ที่ผ่าน
+// requireAdmin แล้วเท่านั้น แต่เป็นวินัยของ Caller ไม่ใช่โครงสร้างบังคับ — ย้าย
+// ผ่าน queryAcrossUsers('facebook_like_grant_requests', 'admin') ให้ชัดเจนว่า
+// นี่คือจุดที่ตั้งใจข้าม User (Admin ดูคำขอของผู้ใช้คนอื่น) grep เจอได้ทันที
 async function findById(id) {
-  const { data, error } = await supabaseAdmin
-    .from('facebook_like_grant_requests')
+  const { data, error } = await queryAcrossUsers('facebook_like_grant_requests', 'admin')
     .select('*')
     .eq('id', id)
     .maybeSingle();
@@ -132,6 +137,11 @@ async function listByStatus(status, limit = 100) {
 // ได้แถวกลับมา อีกคนได้ null → Service ตอบ ALREADY_RESOLVED แทนการ Grant ซ้ำสองรอบ
 //
 // คืน null = มีคน Resolve ไปก่อนแล้ว / ไม่พบคำขอ | คืน request = Claim สำเร็จ
+//
+// ⚠️ Security Audit (Cross-User Isolation, รอบ 2): ข้าม User โดยเจตนา (Admin
+// เปลี่ยนสถานะคำขอของผู้ใช้คนอื่น) — ใช้ queryAcrossUsers('...', 'admin') แทน
+// supabaseAdmin ตรงๆ (Caller ยังเป็น Route ที่ผ่าน requireAdmin เหมือนเดิม
+// ไม่เปลี่ยน Behavior เพียงแต่ทำให้ grep หาจุดข้าม User นี้เจอได้ทันที)
 async function claimForReview(id, { status, reviewedBy, rejectReason = null, now = new Date() }) {
   const payload = {
     status,
@@ -143,8 +153,7 @@ async function claimForReview(id, { status, reviewedBy, rejectReason = null, now
     payload.reject_reason = rejectReason;
   }
 
-  const { data, error } = await supabaseAdmin
-    .from('facebook_like_grant_requests')
+  const { data, error } = await queryAcrossUsers('facebook_like_grant_requests', 'admin')
     .update(payload)
     .eq('id', id)
     .eq('status', 'pending')
