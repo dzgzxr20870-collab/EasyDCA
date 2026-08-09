@@ -999,7 +999,7 @@ auto-increment integer ด้วยเหตุผลดังนี้:
 |---|---|---|---|
 | `users` | Flag: `is_locked` | `is_locked = true` | ล็อคหลัง Grace Period หมด ไม่ลบ Record; `locked_at` เก็บวันที่ล็อค |
 | `assets` | Flag: `is_active` | `is_active = false` | ขายสินทรัพย์ออกหมดแล้ว แต่เก็บไว้เพื่อดูประวัติ |
-| `transactions` | Reversal (ไม่มี Flag) | ไม่มี — Immutable | "ยกเลิกรายการ" ทำโดยสร้าง Transaction ตรงข้าม (เช่น sell ล้าง buy) ไม่แก้/ลบของเดิม |
+| `transactions` | Reversal (ไม่มี Flag) | ไม่มี — Immutable | "ยกเลิกรายการ" ทำโดยสร้าง Transaction ตรงข้าม (เช่น sell ล้าง buy) ไม่แก้/ลบของเดิม แม้ไม่มี Column เฉพาะ แต่ตรวจจากรายการ Reversal ได้จริงผ่าน `transactions.note` ที่ขึ้นต้นด้วย `UNDO_OF:<original_transaction_id>` (ดู `isReversal()`/`parseReversedId()` ใน `undoTransaction.service.js`) — เป็น Marker แบบ Text ไม่ใช่ Schema-enforced จึงควรใช้เป็น "สัญญาณ" ไม่ใช่ความจริงสัมบูรณ์ 100% ถ้ามีระบบภายนอกต้องพึ่งค่านี้ |
 | `payments` | ไม่มี Soft Delete | — | ไม่มี DELETE Policy เลย (Section 3); สถานะสิ้นสุดคือ `rejected`/`expired` |
 | `portfolios`, `goals`, `notifications`, `watchlists`, `user_settings`, `portfolio_snapshots` | ไม่มี Soft Delete | — | ยังไม่มีความจำเป็นทางธุรกิจต้องเก็บประวัติหลังลบ — RLS policy `FOR ALL` อนุญาต DELETE ได้ตามปกติ (ผู้ใช้ลบพอร์ต/เป้าหมาย/watchlist ของตัวเองได้จริง ไม่ใช่ข้อมูลที่กฎ "ห้ามลบผู้ใช้" ครอบคลุม) |
 | `audit_logs`, `system_logs` | ไม่มี Soft Delete | — | ไม่มี DELETE Policy สำหรับ authenticated เลย เข้าถึงได้เฉพาะ `service_role`; ถือเป็น Append-only Log |
