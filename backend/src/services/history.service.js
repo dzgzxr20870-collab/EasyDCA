@@ -14,7 +14,7 @@ async function getRecentHistory(userId, limit = DEFAULT_LIMIT) {
   if (transactions.length === 0) return [];
 
   const assetIds = [...new Set(transactions.map((tx) => tx.assetId))];
-  const assets = await assetRepository.findByIds(assetIds);
+  const assets = await assetRepository.findByIds(assetIds, userId);
   const symbolByAssetId = new Map(assets.map((asset) => [asset.id, asset.symbol]));
 
   // findRecentByUser เรียงตาม date desc มาแล้ว — คงลำดับล่าสุด → เก่าสุดเดิม

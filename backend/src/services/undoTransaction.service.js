@@ -184,7 +184,7 @@ async function undoLastTransaction(userId, options = {}) {
   }
 
   // transactions เก็บแค่ asset_id — ดึง symbol มาแสดงผลข้อความยืนยัน
-  const [asset] = await assetRepository.findByIds([latest.assetId]);
+  const [asset] = await assetRepository.findByIds([latest.assetId], userId);
 
   return {
     reversalTransactionId: reversal.id,

@@ -1,4 +1,5 @@
 const { supabaseAdmin } = require('../config/supabase');
+const { queryForUser, requireUserId } = require('../utils/ownership.util');
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Error ของชั้น Repository สำหรับ "เงื่อนไขทางธุรกิจที่ DB เป็นคนตัดสิน"
@@ -150,10 +151,19 @@ async function findActiveByUser(userId) {
 
 // ดึง Asset หลายตัวพร้อมกันด้วย 1 Query (ใช้ตอนต้อง Map assetId → symbol
 // ของหลาย Transaction เช่นใน history.service — เลี่ยงการ Query ทีละตัว)
-async function findByIds(assetIds) {
+//
+// ⚠️ Security Audit (Cross-User Isolation, รอบ 2): เดิมรับแค่ assetIds — ปลอดภัย
+// อยู่เพราะทุก Caller ส่ง assetId ที่มาจาก Transaction ของตัวเองมาแล้วเท่านั้น แต่
+// เป็นวินัยของ Caller ไม่ใช่โครงสร้างบังคับ — ย้ายผ่าน queryForUser ให้ userId
+// เป็น Parameter บังคับ ตรวจก่อนเสมอแม้ assetIds จะว่าง (กัน Caller ลืมส่ง userId
+// แล้ว "ดูเหมือนทำงานถูก" เพราะ Early-return ทำให้ไม่มี Query ยิงออกไปจริง)
+async function findByIds(assetIds, userId) {
+  requireUserId(userId, 'asset.findByIds');
   if (!assetIds || assetIds.length === 0) return [];
 
-  const { data, error } = await supabaseAdmin.from('assets').select('*').in('id', assetIds);
+  const { data, error } = await queryForUser('assets', userId, (q) =>
+    q.select('*').in('id', assetIds)
+  );
 
   if (error) {
     throw new Error(`Failed to find assets by ids: ${error.message}`);

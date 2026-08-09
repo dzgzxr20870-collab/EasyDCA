@@ -7,6 +7,7 @@
 jest.mock('../src/config/supabase', () => {
   const query = {};
   query.select = jest.fn(() => query);
+  query.in = jest.fn(() => query);
   query.eq = jest.fn();
   const supabaseAdmin = { from: jest.fn(() => query), rpc: jest.fn() };
   return { supabaseAdmin, __query: query };
@@ -211,5 +212,61 @@ describe('countActiveSymbolsGroupedByUser', () => {
   test('Supabase error → throw', async () => {
     __query.eq.mockResolvedValue({ data: null, error: { message: 'db down' } });
     await expect(assetRepository.countActiveSymbolsGroupedByUser()).rejects.toThrow('db down');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// findByIds — Security Audit (Cross-User Isolation, รอบ 2): ย้ายผ่าน queryForUser
+// ═══════════════════════════════════════════════════════════════════════════
+// เดิมรับแค่ assetIds ปลอดภัยอยู่เพราะ Caller ส่ง assetId ที่มาจาก Transaction
+// ของตัวเองมาแล้วเท่านั้น (วินัยของ Caller ไม่ใช่โครงสร้างบังคับ) — ไม่เคยมี Test
+// ตรงจุดนี้มาก่อนเลย เพิ่มให้ครบทั้ง Happy Path + Ownership Guard
+describe('findByIds — Ownership Guard + Query จริง', () => {
+  test('assetIds ว่าง → คืน [] ทันที แต่ยังตรวจ userId ก่อนเสมอ (ไม่ใช่ Bypass Guard)', async () => {
+    await expect(assetRepository.findByIds([], undefined)).rejects.toMatchObject({
+      code: 'MISSING_USER_ID',
+    });
+    expect(supabaseAdmin.from).not.toHaveBeenCalled();
+  });
+
+  test('assetIds ว่าง + userId ถูกต้อง → คืน [] โดยไม่ยิง Query เลย (Early-return ปกติ)', async () => {
+    const result = await assetRepository.findByIds([], 'user-1');
+    expect(result).toEqual([]);
+    expect(supabaseAdmin.from).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['undefined', undefined],
+    ['null', null],
+    ['สตริงว่าง', ''],
+  ])('userId = %s (assetIds ไม่ว่าง) → throw MISSING_USER_ID ไม่ยิง Query', async (_label, bad) => {
+    await expect(assetRepository.findByIds(['asset-1'], bad)).rejects.toMatchObject({
+      code: 'MISSING_USER_ID',
+    });
+    expect(supabaseAdmin.from).not.toHaveBeenCalled();
+  });
+
+  test('Happy Path: .in() + .eq(user_id) ถูกเรียกทั้งคู่ แล้ว Map เป็น camelCase', async () => {
+    __query.eq.mockResolvedValue({
+      data: [
+        { id: 'asset-1', user_id: 'user-1', symbol: 'BTC', name: 'Bitcoin', type: 'crypto', is_active: true },
+      ],
+      error: null,
+    });
+
+    const result = await assetRepository.findByIds(['asset-1'], 'user-1');
+
+    expect(supabaseAdmin.from).toHaveBeenCalledWith('assets');
+    expect(__query.in).toHaveBeenCalledWith('id', ['asset-1']);
+    // Security Audit: queryForUser ต้องต่อ .eq('user_id', userId) ให้เสมอ
+    expect(__query.eq).toHaveBeenCalledWith('user_id', 'user-1');
+    expect(result[0]).toMatchObject({ id: 'asset-1', symbol: 'BTC' });
+  });
+
+  test('Supabase error → throw ข้อความเดิม', async () => {
+    __query.eq.mockResolvedValue({ data: null, error: { message: 'db down' } });
+    await expect(assetRepository.findByIds(['asset-1'], 'user-1')).rejects.toThrow(
+      /Failed to find assets by ids/
+    );
   });
 });
