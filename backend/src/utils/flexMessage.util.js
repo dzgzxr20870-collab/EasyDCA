@@ -1,21 +1,24 @@
 const { dowToDayName, THAI_DAY_NAMES, formatThaiDate } = require('./thaiDate.util');
 
 // Flex Message Builders ตาม Design System ใน UI_UX.md § 1, § 3
-// สีอ้างอิงจาก UI_UX.md § 1.1 (Financial Status Colors)
+// สี Sync กับ Theme จริงของเว็บ Dashboard (frontend/src/pages/DashboardHome.css
+// :root — --green/--red/--amber/--ink) + Navy จากโลโก้ใหม่ (easydca-logo-full-
+// transparent.png, sampled #022B59) แทนค่าเดิมที่อ้างอิง UI_UX.md § 1.1 ซึ่งเป็น
+// Palette ฉบับร่างก่อน Redesign (ไม่ตรงกับเว็บจริงที่ใช้งานอยู่แล้ว)
 const COLOR = {
-  profit: '#16A34A',
-  profitBg: '#E6F4EA',
-  loss: '#DC2626',
-  lossBg: '#FEE2E2',
-  warning: '#D97706',
-  warningBg: '#FEF3C7',
-  info: '#2563EB',
+  profit: '#1E9E55', // --green
+  profitBg: '#E9F6EE', // --green-soft
+  loss: '#DE5050', // --red
+  lossBg: '#FDEEEE', // --red-soft
+  warning: '#F0A93B', // --amber
+  warningBg: '#FCF3E1', // --amber-soft
+  info: '#022B59', // Navy จากโลโก้ใหม่
   // คู่พื้นหลังอ่อนของ info — เดิมมีแต่สีเข้ม (info) ที่ใช้กับปุ่ม/ตัวอักษร ยังไม่เคยมี
-  // การ์ดไหนใช้ info เป็นสีหัวการ์ดจึงไม่เคยต้องมี Bg มาก่อน (ตั้งค่าตามชุดเดียวกับ
-  // profitBg/lossBg/warningBg — โทนอ่อนของสีหลักเดียวกัน)
-  infoBg: '#DBEAFE',
-  textPrimary: '#1E293B',
-  textSecondary: '#64748B',
+  // การ์ดไหนใช้ info เป็นสีหัวการ์ดจึงไม่เคยต้องมี Bg มาก่อน (โทนอ่อนของ Navy ด้านบน
+  // เว็บยังไม่มี Soft Variant ของ Navy จึงคำนวณเป็นโทนอ่อนเดียวกัน)
+  infoBg: '#E1E6EB',
+  textPrimary: '#22301F', // --ink
+  textSecondary: '#4A5A47', // --ink2
 };
 
 // แปล Error Code (API.md § 5) เป็นข้อความไทยที่ผู้ใช้เข้าใจง่าย

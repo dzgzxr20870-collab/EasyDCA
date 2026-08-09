@@ -200,8 +200,8 @@ describe('buildPortfolioSummaryPushMessage — สรุปพอร์ตรา
 
     expect(text).toContain('-5,000');
     expect(text).toContain('16.67');
-    // สีแดงตาม Design System (UI_UX.md § 1.1)
-    expect(text).toContain('#DC2626');
+    // สีแดงตาม Theme เว็บ (DashboardHome.css --red) — Sync กับ COLOR.loss ใน flexMessage.util.js
+    expect(text).toContain('#DE5050');
   });
 
   test('percent เป็น null (พอร์ตไม่มีราคาเลย) → ข้ามการแสดง % ไม่ Error', () => {
