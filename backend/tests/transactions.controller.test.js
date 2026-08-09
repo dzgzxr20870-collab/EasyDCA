@@ -463,7 +463,8 @@ describe('POST /transactions/:id/slip — แนบสลิปหลักฐ�
     // แนบ path ที่ Storage คืนมาเข้าธุรกรรม (slip_image_path — migration 021)
     expect(transactionRepository.attachSlipImagePath).toHaveBeenCalledWith(
       TXN_UUID,
-      `${USER_ID}-1752730000000.jpg`
+      `${USER_ID}-1752730000000.jpg`,
+      USER_ID
     );
   });
 

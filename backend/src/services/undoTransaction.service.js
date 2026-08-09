@@ -102,7 +102,7 @@ async function undoLastTransaction(userId, options = {}) {
 
   // ดึงประวัติทั้ง Asset ครั้งเดียว ใช้ทั้ง (ก) เช็คว่ารายการล่าสุดถูกย้อนไปแล้ว
   // หรือยัง และ (ข) คำนวณยอดคงเหลือกันติดลบ
-  const history = await transactionRepository.findAllByAsset(latest.assetId);
+  const history = await transactionRepository.findAllByAsset(latest.assetId, userId);
 
   // Double-Undo guard ชั้นที่ 2: มี Reversal ของรายการล่าสุดอยู่แล้วในประวัติ —
   // ครอบคลุมกรณีที่ findRecentByUser เรียงตาม date (รายวัน) แล้วรายการเดิมกับ

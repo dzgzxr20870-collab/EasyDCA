@@ -506,7 +506,7 @@ async function validateSell(userId, params) {
   // Confirm ปกติเหมือนคำสั่งขายทั่วไป (ราคาถูก Snapshot ไว้ตอน Preview — Confirm ใช้
   // ค่าที่ Snapshot ไม่ดึงราคาใหม่ ตาม Design pendingTransaction.service เดิม)
   if (params.sellAll) {
-    const historyForAll = await transactionRepository.findAllByAsset(asset.id);
+    const historyForAll = await transactionRepository.findAllByAsset(asset.id, userId);
     const heldForAll = calculateHeldQuantity(historyForAll);
 
     if (heldForAll <= 0) {
@@ -569,7 +569,7 @@ async function validateSell(userId, params) {
   // หากมีสองคำสั่งขาย Asset เดียวกันเข้ามาพร้อมกัน ยังไม่ปลอดภัยเต็มที่
   // (การมี Preview/Confirm เพิ่มช่องเวลานี้ให้ยาวขึ้น — Confirm จึงเรียก
   // validateSell ซ้ำอีกครั้งเพื่อลดโอกาสขายเกินจากยอดที่เปลี่ยนไประหว่างรอ)
-  const history = await transactionRepository.findAllByAsset(asset.id);
+  const history = await transactionRepository.findAllByAsset(asset.id, userId);
   const heldQuantity = calculateHeldQuantity(history);
 
   if (amounts.quantity > heldQuantity) {

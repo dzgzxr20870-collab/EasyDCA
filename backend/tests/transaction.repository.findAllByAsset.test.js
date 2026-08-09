@@ -30,11 +30,13 @@ beforeEach(() => {
 
 describe('findAllByAsset — Deterministic ordering (Moving Average ต้องการลำดับเวลาจริง)', () => {
   test('เรียง date ASC แล้วตามด้วย created_at ASC (Secondary Key)', async () => {
-    await transactionRepository.findAllByAsset('asset-1');
+    await transactionRepository.findAllByAsset('asset-1', 'user-1');
 
     expect(supabaseAdmin.from).toHaveBeenCalledWith('transactions');
     expect(__query.select).toHaveBeenCalledWith('*');
     expect(__query.eq).toHaveBeenCalledWith('asset_id', 'asset-1');
+    // Security Audit: queryForUser ต้องต่อ .eq('user_id', userId) ให้เสมอ
+    expect(__query.eq).toHaveBeenCalledWith('user_id', 'user-1');
     expect(__query.order).toHaveBeenNthCalledWith(1, 'date', { ascending: true });
     expect(__query.order).toHaveBeenNthCalledWith(2, 'created_at', { ascending: true });
     expect(__query.order).toHaveBeenCalledTimes(2);
@@ -61,7 +63,7 @@ describe('findAllByAsset — Deterministic ordering (Moving Average ต้อง
       error: null,
     });
 
-    const result = await transactionRepository.findAllByAsset('asset-1');
+    const result = await transactionRepository.findAllByAsset('asset-1', 'user-1');
 
     expect(result[0]).toMatchObject({
       id: 'tx-1',
@@ -75,8 +77,21 @@ describe('findAllByAsset — Deterministic ordering (Moving Average ต้อง
   test('Query ล้มเหลว → throw', async () => {
     __setResult({ data: null, error: { message: 'boom' } });
 
-    await expect(transactionRepository.findAllByAsset('asset-1')).rejects.toThrow(
+    await expect(transactionRepository.findAllByAsset('asset-1', 'user-1')).rejects.toThrow(
       /Failed to find transactions for asset/
     );
+  });
+});
+
+// ── Security Audit (Cross-User Isolation, รอบ 2) ──────────────────────────────
+describe('findAllByAsset — Ownership Guard', () => {
+  test.each([
+    ['undefined', undefined],
+    ['null', null],
+    ['สตริงว่าง', ''],
+  ])('userId = %s → throw MISSING_USER_ID ไม่ยิง Query เลย', async (_label, bad) => {
+    await expect(transactionRepository.findAllByAsset('asset-1', bad)).rejects.toMatchObject({
+      code: 'MISSING_USER_ID',
+    });
   });
 });

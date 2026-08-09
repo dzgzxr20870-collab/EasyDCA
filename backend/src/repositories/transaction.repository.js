@@ -1,4 +1,5 @@
 const { supabaseAdmin } = require('../config/supabase');
+const { queryForUser } = require('../utils/ownership.util');
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Error ของชั้น Repository สำหรับ "เงื่อนไขทางธุรกิจที่ DB เป็นคนตัดสิน"
@@ -215,11 +216,16 @@ async function findByUserAndDateRange(userId, from, to) {
 // เรียง date ASC, created_at ASC (Pattern เดียวกับ findByUserAndDateRange) — จำเป็น
 // สำหรับ Moving Average Cost Basis (portfolio.service.calculateTotalInvested) ที่ต้อง
 // Replay ธุรกรรมตามลำดับเวลาจริง ไม่พึ่ง Row Order ตามธรรมชาติของ Postgres ซึ่งไม่การันตี
-async function findAllByAsset(assetId) {
-  const { data, error } = await supabaseAdmin
-    .from('transactions')
-    .select('*')
-    .eq('asset_id', assetId)
+//
+// ⚠️ Security Audit (Cross-User Isolation, รอบ 2): เดิมรับแค่ assetId — ปลอดภัย
+// อยู่เพราะทุก Caller Resolve Asset แบบ user-scoped มาก่อนเสมอ (findByUserAndSymbol/
+// findActiveByUser/findRecentByUser) แต่เป็นความปลอดภัยจากวินัยของ Caller ไม่ใช่
+// โครงสร้างบังคับ — ย้ายมาผ่าน queryForUser ให้ userId เป็น Parameter บังคับ
+// (throw ทันทีถ้าไม่ส่ง) และกรอง user_id ที่ชั้น Query จริง ไม่ใช่แค่พึ่ง assetId
+async function findAllByAsset(assetId, userId) {
+  const { data, error } = await queryForUser('transactions', userId, (q) =>
+    q.select('*').eq('asset_id', assetId)
+  )
     .order('date', { ascending: true })
     .order('created_at', { ascending: true });
 
@@ -241,11 +247,15 @@ async function findAllByAsset(assetId) {
 //
 // คืน Transaction ที่อัปเดตแล้ว | throw ถ้า DB error (Caller ห่อ try/catch เพื่อให้
 // การแนบรูปล้มเหลวไม่ทำให้ธุรกรรมที่บันทึกสำเร็จแล้วพังตาม)
-async function attachSlipImagePath(id, slipImagePath) {
-  const { data, error } = await supabaseAdmin
-    .from('transactions')
-    .update({ slip_image_path: slipImagePath })
-    .eq('id', id)
+//
+// ⚠️ Security Audit (Cross-User Isolation, รอบ 2): เดิมรับแค่ id — ปลอดภัยอยู่
+// เพราะทุก Caller ตรวจ Ownership ของ Transaction ก่อนเรียกอยู่แล้ว (findByIdForUser
+// ที่ Controller / userId ที่ Authenticate แล้วที่ Webhook) แต่เป็นวินัยของ Caller
+// ไม่ใช่โครงสร้างบังคับ — เพิ่ม userId เป็น Parameter บังคับ ผ่าน queryForUser
+async function attachSlipImagePath(id, slipImagePath, userId) {
+  const { data, error } = await queryForUser('transactions', userId, (q) =>
+    q.update({ slip_image_path: slipImagePath }).eq('id', id)
+  )
     .select('*')
     .maybeSingle();
 

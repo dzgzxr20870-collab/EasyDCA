@@ -465,7 +465,7 @@ async function attachSlipBestEffort(userId, pending, result) {
       console.error(`[webhook] invalid slip token on pending ${pending.id}; skip attach`);
       return;
     }
-    await transactionRepository.attachSlipImagePath(result.transactionId, path);
+    await transactionRepository.attachSlipImagePath(result.transactionId, path, userId);
   } catch (err) {
     console.error(
       `[webhook] attachSlipImagePath failed AFTER commit ` +

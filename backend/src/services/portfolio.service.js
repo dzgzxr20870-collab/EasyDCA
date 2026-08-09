@@ -91,7 +91,7 @@ async function getPortfolioSummary(userId) {
   const investedByCurrency = { THB: 0, USD: 0 };
 
   for (const asset of assets) {
-    const transactions = await transactionRepository.findAllByAsset(asset.id);
+    const transactions = await transactionRepository.findAllByAsset(asset.id, userId);
     const heldQuantity = calculateHeldQuantity(transactions);
 
     // กรอง Asset ที่ขายหมดแล้ว (heldQuantity = 0) ออก — แม้ is_active ยังเป็น

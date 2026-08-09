@@ -532,7 +532,7 @@ async function uploadTransactionSlip(req, res) {
     // 6) Upload (throw StorageServiceError ถ้าชนิด/ขนาดไม่ผ่าน) → แนบ path เข้าธุรกรรม
     const { path } = await storageService.uploadTransactionSlip(req.user.id, buffer, contentType);
     uploadedPath = path;
-    await transactionRepository.attachSlipImagePath(tx.id, path);
+    await transactionRepository.attachSlipImagePath(tx.id, path, req.user.id);
 
     return res.status(200).json({ status: 'slip_attached' });
   } catch (err) {

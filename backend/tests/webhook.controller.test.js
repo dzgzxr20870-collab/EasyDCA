@@ -3048,7 +3048,8 @@ describe('handleEvent — แนบรูปสลิป OCR (S8)', () => {
 
     expect(transactionRepository.attachSlipImagePath).toHaveBeenCalledWith(
       'tx-99',
-      `${PREMIUM_USER.id}-${VALID_TOKEN}`
+      `${PREMIUM_USER.id}-${VALID_TOKEN}`,
+      PREMIUM_USER.id
     );
     // ผู้ใช้ยังได้ข้อความยืนยันสำเร็จตามปกติ
     expect(lastReplyText()).toContain('BTC');

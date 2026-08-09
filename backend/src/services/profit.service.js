@@ -65,7 +65,7 @@ async function getAssetProfit(userId, symbol, portfolioId = null, priceOptions =
   // heldQuantity/totalInvested คำนวณจาก transactions ทุกครั้ง (DATABASE.md § 12)
   // Reuse Logic กลางแทน Copy — calculateHeldQuantity (transaction.service) และ
   // calculateTotalInvested (portfolio.service) ให้ผลตรงกับที่ portfolio ใช้อยู่แล้ว
-  const transactions = await transactionRepository.findAllByAsset(asset.id);
+  const transactions = await transactionRepository.findAllByAsset(asset.id, userId);
   const heldQuantity = calculateHeldQuantity(transactions);
 
   // ขายหมดแล้ว/ไม่เคยถือ — Asset มีอยู่จริงในระบบแต่ไม่มี Holding ตอนนี้
