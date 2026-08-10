@@ -4,6 +4,18 @@
 > กฎสำคัญ: ทุก Table ต้องเปิด Row Level Security (RLS)
 > ห้ามลบข้อมูลผู้ใช้เด็ดขาด — ใช้ soft delete หรือ lock แทน
 
+> ⚠️ **ตาราง `users` / `assets` / `transactions` มีระบบภายนอกพึ่งพาอยู่**
+> (EasyTax by JaydeX อ่านผ่าน Database View `tax_export.tax_ledger_view` ใน
+> Database เดียวกันนี้ — ดูรายละเอียดที่
+> `C:\Project_EasyTax\EasyTax\migrations\easydca-side\` และ
+> `docs/blueprint/02-integration-with-easydca.md` § 5 ของ EasyTax) ก่อนแก้
+> Schema 3 ตารางนี้ (เปลี่ยนความหมาย/Type คอลัมน์เดิม, ลบ/Rename คอลัมน์, หรือ
+> เพิ่มค่าใหม่ในคอลัมน์ที่มีลักษณะ Enum เช่น `assets.type`) ให้เช็คก่อนว่า
+> View ฝั่ง EasyTax อ้างอิงคอลัมน์นั้นอยู่ไหม — ถ้าอ้างอิงอยู่ต้องแจ้ง/แก้ View
+> คู่กัน (Migration 000/001/002 ของ EasyTax **ยังไม่ Apply** ณ ปัจจุบัน แต่
+> เขียนกฎนี้ไว้ล่วงหน้ากันลืมตอน Apply แล้วในอนาคต) — **เพิ่มคอลัมน์ใหม่ที่ไม่
+> เกี่ยวกับ View ทำได้อิสระ ไม่กระทบ**
+
 ---
 
 ## 1. ER Diagram (อธิบายเป็นข้อความ)
