@@ -214,8 +214,17 @@ app.get('/health', async (req, res) => {
 // Deploy Backend Code ใหม่ไป Restart Cron ที่กำลังรันอยู่ด้วย และไม่ให้ Cron แย่ง CPU/RAM
 // กับ Traffic Webhook จริง — ต้องรัน `npm run worker` เป็น Railway Service ที่สองแยกต่างหาก
 // ด้วย มิฉะนั้น Cron จะไม่ทำงานเลย (ดู docs/DEPLOYMENT.md)
-app.listen(config.app.port, () => {
-  console.log(`EasyDCA API Server listening on port ${config.app.port} (${config.app.nodeEnv})`);
-});
+// ⚠️ Listen เฉพาะตอนถูกรันเป็น Entry Point จริง (`node src/index.js` ตาม npm start /
+// npm run dev — Railway ใช้ทั้งคู่) — ไม่ใช่ตอนถูก require เข้ามา
+//
+// จำเป็นสำหรับ Integration Test ที่ต้องยก "App จริงทั้งก้อน" ขึ้นมาทดสอบ (ดู
+// tests/idorEndToEnd.regression.test.js — Offensive Review Round 2 Q1): ถ้า listen
+// ตอน import ทุกไฟล์เทสต์ที่ require App จะไปแย่ง Port เดียวกันแล้วพังสลับกันไปมา
+// พฤติกรรมบน Production ไม่เปลี่ยนแม้แต่นิดเดียว (require.main === module เสมอ)
+if (require.main === module) {
+  app.listen(config.app.port, () => {
+    console.log(`EasyDCA API Server listening on port ${config.app.port} (${config.app.nodeEnv})`);
+  });
+}
 
 module.exports = app;

@@ -85,6 +85,22 @@ class FakeQuery {
     return this;
   }
 
+  // PostgREST `.is()` — ใช้เทียบกับ NULL/true/false เท่านั้น (SQL `IS` ไม่ใช่ `=`)
+  // เพิ่มเข้ามาตอน Offensive Review Round 2 (Q1) เพราะ asset.repository ใช้
+  // .is('deleted_at', null) แล้ว Fake เดิมไม่มีเมธอดนี้ → โยน TypeError กลายเป็น 500
+  //
+  // ⚠️ ต้องเทียบด้วย == null สำหรับกรณี null โดยเจตนา: PostgREST ถือว่าคอลัมน์ที่ไม่มี
+  // ค่าคือ NULL ส่วนแถวใน Fake ที่ไม่ได้ตั้ง Field นั้นไว้จะเป็น undefined —
+  // ถ้าใช้ === null แถวเหล่านั้นจะหลุดจาก Filter ทั้งที่ของจริงต้องติด
+  is(col, val) {
+    if (val === null) {
+      this.filters.push((r) => r[col] === null || r[col] === undefined);
+    } else {
+      this.filters.push((r) => r[col] === val);
+    }
+    return this;
+  }
+
   order() {
     return this;
   }
