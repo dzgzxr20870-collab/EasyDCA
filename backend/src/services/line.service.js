@@ -7,6 +7,16 @@ const LINE_PROFILE_URL = 'https://api.line.me/v2/bot/profile';
 // ของ Image/Video/File Message (เช่น รูปสลิปโอนเงิน)
 const LINE_CONTENT_URL = 'https://api-data.line.me/v2/bot/message';
 
+// Timeout ของการดึง Binary จาก Content API (Offensive Review Round 2 — F9)
+// เดิมไม่มี AbortController เลย ต่างจาก External Call อื่นทุกตัวในโปรเจกต์
+// (priceFeed.service ใช้ 5s, slipOcr.service ใช้ 20s) — ถ้า LINE ค้าง Request จะค้าง
+// ตามไม่มีกำหนด กิน Handler ของ Webhook ไว้เฉยๆ
+//
+// ตั้ง 20s เท่า slipOcr.REQUEST_TIMEOUT_MS โดยเจตนา: การดึงรูปเป็น "ขั้นแรก" ของ
+// Flow OCR ที่มี Budget รวม 20s อยู่แล้ว และรูปสลิปจากมือถืออาจใหญ่ถึง 10MB
+// (นานกว่า Text API ของ priceFeed มาก) — สั้นกว่านี้จะตัดผู้ใช้เน็ตช้าทิ้งโดยไม่จำเป็น
+const CONTENT_REQUEST_TIMEOUT_MS = 20 * 1000;
+
 // ส่งข้อความตอบกลับผ่าน LINE Reply API
 // สำคัญ: ห้าม throw ออกไป ไม่ว่า LINE จะตอบผิดพลาดอย่างไร เพราะ Webhook
 // Handler ต้องตอบ 200 OK ให้ LINE เสมอ (SRS.md § 2.1) — Error แค่ Log ไว้
@@ -97,21 +107,35 @@ async function pushMessage(to, messages) {
 // (Webhook image handler) รู้ว่าดึงสลิปไม่ได้ แล้วข้ามการอัปโหลด/บันทึกไป — Caller
 // เป็นผู้ห่อ try/catch เองเพื่อไม่ให้ Webhook ทั้งก้อนพัง (Pattern เดียวกับ pushMessage)
 async function getMessageContent(messageId) {
-  const response = await fetch(`${LINE_CONTENT_URL}/${messageId}/content`, {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${config.line.channelAccessToken}`,
-    },
-  });
+  // AbortController ตัด Request ที่ค้างเกิน CONTENT_REQUEST_TIMEOUT_MS ทิ้ง
+  // (Pattern เดียวกับ priceFeed.service / slipOcr.service — ไม่คิดโครงใหม่)
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), CONTENT_REQUEST_TIMEOUT_MS);
 
-  if (!response.ok) {
-    const detail = await response.text().catch(() => '');
-    throw new Error(`LINE Content API failed: ${response.status} ${detail}`);
+  try {
+    const response = await fetch(`${LINE_CONTENT_URL}/${messageId}/content`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${config.line.channelAccessToken}`,
+      },
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(`LINE Content API failed: ${response.status} ${detail}`);
+    }
+
+    const contentType = response.headers.get('content-type') || 'application/octet-stream';
+    // ⚠️ signal ครอบถึง arrayBuffer() ด้วย — ถ้า LINE ส่ง Header มาแล้วค้างกลางคัน
+    // ตอน Stream Body การ Abort จะทำให้ตรงนี้ throw ออกไปแทนที่จะค้างต่อ
+    const arrayBuffer = await response.arrayBuffer();
+    return { buffer: Buffer.from(arrayBuffer), contentType };
+  } finally {
+    // ต้องอยู่ใน finally เสมอ — ถ้าเคลียร์เฉพาะทาง Success, Timer จะค้างไว้ 20 วิ
+    // ทุกครั้งที่ Error แล้วกัน Process ไม่ให้จบตามธรรมชาติ
+    clearTimeout(timeout);
   }
-
-  const contentType = response.headers.get('content-type') || 'application/octet-stream';
-  const arrayBuffer = await response.arrayBuffer();
-  return { buffer: Buffer.from(arrayBuffer), contentType };
 }
 
 module.exports = {
