@@ -2,9 +2,9 @@
 // (ถ้าค่าที่จำเป็นหายไป ต้อง Fail ทันทีตั้งแต่ Startup ไม่ใช่ตอน Request เข้ามา)
 const config = require('./config/env');
 
-const path = require('path');
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
 const { rateLimit } = require('express-rate-limit');
 
 const requestId = require('./middleware/requestId.middleware');
@@ -51,6 +51,24 @@ app.use(requestId);
 // แล้วทุกคนโดนบล็อกตาม) ตั้ง 1 = เชื่อ Proxy ชั้นแรกชั้นเดียว (ของ Railway)
 app.set('trust proxy', 1);
 
+// ── Security Headers (Offensive Review Round 2 — G1) ───────────────────────
+// เดิมไม่มี Header ด้านความปลอดภัยเลยสักตัว (ยืนยันด้วยการยิง Production จริง:
+// ไม่มี HSTS/CSP/X-Frame-Options และมี x-powered-by: Express บอกยี่ห้อ Stack ให้ฟรีๆ)
+//
+// ⚠️ crossOriginResourcePolicy ต้องเป็น 'cross-origin' เท่านั้น — Default ของ helmet
+// คือ 'same-origin' ซึ่งจะบล็อก GET /api/v1/payment/:id/qr.png ที่ LINE ต้อง Fetch
+// ข้าม Origin มาแสดงใน Flex Message (เป็น Subresource Load แบบ no-cors ที่ CORP
+// บังคับใช้จริง ต่างจาก fetch() ของ Frontend ที่ใช้ CORS ปกติจึงไม่โดน CORP)
+// ถ้าปล่อย Default ไว้ = ปุ่ม Premium พังทั้งเส้นโดยไม่มี Error ให้เห็นฝั่ง Server
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+  })
+);
+// helmet ลบ x-powered-by ให้อยู่แล้ว — ประกาศซ้ำเพื่อไม่ให้ Header นี้กลับมาเงียบๆ
+// ถ้าวันหนึ่งมีคนปรับ Option ของ helmet (Defense in Depth ราคาถูกมาก)
+app.disable('x-powered-by');
+
 // จำกัด Origin ที่เรียก API ได้ (ไม่มี Fallback Wildcard แล้ว — เช็คไว้ด้านบน)
 app.use(
   cors({
@@ -67,23 +85,56 @@ app.use(
 //   - /api/v1/webhook  = LINE ยิงมาจาก IP ของ LINE เอง (ผู้ใช้ทุกคนรวมกันเป็น IP
 //     เดียวกันหมด) ถ้านับรวมด้วยจะบล็อก Event ของผู้ใช้จริงตอนมีคนใช้งานพร้อมกันเยอะ
 //     — ด่านจริงของเส้นทางนี้คือ HMAC Signature (lineSignature.middleware) ซึ่งของปลอม
-//     ผ่านไม่ได้อยู่แล้ว
+//     ผ่านไม่ได้อยู่แล้ว **แต่ไม่ได้แปลว่าไม่ต้องมีเพดานเลย** — ดู webhookLimiter ด้านล่าง
 //   - /health = Railway/UptimeRobot Poll ถี่ตลอดเวลา ถ้าโดนบล็อกจะกลายเป็น False Alarm
 //     ว่าระบบล่มทั้งที่ปกติดี
+//
+// ⚠️ Offensive Review Round 2 (F6): เดิม skip ด้วย `req.path.startsWith('/api/v1/webhook')`
+// ซึ่ง "กว้างเกินความจำเป็น" — ยืนยันด้วยการยิง Production จริงแล้วว่า
+// GET /api/v1/webhookZZZ (Path ที่ไม่มี Route รองรับ) ก็หลุด Rate Limit ไปด้วย
+// เปลี่ยนเป็นเทียบ Path เป๊ะแทน (รับทั้งมีและไม่มี Trailing Slash เพราะ Express
+// Router แบบ non-strict Match ทั้งสองแบบให้ Route เดียวกันอยู่แล้ว)
+const WEBHOOK_PATH = '/api/v1/webhook';
+function isWebhookPath(req) {
+  return req.path === WEBHOOK_PATH || req.path === `${WEBHOOK_PATH}/`;
+}
+
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 300,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
-  skip: (req) => req.path === '/health' || req.path.startsWith('/api/v1/webhook'),
+  skip: (req) => req.path === '/health' || isWebhookPath(req),
   message: { error: 'TOO_MANY_REQUESTS' },
 });
 app.use(globalLimiter);
+
+// ── Rate Limit เฉพาะ Webhook (เพดานสูงมาก — เป็น "ตาข่ายรองชั้นสุดท้าย") ──────
+// เหตุผลที่ต้องมีทั้งที่ HMAC กันของปลอมได้อยู่แล้ว: HMAC ทำงาน "หลัง" อ่าน Body
+// เข้ามาแล้ว คนที่ไม่มีบัญชีเลยจึงยิง POST เปล่าๆ เข้ามาได้ไม่จำกัดจำนวนครั้ง
+// แต่ละครั้งกิน JSON Parse + HMAC-SHA256 ก่อนถูกปฏิเสธ (ยืนยันด้วยการยิงจริง:
+// Endpoint นี้ไม่มี Header ratelimit เลย = ไม่มีเพดานใดๆ ทั้งสิ้น)
+//
+// เพดานตั้งไว้ "สูงจนทราฟฟิก LINE จริงไม่มีทางชน": 6,000 ครั้ง/15 นาที/IP (~400/นาที)
+// OA ขนาด Beta มี Event จริงหลักหน่วยต่อนาที และ LINE รวมหลาย Event ไว้ใน Request
+// เดียวอยู่แล้ว — ตัวเลขนี้จึงเป็นการกัน Flood ล้วนๆ ไม่ได้คุมทราฟฟิกปกติ
+//
+// ⚠️ ต้องวาง "ก่อน" express.json เสมอ — คนที่ชนเพดานต้องถูกปฏิเสธตั้งแต่ยังไม่ทัน
+// อ่าน Body 100KB เข้า Memory (Pattern เดียวกับ screenshotUploadLimiter ที่
+// support.routes.js ซึ่งวางก่อน rawScreenshotBody ด้วยเหตุผลเดียวกันเป๊ะ)
+const webhookLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 6000,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'TOO_MANY_REQUESTS' },
+});
 
 // Route Webhook ต้องเก็บ Raw Body ไว้คำนวณ HMAC ก่อน Parse JSON เสมอ
 // (ดู docs/SECURITY.md § 4) จึงแยก JSON Parser เฉพาะ Route นี้ออกจาก Route อื่น
 app.use(
   '/api/v1/webhook',
+  webhookLimiter,
   express.json({
     verify: (req, res, buf) => {
       req.rawBody = buf;
@@ -94,9 +145,13 @@ app.use(
 
 app.use(express.json());
 
-// Serve Static Files (Phase 2 — หน้า LIFF Login ที่ backend/public/liff/index.html)
-// วางหลัง cors/json แต่ก่อน Route API อื่นๆ
-app.use(express.static(path.join(__dirname, '../public')));
+// ⚠️ Offensive Review Round 2 (F5): ถอด express.static('../public') ออกแล้ว พร้อมกับ
+// ลบ backend/public/liff/index.html ทิ้งทั้งไฟล์ — หน้านั้นเขียนกำกับตัวเองไว้ว่า
+// "Deprecated ... ไม่ได้ใช้งานจริงแล้วหลัง Deploy React App สำเร็จ" แต่ยัง Live อยู่บน
+// Production จริง (ยืนยันแล้ว: GET /liff/index.html → 200) และเก็บ JWT ลง
+// localStorage ของ Origin เดียวกับ API ซึ่งขัดกับ docs/SECURITY.md § 1.1 ตรงๆ
+// (frontend/src/lib/api.js เก็บไว้ใน Memory เท่านั้นด้วยเหตุผลนี้)
+// ตอนนี้ backend/public ไม่มีไฟล์อะไรเหลือแล้ว การ Serve Static จึงไม่มีเหตุผลให้คงไว้
 
 // Mount Auth Routes (Phase 2 — LIFF Login) ที่ /api/v1/auth
 app.use('/api/v1/auth', authRoutes);
