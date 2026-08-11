@@ -204,3 +204,66 @@ describe('screenshotUploadLimiter — 1 ครั้ง/ชม./User', () => {
     expect((await upload('user-B')).status).toBe(429);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// F3 (Offensive Review Round 2) — Rate Limit บนการอัปโหลดสลิปชำระเงิน
+// ═══════════════════════════════════════════════════════════════════════════
+// POST /api/v1/payment/:id/slip ไม่มีเพดานจำนวนครั้งเลย และ storage.service ตั้งชื่อ
+// ไฟล์ใหม่ทุกครั้ง (upsert: false — เก็บทุกรูปกัน Race โดยเจตนา) ผู้ใช้ที่มีคำขอ pending
+// 1 ใบจึงยัดรูป 10MB เข้า Storage ได้ไม่จำกัดจำนวนครั้ง ทั้งที่มีแค่รูปล่าสุดใบเดียวที่
+// ถูกอ้างถึงจริง — ใช้ Limiter โครงเดียวกับ screenshotUploadLimiter ทุกประการ
+//
+// ทดสอบกับ Express App จริง + Limiter "ตัวที่ Mount อยู่จริง" (ไม่เขียน Config ซ้ำในเทสต์)
+describe('slipUploadLimiter — 1 ครั้ง/ชม./User (F3)', () => {
+  let server;
+  let baseUrl;
+
+  beforeAll(async () => {
+    const { slipUploadLimiter } = require('../src/routes/payment.routes');
+
+    const app = express();
+    // จำลอง requireAuth: Limiter จริงอยู่หลัง requireAuth เสมอ จึงมี req.user แน่นอน
+    app.use((req, res, next) => {
+      req.user = { id: req.get('x-test-user') };
+      next();
+    });
+    app.post('/slip', slipUploadLimiter, (req, res) => res.status(200).json({ ok: true }));
+
+    server = app.listen(0);
+    await new Promise((resolve) => server.once('listening', resolve));
+    baseUrl = `http://127.0.0.1:${server.address().port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  const uploadSlip = (userId) =>
+    fetch(`${baseUrl}/slip`, { method: 'POST', headers: { 'x-test-user': userId } });
+
+  test('ครั้งแรกผ่าน (200) — ครั้งที่ 2 ในชั่วโมงเดียวกันโดน 429', async () => {
+    expect((await uploadSlip('slip-user-A')).status).toBe(200);
+
+    const second = await uploadSlip('slip-user-A');
+    expect(second.status).toBe(429);
+    // Error Code แยกของตัวเอง ไม่ปนกับ Endpoint อัปโหลด Screenshot
+    expect(await second.json()).toEqual(
+      expect.objectContaining({ error: 'SLIP_UPLOAD_RATE_LIMITED' })
+    );
+  });
+
+  test('ยิงรัวต่อ (ครั้งที่ 3-5) ยังโดน 429 ทุกครั้ง ไม่มีหลุด', async () => {
+    const statuses = [];
+    for (let i = 0; i < 3; i += 1) {
+      statuses.push((await uploadSlip('slip-user-A')).status);
+    }
+    expect(statuses).toEqual([429, 429, 429]);
+  });
+
+  test('🔑 นับแยกรายบัญชี — ผูกกับ user.id ไม่ใช่ IP', async () => {
+    // ทั้งหมดมาจาก 127.0.0.1 เดียวกัน ถ้า Key เป็น IP จะโดน 429 ทันที
+    expect((await uploadSlip('slip-user-B')).status).toBe(200);
+    expect((await uploadSlip('slip-user-C')).status).toBe(200);
+    expect((await uploadSlip('slip-user-B')).status).toBe(429);
+  });
+});
