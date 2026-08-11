@@ -130,6 +130,18 @@
   ใช้ไม่ได้กับ `liff.line.me` จึงต้องเลิกใช้ Domain นั้นด้วย — ดู
   `backend/src/utils/externalUrl.util.js`) Login/JWT ยังทำงานถูกต้องเหมือนเดิม
   (`Login.jsx` เรียก `liff.init()`+`liff.login()` เอง ไม่ได้พึ่งการเปิดผ่าน LIFF)
+### Security
+- **Offensive Security Review Round 2 (11 ส.ค. 2569)** — สำรวจ 6 หมวด พบ 1 จุดแดง
+  (F1 Satang Pool Exhaustion) + 8 จุดส้ม แก้ครบทุกจุด + Production Verification
+  ด้วยหลักฐานจริง (ยิง Endpoint จริง/อ่าน DB จริง ไม่ใช่แค่อ่านโค้ด) — รายละเอียด
+  ครบทุกจุดพร้อม Evidence ใน `docs/PROJECT_STATUS.md` § Offensive Security Review
+  Round 2
+  - Migration ที่ Apply แล้ว: `037` (REVOKE `increment_ai_ocr_usage` จาก
+    PUBLIC/anon/authenticated), `038` (`ai_ocr_usage.call_count` + RPC เพดานคุม
+    ต้นทุน OCR), `039` (`users.locked_by`/`lock_reason` — Audit Trail ของ Account
+    Lock)
+  - Deploy: `main` `8b36fb4` → `d2120a0` (12 commits, Fast-forward, ไม่มี Merge
+    Commit)
 
 ## [0.3.0] - 2026-07-04
 ### Added

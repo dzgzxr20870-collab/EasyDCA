@@ -175,6 +175,201 @@ Cross-User Isolation รายจุด Query** จึงไม่ครอบ�
 - **Production Verification (รอบ Data Access Helper/8 จุดสีส้ม): ยังไม่ทำ** —
   รอ Push + Deploy ก่อน (Commit อยู่ใน Local เท่านั้น ณ ตอนที่เขียนบรรทัดนี้)
 
+### Offensive Security Review Round 2 (11 ส.ค. 2569)
+
+Survey ครบ 6 หมวด พบ **1 จุดแดง** (F1) + **8 จุดส้ม** — Phase 3 แก้ครบทุกจุดตาม
+ขอบเขตที่ Founder อนุมัติ (กลุ่ม A-G) รวม 12 Commits, Deploy `main` `8b36fb4` →
+`d2120a0` (Fast-forward, ไม่มี Merge Commit)
+
+⚠️ **อ่านก่อนเชื่อคำว่า "ปิดแล้ว" ด้านล่าง**: ทุกจุดมี Evidence กำกับแยกชัดเจน
+2 ระดับ — **"Production Verification"** = ยิง Endpoint จริง/อ่าน DB จริงบน Railway
+Production หลัง Deploy (หลักฐานแน่นที่สุด) กับ **"ยืนยันด้วย Test เท่านั้น"** =
+ผ่านแค่ Unit/Integration Test ไม่ได้ยิง Production จริง (เพราะไม่คุ้ม/ทำไม่ได้โดย
+ไม่กระทบผู้ใช้จริง เช่น Rate Limit หน้าต่าง 1 ชม.) — ห้ามอ่านสองระดับนี้ปนกันว่า
+แน่นเท่ากัน
+
+**F1 — Satang Pool Exhaustion (🔴)**
+- สถานะ: ปิดแล้ว
+- Fix: จำกัด 1 Pending Payment ค้างต่อ user (`payment.service.requestPayment`
+  เช็ค `findPendingByUserId` ก่อน `allocateSatangTag` เสมอ) — Error Code ใหม่
+  `PENDING_PAYMENT_EXISTS` ทั้งฝั่ง Web (409 + คำขอเดิม) และ LINE (`request_payment`
+  Postback ตอบ QR เดิมแทนขึ้น Error)
+- Commit: `c349485`
+- Evidence: **Production Verification 11 ส.ค. 2569** — ยิงจริง 3 ครั้งติดกันด้วย
+  บัญชีทดสอบ (`monthly` → `monthly` → `yearly`) เกิดแถวเดียวเท่านั้น
+  (`rows_created=1`, `tags_held=1`) ครั้งที่ 2/3 ได้ 409 คืน `paymentId` เดิมเป๊ะ
+  ทุกครั้ง — Cleanup แล้วคืนเลขสตางค์เข้า Pool (ยืนยันซ้ำด้วยการขอใหม่สำเร็จ 200
+  หลัง Resolve คำขอเดิม) Red-Green: ถอด Guard ออก → Test แดง 4/5 เคส
+
+**F2 — OCR Quota Abuse**
+- สถานะ: ปิดแล้ว
+- Fix: เพดานที่สอง `call_count` (migration 038) นับ "ทุกครั้งที่เรียก Claude จริง"
+  แยกจาก `count` เดิมที่นับเฉพาะ "อ่านสำเร็จ" — `MONTHLY_CALL_LIMIT = 200`
+  (`slipOcr.service.js`)
+- Commit: `4717e5d`
+- Evidence: **Production Verification 11 ส.ค. 2569** — ส่งรูปผ่าน LINE ด้วยบัญชี
+  Premium จริง 6 ภาพ (5 ครั้งเรียก Claude จริง: 4 รูปไม่ใช่สลิป + 1 รูปสลิปสำเร็จ,
+  2 ครั้งโดน Rate Limit ตัดก่อนถึง Claude) ยืนยันคู่กับ Railway Log จริง
+  (Timestamp + `webhookEventId` ตรงกันทุกรายการ): `call_count` 2→7 (+5 ตรง
+  จำนวนครั้งที่เรียก Claude จริงเป๊ะ), `count` 4→5 (+1 ตรงจำนวนที่อ่านสำเร็จเป๊ะ —
+  รูปที่ไม่ใช่สลิปไม่กินโควตาผู้ใช้แต่ยังถูกนับต้นทุน)
+
+**F3 — Payment Slip Re-upload Abuse**
+- สถานะ: ปิดแล้ว
+- Fix: `slipUploadLimiter` (1 ครั้ง/ชม./user, Key = `user.id` ไม่ใช่ IP) วางก่อน
+  `rawSlipBody` บน `POST /payment/:id/slip` — Reuse โครง `screenshotUploadLimiter`
+- Commit: `faabc45`
+- Evidence: **ยืนยันด้วย Test เท่านั้น ไม่ได้ยิง Production จริง** (หน้าต่างเพดาน
+  1 ชม./ครั้ง ทำให้ยิงจริงไม่คุ้ม) — `tests/securityHardening.test.js` ยก Express
+  App จริง + Limiter ตัวที่ Mount อยู่จริงมาทดสอบ (ไม่ Mock Config): ครั้งแรก 200,
+  ครั้งที่ 2 ขึ้นไป 429 ทุกครั้ง, นับแยกรายบัญชีถูกต้อง (Key = `user.id`)
+
+**F4 — payment-slips Bucket Public → Private**
+- สถานะ: ปิดแล้ว
+- Fix: `uploadPaymentSlip` คืน Storage Path แทน Public URL,
+  `createPaymentSlipSignedUrl` (TTL 5 นาที), `paymentSlipPathFrom` แปลง URL เก่า
+  ที่เคยเป็น Public กลับเป็น Path ให้เซ็นใหม่ได้ (กัน Admin เปิดสลิปคำขอเก่าไม่ได้
+  ทันทีที่สลับ Bucket)
+- Commit: `8e0fb26`
+- Evidence: **Production Verification 11 ส.ค. 2569** — หลัง Founder ปิด Public
+  บน Supabase Dashboard แล้ว ยิง Public Storage Endpoint ของ `payment-slips`
+  ตรงๆ ได้ `{"error":"Bucket not found","code":"NoSuchBucket"}` **เหมือนกับ**
+  `transaction-slips` (Bucket Private เดิม) เป๊ะ — ยืนยันว่า URL สาธารณะเก่าใช้
+  ไม่ได้แล้วจริง
+  ⚠️ Known Limitation ที่ยอมรับแล้ว: รูปที่เคยหลุด URL ไปก่อนสลับ ยังเปิดได้ถ้ามี
+  URL อยู่ในมือ (การสลับ Bucket บล็อก Access ใหม่ แต่ไม่ลบ URL เก่าที่เคยรั่ว)
+
+**F5 — ลบ backend/public/liff/**
+- สถานะ: ปิดแล้ว
+- Fix: ลบไฟล์ `backend/public/liff/index.html` ทั้งไฟล์ + ถอด `express.static`
+  ออกจาก `index.js` (หน้านี้เขียนกำกับตัวเองว่า Deprecated แต่ยัง Live จริงบน
+  Production และเก็บ JWT ใน localStorage ขัด `docs/SECURITY.md` § 1.1)
+- Commit: `efe4290`
+- Evidence: **Production Verification 11 ส.ค. 2569** — `GET /liff/index.html`,
+  `/liff/`, `/liff` ได้ **404 ทั้ง 3 Path** (เดิม 200)
+
+**F6 — Webhook Rate Limit Bypass**
+- สถานะ: ปิดแล้ว
+- Fix: เปลี่ยนจาก `req.path.startsWith('/api/v1/webhook')` (Skip กว้างเกินจำเป็น)
+  เป็นเทียบ Path ตรงๆ + เพิ่ม `webhookLimiter` เพดาน 6,000/15 นาที/IP วางก่อน
+  `express.json()` เสมอ
+- Commit: `efe4290`
+- Evidence: **Production Verification 11 ส.ค. 2569** — `GET /api/v1/webhookZZZ`
+  (Path ที่ไม่มี Route รองรับ, เดิมหลุด Limit ไปด้วย) ตอนนี้มี Header
+  `ratelimit: limit=300` แล้ว, `POST /api/v1/webhook` จริงมี
+  `ratelimit: limit=6000` + ตอบ 401 (HMAC เช็คหลัง Rate Limit ตามลำดับที่ออกแบบ),
+  `/health` ยัง Skip ปกติ (ไม่มี Header ratelimit)
+
+**F7 — Account Lock/Ban Mechanism**
+- สถานะ: ปิดแล้ว
+- Fix: Migration 039 (`locked_by`/`lock_reason`), `userRepository.setLock`
+  (ทางเข้าเดียวของการเขียน `is_locked` — เดิมเป็น Dead Column ไม่เคยมีทางเขียนได้
+  เลยตั้งแต่ Schema แรก), Endpoint `POST /admin/users/:id/lock|unlock`, บังคับใช้
+  ที่ `auth.middleware` (403 `ACCOUNT_LOCKED` คู่กับ `anonymizedAt`) + Parity
+  ฝั่ง LINE (`webhook.controller` — การ์ด "บัญชีถูกระงับ")
+- Commit: `7820aea`
+- Evidence: **Production Verification 11 ส.ค. 2569** — ทดสอบเต็มเส้นด้วยบัญชี
+  ทดสอบจริง (ยืนยัน LINE ID ต่างจาก Admin ID ก่อนล็อกทุกครั้ง): Guard ครบ (400
+  ไม่ส่ง reason, 400 reason ยาวเกิน 500, 403 ไม่ใช่ Admin), ล็อกจริง 200 + DB มี
+  ครบ 4 คอลัมน์ (`locked_by` = LINE ID ของ Admin จาก JWT จริง ปลอมไม่ได้), บัญชี
+  ที่ถูกล็อกยิง 4 Endpoint ได้ 403 `ACCOUNT_LOCKED` ทุกตัว (รวมเส้นทางเงิน), ปลด
+  ล็อก 200 → ใช้งานได้ปกติทันที, Audit Trail (`locked_by`/`lock_reason`/
+  `locked_at`) ยังอยู่ครบหลังปลดล็อกตามดีไซน์ (ล้างเป็น NULL ทีหลังตามคำขอ
+  Founder เพราะเป็นข้อมูลทดสอบ ไม่ใช่ของจริง)
+
+**F9 — LINE Content API Timeout**
+- สถานะ: ปิดแล้ว (Code Fix) — ⚠️ **ยืนยันด้วย Test พื้นฐานเท่านั้น ไม่มี Test
+  เฉพาะครอบ Timeout Behavior และไม่ได้ยิง Production จริง** (จำลอง LINE API ค้าง
+  บน Production ทำไม่ได้โดยไม่กระทบผู้ใช้จริง)
+- Fix: เพิ่ม `AbortController` + Timeout 20 วินาที ใน `line.service.getMessageContent`
+  (Pattern เดียวกับ `slipOcr.service`/`priceFeed.service`) — เดิมไม่มี Timeout
+  เลย ต่างจาก External Call อื่นทุกตัวในโปรเจกต์
+- Commit: `e70268e`
+- Evidence: Test เดิมของ `getMessageContent` (Success/Error Path,
+  `tests/line.service.test.js`) ยังผ่านทั้งหมดหลังแก้ — พิสูจน์แค่ "ไม่
+  Regression" ไม่ได้พิสูจน์ว่า Timeout ทำงานจริงเมื่อ LINE ค้าง — **TODO**: เพิ่ม
+  Test จำลอง Timeout ด้วย Fake Timer ในรอบถัดไป
+
+**G1 — helmet Security Headers**
+- สถานะ: ปิดแล้ว
+- Fix: เพิ่ม `helmet()` middleware พร้อม `crossOriginResourcePolicy: 'cross-origin'`
+  (Default ของ helmet คือ `same-origin` ซึ่งจะบล็อก LINE Fetch รูป QR) +
+  `app.disable('x-powered-by')`
+- Commit: `efe4290` (Dependency เพิ่มใน `575e1fd`)
+- Evidence: **Production Verification 11 ส.ค. 2569** — `curl -I /health` ได้
+  Security Header ครบ 9 ตัว (CSP, HSTS, X-Frame-Options, X-Content-Type-Options,
+  Referrer-Policy ฯลฯ) จากเดิมไม่มีสักตัว, `x-powered-by` หายไปแล้ว (count=0),
+  ยืนยันเพิ่มว่า `GET /api/v1/payment/:id/qr.png` ยังตอบ
+  `cross-origin-resource-policy: cross-origin` — ปุ่ม Premium ไม่พัง
+
+**G2 — REVOKE increment_ai_ocr_usage**
+- สถานะ: ปิดแล้ว
+- Fix: Migration 037 — `REVOKE ALL ... FROM PUBLIC, anon, authenticated` +
+  `GRANT EXECUTE ... TO service_role` (Function นี้ไม่เคยถูก REVOKE มาตั้งแต่
+  Migration 011 ก่อนโปรเจกต์จะมี Pattern สิทธิ์ Function)
+- Commit: `abae487`
+- Evidence: SQL VERIFY ที่ Founder รันหลัง Apply ยืนยัน `service_role=true`,
+  `public`/`anon`/`authenticated`=`false` ทั้งหมด ตรง Pattern — **Production
+  Verification 11 ส.ค. 2569**: หลังส่งรูปสลิปจริงผ่าน LINE, `ai_ocr_usage.count`
+  ยังขยับ 4→5 ปกติ (พิสูจน์ว่า Backend เรียก RPC ผ่าน `service_role` ได้จริงหลัง
+  REVOKE ไม่มี Path ไหนพังหรือเรียกด้วย Key อื่น)
+
+**G3 — UUID Validate ใน dcaPlans.controller**
+- สถานะ: ปิดแล้ว
+- Fix: เพิ่ม UUID Regex Validate ก่อน Query ใน `updatePlan`/`deletePlan` (เดิม id
+  ผิดรูปทำ Postgres throw 22P02 กลายเป็น 500 ทั้งที่ควรเป็น 404) — Pattern
+  เดียวกับ `transactions.controller`
+- Commit: `26fadd9`
+- Evidence: **ยืนยันด้วย Test เท่านั้น ไม่ได้ยิง Production จริง** —
+  `tests/dcaPlans.controller.test.js` § "id ที่ไม่ใช่ UUID → 404 ก่อนถึง Service
+  (G3)" ครอบ 10 เคส (รวม SQLi-style, UUID ขาด 1 ตัว) ยืนยันทั้ง Status 404 และ
+  "ไม่เรียก Service เลย"
+
+**G4 — npm audit fix**
+- สถานะ: ปิดแล้ว (บางส่วนโดยเจตนา)
+- Fix: `npm audit fix` (ไม่ใช้ `--force`) ปิด Advisory ที่แก้ได้โดยไม่ Breaking —
+  helmet เพิ่มเป็น Dependency ใหม่
+- Commit: `575e1fd`
+- Evidence: **ตรวจด้วย `npm audit` เท่านั้น (ไม่ใช่ Endpoint ที่ Verify ผ่าน HTTP
+  ได้)** — เหลือ 2 moderate ที่จงใจไม่แก้: `exceljs → uuid <11.1.1`
+  (GHSA-w5hq-g745-h8pq) เพราะ `--force` จะ Downgrade `exceljs` 4.4→3.4.0
+  (Export Excel พังทั้งเส้น) ทั้งที่โปรเจกต์ไม่เคยใช้ `uuid` v3/v5/v6 พร้อม `buf`
+  Param เลย — ความเสี่ยงจริงเป็นศูนย์ ยืนยันด้วย Production ยัง Build/Deploy
+  สำเร็จปกติ (Commit `d2120a0` RUNNING ทั้ง 2 Service)
+
+**Q1 — IDOR End-to-End Regression Test**
+- สถานะ: ปิดแล้ว
+- Fix: `tests/idorEndToEnd.regression.test.js` — ยก Express App จริงทั้งก้อน
+  (Middleware Stack ครบ) + เซ็น JWT ด้วย Secret ทดสอบ + `fakeSupabase` (บังคับ
+  `.eq()` จริง) ยิง 14 Endpoint ที่รับ `:id`/`:symbol` ด้วย Token ของผู้โจมตี A
+  พร้อม id ของเหยื่อ B
+- Commit: `058cfe5`
+- Evidence: **ยืนยันด้วย Test เท่านั้น ไม่ได้ยิง Production จริง** (Integration
+  Test ระดับ HTTP เต็มรูปแบบ ใช้แทนการยิงมือทีละ Endpoint บน Production) —
+  Red-Green พิสูจน์แล้ว: ถอด `.eq('user_id', userId)` ออกจาก
+  `transaction.repository.findByIdForUser` 1 บรรทัด → A ได้ 200 พร้อม Path สลิป
+  ของ B กลับมาเต็มๆ (แดง 2/19) ใส่กลับ → เขียวครบ 19/19 (รวม Control Group 4
+  ตัวที่พิสูจน์ว่า App ไม่ได้พังทั้งก้อน)
+
+**Q2 — Feature Flags บน Railway Production**
+- สถานะ: ตรวจแล้ว (Read-only)
+- Evidence: **Production Verification 11 ส.ค. 2569** — `railway variables --kv`:
+  `PREMIUM_FREE_TRIAL_ENABLED=true`, `FACEBOOK_LIKE_GRANT_ENABLED=false`
+
+**Q3 — ความยาว JWT_SECRET บน Railway Production**
+- สถานะ: ตรวจแล้ว (Read-only, ไม่ Print ค่าจริง)
+- Evidence: **Production Verification 11 ส.ค. 2569** — คำนวณความยาวผ่าน `awk`
+  (ไม่เคย Log ค่าจริง) ได้ **47 ตัวอักษร** (> 32) — ไม่ต้อง Rotate
+
+**สรุป**
+- Production: `d2120a0` (ทั้ง `EasyDCA` + `easydca-worker`, Deploy 11 ส.ค. 2569
+  06:07 UTC)
+- Test Suite: 2,059 ตัว เขียวหมด (`exit 0`, 103 Suites)
+- TODO ที่เหลือ: Jest "worker process failed to exit gracefully" Warning หลังรัน
+  ทั้งชุด (ไม่กระทบผล Test — Exit Code ยังเป็น 0 — ยังไม่สืบสาเหตุแน่ชัด) + RLS
+  Stage 1 (เขียน Policy รอเริ่ม — ดูหัวข้อ Cross-User Isolation Audit ด้านบน) + F9
+  ยังไม่มี Test เฉพาะครอบ Timeout Behavior (ดูรายละเอียดในหัวข้อ F9 ด้านบน)
+
 ### ⏳ ยังไม่ปิด (TODO ที่เหลือ)
 
 1. **จดโดเมน** — กำลังดำเนินการ (`easydca.co` ผ่าน Z.com, ~1,177 บาท/ปี
