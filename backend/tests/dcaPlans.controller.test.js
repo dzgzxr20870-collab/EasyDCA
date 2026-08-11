@@ -29,6 +29,10 @@ dcaReminderService.frequencyValueError.mockImplementation((frequency, value) => 
 });
 
 const USER_ID = 'user-uuid-1';
+// ⚠️ ต้องเป็น UUID จริง (Offensive Review Round 2 — G3): Controller Validate รูปแบบ id
+// ก่อนเรียก Service แล้ว id ปลอมอย่าง 'plan-1' จะได้ 404 ตั้งแต่ด่านแรก ทำให้ Test ที่
+// ตั้งใจครอบ Logic ชั้นหลัง "เขียวโดยไม่ได้ทดสอบอะไรเลย" — เคสรูปแบบผิดมี Test แยกไว้แล้ว
+const PLAN_ID = '11111111-2222-4333-8444-555555555555';
 
 function mockReq({ body = {}, params = {} } = {}) {
   return { user: { id: USER_ID }, body, params };
@@ -43,7 +47,7 @@ const jsonOf = (res) => res.json.mock.calls[0][0];
 const statusOf = (res) => res.status.mock.calls[0][0];
 
 const SAMPLE_PLAN = {
-  id: 'plan-1', symbol: 'BTC', name: 'Bitcoin บิตคอยน์', amountTotal: 1000, currency: 'THB',
+  id: PLAN_ID, symbol: 'BTC', name: 'Bitcoin บิตคอยน์', amountTotal: 1000, currency: 'THB',
   frequency: 'weekly', dayOfWeek: 4, dayOfMonth: null, dayLabel: 'ทุกวันพฤหัสบดี', active: true,
 };
 
@@ -170,23 +174,23 @@ describe('PATCH /dca-plans/:id — updatePlan', () => {
   test('สำเร็จ → 200 + plan', async () => {
     dcaReminderService.updatePlan.mockResolvedValue({ ...SAMPLE_PLAN, amountTotal: 2000 });
     const res = mockRes();
-    await updatePlan(mockReq({ params: { id: 'plan-1' }, body: { amountTotal: 2000 } }), res);
+    await updatePlan(mockReq({ params: { id: PLAN_ID }, body: { amountTotal: 2000 } }), res);
     expect(statusOf(res)).toBe(200);
     expect(jsonOf(res).plan.amountTotal).toBe(2000);
-    expect(dcaReminderService.updatePlan).toHaveBeenCalledWith(USER_ID, 'plan-1', { amountThb: 2000 });
+    expect(dcaReminderService.updatePlan).toHaveBeenCalledWith(USER_ID, PLAN_ID, { amountThb: 2000 });
   });
 
   test('toggle active=false (pause)', async () => {
     dcaReminderService.updatePlan.mockResolvedValue({ ...SAMPLE_PLAN, active: false });
     const res = mockRes();
-    await updatePlan(mockReq({ params: { id: 'plan-1' }, body: { active: false } }), res);
+    await updatePlan(mockReq({ params: { id: PLAN_ID }, body: { active: false } }), res);
     expect(statusOf(res)).toBe(200);
-    expect(dcaReminderService.updatePlan).toHaveBeenCalledWith(USER_ID, 'plan-1', { active: false });
+    expect(dcaReminderService.updatePlan).toHaveBeenCalledWith(USER_ID, PLAN_ID, { active: false });
   });
 
   test('body ว่าง (ไม่มี field แก้) → 400 VALIDATION_ERROR', async () => {
     const res = mockRes();
-    await updatePlan(mockReq({ params: { id: 'plan-1' }, body: {} }), res);
+    await updatePlan(mockReq({ params: { id: PLAN_ID }, body: {} }), res);
     expect(statusOf(res)).toBe(400);
     expect(jsonOf(res).error).toBe('VALIDATION_ERROR');
     expect(dcaReminderService.updatePlan).not.toHaveBeenCalled();
@@ -194,7 +198,7 @@ describe('PATCH /dca-plans/:id — updatePlan', () => {
 
   test('active ไม่ใช่ boolean → 400 VALIDATION_ERROR', async () => {
     const res = mockRes();
-    await updatePlan(mockReq({ params: { id: 'plan-1' }, body: { active: 'yes' } }), res);
+    await updatePlan(mockReq({ params: { id: PLAN_ID }, body: { active: 'yes' } }), res);
     expect(statusOf(res)).toBe(400);
     expect(jsonOf(res).error).toBe('VALIDATION_ERROR');
   });
@@ -202,7 +206,7 @@ describe('PATCH /dca-plans/:id — updatePlan', () => {
   test('service โยน PLAN_NOT_FOUND → 404', async () => {
     dcaReminderService.updatePlan.mockRejectedValue(new MockDcaReminderError('PLAN_NOT_FOUND', 'nope'));
     const res = mockRes();
-    await updatePlan(mockReq({ params: { id: 'x' }, body: { amountTotal: 100 } }), res);
+    await updatePlan(mockReq({ params: { id: PLAN_ID }, body: { amountTotal: 100 } }), res);
     expect(statusOf(res)).toBe(404);
     expect(jsonOf(res).error).toBe('PLAN_NOT_FOUND');
   });
@@ -212,7 +216,7 @@ describe('PATCH /dca-plans/:id — updatePlan', () => {
       new MockDcaReminderError('CURRENCY_NOT_SUPPORTED_FOR_ASSET', 'no')
     );
     const res = mockRes();
-    await updatePlan(mockReq({ params: { id: 'plan-1' }, body: { currency: 'USD' } }), res);
+    await updatePlan(mockReq({ params: { id: PLAN_ID }, body: { currency: 'USD' } }), res);
     expect(statusOf(res)).toBe(400);
     expect(jsonOf(res).error).toBe('CURRENCY_NOT_SUPPORTED_FOR_ASSET');
   });
@@ -220,20 +224,54 @@ describe('PATCH /dca-plans/:id — updatePlan', () => {
 
 describe('DELETE /dca-plans/:id — deletePlan', () => {
   test('สำเร็จ → 200 + deleted.id', async () => {
-    dcaReminderService.deletePlanById.mockResolvedValue({ id: 'plan-1', deleted: 1 });
+    dcaReminderService.deletePlanById.mockResolvedValue({ id: PLAN_ID, deleted: 1 });
     const res = mockRes();
-    await deletePlan(mockReq({ params: { id: 'plan-1' } }), res);
+    await deletePlan(mockReq({ params: { id: PLAN_ID } }), res);
     expect(statusOf(res)).toBe(200);
-    expect(jsonOf(res).deleted).toEqual({ id: 'plan-1' });
-    expect(dcaReminderService.deletePlanById).toHaveBeenCalledWith(USER_ID, 'plan-1');
+    expect(jsonOf(res).deleted).toEqual({ id: PLAN_ID });
+    expect(dcaReminderService.deletePlanById).toHaveBeenCalledWith(USER_ID, PLAN_ID);
   });
 
   test('ไม่พบ → 404 PLAN_NOT_FOUND', async () => {
     dcaReminderService.deletePlanById.mockRejectedValue(new MockDcaReminderError('PLAN_NOT_FOUND', 'nope'));
     const res = mockRes();
-    await deletePlan(mockReq({ params: { id: 'x' } }), res);
+    await deletePlan(mockReq({ params: { id: PLAN_ID } }), res);
     expect(statusOf(res)).toBe(404);
     expect(jsonOf(res).error).toBe('PLAN_NOT_FOUND');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// id ที่ไม่ใช่ UUID (Offensive Review Round 2 — G3)
+// ═══════════════════════════════════════════════════════════════════════════
+// เดิมส่ง id รูปแบบผิดเข้าไปตรงๆ → Postgres throw 22P02 (invalid input syntax for
+// type uuid) → Service ปล่อย Error ดิบขึ้นมา → 500 ทั้งที่ความหมายที่ถูกต้องคือ
+// "ไม่พบแผน" (404) — 500 ที่ยิงได้ตามใจเป็นทั้งสัญญาณรบกวนใน Log และเป็นการยืนยัน
+// ให้ผู้ยิงรู้ว่า Backend เป็น Postgres + คอลัมน์นี้เป็น uuid (Pattern เดียวกับ
+// transactions.controller ที่ปิดไปก่อนแล้ว)
+describe('id ที่ไม่ใช่ UUID → 404 ก่อนถึง Service (G3)', () => {
+  const BAD_IDS = [
+    'plan-1', // รูปแบบเดิมที่เคยใช้ใน Test (ไม่ใช่ UUID)
+    'x',
+    "1' OR '1'='1", // SQLi-style — ต้องไม่หลุดถึงชั้น DB
+    '11111111-2222-4333-8444-55555555555', // UUID ขาดไป 1 ตัว
+    '',
+  ];
+
+  test.each(BAD_IDS)('PATCH id=%p → 404 และไม่เรียก Service เลย', async (id) => {
+    const res = mockRes();
+    await updatePlan(mockReq({ params: { id }, body: { amountTotal: 2000 } }), res);
+    expect(statusOf(res)).toBe(404);
+    expect(jsonOf(res).error).toBe('PLAN_NOT_FOUND');
+    expect(dcaReminderService.updatePlan).not.toHaveBeenCalled();
+  });
+
+  test.each(BAD_IDS)('DELETE id=%p → 404 และไม่เรียก Service เลย', async (id) => {
+    const res = mockRes();
+    await deletePlan(mockReq({ params: { id } }), res);
+    expect(statusOf(res)).toBe(404);
+    expect(jsonOf(res).error).toBe('PLAN_NOT_FOUND');
+    expect(dcaReminderService.deletePlanById).not.toHaveBeenCalled();
   });
 });
 

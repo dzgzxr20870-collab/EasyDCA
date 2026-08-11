@@ -42,6 +42,12 @@ const ERROR_STATUS = {
   PLAN_LIMIT_REACHED: 403,
 };
 
+// UUID v4-ish รูปแบบ (Postgres uuid column) — Validate ก่อน Query กัน id ผิดรูปทำให้
+// Postgres throw 22P02 แล้วตกไป 500 ทั้งที่ความหมายจริงคือ "ไม่พบแผน" (404)
+// ⚠️ คัดลอกรูปแบบมาจาก transactions.controller.js:150 โดยตั้งใจให้ตรงกันเป๊ะ —
+// สอง Controller นี้เป็น Pattern คู่กัน (Offensive Review Round 2 — G3)
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function fail(res, code, details = {}) {
   const status = ERROR_STATUS[code] ?? 500;
   return res.status(status).json({
@@ -150,6 +156,12 @@ async function listPlans(req, res) {
 
 // PATCH /api/v1/dca-plans/:id — แก้ไข/หยุด-เปิดแผน (ทุก field optional)
 async function updatePlan(req, res) {
+  // ตอบ 404 ให้ id ที่ไม่ใช่ UUID เหมือนกับ "ไม่พบแผน" (ไม่บอกใบ้ว่ารูปแบบผิดหรือ
+  // ไม่มีจริง — Pattern เดียวกับ transactions.controller.uploadTransactionSlip)
+  if (!UUID_RE.test(String(req.params.id))) {
+    return fail(res, 'PLAN_NOT_FOUND');
+  }
+
   const body = req.body ?? {};
   const patch = {};
 
@@ -194,6 +206,10 @@ async function updatePlan(req, res) {
 
 // DELETE /api/v1/dca-plans/:id — ลบแผนจริง (Hard delete — Config ไม่ใช่ Ledger)
 async function deletePlan(req, res) {
+  if (!UUID_RE.test(String(req.params.id))) {
+    return fail(res, 'PLAN_NOT_FOUND');
+  }
+
   try {
     const result = await dcaReminderService.deletePlanById(req.user.id, req.params.id);
     return res.status(200).json({ deleted: { id: result.id } });
