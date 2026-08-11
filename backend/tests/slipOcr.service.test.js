@@ -39,6 +39,8 @@ beforeEach(() => {
   process.env.CLAUDE_API_KEY = 'test-key';
   aiOcrUsageRepository.getUsageCount.mockResolvedValue(0);
   aiOcrUsageRepository.incrementUsage.mockResolvedValue(1);
+  // เพดานการเรียก Claude (F2) — Default ให้ยังไม่ชนเพดาน เพื่อไม่กระทบ Test เดิมทุกตัว
+  aiOcrUsageRepository.incrementCallCount.mockResolvedValue(1);
   global.fetch = jest.fn().mockResolvedValue(claudeOk(VALID_SLIP));
 });
 
@@ -407,6 +409,104 @@ describe('extractSlip — ไม่นับโควตา (Error / ไม่�
     );
     expect(global.fetch).not.toHaveBeenCalled();
     expect(aiOcrUsageRepository.incrementUsage).not.toHaveBeenCalled();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// เพดานการเรียก Claude Vision รายเดือน (Offensive Review Round 2 — F2)
+// ═══════════════════════════════════════════════════════════════════════════
+// ช่องโหว่เดิม: โควตา 50/เดือนนับเฉพาะ "อ่านสำเร็จ" — ส่งรูปที่ไม่ใช่สลิปเข้ามา Claude
+// ถูกเรียก+เก็บเงินทุกครั้ง แต่ throw ออกก่อนถึงบรรทัดนับ ตัวนับจึงไม่ขยับเลยตลอดกาล
+// เพดานที่สอง (call_count) นับ "ทุกครั้งที่กำลังจะยิง" จึงปิดช่องนี้ได้
+describe('extractSlip — เพดานการเรียก Claude Vision (F2)', () => {
+  test('เพดานผูกกับ MONTHLY_QUOTA เสมอ และต้องสูงกว่าเสมอ', () => {
+    // ถ้าเพดานคุมต้นทุนต่ำกว่าโควตาที่สัญญากับผู้ใช้ = ผู้ใช้สุจริตโดนบล็อกทั้งที่โควตา
+    // ยังเหลือ (สัญญาที่ให้ไว้เป็นโมฆะ) — ล็อกความสัมพันธ์นี้ไว้กันเผลอปรับตัวเดียว
+    expect(slipOcr.MONTHLY_CALL_LIMIT).toBeGreaterThan(slipOcr.MONTHLY_QUOTA);
+    expect(slipOcr.MONTHLY_CALL_LIMIT).toBe(200);
+  });
+
+  test('นับ call_count "ก่อน" ยิง Claude เสมอ (แม้ครั้งนั้นจะอ่านไม่ออก)', async () => {
+    global.fetch.mockResolvedValue(claudeOk({ is_slip: false }));
+
+    await expect(slipOcr.extractSlip(USER_ID, BUFFER, 'image/jpeg', NOW)).rejects.toThrow(
+      expect.objectContaining({ code: 'OCR_NOT_A_SLIP' })
+    );
+
+    // นี่คือหัวใจของ Fix: ครั้งที่ "อ่านไม่ออก" ต้องถูกนับ (จ่ายเงินไปแล้ว)
+    // แต่ต้องไม่กินโควตาที่สัญญากับผู้ใช้ (count เดิม)
+    expect(aiOcrUsageRepository.incrementCallCount).toHaveBeenCalledWith(USER_ID, '2026-07');
+    expect(aiOcrUsageRepository.incrementUsage).not.toHaveBeenCalled();
+  });
+
+  test('ชนเพดาน → OCR_CALL_LIMIT_EXCEEDED และไม่เรียก Claude เลย', async () => {
+    // ค่าที่ RPC คืนกลับมา = ค่าหลังบวกแล้ว ครั้งที่ทำให้เกิน 200 คือครั้งที่คืน 201
+    aiOcrUsageRepository.incrementCallCount.mockResolvedValue(201);
+
+    await expect(slipOcr.extractSlip(USER_ID, BUFFER, 'image/jpeg', NOW)).rejects.toThrow(
+      expect.objectContaining({ code: 'OCR_CALL_LIMIT_EXCEEDED' })
+    );
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(aiOcrUsageRepository.incrementUsage).not.toHaveBeenCalled();
+  });
+
+  test('ครั้งที่ 200 พอดี (= เพดาน) ยังผ่าน — ขอบเขตต้องเป็น > ไม่ใช่ >=', async () => {
+    aiOcrUsageRepository.incrementCallCount.mockResolvedValue(200);
+    const result = await slipOcr.extractSlip(USER_ID, BUFFER, 'image/jpeg', NOW);
+    expect(result.symbol).toBe('BTC');
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  // ── Test หลักตามที่ระบุใน Prompt: นับจำนวนครั้งที่ Claude ถูกเรียก "จริง" ────────
+  // ยิงรัวๆ ด้วยรูปที่อ่านไม่ออก (is_slip=false) เกินเพดาน แล้วนับ global.fetch
+  // ต้องไม่เกิน MONTHLY_CALL_LIMIT — นี่คือสิ่งที่พังจริงก่อน Fix (นับได้ 210 ครั้ง)
+  test('ยิงรูปที่ไม่ใช่สลิปรัว 210 ครั้ง → Claude ถูกเรียกไม่เกิน 200 ครั้ง', async () => {
+    global.fetch.mockResolvedValue(claudeOk({ is_slip: false }));
+
+    // จำลอง Counter จริงของ Postgres (Increment แล้วคืนค่าใหม่) — ไม่ Hardcode ค่าคืน
+    // เพราะต้องพิสูจน์ว่า "ตัวนับที่เดินจริง" หยุด Claude ได้ ไม่ใช่แค่ Mock ตอบตามบท
+    let counter = 0;
+    aiOcrUsageRepository.incrementCallCount.mockImplementation(async () => {
+      counter += 1;
+      return counter;
+    });
+
+    const ATTEMPTS = 210;
+    for (let i = 0; i < ATTEMPTS; i += 1) {
+      // เลื่อนเวลาไปทีละ 11 วิ เพื่อไม่ให้ติด Rate Limit 10 วิ (คนละด่านกัน — ด่านนี้
+      // ผู้ไม่หวังดีรออยู่แล้วได้ ต้องพิสูจน์ว่าเพดานรายเดือนหยุดได้เองโดยไม่พึ่ง Rate Limit)
+      const at = new Date(NOW.getTime() + i * 11_000);
+      await expect(slipOcr.extractSlip(USER_ID, BUFFER, 'image/jpeg', at)).rejects.toThrow(
+        expect.objectContaining({
+          code: i < 200 ? 'OCR_NOT_A_SLIP' : 'OCR_CALL_LIMIT_EXCEEDED',
+        })
+      );
+    }
+
+    // จำนวนครั้งที่ "จ่ายเงินจริง" ต้องหยุดที่เพดานพอดี ไม่ใช่ 210
+    expect(global.fetch).toHaveBeenCalledTimes(slipOcr.MONTHLY_CALL_LIMIT);
+    expect(aiOcrUsageRepository.incrementUsage).not.toHaveBeenCalled();
+  });
+
+  test('นับ call_count ไม่ได้ (DB ล่ม) → Fail-closed ไม่ยิง Claude', async () => {
+    // ต่างจาก incrementUsage ตอนท้ายที่ยอม Fail-open ได้ (จ่ายเงินไปแล้ว การนับพลาด
+    // ไม่ควรทำลาย UX) — ตรงนี้ยังไม่จ่าย ถ้าเดินต่อทั้งที่บังคับเพดานไม่ได้ = ทำให้ DB
+    // ล่มเมื่อไหร่ก็ยิงฟรีไม่จำกัดเมื่อนั้น
+    aiOcrUsageRepository.incrementCallCount.mockRejectedValue(new Error('db down'));
+
+    await expect(slipOcr.extractSlip(USER_ID, BUFFER, 'image/jpeg', NOW)).rejects.toThrow(
+      expect.objectContaining({ code: 'OCR_FAILED' })
+    );
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  test('โควตาเต็มก่อน → ไม่นับ call_count ด้วย (ไม่มีการยิง Claude ให้ต้องนับ)', async () => {
+    aiOcrUsageRepository.getUsageCount.mockResolvedValue(50);
+
+    await expect(slipOcr.extractSlip(USER_ID, BUFFER, 'image/jpeg', NOW)).rejects.toThrow(
+      expect.objectContaining({ code: 'OCR_QUOTA_EXCEEDED' })
+    );
+    expect(aiOcrUsageRepository.incrementCallCount).not.toHaveBeenCalled();
   });
 });
 

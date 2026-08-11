@@ -33,6 +33,25 @@ const CLAUDE_MODEL = 'claude-sonnet-5';
 const ANTHROPIC_VERSION = '2023-06-01';
 
 const MONTHLY_QUOTA = 50;
+
+// ── เพดานที่สอง: จำนวนครั้งที่ "เรียก Claude จริง" ต่อเดือน (Offensive Review R2 — F2) ──
+// MONTHLY_QUOTA ข้างบนนับเฉพาะ "อ่านสลิปสำเร็จ" ตามที่สัญญากับผู้ใช้ ซึ่งถูกในเชิง UX
+// แต่แปลว่าการเรียกที่ล้มเหลว (is_slip=false / อ่าน symbol ไม่ออก / หลายรายการ) ไม่ถูก
+// นับอะไรเลยทั้งที่จ่ายเงินให้ Anthropic ไปแล้วจริงทุกครั้ง → ส่งรูปวิว/รูปดำรัวๆ ก็ยิงได้
+// ไม่จำกัดเดือน (Rate Limit 10 วิ = 6 ครั้ง/นาที = 8,640 ครั้ง/วัน)
+//
+// ── ที่มาของตัวเลข 200 ──────────────────────────────────────────────────────
+// ต้อง "สูงพอที่ผู้ใช้สุจริตไม่มีวันชน" แต่ "ต่ำพอที่การยิงรัวจะชนภายในไม่กี่ชั่วโมง":
+//   - ผู้ใช้สุจริตที่ใช้โควตาจนหมดทั้ง 50 ครั้ง + ส่งรูปพลาด/เบลอซ้ำอีก 3 เท่าของที่สำเร็จ
+//     ยังอยู่ที่ 200 พอดี — เผื่อไว้กว้างมากเมื่อเทียบกับพฤติกรรมจริง (ส่วนใหญ่อ่านผ่าน
+//     ตั้งแต่รูปแรก) ชนเมื่อไหร่แปลว่าผิดปกติจริง ไม่ใช่แค่ "วันนี้ถ่ายรูปไม่สวย"
+//   - ฝั่งผู้ไม่หวังดี: 8,640 ครั้ง/วันที่เคยทำได้ เหลือ 200 ครั้ง/เดือน = ตัดเพดานความ
+//     เสียหายลง ~1,300 เท่า (ชนภายใน ~35 นาทีถ้ายิงเต็มอัตราตาม Rate Limit 10 วิ)
+// ตั้งเป็น 4 เท่าของ MONTHLY_QUOTA พอดีโดยตั้งใจ — ถ้าวันหนึ่งปรับโควตาผู้ใช้ ให้ปรับ
+// ตัวนี้ตามสัดส่วนเดิม อย่าปล่อยให้เพดานคุมต้นทุนต่ำกว่าโควตาที่สัญญาไว้เด็ดขาด
+// (ถ้าต่ำกว่า ผู้ใช้สุจริตจะโดนบล็อกทั้งที่โควตายังเหลือ = สัญญาที่ให้ไว้เป็นโมฆะ)
+const MONTHLY_CALL_LIMIT = MONTHLY_QUOTA * 4;
+
 // Abuse Guard: ไม่เกิน 1 ครั้ง/10 วินาที/user (กันส่งรูปรัวๆ โดยไม่ตั้งใจ/ทดสอบ)
 const RATE_LIMIT_MS = 10 * 1000;
 // Vision อาจใช้เวลานานกว่า Text API — ตั้ง Timeout สูงกว่า priceFeed (5s) เป็น 20s
@@ -450,10 +469,11 @@ function isUnfilledStatus(orderStatus) {
 
 // ── Entry point ──────────────────────────────────────────────────────────
 // extractSlip(userId, buffer, contentType) → Object ข้อมูลที่อ่านได้ + โควตาคงเหลือ
-// ลำดับ: Rate Limit → Quota Check (ก่อนเรียก Claude) → Claude Vision → Validate →
-//        นับโควตา (เฉพาะอ่านสำเร็จ) → คืนผล
-// throw SlipOcrError codes: OCR_RATE_LIMITED / OCR_QUOTA_EXCEEDED / OCR_NOT_A_SLIP /
-//        OCR_MULTIPLE_ITEMS / OCR_FAILED / OCR_NOT_CONFIGURED (ทุก Error = "ไม่นับโควตา")
+// ลำดับ: Rate Limit → Quota Check → นับ+เช็คเพดานการเรียก (ทั้งหมดนี้ก่อนเรียก Claude)
+//        → Claude Vision → Validate → นับโควตา (เฉพาะอ่านสำเร็จ) → คืนผล
+// throw SlipOcrError codes: OCR_RATE_LIMITED / OCR_QUOTA_EXCEEDED / OCR_CALL_LIMIT_EXCEEDED /
+//        OCR_NOT_A_SLIP / OCR_MULTIPLE_ITEMS / OCR_FAILED / OCR_NOT_CONFIGURED
+//        (ทุก Error = "ไม่นับโควตา" — แต่ call_count นับตั้งแต่ขั้นที่ 2.5 เป็นต้นไปเสมอ)
 async function extractSlip(userId, buffer, contentType, now = new Date()) {
   // 1) Rate Limit (in-memory) — ไม่นับโควตา, ไม่เรียก Claude
   const nowMs = now.getTime();
@@ -473,6 +493,43 @@ async function extractSlip(userId, buffer, contentType, now = new Date()) {
       used,
       limit: MONTHLY_QUOTA,
     });
+  }
+
+  // 2.5) เพดานคุมต้นทุน — นับ "ก่อน" ยิง Claude เสมอ แล้วค่อยตัดสินจากค่าที่คืนมา
+  //
+  // ⚠️ ลำดับตรงนี้เป็นหัวใจของ Fix: ต้อง Increment ก่อน แล้วดูค่าที่ได้กลับมา ไม่ใช่
+  // "อ่านค่าปัจจุบัน → เทียบ → ยิง → ค่อยนับ" ซึ่งเป็น check-then-act ที่ยิงขนานทะลุได้
+  // (ผู้ใช้เปิด 10 Request พร้อมกัน ทุกตัวอ่านค่าเดิมชุดเดียวกันแล้วผ่านหมด)
+  // แบบนี้ต่อให้ยิงขนานกี่ Request ก็ได้เลขไม่ซ้ำกันจาก Postgres เสมอ
+  //
+  // ⚠️ นับ "ทุกครั้งที่กำลังจะยิง" รวมถึงครั้งที่ Claude ตอบ Error/Timeout ด้วย —
+  // ตั้งใจ เพราะเงินถูกจ่ายไปแล้วตั้งแต่ Request ออกจากเครื่อง ไม่ได้ขึ้นกับว่าอ่านออกไหม
+  // (นี่คือความต่างทั้งหมดระหว่างตัวนับนี้กับ count เดิมที่นับเฉพาะอ่านสำเร็จ)
+  //
+  // ⚠️ Fail-closed: ถ้านับไม่ได้ (DB ล่ม) ต้องไม่ยิง Claude — ต่างจาก incrementUsage
+  // ตอนท้ายที่ยอม Fail-open ได้ เพราะตรงนั้น "จ่ายเงินไปแล้ว" การนับพลาดจึงไม่ควร
+  // ทำลาย UX ที่ผู้ใช้ควรได้ ส่วนตรงนี้ "ยังไม่จ่าย" การเดินต่อทั้งที่บังคับเพดานไม่ได้
+  // = เปิดช่องเดิมกลับมาทั้งบาน (แค่ทำให้ DB ล่มก็ยิงฟรีไม่จำกัด)
+  // สอดคล้องกับ getUsageCount ด้านบนที่ throw ออกไปเมื่อ DB ล่มอยู่แล้ว
+  let callCount;
+  try {
+    callCount = await aiOcrUsageRepository.incrementCallCount(userId, yearMonth);
+  } catch (err) {
+    throw new SlipOcrError('OCR_FAILED', `Failed to record OCR call count: ${err.message}`);
+  }
+
+  if (callCount > MONTHLY_CALL_LIMIT) {
+    logger.warn('slip ocr call limit exceeded — claude not called', {
+      userId,
+      yearMonth,
+      callCount,
+      limit: MONTHLY_CALL_LIMIT,
+    });
+    throw new SlipOcrError(
+      'OCR_CALL_LIMIT_EXCEEDED',
+      `Monthly Claude Vision call limit (${MONTHLY_CALL_LIMIT}) reached`,
+      { callCount, limit: MONTHLY_CALL_LIMIT }
+    );
   }
 
   // 3) เรียก Claude Vision
@@ -618,6 +675,7 @@ module.exports = {
   isUnfilledStatus,
   SlipOcrError,
   MONTHLY_QUOTA,
+  MONTHLY_CALL_LIMIT,
   RATE_LIMIT_MS,
   extractSlip,
   __clearRateLimit,

@@ -33,7 +33,31 @@ async function incrementUsage(userId, yearMonth) {
   return data; // count ใหม่ (Number)
 }
 
+// บวก "จำนวนครั้งที่เรียก Claude Vision จริง" +1 แบบ Atomic (migration 038) — คืน
+// call_count ใหม่หลังบวกแล้ว
+//
+// ⚠️ ต่างจาก incrementUsage โดยเจตนา ทั้งความหมายและจังหวะที่เรียก:
+//   incrementUsage     = นับ "อ่านสลิปสำเร็จ" → เรียกหลัง Validate ผ่าน (โควตาผู้ใช้ 50)
+//   incrementCallCount = นับ "เรียก Claude จริง" → เรียกก่อนยิง ไม่ว่าผลจะเป็นอย่างไร
+//                        (เพดานคุมต้นทุน 200 — ดู slipOcr.service.MONTHLY_CALL_LIMIT)
+//
+// ต้อง Increment-แล้ว-ค่อยตัดสินจากค่าที่คืนมาเสมอ ห้ามอ่านก่อนแล้วค่อยเพิ่ม เพราะ
+// check-then-act ยิงขนานทะลุได้ (บทเรียนเดียวกับ Oversell Race ที่ migration 034 แก้)
+async function incrementCallCount(userId, yearMonth) {
+  const { data, error } = await supabaseAdmin.rpc('increment_ai_ocr_call_count', {
+    p_user_id: userId,
+    p_year_month: yearMonth,
+  });
+
+  if (error) {
+    throw new Error(`Failed to increment AI OCR call count for user ${userId}: ${error.message}`);
+  }
+
+  return data; // call_count ใหม่ (Number)
+}
+
 module.exports = {
   getUsageCount,
   incrementUsage,
+  incrementCallCount,
 };

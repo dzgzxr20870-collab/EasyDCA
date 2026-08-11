@@ -271,8 +271,17 @@ describe('buildOcrErrorMessage', () => {
     ['OCR_RATE_LIMITED', 'ถี่เกินไป'],
     ['OCR_FAILED', 'อ่านสลิปไม่สำเร็จ'],
     ['OCR_NOT_CONFIGURED', 'ยังไม่พร้อม'],
+    // เพดานการเรียก Claude (F2) — ต้องไม่ใช้ข้อความเดียวกับ OCR_QUOTA_EXCEEDED
+    ['OCR_CALL_LIMIT_EXCEEDED', 'มากผิดปกติ'],
   ])('code %s → ข้อความไทยตรงกรณี', (code, expected) => {
     expect(JSON.stringify(flex.buildOcrErrorMessage(code))).toContain(expected);
+  });
+
+  test('OCR_CALL_LIMIT_EXCEEDED ต้องไม่ปนกับข้อความ "โควตาอ่านสำเร็จหมด" ที่ผู้ใช้คุ้นเคย', () => {
+    const msg = JSON.stringify(flex.buildOcrErrorMessage('OCR_CALL_LIMIT_EXCEEDED'));
+    expect(msg).not.toContain('ครบ 50 ครั้ง');
+    // ไม่บอกตัวเลขเพดานให้คนที่ตั้งใจยิงรัวรู้ว่าต้องหยุดตรงไหน
+    expect(msg).not.toContain('200');
   });
 
   test('code ที่ไม่รู้จัก / undefined → Fallback OCR_FAILED', () => {
