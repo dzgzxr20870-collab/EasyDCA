@@ -1194,6 +1194,22 @@ async function handleImage(event) {
 
   const user = await resolveUser(event.source?.userId);
 
+  // ── บัญชีถูกล็อก (F7) — เหมือน Text/Postback ใน handleEvent ─────────────────
+  // ต้องมีที่นี่ด้วย เพราะ handleImage แยกออกมาก่อนถึง Gate ของ handleEvent ทั้งหมด
+  // (ดู Branch isImage) — ถ้าไม่ดัก บัญชีที่ถูกล็อกจะยังอัปโหลดรูปขึ้น Storage ได้อยู่
+  // ซึ่งเป็นเส้นทางที่เปลืองทรัพยากรที่สุดของทั้งระบบ (Storage + Claude Vision)
+  if (user.isLocked) {
+    logger.info('locked account attempted to send image', {
+      webhookEventId: event.webhookEventId,
+      userId: user.id,
+    });
+    await lineService.replyMessage(
+      event.replyToken,
+      flexMessage.buildAccountLockedMessage(user.lockReason)
+    );
+    return;
+  }
+
   // ── PDPA Consent Gate (เหมือน Text/Postback ใน handleEvent) ─────────────────
   // รูปสลิป (ทั้งสลิปโอนเงินและสลิปสินทรัพย์) เป็นข้อมูลจริงที่ถูกอัปโหลดขึ้น Storage +
   // บันทึกลง DB เช่นกัน จึงต้อง Gate ด้วยเพื่อความสม่ำเสมอ — การตอบข้อความกลับตรงนี้
@@ -1458,6 +1474,24 @@ async function handleEvent(event) {
 
   try {
     const user = await resolveUser(event.source?.userId);
+
+    // ── บัญชีถูกล็อก (Offensive Review Round 2 — F7) ───────────────────────────
+    // Parity กับ auth.middleware ฝั่ง REST — ต้องอยู่ "ก่อน Gate ทุกตัว" รวมถึงก่อน
+    // ปุ่ม PDPA Consent ด้วย: คนที่ถูกล็อกไม่ควรทำอะไรได้เลยแม้แต่การให้ความยินยอม
+    //
+    // ⚠️ ตอบข้อความอธิบายเสมอ ห้ามเงียบหาย — ผู้ใช้ที่ทักมาแล้วบอตไม่ตอบจะเข้าใจว่า
+    // ระบบล่ม แล้วทักซ้ำเรื่อยๆ (หรือไปรีวิวว่าแอปพัง) ทั้งที่เป็นการกระทำที่เราตั้งใจ
+    if (user.isLocked) {
+      logger.info('locked account attempted to use LINE chat', {
+        webhookEventId: event.webhookEventId,
+        userId: user.id,
+      });
+      await lineService.replyMessage(
+        replyToken,
+        flexMessage.buildAccountLockedMessage(user.lockReason)
+      );
+      return;
+    }
 
     // ── PDPA Consent Gate — ต้องอยู่ "ก่อน" routeText/routePostback เสมอ ─────────
     // 1) ปุ่มยอมรับ/ไม่ยอมรับของ Consent เอง Bypass Gate ได้เสมอ (กัน Deadlock) และ

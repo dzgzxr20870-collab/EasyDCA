@@ -42,6 +42,27 @@ async function requireAuth(req, res, next) {
     return res.status(401).json({ error: 'ACCOUNT_ERASED' });
   }
 
+  // ── บัญชีถูกล็อก (Offensive Review Round 2 — F7, migration 039) ─────────────
+  // ต้องอยู่ "ตรงนี้" คู่กับ anonymizedAt เท่านั้น — ก่อนถึง Route Handler ใดๆ ทั้งสิ้น
+  // เพื่อให้ครอบทุก Endpoint ที่ผ่าน requireAuth ในคราวเดียว ไม่ต้องไล่แปะทีละที่
+  // (เดิม is_locked ถูกเช็คแค่ 2 จุด: freeTrial.service กับ facebookLikeGrant.service
+  // แปลว่าบัญชีที่ถูกล็อกยังใช้งานทุกอย่างที่เหลือได้ตามปกติ — Flag ที่แทบไม่มีผลจริง)
+  //
+  // ⚠️ 403 ไม่ใช่ 401 โดยเจตนา: Frontend (frontend/src/lib/api.js) จัดการ 401 ด้วยการ
+  // ล้าง Token + เด้งไป Login ซึ่งผิดความหมายที่นี่ — ผู้ใช้ที่ถูกล็อกยืนยันตัวตนผ่านแล้ว
+  // (Token ยัง Valid สมบูรณ์) แค่ "ไม่มีสิทธิ์ใช้งาน" ถ้าตอบ 401 ผู้ใช้จะวนเข้า Login
+  // ซ้ำๆ ไม่รู้จบโดยไม่มีข้อความอธิบายอะไรเลย
+  //
+  // ส่ง reason กลับไปด้วยเพื่อให้หน้าเว็บอธิบายผู้ใช้ได้ว่าทำไมถึงใช้งานไม่ได้ (สิทธิ์
+  // ได้รับคำอธิบายตาม PDPA) — เหตุผลนี้เป็นข้อความที่ Admin เขียนเองตอนสั่งล็อก
+  // จึงไม่มีข้อมูลภายในระบบหลุดไปโดยอัตโนมัติ
+  if (userRecord.isLocked) {
+    return res.status(403).json({
+      error: 'ACCOUNT_LOCKED',
+      reason: userRecord.lockReason ?? null,
+    });
+  }
+
   // role มาจาก JWT Payload ที่ Backend ใส่ตอนออก Token (คำนวณจาก ADMIN_LINE_USER_IDS)
   // Token เก่าก่อน Round 4a จะไม่มี role → undefined = ไม่ใช่ Admin (Fail Safe)
   req.user = { id: payload.sub, lineUserId: payload.lineUserId, role: payload.role };

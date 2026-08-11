@@ -205,6 +205,15 @@ Authorization: Bearer <JWT>
 [2] Verify JWT Signature + exp
     - Signature ไม่ถูกต้อง หรือหมดอายุ → 401 UNAUTHORIZED
 
+[2.5] ตรวจสถานะบัญชี (ทำจริงแล้วใน auth.middleware — ทุก Endpoint ที่ผ่าน requireAuth)
+    - anonymized_at ไม่ใช่ NULL (ลบข้อมูลตาม PDPA แล้ว) → 401 ACCOUNT_ERASED
+    - is_locked = true (Admin ระงับบัญชี) → 403 ACCOUNT_LOCKED + { reason }
+      ⚠️ 403 ไม่ใช่ 401 โดยเจตนา: ผู้ใช้ยืนยันตัวตนผ่านแล้ว (Token ยัง Valid)
+      แค่ไม่มีสิทธิ์ใช้งาน — ถ้าตอบ 401 Frontend จะล้าง Token แล้วเด้งไป Login
+      ทำให้ผู้ใช้วนเข้า Login ไม่รู้จบโดยไม่มีคำอธิบายอะไรเลย
+      ⚠️ ฝั่ง LINE Webhook บังคับเงื่อนไขเดียวกันแยกต่างหาก (คนละเส้นทางกับ
+      requireAuth) — ตอบการ์ด "บัญชีถูกระงับ" พร้อมเหตุผล ดู webhook.controller
+
 [3] (เฉพาะ Endpoint ที่ต้องการ Premium) ตรวจสอบ Plan
     - ดึง user.plan, user.plan_expires_at จาก Database
     - plan = 'free' และ Endpoint ต้องการ Premium → 403 PREMIUM_REQUIRED
@@ -606,6 +615,8 @@ Endpoint ในกลุ่มนี้บันทึก `audit_logs` เสม
 | PATCH | `/api/v1/admin/payments/{id}/reject` | ✅ Admin + `Idempotency-Key` | Admin, Finance | Reject สลิป — Body: `{ reason }` (Section 13 Idempotency) | `reject_payment` |
 | GET | `/api/v1/admin/users` | ✅ Admin | Admin, Support | ค้นหา/List User ทั้งหมด | — |
 | PATCH | `/api/v1/admin/users/{id}` | ✅ Admin | Admin | แก้ไขข้อมูล User (เช่น ปลด `isLocked` กรณีพิเศษ) | `edit_user` |
+| POST | `/api/v1/admin/users/{id}/lock` | ✅ Admin | Admin | **(ทำจริงแล้ว)** ระงับบัญชี — Body: `{ reason }` **บังคับ** (≤ 500 ตัวอักษร) บันทึก `is_locked`/`locked_at`/`locked_by`/`lock_reason` ครบ (migration 039) → `400 LOCK_REASON_REQUIRED` ถ้าไม่ส่งเหตุผล, `400 LOCK_REASON_TOO_LONG` ถ้ายาวเกิน, `404 USER_NOT_FOUND` | `lock_user` |
+| POST | `/api/v1/admin/users/{id}/unlock` | ✅ Admin | Admin | **(ทำจริงแล้ว)** ปลดระงับบัญชี — ไม่ต้องมี Body ⚠️ ไม่ล้าง `locked_by`/`lock_reason`/`locked_at` (เก็บเป็นประวัติโดยตั้งใจ ตัวชี้ขาดคือ `is_locked` เท่านั้น) → `404 USER_NOT_FOUND` | `unlock_user` |
 | POST | `/api/v1/admin/users/{id}/change-role` | ✅ Admin | Super Admin เท่านั้น | เปลี่ยน Role ผู้ใช้ (กรณีมี Role ระดับ User ในอนาคต) | `change_user_role` |
 | DELETE | `/api/v1/admin/users/{id}/data` | ✅ Admin | Super Admin, Admin | ลบข้อมูลผู้ใช้ตามคำขอ PDPA — ปฏิเสธด้วย `409 DISPUTE_PENDING` ถ้ามี Payment สถานะ `reviewing` ค้างอยู่ (SECURITY.md § 8) | `delete_user_data` |
 | POST | `/api/v1/admin/broadcasts` | ✅ Admin | Super Admin, Admin | ส่งข้อความ Broadcast หา User ผ่าน LINE | `broadcast_message` |

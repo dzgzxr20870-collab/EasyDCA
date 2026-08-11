@@ -123,6 +123,87 @@ describe('requireAuth — แนบ req.user (id, lineUserId, role) + req.userRe
     expect(next).not.toHaveBeenCalled();
   });
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // F7 — บัญชีถูกล็อก (Offensive Review Round 2, migration 039)
+  // ═══════════════════════════════════════════════════════════════════════
+  // users.is_locked มีมาตั้งแต่ Schema แรกแต่ถูกเช็คแค่ 2 จุด (freeTrial.service /
+  // facebookLikeGrant.service) แปลว่าบัญชีที่ถูกล็อกยังใช้งานทุกอย่างที่เหลือได้ปกติ
+  // ตอนนี้บังคับที่ requireAuth = ครอบทุก Endpoint ที่ผ่าน Middleware นี้ในคราวเดียว
+  test('User ถูกล็อก (isLocked=true) → 403 ACCOUNT_LOCKED ไม่ถึง Route Handler', async () => {
+    authTokenService.verifyUserToken.mockReturnValue({ sub: 'user-1', lineUserId: 'U123', role: 'user' });
+    userRepository.findById.mockResolvedValue({
+      id: 'user-1',
+      isLocked: true,
+      lockReason: 'ยิง OCR รัวผิดปกติ',
+      pdpaConsentedAt: '2026-07-01T00:00:00.000Z',
+    });
+
+    const req = { headers: { authorization: 'Bearer valid-token' } };
+    const res = mockRes();
+    const next = jest.fn();
+
+    await requireAuth(req, res, next);
+
+    // ⚠️ 403 ไม่ใช่ 401 โดยเจตนา — Frontend จัดการ 401 ด้วยการล้าง Token + เด้งไป
+    // Login ซึ่งจะทำให้ผู้ใช้ที่ถูกล็อกวนเข้า Login ไม่รู้จบโดยไม่มีคำอธิบายอะไรเลย
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith({
+      error: 'ACCOUNT_LOCKED',
+      reason: 'ยิง OCR รัวผิดปกติ',
+    });
+    // สำคัญที่สุด: ต้องไม่ถึง Business Logic เลย
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('ถูกล็อกแบบไม่มีเหตุผลบันทึกไว้ (แถวเก่า/ล็อกด้วยมือ) → ยัง 403 แต่ reason = null', async () => {
+    authTokenService.verifyUserToken.mockReturnValue({ sub: 'user-1', lineUserId: 'U123', role: 'user' });
+    userRepository.findById.mockResolvedValue({ id: 'user-1', isLocked: true });
+
+    const res = mockRes();
+    const next = jest.fn();
+    await requireAuth({ headers: { authorization: 'Bearer valid-token' } }, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith({ error: 'ACCOUNT_LOCKED', reason: null });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('ปลดล็อกแล้ว (isLocked=false) → ใช้งานได้ปกติ (Regression)', async () => {
+    authTokenService.verifyUserToken.mockReturnValue({ sub: 'user-1', lineUserId: 'U123', role: 'user' });
+    userRepository.findById.mockResolvedValue({
+      id: 'user-1',
+      isLocked: false,
+      // เหตุผลเดิมยังค้างอยู่โดยตั้งใจ (ประวัติว่าเคยถูกล็อก) — ต้องไม่ทำให้ถูกบล็อกซ้ำ
+      lockReason: 'ยิง OCR รัวผิดปกติ',
+      lockedAt: '2026-08-01T00:00:00.000Z',
+    });
+
+    const req = { headers: { authorization: 'Bearer valid-token' } };
+    const res = mockRes();
+    const next = jest.fn();
+
+    await requireAuth(req, res, next);
+
+    expect(next).toHaveBeenCalled();
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  test('ถูก Anonymize + ถูกล็อกพร้อมกัน → ตอบ ACCOUNT_ERASED ก่อน (ลำดับเดิมไม่เปลี่ยน)', async () => {
+    authTokenService.verifyUserToken.mockReturnValue({ sub: 'user-1', lineUserId: 'U123', role: 'user' });
+    userRepository.findById.mockResolvedValue({
+      id: 'user-1',
+      isLocked: true,
+      anonymizedAt: '2026-07-17T00:00:00.000Z',
+    });
+
+    const res = mockRes();
+    await requireAuth({ headers: { authorization: 'Bearer valid-token' } }, res, jest.fn());
+
+    // บัญชีที่ถูกลบข้อมูลแล้วไม่ควรได้เห็นเหตุผลการล็อก (ไม่มีอะไรให้อธิบายอีกแล้ว)
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: 'ACCOUNT_ERASED' });
+  });
+
   test('Query DB ล้มเหลว (Error อื่นที่ไม่คาดคิด) → 500 INTERNAL_ERROR', async () => {
     authTokenService.verifyUserToken.mockReturnValue({ sub: 'user-1', lineUserId: 'U123', role: 'user' });
     userRepository.findById.mockRejectedValue(new Error('connection reset'));

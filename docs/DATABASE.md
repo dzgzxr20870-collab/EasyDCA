@@ -88,6 +88,8 @@ CREATE TABLE users (
   plan_expires_at   TIMESTAMPTZ,
   is_locked         BOOLEAN       NOT NULL DEFAULT false,
   locked_at         TIMESTAMPTZ,
+  locked_by         TEXT,                 -- migration 039
+  lock_reason       TEXT,                 -- migration 039
   created_at        TIMESTAMPTZ   NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ   NOT NULL DEFAULT now()
 );
@@ -101,8 +103,10 @@ CREATE TABLE users (
 | picture_url | TEXT | URL รูปโปรไฟล์ LINE (nullable) |
 | plan | TEXT | แพ็กเกจปัจจุบัน: `free` / `premium` / `premium_plus` |
 | plan_expires_at | TIMESTAMPTZ | วันหมดอายุของ Premium (null = ไม่หมดอายุ หรือ Free) |
-| is_locked | BOOLEAN | true = อยู่หลัง Grace Period — ล็อคข้อมูล ไม่ใช่ลบ (คนละแนวคิดกับ `anonymized_at` — ดูด้านล่าง) |
-| locked_at | TIMESTAMPTZ | วันที่ถูกล็อค (nullable) |
+| is_locked | BOOLEAN | true = บัญชีถูกระงับ — ล็อคข้อมูล ไม่ใช่ลบ (คนละแนวคิดกับ `anonymized_at` — ดูด้านล่าง). **ตัวชี้ขาดเพียงตัวเดียว** ว่าบัญชีถูกล็อกอยู่หรือไม่ (ห้ามเดาจาก `locked_at`/`lock_reason` ที่ค้างไว้เป็นประวัติ). บังคับใช้ที่ `auth.middleware` (REST → 403 ACCOUNT_LOCKED) และ `webhook.controller` (LINE → การ์ด "บัญชีถูกระงับ") — เขียนได้ทางเดียวผ่าน `userRepository.setLock` |
+| locked_at | TIMESTAMPTZ | วันที่ถูกล็อคครั้งล่าสุด (nullable) |
+| locked_by | TEXT | (nullable, migration 039) LINE User ID ของ Admin ที่สั่งล็อก — Pattern เดียวกับ `premium_grant_logs.granted_by` |
+| lock_reason | TEXT | (nullable, migration 039) เหตุผลที่ล็อก (บังคับกรอกตอนล็อก ≤ 500 ตัวอักษร) — แสดงให้ผู้ใช้เห็นตรงๆ ทั้งฝั่ง REST และ LINE เพื่อตอบได้ว่าทำไมใช้งานไม่ได้. ⚠️ `locked_by`/`lock_reason`/`locked_at` **ไม่ถูกล้างตอนปลดล็อก** โดยตั้งใจ (เก็บเป็นประวัติว่าเคยถูกล็อกด้วยเหตุผลนี้ มีประโยชน์ตอนเจอผู้ใช้คนเดิม Abuse ซ้ำ) |
 | pdpa_consented_at | TIMESTAMPTZ | (nullable) วันที่ผู้ใช้กดยืนยัน Privacy Policy แบบ Express Opt-in — NULL = ยังไม่เคยกดยืนยัน (ต้องเจอหน้า Consent ก่อนใช้งาน) User เดิมก่อน Migration 017 ถูก Backfill ด้วย `created_at` ของตัวเอง (Grandfather Clause) ดู migration 017 |
 | anonymized_at | TIMESTAMPTZ | (nullable) วันที่บัญชีถูก Anonymize ตามคำขอ PDPA Erasure — NULL = บัญชียัง Active ปกติ ไม่ใช่ NULL = `line_user_id`/`display_name`/`picture_url` ถูกแทนที่ด้วยข้อมูลไม่ระบุตัวตนแล้ว และ `requireAuth` จะปฏิเสธ Token เดิมทันที (401 ACCOUNT_ERASED) ดู migration 018 |
 | free_trial_claimed_at | TIMESTAMPTZ | (nullable, migration 029) วันที่ผู้ใช้กดรับ "Premium ฟรี 1 เดือน" ด้วยตัวเอง — NULL = ยังไม่เคยรับ. ใช้เป็น **Atomic Claim Guard** (`UPDATE ... WHERE free_trial_claimed_at IS NULL`) กันกดซ้ำ/กดรัวพร้อมกัน **ห้าม Reset เด็ดขาด** แม้ Premium หมดอายุไปแล้ว (สิทธิ์ครั้งเดียวตลอดชีพ) ดู `freeTrial.service` |

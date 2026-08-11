@@ -27,6 +27,12 @@ router.post('/broadcast', adminController.broadcast);
 // Update users.plan ตรงๆ (ไม่ผ่าน payments/ไม่นับรายได้) + บันทึก premium_grant_logs
 router.post('/users/:id/grant-premium', adminController.grantPremium);
 
+// ล็อก/ปลดล็อกบัญชี (Offensive Review Round 2 — F7) — users.is_locked มีมาตั้งแต่
+// Schema แรกแต่ไม่เคยมีทางตั้งค่าเลย นี่คือทางเข้าเดียวที่ทำให้ใช้งานได้จริง
+// บังคับใช้จริงที่ auth.middleware (REST) และ webhook.controller (LINE) คู่กัน
+router.post('/users/:id/lock', adminController.lockUser);
+router.post('/users/:id/unlock', adminController.unlockUser);
+
 // แคมเปญ Premium ฟรี (Like Facebook) — Admin ตรวจ Screenshot แล้วอนุมัติ/ปฏิเสธ
 // อนุมัติ = Update users.plan ตรงๆ ผ่าน Atomic Grant (ไม่ผ่าน payments/ไม่นับรายได้)
 // + บันทึก premium_grant_logs เหมือน grant-premium ด้านบน

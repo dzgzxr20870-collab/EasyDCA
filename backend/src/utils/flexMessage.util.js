@@ -919,6 +919,45 @@ function buildPdpaConsentDeclinedMessage() {
   });
 }
 
+// ── บัญชีถูกล็อก (Offensive Review Round 2 — F7) ──────────────────────────────
+// Parity กับ ACCOUNT_LOCKED ฝั่ง REST (auth.middleware) — ผู้ใช้ที่ถูกล็อกทัก LINE
+// เข้ามาต้องได้คำอธิบายสั้นๆ เสมอ ไม่ใช่ Error ดิบหรือเงียบหาย (คนที่ทักแล้วบอตไม่ตอบ
+// จะเข้าใจว่าระบบล่มแล้วทักซ้ำเรื่อยๆ ทั้งที่เป็นการกระทำที่เราตั้งใจ)
+//
+// reason = ข้อความที่ Admin เขียนเองตอนสั่งล็อก (users.lock_reason) — แสดงตรงๆ ได้
+// เพราะไม่มีข้อมูลภายในระบบหลุดไปโดยอัตโนมัติ ถ้าไม่มี (แถวเก่าก่อน migration 039
+// หรือถูกล็อกด้วยมือผ่าน Supabase Dashboard) ให้ข้ามบรรทัดเหตุผลไปเลย ไม่แสดงคำว่า
+// "null"/"ไม่ระบุ" ซึ่งดูเหมือนระบบพัง
+function buildAccountLockedMessage(reason) {
+  const body = [
+    textLine('บัญชีนี้ถูกระงับการใช้งานชั่วคราว', {
+      size: 'md',
+      weight: 'bold',
+      color: COLOR.loss,
+    }),
+  ];
+
+  if (typeof reason === 'string' && reason.trim()) {
+    body.push(
+      textLine(`เหตุผล: ${reason.trim()}`, { size: 'sm', color: COLOR.textPrimary, wrap: true })
+    );
+  }
+
+  body.push(
+    textLine('หากคิดว่าเป็นความผิดพลาด กรุณาติดต่อทีมงานเพื่อตรวจสอบ', {
+      size: 'xs',
+      color: COLOR.textSecondary,
+    })
+  );
+
+  return bubble({
+    headerText: '🔒 บัญชีถูกระงับ',
+    headerColor: COLOR.loss,
+    headerBg: COLOR.lossBg,
+    bodyContents: body,
+  });
+}
+
 // ── PDPA Self-Service Erasure — คำสั่ง "ลบข้อมูล" (2-Step Confirm) ─────────────
 // ขั้นที่ 1: อธิบายผลกระทบให้ชัดเจนก่อนถามยืนยันจริง (Action ย้อนกลับไม่ได้ —
 // Pattern 2-Step Confirm เดียวกับ Broadcast/Bulk Import เดิม) hasPendingPayment
@@ -3556,6 +3595,8 @@ module.exports = {
   buildPdpaConsentRequiredMessage,
   buildPdpaConsentAcceptedMessage,
   buildPdpaConsentDeclinedMessage,
+  // บัญชีถูกล็อก (F7) — Parity กับ ACCOUNT_LOCKED ฝั่ง REST
+  buildAccountLockedMessage,
   buildErasureConfirmMessage,
   buildDataErasedMessage,
   buildReminderSetMessage,

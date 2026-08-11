@@ -42,6 +42,8 @@ const {
   getStats,
   broadcast,
   grantPremium,
+  lockUser,
+  unlockUser,
 } = require('../src/controllers/admin.controller');
 
 function mockRes() {
@@ -452,5 +454,111 @@ describe('admin.controller.grantPremium', () => {
     await grantPremium(grantReq({ billingPeriod: 'monthly' }), res);
     expect(res.status).toHaveBeenCalledWith(500);
     expect(res.json).toHaveBeenCalledWith({ error: 'INTERNAL_ERROR' });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// F7 — ล็อก/ปลดล็อกบัญชี (Offensive Review Round 2, migration 039)
+// ═══════════════════════════════════════════════════════════════════════════
+// users.is_locked มีมาตั้งแต่ Schema แรกแต่ไม่มีโค้ดจุดไหนเขียนได้เลย (Dead Column)
+// สองฟังก์ชันนี้คือทางเข้าเดียวที่ทำให้ใช้งานได้จริง พร้อม Audit Trail ว่าใครสั่ง/เพราะอะไร
+describe('lockUser / unlockUser (F7)', () => {
+  const ADMIN_LINE_ID = 'Uadmin1';
+  const lockReq = (body) => ({
+    params: { id: 'user-9' },
+    body,
+    user: { id: 'admin-1', lineUserId: ADMIN_LINE_ID, role: 'admin' },
+  });
+
+  test('ล็อกสำเร็จ → 200 + บันทึกครบ (ใครสั่ง/เมื่อไหร่/เพราะอะไร)', async () => {
+    userRepository.setLock.mockResolvedValue({
+      id: 'user-9',
+      isLocked: true,
+      lockedAt: '2026-08-11T00:00:00.000Z',
+      lockedBy: ADMIN_LINE_ID,
+      lockReason: 'ยิง OCR รัวผิดปกติ',
+    });
+
+    const res = mockRes();
+    await lockUser(lockReq({ reason: 'ยิง OCR รัวผิดปกติ' }), res);
+
+    // lockedBy ต้องมาจาก JWT ของ Admin ที่กด ไม่ใช่รับจาก Body (ปลอมไม่ได้)
+    expect(userRepository.setLock).toHaveBeenCalledWith('user-9', true, {
+      lockedBy: ADMIN_LINE_ID,
+      reason: 'ยิง OCR รัวผิดปกติ',
+    });
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({
+      status: 'locked',
+      userId: 'user-9',
+      lockedAt: '2026-08-11T00:00:00.000Z',
+      lockReason: 'ยิง OCR รัวผิดปกติ',
+    });
+  });
+
+  // reason เป็น Required โดยเจตนา: ล็อกบัญชี = ตัดสิทธิ์เข้าถึงข้อมูลของผู้ใช้จริง
+  // ต้องตอบได้เสมอว่าทำไม (ทั้งเพื่อตอบผู้ใช้ และให้ Admin คนอื่นเข้าใจบริบท)
+  test.each([
+    ['ไม่ส่ง body เลย', undefined],
+    ['body ว่าง', {}],
+    ['reason ว่าง', { reason: '' }],
+    ['reason มีแต่ช่องว่าง', { reason: '   ' }],
+    ['reason ไม่ใช่ string', { reason: 12345 }],
+  ])('%s → 400 LOCK_REASON_REQUIRED (ไม่แตะ DB)', async (_label, body) => {
+    const res = mockRes();
+    await lockUser(lockReq(body), res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({ error: 'LOCK_REASON_REQUIRED' });
+    expect(userRepository.setLock).not.toHaveBeenCalled();
+  });
+
+  test('reason ยาวเกิน 500 ตัว → 400 LOCK_REASON_TOO_LONG (ไม่แตะ DB)', async () => {
+    const res = mockRes();
+    await lockUser(lockReq({ reason: 'ก'.repeat(501) }), res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({ error: 'LOCK_REASON_TOO_LONG' });
+    expect(userRepository.setLock).not.toHaveBeenCalled();
+  });
+
+  test('ไม่พบ User (setLock คืน null) → 404 USER_NOT_FOUND', async () => {
+    userRepository.setLock.mockResolvedValue(null);
+    const res = mockRes();
+    await lockUser(lockReq({ reason: 'ทดสอบ' }), res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith({ error: 'USER_NOT_FOUND' });
+  });
+
+  test('DB ล้มเหลว → 500 INTERNAL_ERROR', async () => {
+    userRepository.setLock.mockRejectedValue(new Error('db down'));
+    const res = mockRes();
+    await lockUser(lockReq({ reason: 'ทดสอบ' }), res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith({ error: 'INTERNAL_ERROR' });
+  });
+
+  test('ปลดล็อกสำเร็จ → 200 (ไม่ต้องมี reason)', async () => {
+    userRepository.setLock.mockResolvedValue({ id: 'user-9', isLocked: false });
+    const res = mockRes();
+    await unlockUser(lockReq(undefined), res);
+
+    // ⚠️ ส่งแค่ false — ไม่ล้าง locked_by/lock_reason ทิ้ง (เก็บเป็นประวัติโดยตั้งใจ
+    // ดู user.repository.setLock) ถ้าวันหนึ่งมีคนเติม Option ล้างค่าเข้ามาที่นี่
+    // Test นี้จะแดงทันที
+    expect(userRepository.setLock).toHaveBeenCalledWith('user-9', false);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({ status: 'unlocked', userId: 'user-9' });
+  });
+
+  test('ปลดล็อก User ที่ไม่มีจริง → 404 USER_NOT_FOUND', async () => {
+    userRepository.setLock.mockResolvedValue(null);
+    const res = mockRes();
+    await unlockUser(lockReq(undefined), res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith({ error: 'USER_NOT_FOUND' });
   });
 });

@@ -3135,3 +3135,93 @@ describe('handleEvent — แนบรูปสลิป OCR (S8)', () => {
     expect(lastReplyText()).toContain('ETH');
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// F7 — บัญชีถูกล็อกทัก LINE เข้ามา (Offensive Review Round 2)
+// ═══════════════════════════════════════════════════════════════════════════
+// Parity กับ ACCOUNT_LOCKED ฝั่ง REST (auth.middleware) — LINE เป็นคนละเส้นทางกับ
+// requireAuth โดยสิ้นเชิง ถ้าดักแต่ฝั่ง REST บัญชีที่ถูกล็อกจะยังใช้งานผ่านแชทได้ครบ
+// ทุกอย่าง ซึ่งเป็นช่องทางหลักที่ผู้ใช้ส่วนใหญ่ใช้จริง (Rich Menu) = ล็อกแล้วเหมือนไม่ล็อก
+describe('handleEvent — บัญชีถูกล็อก (F7)', () => {
+  const LOCKED_USER = {
+    ...FREE_USER,
+    isLocked: true,
+    lockReason: 'ยิง OCR รัวผิดปกติ',
+  };
+
+  beforeEach(() => {
+    userRepository.findByLineUserId.mockResolvedValue(LOCKED_USER);
+  });
+
+  test('พิมพ์ข้อความ → ตอบการ์ด "บัญชีถูกระงับ" พร้อมเหตุผล ไม่ประมวลผลคำสั่ง', async () => {
+    await handleEvent(textEvent('ซื้อ BTC 0.5 หุ้น ราคา 1500000'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('บัญชีถูกระงับ');
+    expect(reply).toContain('ยิง OCR รัวผิดปกติ');
+    // สำคัญที่สุด: ต้องไม่มีธุรกรรมใดถูกสร้าง
+    expect(pendingService.createPending).not.toHaveBeenCalled();
+  });
+
+  test('กดปุ่ม (Postback) → โดนบล็อกเหมือนกัน', async () => {
+    await handleEvent(postbackEvent('action=premium_menu'));
+
+    expect(lastReplyText()).toContain('บัญชีถูกระงับ');
+    expect(paymentService.requestPayment).not.toHaveBeenCalled();
+    expect(paymentService.findPendingByUserId).not.toHaveBeenCalled();
+  });
+
+  // ⚠️ ต้องอยู่ "ก่อน" PDPA Gate ทุกตัว รวมถึงปุ่มยอมรับ Consent เอง — คนที่ถูกล็อก
+  // ไม่ควรทำอะไรได้เลยแม้แต่การให้ความยินยอม
+  test('กดปุ่มยอมรับ PDPA → ยังโดนบล็อก (ไม่บันทึก Consent)', async () => {
+    userRepository.findByLineUserId.mockResolvedValue({
+      ...LOCKED_USER,
+      pdpaConsentedAt: null,
+    });
+
+    await handleEvent(postbackEvent('action=pdpa_accept'));
+
+    expect(lastReplyText()).toContain('บัญชีถูกระงับ');
+    expect(userRepository.setPdpaConsent).not.toHaveBeenCalled();
+  });
+
+  // handleImage แยกออกมาก่อนถึง Gate ของ handleEvent ทั้งหมด (Branch isImage) จึงต้อง
+  // ดักซ้ำที่นั่นด้วย — เส้นทางนี้เปลืองทรัพยากรที่สุดของระบบ (Storage + Claude Vision)
+  test('ส่งรูป → โดนบล็อกก่อนแตะ Storage/Claude', async () => {
+    await handleEvent({
+      type: 'message',
+      replyToken: 'reply-token-1',
+      source: { userId: 'U123' },
+      message: { type: 'image', id: 'img-locked' },
+    });
+
+    expect(lastReplyText()).toContain('บัญชีถูกระงับ');
+    expect(lineService.getMessageContent).not.toHaveBeenCalled();
+    expect(storageService.uploadPaymentSlip).not.toHaveBeenCalled();
+    expect(slipOcrService.extractSlip).not.toHaveBeenCalled();
+  });
+
+  test('ล็อกแบบไม่มีเหตุผลบันทึกไว้ → ยังบล็อก แต่ไม่แสดงคำว่า null', async () => {
+    userRepository.findByLineUserId.mockResolvedValue({ ...FREE_USER, isLocked: true });
+
+    await handleEvent(textEvent('พอร์ต'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('บัญชีถูกระงับ');
+    expect(reply).not.toContain('null');
+    expect(reply).toContain('ติดต่อทีมงาน');
+  });
+
+  test('ปลดล็อกแล้ว → ใช้งานได้ปกติ (Regression)', async () => {
+    userRepository.findByLineUserId.mockResolvedValue({
+      ...FREE_USER,
+      isLocked: false,
+      // เหตุผลเดิมยังค้างอยู่โดยตั้งใจ (ประวัติ) — ต้องไม่ทำให้ถูกบล็อกซ้ำ
+      lockReason: 'ยิง OCR รัวผิดปกติ',
+    });
+
+    await handleEvent(textEvent('ทดสอบ'));
+
+    expect(lastReplyText()).not.toContain('บัญชีถูกระงับ');
+  });
+});

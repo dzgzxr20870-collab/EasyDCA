@@ -220,6 +220,83 @@ async function grantPremium(req, res) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// ล็อก/ปลดล็อกบัญชี (Offensive Review Round 2 — F7, migration 039)
+// ═══════════════════════════════════════════════════════════════════════
+// users.is_locked มีมาตั้งแต่ Schema แรกแต่ไม่เคยมีทางตั้งค่าเลย (Dead Column) —
+// ต่อให้เจอบัญชีที่ Abuse ระบบจริงๆ ก็ไม่มีเครื่องมือหยุดนอกจากแก้ Row ด้วยมือใน
+// Supabase Dashboard ซึ่งไม่เหลือร่องรอยว่าใครทำ ตอนไหน เพราะอะไร
+//
+// ⚠️ ความยาวสูงสุดของเหตุผล — กันข้อความยาวผิดปกติถูกยัดลง DB (คอลัมน์เป็น TEXT
+// ไม่มีเพดานของตัวเอง) และเหตุผลนี้ถูกส่งกลับไปแสดงให้ผู้ใช้เห็นด้วย
+const MAX_LOCK_REASON_LENGTH = 500;
+
+// POST /api/v1/admin/users/:id/lock — Body: { reason } (requireAuth + requireAdmin)
+//
+// reason เป็น Required โดยเจตนา: การล็อกบัญชีคือการตัดสิทธิ์เข้าถึงข้อมูลของผู้ใช้จริง
+// ซึ่งต้องตอบได้เสมอว่าทำไม — ทั้งเพื่อตอบผู้ใช้ที่ทักมาถาม และเพื่อให้ Admin คนอื่น
+// (หรือตัวเราเองในอีก 6 เดือน) เข้าใจบริบทโดยไม่ต้องเดา
+async function lockUser(req, res) {
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+
+  if (!reason) {
+    return res.status(400).json({ error: 'LOCK_REASON_REQUIRED' });
+  }
+  if (reason.length > MAX_LOCK_REASON_LENGTH) {
+    return res.status(400).json({ error: 'LOCK_REASON_TOO_LONG' });
+  }
+
+  try {
+    const user = await userRepository.setLock(req.params.id, true, {
+      // lockedBy = LINE User ID ของ Admin ที่กด (Pattern เดียวกับ grantPremium)
+      lockedBy: req.user.lineUserId,
+      reason,
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'USER_NOT_FOUND' });
+    }
+
+    // ⚠️ Log ระดับ error โดยตั้งใจ (ไม่ใช่ info): การล็อกบัญชีเป็นเหตุการณ์ที่ต้อง
+    // ตามหาย้อนหลังได้ง่ายที่สุดใน Log ตอนมีคนทักมาถามว่าใช้งานไม่ได้
+    console.error(
+      `[admin] user ${user.id} LOCKED by ${req.user.lineUserId}: ${reason}`
+    );
+
+    return res.status(200).json({
+      status: 'locked',
+      userId: user.id,
+      lockedAt: user.lockedAt,
+      lockReason: user.lockReason,
+    });
+  } catch (err) {
+    console.error(`[admin] lockUser failed: ${err.message}`);
+    return res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+}
+
+// POST /api/v1/admin/users/:id/unlock — ไม่ต้องมี Body (requireAuth + requireAdmin)
+//
+// ⚠️ ไม่ล้าง locked_by/lock_reason/locked_at ทิ้ง (ดู user.repository.setLock) —
+// ค่าที่ค้างอยู่คือประวัติว่า "เคยถูกล็อกด้วยเหตุผลนี้" ซึ่งมีประโยชน์มากตอนเจอผู้ใช้
+// คนเดิม Abuse ซ้ำ ตัวชี้ขาดว่าถูกล็อกอยู่หรือไม่คือ is_locked เท่านั้น
+async function unlockUser(req, res) {
+  try {
+    const user = await userRepository.setLock(req.params.id, false);
+
+    if (!user) {
+      return res.status(404).json({ error: 'USER_NOT_FOUND' });
+    }
+
+    console.error(`[admin] user ${user.id} UNLOCKED by ${req.user.lineUserId}`);
+
+    return res.status(200).json({ status: 'unlocked', userId: user.id });
+  } catch (err) {
+    console.error(`[admin] unlockUser failed: ${err.message}`);
+    return res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // แคมเปญ Premium ฟรี (Like Facebook) — ฝั่ง Admin ตรวจคำขอ
 // ═══════════════════════════════════════════════════════════════════════
 // ⚠️ ไม่ผ่าน payments (ไม่นับเป็นรายได้ใน getStats) — Update users.plan ตรงๆ ผ่าน
@@ -367,6 +444,8 @@ module.exports = {
   getStats,
   broadcast,
   grantPremium,
+  lockUser,
+  unlockUser,
   listFacebookLikeRequests,
   approveFacebookLikeRequest,
   rejectFacebookLikeRequest,

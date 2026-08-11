@@ -14,6 +14,10 @@ function toUser(row) {
     planExpiresAt: row.plan_expires_at,
     isLocked: row.is_locked,
     lockedAt: row.locked_at,
+    // Audit Trail ของการล็อก (migration 039) — ใครสั่ง/เพราะอะไร ค้างไว้เป็นประวัติ
+    // แม้ปลดล็อกไปแล้ว (ดู setLock) NULL = ไม่เคยถูกล็อก
+    lockedBy: row.locked_by ?? null,
+    lockReason: row.lock_reason ?? null,
     // PDPA Compliance (migration 017/018) — NULL = ยังไม่เคย Consent /
     // บัญชียัง Active ปกติ ตามลำดับ ดู setPdpaConsent / anonymize ด้านล่าง
     pdpaConsentedAt: row.pdpa_consented_at ?? null,
@@ -183,6 +187,42 @@ async function anonymize(userId) {
   return toUser(data);
 }
 
+// ── ล็อก/ปลดล็อกบัญชี (Offensive Review Round 2 — F7, migration 039) ─────────
+// ทางเข้า "เดียว" ของการเขียน is_locked ทั้งระบบ — is_locked มีมาตั้งแต่ Schema แรก
+// แต่ไม่เคยมีโค้ดจุดไหนเขียนได้เลย (Dead Column) นี่คือจุดที่ทำให้ใช้งานได้จริง
+//
+// locked = true  → บันทึกครบ 4 คอลัมน์ (is_locked/locked_at/locked_by/lock_reason)
+// locked = false → แตะแค่ is_locked
+//
+// ⚠️ จงใจ "ไม่" ล้าง locked_by/lock_reason/locked_at ตอนปลดล็อก — ค่าที่ค้างอยู่คือ
+// ประวัติว่า "เคยถูกล็อกด้วยเหตุผลนี้" ซึ่งมีประโยชน์มากตอนเจอผู้ใช้คนเดิม Abuse ซ้ำ
+// (ถ้าล้างทิ้ง จะไม่มีทางรู้เลยว่าคนนี้เคยมีประวัติ) ตัวชี้ขาดว่าถูกล็อกอยู่หรือไม่คือ
+// is_locked เท่านั้น ทุกจุดที่บังคับใช้จึงต้องอ่าน is_locked ห้ามเดาจาก locked_at
+async function setLock(userId, locked, { lockedBy = null, reason = null } = {}) {
+  const update = { is_locked: locked };
+  if (locked) {
+    update.locked_at = new Date().toISOString();
+    update.locked_by = lockedBy;
+    update.lock_reason = reason;
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from('users')
+    .update(update)
+    .eq('id', userId)
+    .select('*')
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Failed to set lock=${locked} for user ${userId}: ${error.message}`);
+  }
+
+  // null = ไม่มี User id นี้จริง (Controller แปลงเป็น 404) — ใช้ maybeSingle ไม่ใช่
+  // single() เพราะ single() จะ throw เป็น Error ดิบซึ่งกลายเป็น 500 ทั้งที่ความหมายคือ
+  // "ไม่พบผู้ใช้" (Pattern เดียวกับ findById)
+  return toUser(data);
+}
+
 // ทางเข้า "เดียว" ของการเขียน plan/plan_expires_at ทั้งระบบ (payment อนุมัติ /
 // admin grant / free trial / downgrade เรียกตัวนี้ทั้งหมด)
 //
@@ -326,4 +366,5 @@ module.exports = {
   updateDisplayName,
   setPdpaConsent,
   anonymize,
+  setLock,
 };
