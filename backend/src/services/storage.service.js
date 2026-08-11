@@ -21,10 +21,24 @@ const ALLOWED_SLIP_CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'im
 // ค่าคงที่เดิมในโปรเจกต์ให้ Reuse เรื่องขนาดไฟล์ จึงกำหนดใหม่ที่นี่)
 const MAX_SLIP_SIZE_BYTES = 10 * 1024 * 1024;
 
-// Bucket สาธารณะสำหรับเก็บรูปสลิปการชำระเงิน — ต้องสร้างเองผ่าน Supabase Dashboard
-// เป็น "Public Bucket" ก่อนใช้งานจริง (สร้างผ่าน Migration SQL ไม่ได้ตามปกติ ดูรายงาน
-// Round 5) เลือก Public เพื่อให้แนบ URL ในFlexMessage หา Admin ได้ทันทีโดยไม่ต้อง Sign
+// Bucket ส่วนตัวสำหรับเก็บรูปสลิปการชำระเงิน — ต้องสร้าง/ตั้งค่าเองผ่าน Supabase
+// Dashboard (สร้างผ่าน Migration SQL ไม่ได้ตามปกติ ดูรายงาน Round 5)
+//
+// ⚠️ Offensive Review Round 2 (F4): เดิมเป็น "Public Bucket" โดยเจตนา เพื่อแนบ URL
+// ใน Flex Message หา Admin ได้ทันทีโดยไม่ต้อง Sign — ซึ่งแลกมาด้วยราคาที่สูงเกินไป:
+// สลิปโอนเงินมีชื่อ-นามสกุลจริงของผู้โอน เลขบัญชีบางส่วน ยอดเงิน และเวลาทำรายการ
+// (PII เต็มรูปแบบตาม § 4.3 PDPA) และ Public URL ที่หลุดออกไปครั้งเดียวจะเปิดดูได้
+// ตลอดกาลโดยไม่ต้อง Login — ชื่อไฟล์ {paymentId}-{timestamp} ก็เดาได้ถ้ารู้ paymentId
+//
+// ตอนนี้ Private เหมือน transaction-slips / facebook-like-proofs / reports ทั้งหมดแล้ว
+// (โปรเจกต์ไม่มี Bucket Public เหลืออยู่อีก) — เข้าถึงผ่าน Signed URL อายุสั้นเท่านั้น
 const SLIP_BUCKET = 'payment-slips';
+
+// อายุ Signed URL ของสลิปชำระเงิน = 5 นาที (เท่า transaction-slips / facebook-like-proofs
+// ด้วยเหตุผลเดียวกัน: Admin/ผู้ใช้กดแล้วเปิดรูปทันที ไม่ต้องมีเวลาดาวน์โหลดไฟล์ใหญ่
+// เหมือนรายงาน PDF/Excel ที่ตั้งไว้ 15 นาที) — ลดหน้าต่างความเสี่ยงให้แคบที่สุดเท่าที่
+// ยังใช้งานได้จริง
+const PAYMENT_SLIP_SIGNED_URL_TTL_SECONDS = 5 * 60;
 
 // Bucket ส่วนตัวสำหรับเก็บไฟล์รายงาน Export (Phase 3 Round 8) — ต้องสร้างเองผ่าน
 // Supabase Dashboard เป็น "Private Bucket" ก่อนใช้งานจริง (สร้างผ่าน Migration SQL
@@ -84,7 +98,16 @@ function extensionFromContentType(contentType) {
 }
 
 // อัปโหลดรูปสลิปขึ้น Bucket payment-slips ด้วยชื่อไฟล์ไม่ซ้ำ ({paymentId}-{timestamp}.{ext})
-// คืน Public URL เต็มกลับมา — throw ถ้าอัปโหลดล้มเหลว (Caller ห่อ try/catch เพื่อกัน Webhook พัง)
+// คืน "Storage path" กลับมา — throw ถ้าอัปโหลดล้มเหลว (Caller ห่อ try/catch กัน Webhook พัง)
+//
+// ⚠️ Offensive Review Round 2 (F4): เดิมคืน Public URL เต็ม (getPublicUrl) — ตอนนี้
+// Bucket เป็น Private แล้ว จึงคืน path แล้วให้จุดที่ "จะแสดงผลจริง" สร้าง Signed URL
+// อายุสั้นเอาเองตอนนั้น (createPaymentSlipSignedUrl) — Pattern เดียวกับ
+// transaction-slips/facebook-like-proofs ทุกประการ
+//
+// ค่าที่คืนยังถูกเก็บลงคอลัมน์ payments.slip_image_url เหมือนเดิม (ไม่เปลี่ยนชื่อคอลัมน์
+// เพื่อเลี่ยง Migration ที่ไม่จำเป็นบนตารางเส้นทางเงิน) — ความหมายของค่าข้างในเปลี่ยน
+// จาก URL เป็น path ซึ่ง createPaymentSlipSignedUrl รองรับทั้งสองแบบอยู่แล้ว
 //
 // ตั้งชื่อไฟล์ใหม่ทุกครั้ง (upsert: false, ไม่ Overwrite) เผื่อผู้ใช้ส่งสลิปหลายรูป —
 // payments.slip_image_url จะถูกอัปเดตให้ชี้ไปรูป "ล่าสุด" เสมอ (ดู updateSlipImageUrl)
@@ -123,8 +146,46 @@ async function uploadPaymentSlip(paymentId, buffer, contentType) {
     throw new Error(`Failed to upload payment slip for ${paymentId}: ${error.message}`);
   }
 
-  const { data } = supabaseAdmin.storage.from(SLIP_BUCKET).getPublicUrl(path);
-  return data.publicUrl;
+  return path;
+}
+
+// แปลงค่าที่เก็บอยู่ใน payments.slip_image_url ให้เป็น "Storage path" เสมอ
+//
+// ⚠️ ต้องรองรับ 2 รูปแบบ เพราะแถวเก่าที่บันทึกไว้ตอน Bucket ยังเป็น Public เก็บ URL
+// เต็มไว้ (https://<project>.supabase.co/storage/v1/object/public/payment-slips/<path>)
+// ถ้าไม่แปลงกลับ Admin จะเปิดสลิปของคำขอเก่าที่ยังค้างอยู่ไม่ได้เลยทันทีที่ Founder
+// สลับ Bucket เป็น Private — ตัดตรงหลัง "/payment-slips/" แล้วเอาไปเซ็นใหม่แทน
+// (ตัด Query String ทิ้งด้วย เผื่อ URL เก่ามี ?t=... ติดมา)
+function paymentSlipPathFrom(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const raw = value.trim();
+
+  const marker = `/${SLIP_BUCKET}/`;
+  const idx = raw.indexOf(marker);
+  const path = idx === -1 ? raw : raw.slice(idx + marker.length);
+
+  return path.split('?')[0] || null;
+}
+
+// สร้าง Signed URL อายุสั้นให้รูปสลิปชำระเงิน — คืน null ถ้าว่าง/Sign ไม่สำเร็จ
+// (ไม่ throw: หน้า Admin ต้องแสดงรายการคำขอได้ต่อแม้เปิดรูปบางใบไม่ได้ — Pattern
+// เดียวกับ createTransactionSlipSignedUrl / createFacebookLikeProofSignedUrl)
+async function createPaymentSlipSignedUrl(pathOrLegacyUrl) {
+  const path = paymentSlipPathFrom(pathOrLegacyUrl);
+  if (!path) return null;
+
+  const { data, error } = await supabaseAdmin.storage
+    .from(SLIP_BUCKET)
+    .createSignedUrl(path, PAYMENT_SLIP_SIGNED_URL_TTL_SECONDS);
+
+  if (error || !data?.signedUrl) {
+    console.error(
+      `[storage] failed to sign payment slip ${path}: ${error?.message ?? 'no signedUrl'}`
+    );
+    return null;
+  }
+
+  return data.signedUrl;
 }
 
 // PDPA Erasure (userErasure.service) — ลบรูปสลิปทั้งหมดของ User คนหนึ่งออกจาก
@@ -455,6 +516,9 @@ async function deleteAllFacebookLikeProofsForUser(userId) {
 module.exports = {
   StorageServiceError,
   SLIP_BUCKET,
+  PAYMENT_SLIP_SIGNED_URL_TTL_SECONDS,
+  paymentSlipPathFrom,
+  createPaymentSlipSignedUrl,
   REPORT_BUCKET,
   REPORT_SIGNED_URL_TTL_SECONDS,
   TRANSACTION_SLIP_BUCKET,

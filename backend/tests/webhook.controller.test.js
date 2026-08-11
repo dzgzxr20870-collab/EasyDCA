@@ -1725,7 +1725,11 @@ describe('handleEvent — Image (แนบสลิปตอนแจ้งช�
     });
     paymentService.hashSlipImage.mockReturnValueOnce('hash-first');
     paymentService.assertSlipNotReused.mockResolvedValueOnce(undefined);
-    storageService.uploadPaymentSlip.mockResolvedValue('https://cdn.test/payment-slips/pay-1-new.jpg');
+    // ⚠️ F4: Bucket เป็น Private แล้ว — upload คืน path ส่วนการ์ด Admin ใช้ Signed URL
+    storageService.uploadPaymentSlip.mockResolvedValue('pay-1-new.jpg');
+    storageService.createPaymentSlipSignedUrl.mockResolvedValue(
+      'https://cdn.test/signed/pay-1-new.jpg?token=abc'
+    );
     paymentService.attachSlipImage.mockResolvedValue({ id: 'pay-1' });
     lineService.pushMessage.mockResolvedValue(undefined);
 
@@ -1737,8 +1741,18 @@ describe('handleEvent — Image (แนบสลิปตอนแจ้งช�
     const adminMsg = JSON.stringify(lineService.pushMessage.mock.calls[0][1]);
     expect(adminMsg).toContain('action=approve_payment&paymentId=pay-1');
     expect(adminMsg).toContain('action=reject_payment&paymentId=pay-1');
-    // การ์ดต้องมีรูปสลิปที่เพิ่งอัปโหลด (Hero) ให้ Admin กดดูเทียบยอดได้
-    expect(adminMsg).toContain('https://cdn.test/payment-slips/pay-1-new.jpg');
+    // การ์ดต้องมีรูปสลิปที่เพิ่งอัปโหลด (Hero) ให้ Admin กดดูเทียบยอดได้ — และต้อง
+    // เป็น Signed URL เท่านั้น ห้ามหลุด path ดิบ/Public URL ออกไปในข้อความ LINE (F4)
+    expect(adminMsg).toContain('https://cdn.test/signed/pay-1-new.jpg?token=abc');
+    // path ดิบที่บันทึกลง DB ต้องไม่ปรากฏในการ์ด (ถ้าโผล่ = ลืมเซ็น URL)
+    expect(adminMsg).not.toContain('"pay-1-new.jpg"');
+    // สิ่งที่บันทึกลง DB คือ path ไม่ใช่ URL
+    expect(paymentService.attachSlipImage).toHaveBeenCalledWith(
+      'pay-1',
+      expect.any(String),
+      'pay-1-new.jpg',
+      'hash-first'
+    );
     // และต้องมีรูป QR (Deterministic จาก paymentId) คู่กันด้วย (migration 016 — Admin
     // เทียบ QR + สลิปได้ในการ์ดเดียว ไม่ต้องให้ผู้ใช้ส่ง Screenshot กลับมาเอง)
     // ⚠️ เดิม Assertion นี้อยู่ใน Test ของ notify_payment ซึ่งไม่ Push แล้ว จึงย้ายมาที่นี่

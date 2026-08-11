@@ -23,12 +23,17 @@ jest.mock('../src/services/adminGrant.service', () => {
     grantPremium: jest.fn(),
   };
 });
+// storage.service — Bucket payment-slips เป็น Private แล้ว (Offensive Review R2 — F4)
+// listPayments ต้องเซ็น Signed URL ให้สลิปทุกใบตอนแสดงผล จึงต้อง Mock ไม่ให้แตะ
+// Supabase Storage จริง (Logic การเซ็น/แปลง path ทดสอบใน storage.service.test)
+jest.mock('../src/services/storage.service');
 
 const userRepository = require('../src/repositories/user.repository');
 const paymentRepository = require('../src/repositories/payment.repository');
 const assetRepository = require('../src/repositories/asset.repository');
 const broadcastService = require('../src/services/broadcast.service');
 const adminGrantService = require('../src/services/adminGrant.service');
+const storageService = require('../src/services/storage.service');
 const { AdminGrantError } = adminGrantService;
 const {
   ping,
@@ -52,6 +57,11 @@ const PAST = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
 beforeEach(() => {
   jest.clearAllMocks();
+  // F4 — Default: เซ็น Signed URL สำเร็จ (คืน URL ที่มี ?token= ต่อท้าย path เดิม)
+  // เพื่อให้ Test เห็นชัดว่า "ค่าที่ตอบกลับ Frontend ผ่านการเซ็นมาแล้วจริง"
+  storageService.createPaymentSlipSignedUrl.mockImplementation(async (p) =>
+    p ? `https://cdn.test/signed/${p}?token=abc` : null
+  );
 });
 
 describe('admin.controller.ping', () => {
@@ -115,7 +125,8 @@ describe('listPayments', () => {
       {
         id: 'p1', userId: 'u1', displayName: 'สมชาย', amountThb: 59.17,
         billingPeriod: 'monthly', status: 'pending',
-        slipImageUrl: 'https://cdn.test/slip.jpg',
+        // ค่าใน DB หลัง F4 = Storage path (ไม่ใช่ URL อีกต่อไป)
+        slipImageUrl: 'p1-123.jpg',
         createdAt: '2026-07-01', confirmedAt: null,
         baseAmountThb: 59, satangTag: 17, amountReleasedAt: null, confirmedBy: null,
       },
@@ -129,7 +140,9 @@ describe('listPayments', () => {
     expect(res.json.mock.calls[0][0].payments[0]).toEqual({
       id: 'p1', userId: 'u1', displayName: 'สมชาย', amountThb: 59.17,
       billingPeriod: 'monthly', status: 'pending',
-      slipImageUrl: 'https://cdn.test/slip.jpg',
+      // ⚠️ F4: Bucket เป็น Private แล้ว — ค่าที่ส่งให้ Frontend ต้องเป็น Signed URL
+      // ที่เซ็นสดตอนโหลดหน้า ไม่ใช่ค่าดิบจาก DB (ซึ่งตอนนี้เป็น Storage path)
+      slipImageUrl: 'https://cdn.test/signed/p1-123.jpg?token=abc',
       createdAt: '2026-07-01', confirmedAt: null,
       // Lock-Until-Resolved (migration 016) — Passthrough ให้ Admin Dashboard
       baseAmountThb: 59, satangTag: 17, amountReleasedAt: null, confirmedBy: null,

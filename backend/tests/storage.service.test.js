@@ -4,6 +4,8 @@ jest.mock('../src/config/supabase', () => {
   const storageBucket = {
     upload: jest.fn(),
     getPublicUrl: jest.fn(),
+    // F4 — Bucket payment-slips เป็น Private แล้ว ต้องเซ็น URL ทุกครั้งที่แสดงรูป
+    createSignedUrl: jest.fn(),
     list: jest.fn(),
     remove: jest.fn(),
   };
@@ -29,14 +31,21 @@ beforeEach(() => {
 });
 
 describe('uploadPaymentSlip', () => {
-  test('อัปโหลดสำเร็จ → คืน Public URL, ใช้ Bucket payment-slips + ตั้ง contentType', async () => {
-    const url = await storageService.uploadPaymentSlip(PAYMENT_ID, BUFFER, 'image/jpeg');
+  // ⚠️ พฤติกรรมเปลี่ยนโดยตั้งใจ (Offensive Review Round 2 — F4): Bucket payment-slips
+  // เปลี่ยนจาก Public เป็น Private ฟังก์ชันนี้จึงคืน "Storage path" ไม่ใช่ Public URL
+  // อีกต่อไป — Test เดิมยืนยันว่าคืน publicUrl ซึ่งตอนนี้เป็นสิ่งที่ "ต้องไม่เกิดขึ้น"
+  test('อัปโหลดสำเร็จ → คืน Storage path (ไม่ใช่ Public URL), ใช้ Bucket payment-slips', async () => {
+    const returned = await storageService.uploadPaymentSlip(PAYMENT_ID, BUFFER, 'image/jpeg');
 
-    expect(url).toBe('https://cdn.supabase.test/payment-slips/pay-1-123.jpg');
+    expect(returned).toMatch(/^pay-1-\d+\.jpg$/);
+    // Bucket เป็น Private แล้ว — ห้ามมีการเรียก getPublicUrl หลงเหลืออยู่เลย
+    expect(__storageBucket.getPublicUrl).not.toHaveBeenCalled();
     expect(supabaseAdmin.storage.from).toHaveBeenCalledWith('payment-slips');
     // ชื่อไฟล์ขึ้นต้นด้วย paymentId และลงท้าย .jpg (image/jpeg)
     const [path, buffer, options] = __storageBucket.upload.mock.calls[0];
     expect(path).toMatch(/^pay-1-\d+\.jpg$/);
+    // ค่าที่คืนต้องเป็น path เดียวกับที่อัปโหลดจริง (ไม่ใช่ค่าที่ประกอบใหม่คนละตัว)
+    expect(returned).toBe(path);
     expect(buffer).toBe(BUFFER);
     expect(options).toEqual({ contentType: 'image/jpeg', upsert: false });
   });
@@ -71,10 +80,10 @@ describe('uploadPaymentSlip', () => {
   test('image/webp และ image/gif (อยู่ใน Allowlist) → อัปโหลดสำเร็จตามปกติ', async () => {
     await expect(
       storageService.uploadPaymentSlip(PAYMENT_ID, BUFFER, 'image/webp')
-    ).resolves.toBe('https://cdn.supabase.test/payment-slips/pay-1-123.jpg');
+    ).resolves.toMatch(/^pay-1-\d+\.(jpg|webp|gif)$/);
     await expect(
       storageService.uploadPaymentSlip(PAYMENT_ID, BUFFER, 'image/gif')
-    ).resolves.toBe('https://cdn.supabase.test/payment-slips/pay-1-123.jpg');
+    ).resolves.toMatch(/^pay-1-\d+\.(jpg|webp|gif)$/);
     expect(__storageBucket.upload).toHaveBeenCalledTimes(2);
   });
 
@@ -92,7 +101,7 @@ describe('uploadPaymentSlip', () => {
 
     await expect(
       storageService.uploadPaymentSlip(PAYMENT_ID, boundaryBuffer, 'image/jpeg')
-    ).resolves.toBe('https://cdn.supabase.test/payment-slips/pay-1-123.jpg');
+    ).resolves.toMatch(/^pay-1-\d+\.(jpg|webp|gif)$/);
     expect(__storageBucket.upload).toHaveBeenCalledTimes(1);
   });
 
@@ -118,6 +127,62 @@ describe('uploadPaymentSlip', () => {
     // ทั้งคู่ upsert:false → ไม่ทับไฟล์เดิม
     expect(__storageBucket.upload.mock.calls[0][2].upsert).toBe(false);
     expect(__storageBucket.upload.mock.calls[1][2].upsert).toBe(false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Signed URL ของสลิปชำระเงิน (Offensive Review Round 2 — F4)
+// ═══════════════════════════════════════════════════════════════════════════
+// Bucket เปลี่ยนจาก Public → Private แล้ว ทุกจุดที่แสดงรูปต้องเซ็น URL อายุสั้นเอง
+describe('createPaymentSlipSignedUrl / paymentSlipPathFrom', () => {
+  beforeEach(() => {
+    __storageBucket.createSignedUrl.mockResolvedValue({
+      data: { signedUrl: 'https://cdn.supabase.test/signed/pay-1-123.jpg?token=abc' },
+      error: null,
+    });
+  });
+
+  test('path ปกติ → เซ็นด้วย TTL 5 นาที บน Bucket payment-slips', async () => {
+    const url = await storageService.createPaymentSlipSignedUrl('pay-1-123.jpg');
+
+    expect(url).toBe('https://cdn.supabase.test/signed/pay-1-123.jpg?token=abc');
+    expect(supabaseAdmin.storage.from).toHaveBeenCalledWith('payment-slips');
+    expect(__storageBucket.createSignedUrl).toHaveBeenCalledWith('pay-1-123.jpg', 5 * 60);
+    // เท่ากับ transaction-slips / facebook-like-proofs โดยเจตนา
+    expect(storageService.PAYMENT_SLIP_SIGNED_URL_TTL_SECONDS).toBe(
+      storageService.TRANSACTION_SLIP_SIGNED_URL_TTL_SECONDS
+    );
+  });
+
+  // ⚠️ เคสสำคัญที่สุดของ Migration นี้: แถวเก่าที่บันทึกไว้ตอน Bucket ยังเป็น Public
+  // เก็บ "URL เต็ม" ไว้ ถ้าไม่แปลงกลับเป็น path Admin จะเปิดสลิปของคำขอที่ค้างอยู่
+  // ไม่ได้เลยทันทีที่สลับ Bucket เป็น Private
+  test('แถวเก่าที่เก็บ Public URL เต็มไว้ → แปลงกลับเป็น path แล้วเซ็นใหม่ได้', async () => {
+    await storageService.createPaymentSlipSignedUrl(
+      'https://xyz.supabase.co/storage/v1/object/public/payment-slips/pay-9-999.png'
+    );
+    expect(__storageBucket.createSignedUrl).toHaveBeenCalledWith('pay-9-999.png', 5 * 60);
+  });
+
+  test('URL เก่าที่มี Query String ติดมา → ตัดทิ้งก่อนเซ็น', () => {
+    expect(
+      storageService.paymentSlipPathFrom(
+        'https://xyz.supabase.co/storage/v1/object/public/payment-slips/pay-9-999.png?t=123'
+      )
+    ).toBe('pay-9-999.png');
+  });
+
+  test.each([null, undefined, '', '   '])('ค่าว่าง (%p) → คืน null ไม่เรียก Storage', async (v) => {
+    expect(await storageService.createPaymentSlipSignedUrl(v)).toBeNull();
+    expect(__storageBucket.createSignedUrl).not.toHaveBeenCalled();
+  });
+
+  test('เซ็นไม่สำเร็จ → คืน null (ไม่ throw — หน้า Admin ต้องแสดงรายการต่อได้)', async () => {
+    __storageBucket.createSignedUrl.mockResolvedValue({
+      data: null,
+      error: { message: 'object not found' },
+    });
+    expect(await storageService.createPaymentSlipSignedUrl('pay-1-123.jpg')).toBeNull();
   });
 });
 

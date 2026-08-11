@@ -103,8 +103,11 @@ async function notifyPayment(req, res) {
     return res.status(200).json({ status: 'notified' });
   }
 
+  // ⚠️ F4: payment.slipImageUrl ที่มาจาก DB เป็น "Storage path" แล้ว (Bucket Private)
+  // ต้องเซ็นเป็น Signed URL อายุ 5 นาทีก่อนแนบเป็น Hero ของการ์ด — เซ็นไม่สำเร็จก็ยัง
+  // Push ต่อได้ (การ์ดแค่ไม่มีรูป ซึ่งดีกว่าไม่แจ้ง Admin เลย) เพราะฟังก์ชันคืน null
   const adminMessage = flexMessage.buildAdminPaymentRequestMessage(
-    payment,
+    { ...payment, slipImageUrl: await storageService.createPaymentSlipSignedUrl(payment.slipImageUrl) },
     displayName,
     paymentService.buildQrImageUrl(payment.id)
   );
@@ -142,10 +145,15 @@ async function uploadSlip(req, res) {
     const slipHash = paymentService.hashSlipImage(buffer);
     await paymentService.assertSlipNotReused(slipHash);
 
-    // 3) Upload (Validate MIME/ขนาดในตัว) แล้วผูก URL+hash เข้าคำขอ (Service เดียวกับ LINE)
-    const slipImageUrl = await storageService.uploadPaymentSlip(req.params.id, buffer, contentType);
-    await paymentService.attachSlipImage(req.params.id, req.user.id, slipImageUrl, slipHash);
+    // 3) Upload (Validate MIME/ขนาดในตัว) แล้วผูก path+hash เข้าคำขอ (Service เดียวกับ LINE)
+    // ⚠️ F4: uploadPaymentSlip คืน "Storage path" แล้ว (Bucket Private) — path คือสิ่งที่
+    // เก็บลง DB ส่วนที่ตอบกลับ Frontend ต้องเป็น Signed URL อายุสั้น เพื่อให้ผู้ใช้เห็น
+    // Preview รูปที่เพิ่งอัปโหลดของตัวเองได้ตามเดิม (ห้ามตอบ path ดิบกลับไป — Frontend
+    // เอาไปแสดงเป็น <img src> ตรงๆ ไม่ได้ และ path ไม่มีความหมายนอกฝั่ง Backend)
+    const slipPath = await storageService.uploadPaymentSlip(req.params.id, buffer, contentType);
+    await paymentService.attachSlipImage(req.params.id, req.user.id, slipPath, slipHash);
 
+    const slipImageUrl = await storageService.createPaymentSlipSignedUrl(slipPath);
     return res.status(200).json({ status: 'slip_attached', slipImageUrl });
   } catch (err) {
     return handlePaymentError(res, err, 'uploadSlip');

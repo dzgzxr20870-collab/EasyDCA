@@ -65,14 +65,24 @@ async function listPayments(req, res) {
 
     const payments = await paymentRepository.findAll({ status });
 
-    const result = payments.map((p) => ({
+    // ⚠️ Offensive Review Round 2 (F4): Bucket payment-slips เป็น Private แล้ว —
+    // ค่าใน DB เป็น Storage path (แถวเก่าเป็น Public URL ซึ่ง paymentSlipPathFrom
+    // แปลงกลับให้เอง) ต้องเซ็นเป็น Signed URL อายุ 5 นาทีตอนแสดงผลทุกครั้ง
+    //
+    // Sign แบบขนานทั้งหน้า: จำนวนคำขอต่อหน้าอยู่ในหลักสิบ และ createSignedUrl ไม่ throw
+    // (คืน null เมื่อพลาด) — สลิปใบใดเซ็นไม่สำเร็จก็แค่ใบนั้นไม่มีรูป ตารางยังแสดงครบ
+    const signedSlipUrls = await Promise.all(
+      payments.map((p) => storageService.createPaymentSlipSignedUrl(p.slipImageUrl))
+    );
+
+    const result = payments.map((p, i) => ({
       id: p.id,
       userId: p.userId,
       displayName: p.displayName ?? null,
       amountThb: p.amountThb,
       billingPeriod: p.billingPeriod,
       status: p.status,
-      slipImageUrl: p.slipImageUrl ?? null,
+      slipImageUrl: signedSlipUrls[i] ?? null,
       createdAt: p.createdAt,
       confirmedAt: p.confirmedAt ?? null,
       // Lock-Until-Resolved (migration 016) — Admin Dashboard (Frontend) ใช้ 4 Field

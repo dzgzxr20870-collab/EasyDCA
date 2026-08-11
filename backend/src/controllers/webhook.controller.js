@@ -1289,8 +1289,11 @@ async function handlePaymentSlipImage(event, pending, user) {
   // slipImageUrl ติดมาอยู่แล้ว ไม่ต้อง Query เพิ่ม
   const isFirstSlip = !pending.slipImageUrl;
 
-  const slipImageUrl = await storageService.uploadPaymentSlip(pending.id, buffer, contentType);
-  await paymentService.attachSlipImage(pending.id, user.id, slipImageUrl, slipHash);
+  // ⚠️ Offensive Review Round 2 (F4): uploadPaymentSlip คืน "Storage path" แล้ว
+  // ไม่ใช่ Public URL (Bucket เป็น Private) — path คือสิ่งที่เก็บลง DB ส่วนการ์ด Admin
+  // ต้องใช้ Signed URL อายุสั้นที่สร้างตอนจะแสดงผลจริงเท่านั้น
+  const slipPath = await storageService.uploadPaymentSlip(pending.id, buffer, contentType);
+  await paymentService.attachSlipImage(pending.id, user.id, slipPath, slipHash);
 
   // ⚠️ Bug Fix: เดิมจบแค่ตรงนี้ — บันทึก URL แล้วตอบผู้ใช้ว่า "รอ Admin ตรวจสอบ" ทั้งที่
   // ไม่มีอะไรถูกส่งไปหา Admin เลย ต้องรอผู้ใช้กดปุ่ม "แจ้งชำระแล้ว" บนการ์ด QR อีกทีถึงจะ
@@ -1308,8 +1311,15 @@ async function handlePaymentSlipImage(event, pending, user) {
   let notifiedCount = 0;
   if (isFirstSlip) {
     // จังหวะนี้ดีที่สุดเพราะการ์ด Admin ใช้ slipImageUrl เป็น Hero ให้กดดูรูปเทียบยอดได้เลย
+    //
+    // ⚠️ F4: Signed URL อายุ 5 นาที — การ์ด Flex ที่ Push ไปแล้วแก้ทีหลังไม่ได้ ดังนั้น
+    // Admin ที่เปิดการ์ดช้ากว่านั้นจะเห็นรูปโหลดไม่ขึ้น ซึ่ง "ยอมรับได้โดยเจตนา" เพราะ
+    // ทางหลักในการตรวจสลิปคือหน้า /admin (ตาราง "การชำระเงิน") ที่เซ็น URL ใหม่ทุกครั้ง
+    // ที่โหลดหน้าอยู่แล้ว และการ์ดนี้เป็นตัว "แจ้งเตือน" ให้รู้ว่ามีคำขอเข้ามาเป็นหลัก
+    // — แลกกับการที่ URL สลิป (PII) ไม่ค้างอยู่ในห้องแชท Admin แบบเปิดดูได้ตลอดกาล
+    const signedSlipUrl = await storageService.createPaymentSlipSignedUrl(slipPath);
     notifiedCount = await pushPaymentRequestToAdmins(
-      { ...pending, slipImageUrl },
+      { ...pending, slipImageUrl: signedSlipUrl },
       user?.displayName ?? null,
       'slip_image'
     );

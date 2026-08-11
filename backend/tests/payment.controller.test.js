@@ -319,7 +319,12 @@ describe('POST /payment/:id/slip — uploadSlip', () => {
   test('สำเร็จ → 200 + slur_attached (มิเรอร์ LINE: ownership→hash→reuse→upload→attach)', async () => {
     paymentService.assertPaymentClaimableByUser.mockResolvedValue({ id: 'pay-1', userId: 'user-1', status: 'pending' });
     paymentService.assertSlipNotReused.mockResolvedValue(undefined);
-    storageService.uploadPaymentSlip.mockResolvedValue('https://cdn.test/pay-1.jpg');
+    // ⚠️ F4: uploadPaymentSlip คืน "Storage path" แล้ว (Bucket Private) ส่วนค่าที่ตอบ
+    // กลับ Frontend ต้องเป็น Signed URL ที่เซ็นทีหลัง — สองค่านี้ต่างกันโดยเจตนา
+    storageService.uploadPaymentSlip.mockResolvedValue('pay-1-123.jpg');
+    storageService.createPaymentSlipSignedUrl.mockResolvedValue(
+      'https://cdn.test/signed/pay-1-123.jpg?token=abc'
+    );
     paymentService.attachSlipImage.mockResolvedValue(undefined);
 
     const res = mockRes();
@@ -330,11 +335,16 @@ describe('POST /payment/:id/slip — uploadSlip', () => {
     expect(paymentService.attachSlipImage).toHaveBeenCalledWith(
       'pay-1',
       'user-1',
-      'https://cdn.test/pay-1.jpg',
+      // สิ่งที่บันทึกลง DB = path (ไม่ใช่ URL — URL หมดอายุ path ไม่หมด)
+      'pay-1-123.jpg',
       'deadbeef'
     );
     expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith({ status: 'slip_attached', slipImageUrl: 'https://cdn.test/pay-1.jpg' });
+    // สิ่งที่ตอบกลับผู้ใช้ = Signed URL อายุสั้น (Frontend เอาไปแสดง Preview ได้ทันที)
+    expect(res.json).toHaveBeenCalledWith({
+      status: 'slip_attached',
+      slipImageUrl: 'https://cdn.test/signed/pay-1-123.jpg?token=abc',
+    });
   });
 
   test('Body ว่าง → 400 EMPTY_BODY (ไม่แตะ service/storage)', async () => {
