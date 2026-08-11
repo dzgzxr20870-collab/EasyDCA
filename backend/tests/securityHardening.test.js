@@ -171,6 +171,9 @@ describe('screenshotUploadLimiter — 1 ครั้ง/ชม./User', () => {
   });
 
   afterAll(async () => {
+    // closeAllConnections() ต้องมาก่อน close() — global fetch (undici) เปิด Socket
+    // keep-alive ค้างไว้ ทำให้ close() รอไม่จบ แล้ว Jest เตือน worker force exited
+    server.closeAllConnections?.();
     await new Promise((resolve) => server.close(resolve));
   });
 
@@ -235,6 +238,9 @@ describe('slipUploadLimiter — 1 ครั้ง/ชม./User (F3)', () => {
   });
 
   afterAll(async () => {
+    // closeAllConnections() ต้องมาก่อน close() — global fetch (undici) เปิด Socket
+    // keep-alive ค้างไว้ ทำให้ close() รอไม่จบ แล้ว Jest เตือน worker force exited
+    server.closeAllConnections?.();
     await new Promise((resolve) => server.close(resolve));
   });
 

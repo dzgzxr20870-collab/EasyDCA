@@ -223,6 +223,10 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // ⚠️ closeAllConnections() ต้องมาก่อน close() — global fetch (undici) เปิด Socket
+  // แบบ keep-alive ค้างไว้ ทำให้ server.close() รอ Connection เหล่านั้นจนไม่จบ แล้ว
+  // Jest เตือน "worker process failed to exit gracefully" ตอนรันทั้งชุดพร้อมกัน
+  server.closeAllConnections?.();
   await new Promise((resolve) => server.close(resolve));
 });
 
