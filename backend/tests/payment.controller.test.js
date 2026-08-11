@@ -115,6 +115,36 @@ describe('POST /payment/request', () => {
     expect(res.status).toHaveBeenCalledWith(409);
   });
 
+  // F1 — มีคำขอค้างอยู่แล้ว: ต้องไม่ใช่แค่ Error เปล่าๆ ผู้ใช้ต้องกลับไปจ่ายใบเดิมต่อได้
+  test('PENDING_PAYMENT_EXISTS → 409 พร้อมคำขอเดิมครบชุด (Frontend Redirect ได้)', async () => {
+    paymentService.requestPayment.mockRejectedValue(
+      new PaymentServiceError('PENDING_PAYMENT_EXISTS', 'already has one', {
+        paymentId: 'pay-existing',
+        amountThb: 59.42,
+        billingPeriod: 'monthly',
+        expiresAt: '2026-08-12T00:00:00.000Z',
+        qrPayload: '000201...',
+      })
+    );
+    const res = mockRes();
+    await paymentController.requestPayment(
+      { user: { id: 'u' }, body: { billingPeriod: 'monthly' } },
+      res
+    );
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith({
+      error: 'PENDING_PAYMENT_EXISTS',
+      payment: {
+        paymentId: 'pay-existing',
+        amountThb: 59.42,
+        billingPeriod: 'monthly',
+        expiresAt: '2026-08-12T00:00:00.000Z',
+        qrPayload: '000201...',
+      },
+    });
+  });
+
   test('Error ไม่คาดคิด (ไม่ใช่ PaymentServiceError) → 500 INTERNAL_ERROR', async () => {
     paymentService.requestPayment.mockRejectedValue(new Error('boom'));
     const res = mockRes();

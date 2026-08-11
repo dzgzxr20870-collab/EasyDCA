@@ -700,7 +700,31 @@ async function routePostback(user, data) {
     // อนุมัติ ไม่ต้องเขียน Logic ต่ออายุซ้ำที่นี่ | period มาจากปุ่มของเราเอง
     case 'request_payment': {
       const period = params.get('period');
-      const result = await paymentService.requestPayment(user.id, period);
+
+      // ⚠️ Offensive Review Round 2 (F1): requestPayment บังคับ "1 คำขอค้างต่อ user"
+      // แล้ว ปุ่มนี้จึงชนเงื่อนไขนั้นได้จริง แม้ premium_menu จะ Dedupe มาก่อนหน้า —
+      // เพราะการ์ด "เลือกแพ็กเกจ" ใบเก่ายังค้างอยู่ในห้องแชทและกดซ้ำได้ตลอดเวลา
+      // (Postback ไม่มีวันหมดอายุ) คนที่มีคำขอค้างอยู่แล้วเลื่อนขึ้นไปกดใบเก่า จะไม่ได้
+      // ผ่าน premium_menu เลย
+      //
+      // ถ้าปล่อยให้ Error ทะลุขึ้นไป ผู้ใช้จะเห็น "เกิดข้อผิดพลาดบางอย่าง" ทั้งที่ระบบ
+      // ทำงานถูกต้อง — ตอบด้วย QR ของคำขอเดิมแทน (พฤติกรรมเดียวกับ premium_menu เป๊ะ)
+      let result;
+      try {
+        result = await paymentService.requestPayment(user.id, period);
+      } catch (err) {
+        if (err.code !== 'PENDING_PAYMENT_EXISTS') throw err;
+
+        const pending = await paymentService.findPendingByUserId(user.id);
+        // คำขออาจถูก Resolve ไปแล้วระหว่างสองบรรทัดนี้ (Admin กดอนุมัติพอดี) — กรณีนั้น
+        // ให้ Error เดิมทะลุขึ้นไปตามปกติ ดีกว่าตอบการ์ดเปล่า
+        if (!pending) throw err;
+        return flexMessage.buildPaymentQrMessage(
+          pending,
+          paymentService.buildQrImageUrl(pending.id)
+        );
+      }
+
       // result = { paymentId, amountThb, qrPayload, expiresAt } — ประกอบ object
       // ให้ตรงกับที่ buildPaymentQrMessage ต้องใช้ (id/amountThb/billingPeriod/expiresAt)
       const payment = {

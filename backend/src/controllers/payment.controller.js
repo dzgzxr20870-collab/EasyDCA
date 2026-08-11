@@ -16,6 +16,9 @@ const STATUS_BY_CODE = {
   PAYMENT_NOT_CONFIGURED: 503,
   SATANG_POOL_EXHAUSTED: 409,
   ALLOCATION_CONFLICT: 409,
+  // มีคำขอค้างอยู่แล้ว (F1) — requestPayment จัดการเองแบบเจาะจงเพื่อแนบคำขอเดิมกลับไป
+  // ด้วย ตัวนี้เป็น Fallback เผื่อมี Path อื่นมาใช้ handlePaymentError ในอนาคต
+  PENDING_PAYMENT_EXISTS: 409,
   PAYMENT_NOT_FOUND: 404,
   PAYMENT_NOT_PENDING: 409,
   SLIP_NOT_ATTACHED: 409,
@@ -52,6 +55,22 @@ async function requestPayment(req, res) {
     const result = await paymentService.requestPayment(req.user.id, req.body?.billingPeriod);
     return res.status(200).json(result);
   } catch (err) {
+    // ── มีคำขอค้างอยู่แล้ว (F1) → 409 พร้อม "คำขอเดิม" ครบชุด ─────────────────
+    // ตอบแค่ { error } เฉยๆ ไม่พอ: ผู้ใช้จะค้างอยู่หน้าเดิมโดยไม่รู้ว่าต้องทำอะไรต่อ
+    // ทั้งที่คำขอที่ค้างอยู่เป็นของตัวเอง — ส่ง Payload รูปแบบเดียวกับตอนสำเร็จ (200)
+    // กลับไปด้วย เพื่อให้ Frontend พาไปหน้าจ่ายเงินใบเดิมได้ทันที (UX เดียวกับฝั่ง
+    // LINE ที่ premium_menu ส่ง QR ของคำขอเดิมซ้ำแทนการขึ้น Error)
+    if (
+      err instanceof paymentService.PaymentServiceError &&
+      err.code === 'PENDING_PAYMENT_EXISTS'
+    ) {
+      const { paymentId, amountThb, qrPayload, expiresAt, billingPeriod } = err.details ?? {};
+      return res.status(409).json({
+        error: err.code,
+        payment: { paymentId, amountThb, qrPayload, expiresAt, billingPeriod },
+      });
+    }
+
     return handlePaymentError(res, err, 'requestPayment');
   }
 }

@@ -83,6 +83,43 @@ async function requestPayment(userId, billingPeriod) {
     );
   }
 
+  // ── 1 คำขอค้างต่อ user (Offensive Review Round 2 — F1 Satang Pool Exhaustion) ──
+  // เดิม requestPayment สร้างแถวใหม่ได้ไม่จำกัดจำนวนครั้ง และทุกแถวที่ยัง unresolved
+  // "จอง" เลขสตางค์ไว้ 1 ตัวจาก Pool ที่มีแค่ 99 ตัวต่อยอดฐาน (migration 016) —
+  // ผู้ใช้ที่ Login ได้คนเดียวจึงกดขอ 99 ครั้งรวดแล้วทำให้ "ทุกคนทั้งระบบ" ซื้อ Premium
+  // ไม่ได้เลย (SATANG_POOL_EXHAUSTED) จนกว่า Auto-release 7 วันจะทำงาน
+  //
+  // ⚠️ ต้องเช็ค "ก่อน" allocateSatangTag เสมอ — จุดนั้นคือจุดที่จองทรัพยากรร่วมของทั้ง
+  // ระบบ ถ้าเช็คทีหลังก็เท่ากับปล่อยให้จองไปแล้วค่อยบ่น
+  //
+  // เพดานนี้ทำให้อัตราการจองสูงสุดของ 1 user เหลือ 1 ใบต่อรอบ TTL 24 ชม. (ต้องรอ
+  // expireOverduePayments ปลดสถานะก่อนถึงขอใหม่ได้) — ไล่ให้ Pool หมดต้องใช้ 99 วัน
+  // ขณะที่ Auto-release คืนยอดให้ตั้งแต่วันที่ 7 จึงไม่มีทางไล่ทัน
+  //
+  // ⚠️ ไม่แตะ Ledger/Entitlement ใดๆ — คำขอเดิมยังเดินตาม Flow เดิมทุกประการ
+  const existingPending = await paymentRepository.findPendingByUserId(userId);
+  if (existingPending) {
+    // แนบข้อมูลคำขอ "เดิม" (ไม่ใช่ของ Period ที่เพิ่งขอมา) ให้ Caller พาผู้ใช้กลับไป
+    // หน้าจ่ายเงินใบเดิมได้ทันที — Pattern เดียวกับฝั่ง LINE (premium_menu) ที่ส่ง QR
+    // ของคำขอเดิมซ้ำแทนการสร้างใหม่ ไม่ใช่แค่ตอบ Error แล้วปล่อยผู้ใช้ค้าง
+    //
+    // ปลอดภัยที่จะใส่ใน details: เป็นคำขอของ userId คนเดียวกับที่กำลังเรียกอยู่
+    throw new PaymentServiceError(
+      'PENDING_PAYMENT_EXISTS',
+      `User ${userId} already has an unresolved payment request`,
+      {
+        paymentId: existingPending.id,
+        amountThb: existingPending.amountThb,
+        billingPeriod: existingPending.billingPeriod,
+        expiresAt: existingPending.expiresAt,
+        qrPayload: promptpayQrService.buildPromptPayPayload(
+          promptpayId,
+          existingPending.amountThb
+        ),
+      }
+    );
+  }
+
   const baseAmountThb =
     billingPeriod === 'monthly'
       ? config.payment.premiumPriceMonthly

@@ -1021,6 +1021,41 @@ describe('handleEvent — Payment Postback (request/notify)', () => {
     expect(reply).toContain('action=notify_payment&paymentId=pay-5');
   });
 
+  // ── F1: การ์ด "เลือกแพ็กเกจ" ใบเก่าในแชทกดซ้ำได้ตลอด (Postback ไม่มีวันหมดอายุ) ──
+  // คนที่มีคำขอค้างอยู่แล้วเลื่อนขึ้นไปกดใบเก่า จะไม่ผ่าน premium_menu ที่ Dedupe ไว้เลย
+  // → ต้องได้ QR ของคำขอเดิม ไม่ใช่ "เกิดข้อผิดพลาดบางอย่าง"
+  test('request_payment: มีคำขอค้างอยู่แล้ว → ตอบ QR ของคำขอเดิม (ไม่ขึ้น Error)', async () => {
+    paymentService.requestPayment.mockRejectedValue(
+      Object.assign(new Error('already has one'), { code: 'PENDING_PAYMENT_EXISTS' })
+    );
+    paymentService.findPendingByUserId.mockResolvedValue({
+      id: 'pay-9',
+      amountThb: 59.42,
+      billingPeriod: 'monthly',
+      expiresAt: '2026-07-05T00:00:00.000Z',
+      status: 'pending',
+    });
+
+    await handleEvent(postbackEvent('action=request_payment&period=monthly'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('/api/v1/payment/pay-9/qr.png');
+    expect(reply).toContain('action=notify_payment&paymentId=pay-9');
+    expect(reply).not.toContain('เกิดข้อผิดพลาด');
+  });
+
+  test('request_payment: คำขอเดิมถูก Resolve พอดีจังหวะ → ปล่อย Error เดิมขึ้นไปตามปกติ', async () => {
+    // ดีกว่าตอบการ์ดเปล่าที่ไม่มี QR ให้จ่าย
+    paymentService.requestPayment.mockRejectedValue(
+      Object.assign(new Error('already has one'), { code: 'PENDING_PAYMENT_EXISTS' })
+    );
+    paymentService.findPendingByUserId.mockResolvedValue(null);
+
+    await handleEvent(postbackEvent('action=request_payment&period=monthly'));
+
+    expect(lastReplyText()).toContain('คำขอชำระเงินที่ยังไม่เสร็จสิ้น');
+  });
+
   // ⚠️ พฤติกรรมเปลี่ยนโดยตั้งใจ (Bug Fix: สลิปที่ส่งเข้าแชทไม่เคยแจ้ง Admin)
   // เดิม Test นี้ชื่อ 'notify_payment: แจ้งชำระ → Push แจ้ง Admin ทุกคน...' และยืนยันว่า
   // ปุ่มนี้เป็นตัว Push — ตอนนี้ Flow LINE Push ให้ตั้งแต่รับรูปสลิปแล้ว (handlePaymentSlipImage)

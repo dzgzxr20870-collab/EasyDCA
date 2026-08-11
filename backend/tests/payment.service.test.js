@@ -29,6 +29,8 @@ describe('requestPayment', () => {
   beforeEach(() => {
     // Default: ไม่มีเลขสตางค์ถูกจอง + insert สำเร็จ
     paymentRepository.findPendingSatangTagsByBaseAmount.mockResolvedValue([]);
+    // Default: ผู้ใช้ยังไม่มีคำขอค้าง (F1 — เช็คก่อน allocateSatangTag ทุกครั้ง)
+    paymentRepository.findPendingByUserId.mockResolvedValue(null);
     paymentRepository.create.mockImplementation(async (data) => ({
       id: 'pay-1',
       ...data,
@@ -120,6 +122,82 @@ describe('requestPayment', () => {
 
     const allocatedSatang = Math.round((result.amountThb - 59) * 100);
     expect(allocatedSatang).not.toBe(17);
+  });
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // F1 — Satang Pool Exhaustion (Offensive Review Round 2, จุดแดงจุดเดียว)
+  // ═════════════════════════════════════════════════════════════════════════
+  // ทุกคำขอที่ยัง unresolved จอง 1 เลขจาก Pool ที่มีแค่ 99 ตัว/ยอดฐาน (migration 016)
+  // เดิมผู้ใช้คนเดียวกดขอซ้ำได้ไม่จำกัด → จอง 99 ใบรวดแล้วทำให้ "ทุกคนทั้งระบบ" ซื้อ
+  // Premium ไม่ได้เลยจนกว่า Auto-release 7 วันจะทำงาน
+  describe('F1 — จำกัด 1 คำขอค้างต่อ user', () => {
+    const PENDING = {
+      id: 'pay-existing',
+      amountThb: 59.42,
+      billingPeriod: 'monthly',
+      expiresAt: new Date('2026-08-12T00:00:00Z'),
+      status: 'pending',
+    };
+
+    test('ยิงซ้ำครั้งที่ 2 → PENDING_PAYMENT_EXISTS (ไม่สร้างคำขอใหม่)', async () => {
+      // ครั้งที่ 1 สำเร็จตามปกติ
+      const first = await paymentService.requestPayment(USER_ID, 'monthly');
+      expect(first.paymentId).toBe('pay-1');
+
+      // ครั้งที่ 2: DB มีคำขอค้างแล้ว (จำลองสถานะหลังครั้งแรก)
+      paymentRepository.findPendingByUserId.mockResolvedValue(PENDING);
+
+      await expect(paymentService.requestPayment(USER_ID, 'monthly')).rejects.toMatchObject({
+        code: 'PENDING_PAYMENT_EXISTS',
+      });
+
+      // หัวใจของ Fix: ไม่มีแถวใหม่เกิดขึ้น = ไม่มีเลขสตางค์ตัวที่สองถูกจอง
+      expect(paymentRepository.create).toHaveBeenCalledTimes(1);
+    });
+
+    test('เช็ค "ก่อน" allocateSatangTag เสมอ (ไม่แตะ Pool เลย)', async () => {
+      paymentRepository.findPendingByUserId.mockResolvedValue(PENDING);
+
+      await expect(paymentService.requestPayment(USER_ID, 'monthly')).rejects.toMatchObject({
+        code: 'PENDING_PAYMENT_EXISTS',
+      });
+
+      // ถ้าเช็คทีหลัง = ปล่อยให้จองทรัพยากรร่วมไปแล้วค่อยบ่น
+      expect(paymentRepository.findPendingSatangTagsByBaseAmount).not.toHaveBeenCalled();
+      expect(paymentRepository.create).not.toHaveBeenCalled();
+    });
+
+    test('details แนบคำขอเดิมครบชุดให้ Caller พาผู้ใช้กลับไปจ่ายต่อได้', async () => {
+      paymentRepository.findPendingByUserId.mockResolvedValue(PENDING);
+
+      const err = await paymentService.requestPayment(USER_ID, 'monthly').catch((e) => e);
+
+      expect(err.details).toMatchObject({
+        paymentId: 'pay-existing',
+        amountThb: 59.42,
+        billingPeriod: 'monthly',
+        expiresAt: PENDING.expiresAt,
+      });
+      // qrPayload ของ "คำขอเดิม" (ยอด 59.42) ไม่ใช่ของ Period ที่เพิ่งขอมา
+      expect(typeof err.details.qrPayload).toBe('string');
+      expect(err.details.qrPayload.length).toBeGreaterThan(0);
+    });
+
+    test('ขอ yearly ทั้งที่มี monthly ค้างอยู่ → ยังโดนบล็อก (Pool เป็นทรัพยากรร่วม)', async () => {
+      // เพดานผูกกับ "ผู้ใช้" ไม่ใช่ "ยอดฐาน" — ไม่งั้นคนเดียวจองได้ 2 เท่า
+      paymentRepository.findPendingByUserId.mockResolvedValue(PENDING);
+
+      await expect(paymentService.requestPayment(USER_ID, 'yearly')).rejects.toMatchObject({
+        code: 'PENDING_PAYMENT_EXISTS',
+      });
+      expect(paymentRepository.create).not.toHaveBeenCalled();
+    });
+
+    test('ไม่มีคำขอค้าง → สร้างได้ตามปกติ (กัน Regression)', async () => {
+      paymentRepository.findPendingByUserId.mockResolvedValue(null);
+      const result = await paymentService.requestPayment(USER_ID, 'monthly');
+      expect(result.paymentId).toBe('pay-1');
+    });
   });
 
   test('เลขสตางค์เต็มหมด 99 ตัว → SATANG_POOL_EXHAUSTED', async () => {
