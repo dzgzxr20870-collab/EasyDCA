@@ -107,6 +107,12 @@ const SYMBOL_TYPES = {
   PYPL: 'stock_us',
   SQ: 'stock_us',
   COIN: 'stock_us',
+  // Bitcoin/Crypto Proxy เพิ่มเติม (คู่กับ COIN ด้านบน) — ยืนยัน Twelve Data /quote
+  // แล้วว่าเป็นหุ้นสหรัฐจริง (ไม่ใช่ Crypto โดยตรง) currency=USD ทุกตัว
+  MSTR: 'stock_us', // Strategy Inc. (เดิมชื่อ MicroStrategy, NASDAQ)
+  MARA: 'stock_us', // MARA Holdings (NASDAQ)
+  RIOT: 'stock_us', // Riot Platforms (NASDAQ)
+  CLSK: 'stock_us', // CleanSpark (NASDAQ)
   IBM: 'stock_us',
   CSCO: 'stock_us',
   HPQ: 'stock_us',
@@ -270,6 +276,13 @@ const SYMBOL_TYPES = {
   NIO: 'stock_us', // ADR (จีน) เทรดเป็น USD บน NYSE
   BABA: 'stock_us', // ADR (จีน) เทรดเป็น USD บน NYSE
   SOFI: 'stock_us',
+  // Fintech/Retail ยอดนิยม เพิ่มเติม (คู่กับ SOFI ด้านบน) — ยืนยัน Twelve Data
+  // /quote แล้วว่าเป็นหุ้นสหรัฐจริง currency=USD ทุกตัว
+  HOOD: 'stock_us', // Robinhood Markets (NASDAQ)
+  UPST: 'stock_us', // Upstart Holdings (NASDAQ)
+  AFRM: 'stock_us', // Affirm Holdings (NASDAQ)
+  DKNG: 'stock_us', // DraftKings (NASDAQ)
+  CVNA: 'stock_us', // Carvana (NYSE)
   RBLX: 'stock_us',
   U: 'stock_us',
   DOCU: 'stock_us',
@@ -293,6 +306,31 @@ const SYMBOL_TYPES = {
   // looksLikeThaiFundSymbol กัน Ticker ในอนาคตที่ไม่อยู่ใน Whitelist ไม่ให้หลุดไป
   // Fund Path แบบนี้อีก)
   SPCX: 'stock_us', // Space Exploration Technologies Corp. / SpaceX (NASDAQ)
+  // อวกาศ/ดาวเทียม เพิ่มเติม (คู่กับ SPCX ด้านบน) — ยืนยัน Twelve Data /quote แล้วว่า
+  // เป็นหุ้นสหรัฐจริง currency=USD ทุกตัว
+  ASTS: 'stock_us', // AST SpaceMobile (NASDAQ)
+  RKLB: 'stock_us', // Rocket Lab (NASDAQ)
+  LUNR: 'stock_us', // Intuitive Machines (NASDAQ)
+  // นิวเคลียร์/ยูเรเนียม เพิ่มเติม (คู่กับ OKLO ด้านบน) — ยืนยัน Twelve Data /quote
+  // แล้วว่าเป็นหุ้นสหรัฐจริง currency=USD ทุกตัว
+  SMR: 'stock_us', // NuScale Power (NYSE)
+  CCJ: 'stock_us', // Cameco (NYSE)
+  UEC: 'stock_us', // Uranium Energy Corp (NYSE American)
+  BWXT: 'stock_us', // BWX Technologies (NYSE)
+
+  // Quantum Computing (Theme ใหม่ ยังไม่มีใน Registry มาก่อน) — ยืนยัน Twelve Data
+  // /quote แล้วว่าเป็นหุ้นสหรัฐจริง currency=USD ทุกตัว
+  IONQ: 'stock_us', // IonQ (NYSE)
+  RGTI: 'stock_us', // Rigetti Computing (NASDAQ)
+  QBTS: 'stock_us', // D-Wave Quantum (NYSE)
+
+  // Hydrogen/Clean Energy (Theme ใหม่)
+  PLUG: 'stock_us', // Plug Power (NASDAQ)
+  QS: 'stock_us', // QuantumScape (NYSE)
+
+  // eVTOL (Theme ใหม่ ใกล้เคียงกลุ่มอุตสาหกรรม/อากาศยานที่มี BA/RTX/LMT อยู่แล้ว)
+  JOBY: 'stock_us', // Joby Aviation (NYSE)
+  ACHR: 'stock_us', // Archer Aviation (NYSE)
 
   // ── ทองคำ (Phase 3 Round 7) — ราคาเป็น "บาททองคำ" (น้ำหนัก) ผ่าน Thai Gold API ──
   // แยก 2 Symbol ตาม 2 ประเภทที่ราคาต่างกัน (ทองรูปพรรณมีค่ากำเหน็จ):
@@ -401,6 +439,10 @@ const SYMBOL_NAMES = {
   PYPL: 'PayPal เพย์พาล',
   SQ: 'Block (Square)',
   COIN: 'Coinbase คอยน์เบส',
+  MSTR: 'Strategy (เดิม MicroStrategy)',
+  MARA: 'MARA Holdings',
+  RIOT: 'Riot Platforms',
+  CLSK: 'CleanSpark',
   IBM: 'IBM ไอบีเอ็ม',
   CSCO: 'Cisco ซิสโก้',
   HPQ: 'HP เอชพี',
@@ -535,6 +577,11 @@ const SYMBOL_NAMES = {
   NIO: 'NIO (ADR จีน)',
   BABA: 'Alibaba อาลีบาบา (ADR)',
   SOFI: 'SoFi',
+  HOOD: 'Robinhood โรบินฮู้ด',
+  UPST: 'Upstart',
+  AFRM: 'Affirm',
+  DKNG: 'DraftKings',
+  CVNA: 'Carvana',
   RBLX: 'Roblox โรบล็อกซ์',
   U: 'Unity Software',
   DOCU: 'DocuSign',
@@ -545,6 +592,20 @@ const SYMBOL_NAMES = {
   EOSE: 'Eos Energy Enterprises',
   OKLO: 'Oklo Inc.',
   SPCX: 'Space Exploration Technologies (SpaceX)',
+  ASTS: 'AST SpaceMobile',
+  RKLB: 'Rocket Lab',
+  LUNR: 'Intuitive Machines',
+  SMR: 'NuScale Power',
+  CCJ: 'Cameco',
+  UEC: 'Uranium Energy Corp',
+  BWXT: 'BWX Technologies',
+  IONQ: 'IonQ',
+  RGTI: 'Rigetti Computing',
+  QBTS: 'D-Wave Quantum',
+  PLUG: 'Plug Power',
+  QS: 'QuantumScape',
+  JOBY: 'Joby Aviation',
+  ACHR: 'Archer Aviation',
 
   // ── ทองคำ ───────────────────────────────────────────────────
   GOLD: 'ทองคำแท่ง (ราคาสมาคมฯ)',
