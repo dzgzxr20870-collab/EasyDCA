@@ -301,14 +301,18 @@ function mascotAvatar({ url, sparkle = false, bg = MASCOT_BG.cream }) {
   const contents = [{ type: 'image', url, aspectMode: 'cover', size: 'full' }];
 
   if (sparkle) {
+    // ⚠️ Hotfix (2026-08-18): LINE Flex Message Schema ไม่รับ width/height บน
+    // Component type: 'image' (รับเฉพาะ box) — เดิมใส่ width/height ผิดตรงนี้ ทำให้
+    // Reply API คืน 400 "unknown field .../width" ทุกครั้งที่การ์ดนี้ถูกส่ง (Silent
+    // Failure ฝั่งผู้ใช้ ธุรกรรมยัง Commit สำเร็จอยู่แล้วก่อนจุดนี้ — ไม่เกี่ยวกับ Ledger)
+    // ใช้ size แทน ซึ่งรองรับค่าพิกเซลตรงๆ เหมือนกัน
     contents.push({
       type: 'image',
       url: MASCOT.decorationSparkle,
       position: 'absolute',
       offsetTop: '-8px',
       offsetEnd: '-8px',
-      width: '22px',
-      height: '22px',
+      size: '22px',
     });
   }
 
