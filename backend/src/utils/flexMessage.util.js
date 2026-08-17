@@ -21,6 +21,35 @@ const COLOR = {
   textSecondary: '#4A5A47', // --ink2
 };
 
+// มาสคอต "อีซี่" (feature/mascot-flex-redesign) — 9 รูป PNG พื้นหลังโปร่งใสจาก Founder
+// อัปโหลดขึ้น Supabase Storage Bucket "flex-assets" (Public — เป็นรูปตกแต่ง UI ล้วน
+// ไม่มี PII ต่างจาก payment-slips/transaction-slips/facebook-like-proofs ที่เป็น
+// Private ทั้งหมด ดู storage.service.js) ไม่มีนามสกุลไฟล์ที่ต้อง Sign URL แบบสลิป
+//
+// ⚠️ 02-processing-thinking.png ยังไม่ได้ Wire เข้าที่นี่ — ไม่มี Flex Message Builder
+// ใดในไฟล์นี้ที่สื่อ "กำลังประมวลผล/รอผล AI" ได้ตรงความหมาย (สถานะรอ OCR ส่งเป็นข้อความ
+// Text ธรรมดาจาก Controller ไม่ใช่ Flex) — รายงานไว้ให้ Founder แทนการฝืนใส่ผิดจุด
+const MASCOT_BASE_URL =
+  'https://isukdqundjwpbknnvckf.supabase.co/storage/v1/object/public/flex-assets';
+const MASCOT = {
+  successCheer: `${MASCOT_BASE_URL}/01-success-cheer.png`,
+  errorConcern: `${MASCOT_BASE_URL}/03-error-concern.png`,
+  lockedStop: `${MASCOT_BASE_URL}/04-locked-stop.png`,
+  portfolioUp: `${MASCOT_BASE_URL}/05-portfolio-up.png`,
+  portfolioDown: `${MASCOT_BASE_URL}/06-portfolio-down-encourage.png`,
+  welcomeWave: `${MASCOT_BASE_URL}/07-welcome-wave.png`,
+  achievementTrophy: `${MASCOT_BASE_URL}/08-achievement-trophy.png`,
+  decorationSparkle: `${MASCOT_BASE_URL}/09-decoration-sparkle.png`,
+};
+
+// Palette พาสเทลสำหรับพื้นหลังวงกลมมาสคอต (ตาม Reference ของ Founder) — ใช้ mint
+// เฉพาะการ์ดโทนเขียว (Buy/Profit/Premium) ให้เข้ากับ headerColor เดิม ส่วนการ์ดโทน
+// อื่น (แดง/ส้ม/กลาง) ใช้ cream กันสีมาสคอตชนกับสีความหมาย (แดง=ขาดทุน/ระงับ) เดิม
+const MASCOT_BG = {
+  mint: '#7ED47E',
+  cream: '#FFF5E6',
+};
+
 // แปล Error Code (API.md § 5) เป็นข้อความไทยที่ผู้ใช้เข้าใจง่าย
 // ห้ามโชว์ Code ดิบให้ผู้ใช้เห็น
 const ERROR_MESSAGES = {
@@ -264,19 +293,81 @@ function usdFxLines(fx) {
   return lines;
 }
 
-function bubble({ headerText, headerColor, headerBg, bodyContents }) {
+// วงกลมมาสคอตมุมขวาบนของ Header (feature/mascot-flex-redesign) — url = รูปจาก MASCOT,
+// sparkle = true แปะ 09-decoration-sparkle.png มุมขวาบนซ้อนทับด้วย position: 'absolute'
+// (เฉพาะการ์ด "ข่าวดี" ตามที่ Founder ระบุ — บันทึกสำเร็จ/บรรลุเป้าหมาย) bg = พื้นหลัง
+// วงกลม เลือกจาก MASCOT_BG ให้เข้ากับ headerColor ของการ์ดนั้นๆ (Default: cream)
+function mascotAvatar({ url, sparkle = false, bg = MASCOT_BG.cream }) {
+  const contents = [{ type: 'image', url, aspectMode: 'cover', size: 'full' }];
+
+  if (sparkle) {
+    contents.push({
+      type: 'image',
+      url: MASCOT.decorationSparkle,
+      position: 'absolute',
+      offsetTop: '-8px',
+      offsetEnd: '-8px',
+      width: '22px',
+      height: '22px',
+    });
+  }
+
+  return {
+    type: 'box',
+    layout: 'vertical',
+    width: '56px',
+    height: '56px',
+    cornerRadius: '28px',
+    backgroundColor: bg,
+    justifyContent: 'center',
+    alignItems: 'center',
+    contents,
+  };
+}
+
+// Header Box ของ Bubble — แยกออกมาจาก bubble() เพื่อให้ Builder ที่ประกอบ Bubble เอง
+// นอก bubble() (เช่น buildPremiumStatusMessage ที่มี footer ปุ่มซับซ้อน) เรียกใช้ร่วมกัน
+// ได้ ไม่ต้องก็อปโครงสร้าง Header ซ้ำ — ไม่ใส่ mascot = พฤติกรรมเดิมเป๊ะ (Backward Compat
+// กับ Bubble ที่ยังไม่ได้ Wire รูปมาสคอตในรอบนี้)
+function headerBox(headerText, headerColor, headerBg, mascot) {
+  if (!mascot) {
+    return {
+      type: 'box',
+      layout: 'vertical',
+      backgroundColor: headerBg,
+      paddingAll: '12px',
+      contents: [textLine(headerText, { weight: 'bold', color: headerColor })],
+    };
+  }
+
+  return {
+    type: 'box',
+    layout: 'horizontal',
+    backgroundColor: headerBg,
+    paddingAll: '12px',
+    cornerRadius: 'lg',
+    alignItems: 'center',
+    spacing: 'sm',
+    contents: [
+      {
+        type: 'box',
+        layout: 'vertical',
+        flex: 1,
+        justifyContent: 'center',
+        contents: [textLine(headerText, { weight: 'bold', color: headerColor })],
+      },
+      mascotAvatar(mascot),
+    ],
+  };
+}
+
+function bubble({ headerText, headerColor, headerBg, bodyContents, mascot }) {
   return {
     type: 'flex',
     altText: headerText,
     contents: {
       type: 'bubble',
-      header: {
-        type: 'box',
-        layout: 'vertical',
-        backgroundColor: headerBg,
-        paddingAll: '12px',
-        contents: [textLine(headerText, { weight: 'bold', color: headerColor })],
-      },
+      header: headerBox(headerText, headerColor, headerBg, mascot),
       body: {
         type: 'box',
         layout: 'vertical',
@@ -319,6 +410,7 @@ function buildBuyConfirmMessage(result) {
     headerColor: COLOR.profit,
     headerBg: COLOR.profitBg,
     bodyContents: body,
+    mascot: { url: MASCOT.successCheer, sparkle: true, bg: MASCOT_BG.mint },
   });
 }
 
@@ -354,6 +446,7 @@ function buildSellConfirmMessage(result) {
     headerColor: COLOR.loss,
     headerBg: COLOR.lossBg,
     bodyContents: body,
+    mascot: { url: MASCOT.successCheer, sparkle: true, bg: MASCOT_BG.cream },
   });
 }
 
@@ -457,6 +550,7 @@ function buildErrorMessage(code) {
     headerColor: COLOR.warning,
     headerBg: COLOR.warningBg,
     bodyContents: [textLine(message, { size: 'sm', color: COLOR.textPrimary })],
+    mascot: { url: MASCOT.errorConcern, bg: MASCOT_BG.cream },
   });
 }
 
@@ -955,6 +1049,7 @@ function buildAccountLockedMessage(reason) {
     headerColor: COLOR.loss,
     headerBg: COLOR.lossBg,
     bodyContents: body,
+    mascot: { url: MASCOT.lockedStop, bg: MASCOT_BG.cream },
   });
 }
 
@@ -1647,6 +1742,10 @@ function buildPortfolioSummaryPushMessage(summary) {
     headerColor: plColor,
     headerBg: isProfit ? COLOR.profitBg : COLOR.lossBg,
     bodyContents: body,
+    mascot: {
+      url: isProfit ? MASCOT.portfolioUp : MASCOT.portfolioDown,
+      bg: isProfit ? MASCOT_BG.mint : MASCOT_BG.cream,
+    },
   });
 }
 
@@ -1917,6 +2016,7 @@ function buildPaymentApprovedMessage(payment, newExpiry) {
         color: COLOR.textSecondary,
       }),
     ],
+    mascot: { url: MASCOT.achievementTrophy, sparkle: true, bg: MASCOT_BG.mint },
   });
 }
 
@@ -2250,13 +2350,10 @@ function buildPremiumStatusMessage(expiresAt) {
     altText: 'สถานะ Premium',
     contents: {
       type: 'bubble',
-      header: {
-        type: 'box',
-        layout: 'vertical',
-        backgroundColor: COLOR.profitBg,
-        paddingAll: '12px',
-        contents: [textLine('👑 Premium ของคุณ', { weight: 'bold', color: COLOR.profit })],
-      },
+      header: headerBox('👑 Premium ของคุณ', COLOR.profit, COLOR.profitBg, {
+        url: MASCOT.achievementTrophy,
+        bg: MASCOT_BG.mint,
+      }),
       body: { type: 'box', layout: 'vertical', spacing: 'sm', contents: body },
       footer: {
         type: 'box',
@@ -2667,6 +2764,7 @@ function buildWelcomeIntroMessage() {
         { size: 'sm', color: COLOR.textSecondary }
       ),
     ],
+    mascot: { url: MASCOT.welcomeWave, bg: MASCOT_BG.cream },
   });
 }
 
