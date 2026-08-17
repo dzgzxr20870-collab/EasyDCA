@@ -1305,3 +1305,78 @@ describe('buildPortfolioSummaryPushMessage — เงินลงทุนรว
     expect(text).toContain('1 USD = 35 บาท');
   });
 });
+
+// Regression — Hotfix (2026-08-18): mascotAvatar() เคยใส่ width/height บน Component
+// type: 'image' (Sparkle มุมขวาบน) ซึ่ง LINE Flex Message Schema ไม่รับ (รับเฉพาะ box)
+// → Reply API คืน 400 "unknown field .../width" ทุกครั้งที่การ์ดมี sparkle: true ผู้ใช้
+// เห็นความเงียบหลังกดยืนยัน (ธุรกรรมบันทึกสำเร็จอยู่แล้ว แค่ข้อความตอบกลับส่งไม่ผ่าน)
+//
+// Test เดิมในไฟล์นี้ (allText) อ่านแค่ message.contents.body.contents จึงไม่เคยเห็น
+// Header ที่ Sparkle อยู่เลย — Bug นี้เลยรอดมาจนถึง Production ทั้งที่ Test เขียวหมด
+// ต้อง Walk ทั้ง Message (Header/Hero/Body/Footer) หา Component type: 'image' ทุกตัว
+// แล้วยืนยันว่าไม่มี width/height ติดมา (Assert เชิงลบตรงเป้าตาม LINE Flex Schema จริง
+// — ไม่ใช่ Full Schema Validator เพราะโปรเจกต์ไม่มี @line/bot-sdk หรือ Validator สำเร็จรูป
+// อยู่แล้ว [เช็คจาก package.json] จึงไม่เพิ่ม Dependency ใหม่เพียงเพราะบั๊คนี้)
+describe('Regression — image Component ต้องไม่มี width/height (LINE Schema ไม่รับ, Hotfix 2026-08-18)', () => {
+  const {
+    buildBuyConfirmMessage,
+    buildSellConfirmMessage,
+    buildPaymentApprovedMessage,
+  } = require('../src/utils/flexMessage.util');
+
+  // เก็บทุก Node ประเภท image ที่อยู่ในต้นไม้ (Recursive ผ่าน contents/hero/header/
+  // body/footer ทุกชั้น ไม่ใช่แค่ body เหมือน allText เดิม)
+  function collectImageNodes(node, found = []) {
+    if (Array.isArray(node)) {
+      node.forEach((child) => collectImageNodes(child, found));
+      return found;
+    }
+    if (!node || typeof node !== 'object') return found;
+
+    if (node.type === 'image') found.push(node);
+
+    for (const value of Object.values(node)) {
+      if (value && typeof value === 'object') collectImageNodes(value, found);
+    }
+    return found;
+  }
+
+  function assertNoWidthHeightOnImages(message) {
+    const images = collectImageNodes(message.contents);
+    expect(images.length).toBeGreaterThan(0); // กัน Test นี้ผ่านเงียบๆ เพราะหา image ไม่เจอเลย
+    images.forEach((img) => {
+      expect(img).not.toHaveProperty('width');
+      expect(img).not.toHaveProperty('height');
+    });
+  }
+
+  test('buildBuyConfirmMessage (sparkle: true) → ไม่มี width/height บน image ใดๆ', () => {
+    assertNoWidthHeightOnImages(
+      buildBuyConfirmMessage({
+        symbol: 'BTC',
+        quantity: 0.01,
+        pricePerUnit: 3400000,
+        amountThb: 34000,
+        newAssetCreated: true,
+        currency: 'THB',
+      })
+    );
+  });
+
+  test('buildSellConfirmMessage (sparkle: true) → ไม่มี width/height บน image ใดๆ', () => {
+    assertNoWidthHeightOnImages(
+      buildSellConfirmMessage({
+        symbol: 'BTC',
+        quantity: 0.01,
+        pricePerUnit: 3400000,
+        amountThb: 34000,
+        remainingQuantity: 0,
+        currency: 'THB',
+      })
+    );
+  });
+
+  test('buildPaymentApprovedMessage (sparkle: true) → ไม่มี width/height บน image ใดๆ', () => {
+    assertNoWidthHeightOnImages(buildPaymentApprovedMessage({}, '2026-09-17T00:00:00Z'));
+  });
+});
