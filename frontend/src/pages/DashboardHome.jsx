@@ -591,6 +591,9 @@ function DashboardHome() {
             activeTab={legacyActiveTab}
             onTabChange={setLegacyActiveTab}
             onUpgrade={() => navigate('/premium')}
+            // แนบสลิปเข้ารายการเดิมจากตารางประวัติ (งานที่ 2.1) — planInfo Fetch ไว้แล้ว
+            // ตอน load() ไม่ยิง Endpoint เพิ่ม
+            isPremiumActive={planInfo?.isPremiumActive ?? false}
           />
 
           <p className="dh-disclaimer-bottom">

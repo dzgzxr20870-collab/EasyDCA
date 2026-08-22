@@ -2,7 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import AssetPicker from './AssetPicker.jsx';
 import { apiPost, apiUpload } from '../../lib/api.js';
-import { transactionErrorMessage, slipUploadErrorMessage } from '../../lib/dcaErrors.js';
+import {
+  transactionErrorMessage,
+  slipUploadErrorMessage,
+  slipOcrErrorMessage,
+  isSlipOcrUpgradeError,
+} from '../../lib/dcaErrors.js';
 import { todayBangkokIso } from '../../lib/dateBangkok.js';
 import { resolvePrefillState } from '../../lib/dcaPlanPrefill.js';
 import { buildSellPayload, findHolding, formatUnits } from '../../lib/sellForm.js';
@@ -107,6 +112,22 @@ function DcaForm({
   const [slipPreviewUrl, setSlipPreviewUrl] = useState(null);
   const [slipNotice, setSlipNotice] = useState(null);
 
+  // ── AI อ่านสลิป (งานที่ 2.2) ───────────────────────────────────────────────
+  // Flow: เลือกรูป → POST /transactions/slip-ocr → Prefill ฟอร์มด้วยค่าที่อ่านได้ →
+  // ผู้ใช้ "ตรวจ + แก้ไขได้" → กดปุ่มบันทึกเดิม → POST /transactions พร้อม slipToken
+  //
+  // ⚠️ ห้ามบันทึกลง Ledger ทันทีหลัง AI อ่านเสร็จเด็ดขาด (Requirement) — Endpoint
+  // /slip-ocr ไม่สร้างธุรกรรมอยู่แล้ว และหน้านี้แค่ "เติมค่าในฟอร์ม" ให้ผู้ใช้ยืนยันเอง
+  // (Pattern เดียวกับการ์ด Preview ใน LINE)
+  //
+  // ocrSlipToken: รูปที่ถูกอัปโหลดไว้แล้วตอนอ่าน (Premium เท่านั้น — ผู้ใช้ทดลองฟรี
+  // ได้ null) ส่งไปกับ Payload ตอนยืนยันเพื่อให้ Backend แนบเข้ารายการที่เพิ่งสร้าง
+  const [ocrScanning, setOcrScanning] = useState(false);
+  const [ocrError, setOcrError] = useState(null);
+  const [ocrUpgrade, setOcrUpgrade] = useState(false);
+  const [ocrSlipToken, setOcrSlipToken] = useState(null);
+  const [ocrNotice, setOcrNotice] = useState(null);
+
   // Revoke Object URL ล่าสุด "ตอน Unmount เท่านั้น" (กัน Memory leak) — ใช้ ref กัน
   // ไม่ให้ revoke ทุกครั้งที่ URL เปลี่ยน (การเปลี่ยน/ลบ revoke เองอยู่แล้วในแต่ละ Handler)
   const slipPreviewRef = useRef(null);
@@ -188,6 +209,9 @@ function DcaForm({
     // สลิปเป็นของฝั่งซื้อ (แนบเป็นหลักฐานตอน DCA) — ล้างไฟล์ที่ค้างไว้ด้วย
     clearSlip();
     setSlipNotice(null);
+    // ⚠️ ต้องล้าง token ของสลิปที่ AI อ่านไว้ด้วย: ผู้ใช้สลับโหมดเอง = ตั้งใจเริ่มรายการ
+    // ใหม่ ถ้าปล่อย token ค้าง รูปสลิปใบเดิมจะถูกแนบเข้ารายการใหม่ที่คนละใบกัน
+    clearOcrState();
   }
 
   // ล้างสลิปที่เลือกไว้ + revoke Preview URL (เรียกทั้งตอนกด "ลบรูป" และหลังบันทึกสำเร็จ)
@@ -238,6 +262,17 @@ function DcaForm({
     setNote('');
     setDate(todayBangkokIso());
     clearSlip();
+    clearOcrState();
+  }
+
+  // ล้างสถานะ AI อ่านสลิป — ⚠️ ต้องล้าง ocrSlipToken ทุกครั้งที่ฟอร์มถูก Reset/สลับโหมด
+  // ไม่งั้น token ของสลิปใบเก่าจะค้างไปแนบเข้ารายการ "ใบถัดไป" ที่ไม่เกี่ยวข้องกันเลย
+  // (หลักฐานผิดรายการ = ร้ายแรงกว่าไม่มีหลักฐาน)
+  function clearOcrState() {
+    setOcrSlipToken(null);
+    setOcrError(null);
+    setOcrUpgrade(false);
+    setOcrNotice(null);
   }
 
   // ── บันทึกการขาย ──────────────────────────────────────────────────────────
@@ -323,6 +358,10 @@ function DcaForm({
       date,
       ...(note.trim() ? { note: note.trim() } : {}),
       ...(needsManualPrice ? { pricePerUnit: priceValue } : {}),
+      // AI อ่านสลิป (งานที่ 2.2) — รูปถูกอัปโหลดไว้แล้วตอนอ่าน Backend จะแนบเข้า
+      // รายการที่เพิ่งสร้างให้เอง (Fail Isolated ฝั่ง Backend) จึง "ไม่" ต้องอัปโหลดซ้ำ
+      // ผ่าน apiUpload ด้านล่าง — ดู ocrSlipToken ใน Guard ของ slipFile
+      ...(ocrSlipToken ? { slipToken: ocrSlipToken } : {}),
     };
 
     setSubmitting(true);
@@ -334,8 +373,13 @@ function DcaForm({
       // แล้ว (Endpoint รับ transaction id) — Best-effort: ธุรกรรม "บันทึกสำเร็จแล้วจริง"
       // ต่อให้แนบรูปพลาด ต้องไม่ทำให้ผู้ใช้เข้าใจว่าบันทึก DCA ไม่สำเร็จ → ไม่ throw
       // แค่แสดง Warning แยก (รายการยังอยู่ครบ แค่ไม่มีรูปแนบ) Backend Gate Premium ซ้ำเอง
+      // ⚠️ ข้ามการอัปโหลดซ้ำเมื่อรายการนี้มาจาก AI อ่านสลิป — รูปใบนั้นถูกอัปโหลดและ
+      // แนบโดย Backend ไปแล้ว (slipToken ใน Payload) ถ้ายิงซ้ำจะได้ SLIP_ALREADY_ATTACHED
+      // แล้วขึ้น Warning หลอกว่า "แนบไม่สำเร็จ" ทั้งที่แนบไปแล้วเรียบร้อย
       let slipWarning = null;
-      if (slipFile && isPremiumActive) {
+      if (ocrSlipToken) {
+        // ไม่ทำอะไร — Backend แนบให้แล้ว
+      } else if (slipFile && isPremiumActive) {
         try {
           await apiUpload(`/api/v1/transactions/${response.transaction.id}/slip`, slipFile);
         } catch (err) {
@@ -362,6 +406,86 @@ function DcaForm({
     }
   }
 
+  // ── ให้ AI อ่านสลิปแล้ว Prefill ฟอร์ม (งานที่ 2.2) ─────────────────────────
+  async function handleScanSlip(file) {
+    if (!file) return;
+    setOcrError(null);
+    setOcrUpgrade(false);
+    setOcrNotice(null);
+    setFormError(null);
+    setOcrScanning(true);
+
+    try {
+      const result = await apiUpload('/api/v1/transactions/slip-ocr', file);
+      const { slip, slipToken, quota } = result;
+
+      // ⚠️ คำสั่งที่ "ยังไม่เกิดขึ้นจริง" (Limit Order รอจับคู่/ถูกยกเลิก) ห้าม Prefill
+      // ให้กดบันทึกง่ายๆ — เหตุผลเดียวกับที่การ์ด Preview ฝั่ง LINE ตัดปุ่มยืนยันออก
+      // (slipOcr.service.isUnfilledStatus): Ledger ต้องไม่มีรายการที่ไม่เคยเกิดขึ้น
+      if (slip.orderStatus === 'pending' || slip.orderStatus === 'cancelled') {
+        setOcrError(
+          slip.orderStatus === 'pending'
+            ? 'สลิปนี้เป็นคำสั่งที่ "ยังไม่สำเร็จ" (รอจับคู่/รอดำเนินการ) จึงยังไม่บันทึกให้อัตโนมัติ — ถ้าคำสั่งจับคู่แล้ว กรุณากรอกรายการเอง'
+            : 'สลิปนี้เป็นคำสั่งที่ถูกยกเลิก/ไม่สำเร็จ จึงไม่บันทึกเป็นรายการให้'
+        );
+        return;
+      }
+
+      // Symbol ต้องมีอยู่ใน Registry ที่หน้านี้รู้จัก ไม่งั้น AssetPicker เลือกไม่ได้
+      const matched = symbols.find((s) => s.symbol === slip.symbol) ?? null;
+      if (!matched) {
+        setOcrError(
+          `อ่านสลิปได้ว่าเป็น "${slip.symbol}" แต่ระบบยังไม่รองรับสินทรัพย์นี้ กรุณาเลือกสินทรัพย์เองแล้วกรอกรายการต่อ`
+        );
+        return;
+      }
+
+      // ── Prefill ── ทุกค่าที่เติมยัง "แก้ไขได้ทั้งหมด" ผู้ใช้ต้องกดบันทึกเองอยู่ดี
+      setPicked(matched);
+      setSelectedChip(null);
+      if (slip.date) setDate(slip.date);
+
+      if (slip.side === 'sell') {
+        // สลิปขาย → สลับโหมดฟอร์มให้ตรง แล้วเติมจำนวนหน่วย/ราคาที่ขายได้
+        setSide('sell');
+        if (slip.quantity) setSellQuantity(String(slip.quantity));
+        if (slip.pricePerUnit) setSellPrice(String(slip.pricePerUnit));
+      } else {
+        setSide('buy');
+        if (slip.currency === 'USD') setCurrency('USD');
+        if (slip.amountTotal) setAmountInput(String(slip.amountTotal));
+        // หุ้นไทยต้องกรอกราคาต่อหน่วยเอง — เติมให้ถ้าสลิปมี
+        if (slip.pricePerUnit) setPricePerUnit(String(slip.pricePerUnit));
+      }
+
+      setOcrSlipToken(slipToken ?? null);
+
+      // ⚠️ ทิศทางอ่านไม่ชัด = ต้องเตือนให้ผู้ใช้เลือกเอง ห้ามเดา (เคส BCPG: สลิป "ขาย"
+      // เคยถูกบันทึกเป็น "ซื้อ" มาแล้ว — เป็นบั๊กที่กระทบ P&L/จำนวนหน่วยโดยตรง)
+      const parts = [];
+      if (!slip.side) {
+        parts.push('⚠️ อ่านทิศทางรายการ (ซื้อ/ขาย) จากสลิปไม่ชัด กรุณาเลือกเองให้ถูกต้องก่อนบันทึก');
+      }
+      if (slip.confidence === 'low') {
+        parts.push('ความมั่นใจในการอ่านต่ำ กรุณาตรวจตัวเลขทุกช่องก่อนกดบันทึก');
+      }
+      parts.push(
+        quota?.mode === 'trial'
+          ? `ทดลองใช้ฟรี — เหลืออีก ${quota.remaining} ครั้ง`
+          : `โควตาอ่านสลิปเดือนนี้เหลือ ${quota?.remaining ?? '-'} ครั้ง`
+      );
+      if (quota?.mode === 'trial') {
+        parts.push('(การเก็บรูปสลิปเป็นหลักฐานเป็นสิทธิ์ของสมาชิก Premium)');
+      }
+      setOcrNotice(parts.join(' · '));
+    } catch (err) {
+      setOcrError(slipOcrErrorMessage(err.message));
+      setOcrUpgrade(isSlipOcrUpgradeError(err.message));
+    } finally {
+      setOcrScanning(false);
+    }
+  }
+
   // โหมดขายที่ยังไม่มีอะไรให้ขาย — บอกตรงๆ ดีกว่าปล่อยให้เปิด Picker แล้วเจอ
   // "ไม่พบรายการ" (ข้อความของ Picker ชวนให้แจ้งทีมงานเพิ่มสินทรัพย์ ซึ่งไม่ใช่ปัญหานี้)
   const sellEmpty = isSell && holdings.length === 0;
@@ -369,6 +493,45 @@ function DcaForm({
   return (
     <div className={`dh-dca-grid${confirmed ? '' : ' dh-dca-grid-full'}`}>
       <form className="dh-dca-form" autoComplete="off" onSubmit={handleSubmit}>
+        {/* ── ทางเลือกการกรอก: กรอกเอง หรือ ให้ AI อ่านสลิป (งานที่ 2.2) ──────────
+            วางไว้บนสุดของฟอร์มโดยเจตนา — Requirement ระบุว่าต้อง "เด่นและใช้ง่าย
+            ระดับเดียวกับปุ่มบันทึก" และผู้ใช้ต้องเห็นทางเลือกก่อนเริ่มกรอก ไม่ใช่
+            หลังกรอกไปครึ่งฟอร์มแล้ว
+            ไม่ใช่ Toggle โหมด: กดแล้วเปิดหน้าต่างเลือกไฟล์ทันที (Action ไม่ใช่ State)
+            ฟอร์มด้านล่างยังเป็นตัวเดิมเสมอ — AI แค่ "เติมค่าให้" แล้วผู้ใช้ตรวจ/แก้/ยืนยันเอง */}
+        <div className="dh-entry-choice">
+          <span className="dh-entry-choice-lbl">กรอกเอง หรือ</span>
+          <label className={`dh-scan-btn${ocrScanning ? ' dh-scan-btn-busy' : ''}`}>
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/gif"
+              hidden
+              disabled={ocrScanning || submitting}
+              onChange={(e) => {
+                const file = e.target.files?.[0] ?? null;
+                // Reset ทันทีเพื่อให้เลือกไฟล์เดิมซ้ำได้หลังอ่านพลาด
+                e.target.value = '';
+                handleScanSlip(file);
+              }}
+            />
+            {ocrScanning ? '🤖 กำลังอ่านสลิป…' : '📷 อัปโหลดสลิปให้ AI อ่าน'}
+          </label>
+        </div>
+
+        {ocrError && (
+          <div className="dh-form-error">
+            {ocrError}
+            {ocrUpgrade && (
+              <div style={{ marginTop: 8 }}>
+                <button type="button" className="dh-btn-main" onClick={handleUpgrade}>
+                  👑 อัพเกรด Premium
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+        {ocrNotice && <div className="dh-form-note dh-ocr-notice">🤖 {ocrNotice}</div>}
+
         {/* ── Toggle ซื้อ/ขาย ─────────────────────────────────────────────────
             role="tablist" + aria-selected เพื่อให้ Screen Reader รู้ว่าเป็นการสลับ
             "โหมดของฟอร์มเดียวกัน" ไม่ใช่ปุ่มสั่งงาน 2 ปุ่มที่กดแล้วบันทึกทันที */}
