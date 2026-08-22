@@ -177,6 +177,20 @@ label.dh-fl .dh-fl-opt { color: var(--muted); font-weight: 500; }
 .dh-scan-btn:hover { filter: brightness(1.05); }
 .dh-scan-btn-busy { opacity: .7; cursor: progress; }
 .dh-ocr-notice { border-left: 3px solid var(--green); padding-left: 10px; }
+/* AI อ่านทิศทาง (ซื้อ/ขาย) ไม่ได้ → ไฮไลต์ปุ่มเลือกโหมดให้เห็นชัดว่ายังต้องเลือกเอง
+   ระบบไม่เดาให้ (เคส BCPG — ดู lib/slipOcrPrefill.js) ข้อความเตือนอย่างเดียวไม่พอ
+   เพราะผู้ใช้ที่สแกนแล้วกดบันทึกเร็วๆ มักไม่ทันอ่าน */
+.dh-side-toggle-attention {
+  outline: 2px solid var(--amber); outline-offset: 3px; border-radius: 14px;
+  animation: dh-side-attention 1.4s ease-in-out 2;
+}
+@keyframes dh-side-attention {
+  0%, 100% { outline-color: var(--amber); }
+  50% { outline-color: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dh-side-toggle-attention { animation: none; }
+}
 /* ปุ่มแนบสลิปในตารางประวัติ (งานที่ 2.1) — <label> ครอบ input file ที่ hidden */
 .dh-slip-attach-cell { cursor: pointer; display: inline-flex; }
 

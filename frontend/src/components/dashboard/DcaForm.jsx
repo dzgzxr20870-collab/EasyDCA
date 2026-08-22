@@ -8,6 +8,7 @@ import {
   slipOcrErrorMessage,
   isSlipOcrUpgradeError,
 } from '../../lib/dcaErrors.js';
+import { buildOcrPrefill } from '../../lib/slipOcrPrefill.js';
 import { todayBangkokIso } from '../../lib/dateBangkok.js';
 import { resolvePrefillState } from '../../lib/dcaPlanPrefill.js';
 import { buildSellPayload, findHolding, formatUnits } from '../../lib/sellForm.js';
@@ -127,6 +128,9 @@ function DcaForm({
   const [ocrUpgrade, setOcrUpgrade] = useState(false);
   const [ocrSlipToken, setOcrSlipToken] = useState(null);
   const [ocrNotice, setOcrNotice] = useState(null);
+  // true = AI อ่านทิศทาง (ซื้อ/ขาย) ไม่ได้ → ไฮไลต์ปุ่มเลือกโหมดให้ผู้ใช้เห็นชัด
+  // ว่ายังต้องเลือกเอง (ระบบไม่เดาให้ — ดู lib/slipOcrPrefill.js)
+  const [ocrSideUnresolved, setOcrSideUnresolved] = useState(false);
 
   // Revoke Object URL ล่าสุด "ตอน Unmount เท่านั้น" (กัน Memory leak) — ใช้ ref กัน
   // ไม่ให้ revoke ทุกครั้งที่ URL เปลี่ยน (การเปลี่ยน/ลบ revoke เองอยู่แล้วในแต่ละ Handler)
@@ -273,6 +277,7 @@ function DcaForm({
     setOcrError(null);
     setOcrUpgrade(false);
     setOcrNotice(null);
+    setOcrSideUnresolved(false);
   }
 
   // ── บันทึกการขาย ──────────────────────────────────────────────────────────
@@ -441,30 +446,49 @@ function DcaForm({
       }
 
       // ── Prefill ── ทุกค่าที่เติมยัง "แก้ไขได้ทั้งหมด" ผู้ใช้ต้องกดบันทึกเองอยู่ดี
+      // ตรรกะว่า "เติมอะไรได้บ้าง" อยู่ใน lib/slipOcrPrefill.js (Pure + มี Test คลุม)
+      // — ที่นี่ทำหน้าที่ Apply ผลลัพธ์ลง State เท่านั้น ไม่ตัดสินใจอะไรเอง
+      const prefill = buildOcrPrefill(slip);
+
       setPicked(matched);
       setSelectedChip(null);
-      if (slip.date) setDate(slip.date);
+      if (prefill.date) setDate(prefill.date);
 
-      if (slip.side === 'sell') {
-        // สลิปขาย → สลับโหมดฟอร์มให้ตรง แล้วเติมจำนวนหน่วย/ราคาที่ขายได้
-        setSide('sell');
-        if (slip.quantity) setSellQuantity(String(slip.quantity));
-        if (slip.pricePerUnit) setSellPrice(String(slip.pricePerUnit));
-      } else {
-        setSide('buy');
-        if (slip.currency === 'USD') setCurrency('USD');
-        if (slip.amountTotal) setAmountInput(String(slip.amountTotal));
-        // หุ้นไทยต้องกรอกราคาต่อหน่วยเอง — เติมให้ถ้าสลิปมี
-        if (slip.pricePerUnit) setPricePerUnit(String(slip.pricePerUnit));
-      }
+      // ⚠️ ล้างช่องที่ผูกกับทิศทางก่อนเติมใหม่เสมอ — กันค่าจากสลิป "ใบก่อนหน้า"
+      // ค้างอยู่แล้วดูเหมือนเป็นค่าของใบนี้ (สแกนใบที่ 2 ทับใบที่ 1) ซึ่งอันตราย
+      // ที่สุดตอน side ไม่ชัด เพราะเราจะไม่เติมทับให้เลย
+      setAmountInput('');
+      setPricePerUnit('');
+      setSellQuantity('');
+      setSellPrice('');
+      setCurrency('THB');
+
+      // ⚠️ setSide เฉพาะตอนที่ "รู้ทิศทางจริง" เท่านั้น — side = null (อ่านไม่ออก/
+      // สัญญาณขัดกัน) ต้องปล่อยฟอร์มไว้ตามที่ผู้ใช้เปิดมา ห้ามเดาให้เด็ดขาด
+      // (ดูเหตุผลเต็ม + เคส BCPG ใน lib/slipOcrPrefill.js)
+      if (prefill.side) setSide(prefill.side);
+      if (prefill.currency) setCurrency(prefill.currency);
+      if (prefill.amountInput) setAmountInput(prefill.amountInput);
+      if (prefill.pricePerUnit) setPricePerUnit(prefill.pricePerUnit);
+      if (prefill.sellQuantity) setSellQuantity(prefill.sellQuantity);
+      if (prefill.sellPrice) setSellPrice(prefill.sellPrice);
+
+      // ไฮไลต์ปุ่มซื้อ/ขายให้เห็นชัดว่า "ยังต้องเลือกเอง" (ข้อความเตือนอย่างเดียว
+      // ผู้ใช้ที่กดเร็วๆ มักไม่ทันอ่าน — นี่คือช่องที่ทำให้บั๊ก BCPG หลุดมาได้)
+      setOcrSideUnresolved(prefill.sideUnresolved);
 
       setOcrSlipToken(slipToken ?? null);
 
       // ⚠️ ทิศทางอ่านไม่ชัด = ต้องเตือนให้ผู้ใช้เลือกเอง ห้ามเดา (เคส BCPG: สลิป "ขาย"
       // เคยถูกบันทึกเป็น "ซื้อ" มาแล้ว — เป็นบั๊กที่กระทบ P&L/จำนวนหน่วยโดยตรง)
       const parts = [];
-      if (!slip.side) {
-        parts.push('⚠️ อ่านทิศทางรายการ (ซื้อ/ขาย) จากสลิปไม่ชัด กรุณาเลือกเองให้ถูกต้องก่อนบันทึก');
+      if (prefill.sideUnresolved) {
+        // ข้อความต้องตรงกับพฤติกรรมจริง: ระบบ "ไม่ได้เลือกให้" และ "ไม่ได้กรอกตัวเลข"
+        // (เดิมเขียนว่า "กรุณาเลือกเองให้ถูกต้อง" ทั้งที่โค้ดเลือก buy ให้ไปแล้ว —
+        // ข้อความกับพฤติกรรมขัดกันเอง ทำให้ผู้ใช้เข้าใจผิดว่าที่เห็นคือค่าจากสลิป)
+        parts.push(
+          '⚠️ อ่านทิศทางรายการ (ซื้อ/ขาย) จากสลิปไม่ได้ — ระบบจึงยังไม่เลือกโหมดและไม่กรอกจำนวนให้ กรุณาเลือกซื้อ/ขายเอง แล้วกรอกจำนวนจากสลิป'
+        );
       }
       if (slip.confidence === 'low') {
         parts.push('ความมั่นใจในการอ่านต่ำ กรุณาตรวจตัวเลขทุกช่องก่อนกดบันทึก');
@@ -535,7 +559,11 @@ function DcaForm({
         {/* ── Toggle ซื้อ/ขาย ─────────────────────────────────────────────────
             role="tablist" + aria-selected เพื่อให้ Screen Reader รู้ว่าเป็นการสลับ
             "โหมดของฟอร์มเดียวกัน" ไม่ใช่ปุ่มสั่งงาน 2 ปุ่มที่กดแล้วบันทึกทันที */}
-        <div className="dh-side-toggle" role="tablist" aria-label="เลือกประเภทรายการ">
+        <div
+          className={`dh-side-toggle${ocrSideUnresolved ? ' dh-side-toggle-attention' : ''}`}
+          role="tablist"
+          aria-label="เลือกประเภทรายการ"
+        >
           <button
             type="button"
             role="tab"
