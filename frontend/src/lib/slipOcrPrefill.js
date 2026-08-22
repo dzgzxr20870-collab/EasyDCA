@@ -54,6 +54,11 @@ export function buildOcrPrefill(slip) {
     // ณ ตอนกดบันทึก — ดูเหตุผลเต็มใน § "ทำไมต้องใช้ตัวเลขจากสลิป" ท้ายไฟล์
     buyQuantity: null,
     buyPricePerUnit: null,
+    // ค่าธรรมเนียมจากสลิป (Migration 041) — null = สลิปไม่ระบุ ไม่ใช่ "ไม่มี"
+    // ไม่ขึ้นกับทิศทาง จึงเติมได้เสมอแม้ side ไม่ชัด (เหมือน date)
+    feeTotal: inputValueOrNull(slip?.feeTotal),
+    // ยอดสุทธิที่จ่าย/รับจริงตามสลิป — ใช้แสดงผลอย่างเดียว ไม่ถูกบันทึกลง Ledger
+    netAmount: inputValueOrNull(slip?.netAmount),
   };
 
   // ── ทิศทางชัดเจน: Prefill ครบเหมือนเดิมทุกประการ (คุณค่าหลักของฟีเจอร์) ──

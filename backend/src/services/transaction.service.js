@@ -461,7 +461,7 @@ async function processBuyCommand(userId, params, options = {}) {
     pricePerUnit,
     quantity,
     currency,
-    feeThb: params.feeThb ?? 0,
+    feeThb: params.feeThb ?? null,
     date: params.date ?? todayInBangkok(),
     note: params.note ?? null,
     // ช่องทางที่บันทึก (DATABASE.md § transactions — CHECK IN ('line','web','slip_ai'))
@@ -598,7 +598,7 @@ async function processSellCommand(userId, params) {
       pricePerUnit,
       quantity,
       currency,
-      feeThb: params.feeThb ?? 0,
+      feeThb: params.feeThb ?? null,
       date: params.date ?? todayInBangkok(),
       note: params.note ?? null,
       // Default 'line' = Path เดิมทั้งหมดได้ค่าเท่าเดิม (เหตุผลเดียวกับ processBuyCommand)

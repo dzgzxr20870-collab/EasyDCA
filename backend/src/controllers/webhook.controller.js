@@ -1009,6 +1009,13 @@ async function routePostback(user, data) {
       }
       // Multi-Currency (Round 10) — สลิปสกุล USD: เก็บเป็น USD ตามจริง (Default THB)
       if (params.get('cur') === 'USD') commandParams.currency = 'USD';
+      // ค่าธรรมเนียมจากสลิป (Migration 041) — ไม่มีใน Postback = สลิปไม่ระบุ = ไม่รู้
+      // ปล่อยให้เป็น undefined ไปตามสาย แล้วลงเป็น NULL ใน DB (ไม่ใช่ 0)
+      const feeParam = params.get('fee');
+      if (feeParam !== null) {
+        const fee = Number(feeParam);
+        if (Number.isFinite(fee) && fee >= 0) commandParams.feeThb = fee;
+      }
       const dateIso = params.get('date');
       if (dateIso) commandParams.date = dateIso; // ISO 'YYYY-MM-DD' (createPending ใช้ตรงๆ)
       // แนบรูปสลิป (S8) — พก token ต่อไปให้ pending row เก็บไว้ เพื่อให้ขั้น 'confirm'

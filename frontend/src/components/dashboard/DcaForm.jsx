@@ -138,6 +138,12 @@ function DcaForm({
   // ว่างทั้งคู่ = ไม่ได้มาจากสลิป → ฟอร์มทำงานแบบเดิมทุกประการ (ใช้จำนวนเงิน)
   const [slipQuantityInput, setSlipQuantityInput] = useState('');
   const [slipPriceInput, setSlipPriceInput] = useState('');
+  // ค่าธรรมเนียม (Migration 041) — ผู้ใช้แก้เองได้เผื่อ AI อ่านผิด/สลิปไม่ระบุ
+  // '' = ไม่รู้ (ส่ง undefined ไป Backend → ลง DB เป็น NULL ไม่ใช่ 0)
+  const [slipFeeInput, setSlipFeeInput] = useState('');
+  // ยอดสุทธิตามสลิป — แสดงผลอย่างเดียว ไม่ถูกบันทึก (ใช้บอกผู้ใช้ว่ายอดที่จำได้
+  // ต่างจากมูลค่าหุ้นเพราะค่าธรรมเนียม)
+  const [slipNetAmount, setSlipNetAmount] = useState(null);
 
   // Revoke Object URL ล่าสุด "ตอน Unmount เท่านั้น" (กัน Memory leak) — ใช้ ref กัน
   // ไม่ให้ revoke ทุกครั้งที่ URL เปลี่ยน (การเปลี่ยน/ลบ revoke เองอยู่แล้วในแต่ละ Handler)
@@ -153,7 +159,21 @@ function DcaForm({
 
   const today = todayBangkokIso();
   const isSell = side === 'sell';
-  const needsManualPrice = !isSell && picked?.type === 'stock_th';
+  // ── ราคาต่อหน่วย (โหมดซื้อ) ────────────────────────────────────────────────
+  // priceRequired    : บังคับกรอก — หุ้นไทยไม่มี Price Feed ในระบบ ถ้าไม่กรอกจะไป
+  //                    จบที่ PRICE_FEED_NOT_IMPLEMENTED ฝั่ง Backend อยู่ดี
+  // slipNumbersActive: กำลังใช้ตัวเลขจากสลิป (กล่องเขียวด้านล่าง) — ต้องซ่อนช่องราคา
+  //                    ปกติทิ้ง ไม่งั้นหน้าจอมีช่องราคา 2 ช่องที่ขัดแย้งกันเอง
+  // showPriceField   : แสดงช่องให้กรอกเอง — เปิดให้ "ทุกสินทรัพย์" ไม่ใช่แค่หุ้นไทย
+  //                    (ราคาตลาดตอนกดบันทึกไม่เคยตรงกับราคาที่จับคู่จริง ผู้ใช้ที่รู้
+  //                    ราคาจริงควรกรอกเองได้) — ⚠️ ห้ามเติมราคาให้อัตโนมัติเด็ดขาด
+  //                    เพราะต้องยิง Price Feed ทุกครั้งที่เปิดฟอร์ม ซึ่ง Twelve Data
+  //                    ชนเพดาน 8 ครั้ง/นาทีอยู่บ่อยแล้ว — ปล่อยว่างให้ผู้ใช้กรอกเอง
+  const priceRequired = !isSell && picked?.type === 'stock_th';
+  const slipNumbersActive = !isSell && slipQuantityInput !== '' && slipPriceInput !== '';
+  const showPriceField = !isSell && !slipNumbersActive;
+  // ชื่อเดิม — คงไว้เพื่อไม่ต้องแก้ทุกจุดที่อ้างถึงความหมาย "ต้องกรอกราคาเอง"
+  const needsManualPrice = priceRequired;
   const supportsUsd = !isSell && picked ? USD_TOGGLE_TYPES.includes(picked.type) : false;
   // ยอดคงเหลือของตัวที่เลือกในโหมดขาย — อ่านจาก holdings (Backend คำนวณมาแล้ว)
   // ไม่ใช่ค่าที่คำนวณในหน้านี้ ดูหมายเหตุที่ props holdings
@@ -285,6 +305,10 @@ function DcaForm({
     setOcrUpgrade(false);
     setOcrNotice(null);
     setOcrSideUnresolved(false);
+    setSlipQuantityInput('');
+    setSlipPriceInput('');
+    setSlipFeeInput('');
+    setSlipNetAmount(null);
   }
 
   // ── บันทึกการขาย ──────────────────────────────────────────────────────────
@@ -364,10 +388,19 @@ function DcaForm({
       return;
     }
 
+    // ── ราคาต่อหน่วย: กรอกเองได้ทุกสินทรัพย์ (ไม่บังคับ ยกเว้นหุ้นไทย) ──────────
+    // เหตุผล: ราคาตลาดที่ดึงตอนกดบันทึกไม่เคยตรงกับราคาที่จับคู่จริง แม้บันทึกวัน
+    // เดียวกัน ทำให้จำนวนหน่วยคลาดสะสมไปเรื่อยๆ — ผู้ใช้ที่รู้ราคาจริงควรกรอกเองได้
+    // เว้นว่าง = ใช้ราคาตลาดเหมือนเดิมทุกประการ (ไม่ทำลายความสะดวกของคนที่ไม่อยากกรอก)
     let priceValue = null;
-    if (needsManualPrice && !useSlipNumbers) {
-      priceValue = parseAmount(pricePerUnit);
-      if (priceValue === null || priceValue <= 0) {
+    if (!useSlipNumbers) {
+      if (pricePerUnit.trim() !== '') {
+        priceValue = parseAmount(pricePerUnit);
+        if (priceValue === null || priceValue <= 0) {
+          setFormError('ราคาต่อหน่วยไม่ถูกต้อง — กรอกตัวเลขมากกว่า 0 หรือเว้นว่างไว้เพื่อใช้ราคาตลาด');
+          return;
+        }
+      } else if (priceRequired) {
         setFormError('หุ้นไทยยังไม่มีราคาตลาดอัตโนมัติ กรุณากรอก "ราคาต่อหน่วย" ที่ซื้อด้วย');
         return;
       }
@@ -383,7 +416,12 @@ function DcaForm({
       // และเสี่ยงให้เข้าใจผิดว่ายอดนั้นเป็นตัวตั้ง)
       ...(useSlipNumbers
         ? { quantity: slipQty, pricePerUnit: slipPrice }
-        : { amountTotal, ...(needsManualPrice ? { pricePerUnit: priceValue } : {}) }),
+        : { amountTotal, ...(priceValue !== null ? { pricePerUnit: priceValue } : {}) }),
+      // ค่าธรรมเนียม (Migration 041) — ส่งเฉพาะเมื่อรู้จริง ('' = ไม่รู้ → ไม่ส่ง Key
+      // เลย เพื่อให้ Backend ลง NULL ไม่ใช่ 0) · ผู้ใช้กรอก 0 เอง = ยืนยันว่าไม่มี
+      ...(slipFeeInput.trim() !== '' && Number.isFinite(Number(slipFeeInput))
+        ? { feeThb: Number(slipFeeInput) }
+        : {}),
       // AI อ่านสลิป (งานที่ 2.2) — รูปถูกอัปโหลดไว้แล้วตอนอ่าน Backend จะแนบเข้า
       // รายการที่เพิ่งสร้างให้เอง (Fail Isolated ฝั่ง Backend) จึง "ไม่" ต้องอัปโหลดซ้ำ
       // ผ่าน apiUpload ด้านล่าง — ดู ocrSlipToken ใน Guard ของ slipFile
@@ -485,6 +523,8 @@ function DcaForm({
       setCurrency('THB');
       setSlipQuantityInput('');
       setSlipPriceInput('');
+      setSlipFeeInput('');
+      setSlipNetAmount(null);
 
       // ⚠️ setSide เฉพาะตอนที่ "รู้ทิศทางจริง" เท่านั้น — side = null (อ่านไม่ออก/
       // สัญญาณขัดกัน) ต้องปล่อยฟอร์มไว้ตามที่ผู้ใช้เปิดมา ห้ามเดาให้เด็ดขาด
@@ -499,6 +539,9 @@ function DcaForm({
       // ยอดเงินที่ต้องเอาไปหารด้วยราคาตลาดวันนี้ (ดู buildOcrPrefill.buyQuantity)
       if (prefill.buyQuantity) setSlipQuantityInput(prefill.buyQuantity);
       if (prefill.buyPricePerUnit) setSlipPriceInput(prefill.buyPricePerUnit);
+      // ค่าธรรมเนียม + ยอดสุทธิ (Migration 041) — ไม่ขึ้นกับทิศทาง เติมได้เสมอ
+      if (prefill.feeTotal) setSlipFeeInput(prefill.feeTotal);
+      if (prefill.netAmount) setSlipNetAmount(Number(prefill.netAmount));
 
       // ไฮไลต์ปุ่มซื้อ/ขายให้เห็นชัดว่า "ยังต้องเลือกเอง" (ข้อความเตือนอย่างเดียว
       // ผู้ใช้ที่กดเร็วๆ มักไม่ทันอ่าน — นี่คือช่องที่ทำให้บั๊ก BCPG หลุดมาได้)
@@ -790,16 +833,19 @@ function DcaForm({
           </div>
 
           <div>
-            {needsManualPrice ? (
+            {showPriceField ? (
               <>
                 <label className="dh-fl" htmlFor="dh-f-price">
-                  ราคา/หน่วย <span className="dh-fl-opt">(หุ้นไทยยังไม่มีราคาสดในระบบ)</span>
+                  ราคา/หน่วย{' '}
+                  <span className="dh-fl-opt">
+                    {priceRequired ? '(หุ้นไทยยังไม่มีราคาสดในระบบ)' : '(ไม่บังคับ)'}
+                  </span>
                 </label>
                 <input
                   className="dh-inp"
                   id="dh-f-price"
                   inputMode="decimal"
-                  placeholder="เช่น 34.00"
+                  placeholder={priceRequired ? 'เช่น 34.00' : 'เว้นว่าง = ใช้ราคาตลาด'}
                   value={pricePerUnit}
                   onChange={(e) => setPricePerUnit(e.target.value)}
                 />
@@ -818,10 +864,19 @@ function DcaForm({
                 />
               </>
             )}
+            {/* ⚠️ ข้อความนี้เคยขัดแย้งกับกล่องเขียว "ใช้ราคาจากสลิป ไม่ใช่ราคาตลาดวันนี้"
+                ที่อยู่ห่างกันไม่ถึงนิ้วบนหน้าจอ (ผู้ใช้ไม่รู้ว่าตกลงระบบใช้อะไร) —
+                ตอนนี้เลือกข้อความตามสถานะจริงของฟอร์ม ไม่พูดสิ่งที่ไม่ตรงกับที่ทำ */}
             <div className="dh-form-note" style={{ marginTop: 9 }}>
-              {picked && !needsManualPrice
-                ? 'ระบบดึงราคาตลาด ณ เวลาบันทึกให้อัตโนมัติ แล้วคำนวณจำนวนหน่วยให้เอง — ไม่ต้องกรอกราคาเอง'
-                : ''}
+              {!picked
+                ? ''
+                : slipNumbersActive
+                  ? '' /* กล่องเขียวด้านล่างอธิบายครบแล้ว — ไม่พูดเรื่องราคาตลาดซ้ำให้ขัดกันเอง */
+                  : priceRequired
+                    ? 'หุ้นไทยยังไม่มีราคาสดในระบบ กรุณากรอกราคาที่ซื้อได้จริง'
+                    : pricePerUnit.trim() !== ''
+                      ? 'จะบันทึกด้วยราคาที่คุณกรอก — ไม่ดึงราคาตลาด'
+                      : 'เว้นว่างไว้ = ระบบดึงราคาตลาด ณ เวลาบันทึกให้อัตโนมัติ · กรอกเองได้ถ้ารู้ราคาที่ซื้อจริง'}
             </div>
           </div>
         </div>
@@ -863,25 +918,72 @@ function DcaForm({
                 />
               </div>
             </div>
-            <p className="dh-form-note dh-slip-numbers-total">
-              รวมเป็น{' '}
-              <b>
-                {(() => {
-                  const q = parseAmount(slipQuantityInput);
-                  const p = parseAmount(slipPriceInput);
-                  return q > 0 && p > 0
-                    ? `${(Math.round(q * p * 100) / 100).toLocaleString('th-TH')} ${currency}`
-                    : '—';
-                })()}
-              </b>{' '}
-              · ใช้ราคาจากสลิป ไม่ใช่ราคาตลาดวันนี้ (ล้างช่องใดช่องหนึ่งเพื่อกลับไปใช้จำนวนเงินด้านบน)
-            </p>
+            {/* ── ค่าธรรมเนียม: แก้เองได้เผื่อ AI อ่านผิด/สลิปไม่ระบุ ────────────── */}
+            <div>
+              <label className="dh-fl" htmlFor="dh-f-slip-fee">
+                ค่าธรรมเนียม ({currency}) <span className="dh-fl-opt">(ไม่บังคับ)</span>
+              </label>
+              <input
+                className="dh-inp"
+                id="dh-f-slip-fee"
+                inputMode="decimal"
+                placeholder="เว้นว่าง = ไม่ทราบ"
+                value={slipFeeInput}
+                onChange={(e) => setSlipFeeInput(e.target.value)}
+              />
+            </div>
+
+            {/* ── สรุปยอดแบบแยกบรรทัดให้บวกกันเห็นชัด ──────────────────────────
+                ⚠️ สำคัญ: ผู้ใช้จำ "ยอดที่จ่ายจริง" (1,500) แต่ระบบบันทึก "มูลค่าหุ้น"
+                (1,497.60) ถ้าโชว์เลขเดียวโดดๆ จะเข้าใจผิดว่าระบบอ่านสลิปผิด
+                (Founder เองยังเข้าใจผิดตอนทดสอบ) — ต้องเห็นว่าบวกกันแล้วได้ยอดที่จ่าย */}
+            {(() => {
+              const q = parseAmount(slipQuantityInput);
+              const p = parseAmount(slipPriceInput);
+              const gross = q > 0 && p > 0 ? Math.round(q * p * 100) / 100 : null;
+              const fee = slipFeeInput.trim() === '' ? null : parseAmount(slipFeeInput);
+              const fmt = (n) => n.toLocaleString('th-TH', { maximumFractionDigits: 8 });
+
+              if (gross === null) {
+                return <p className="dh-form-note dh-slip-numbers-total">กรอกจำนวนหน่วยและราคาให้ครบเพื่อดูยอดรวม</p>;
+              }
+
+              // ยอดรวมจ่ายจริง: ใช้ค่าจากสลิปถ้ามี (แม่นสุด) ไม่มีค่อยบวกเอง
+              const totalPaid =
+                slipNetAmount !== null ? slipNetAmount : fee !== null ? Math.round((gross + fee) * 100) / 100 : null;
+
+              return (
+                <div className="dh-slip-breakdown">
+                  <div className="dh-slip-brk-row">
+                    <span>มูลค่าหุ้น (บันทึกเป็นต้นทุน)</span>
+                    <b>{fmt(gross)} {currency}</b>
+                  </div>
+                  {fee !== null && fee > 0 && (
+                    <div className="dh-slip-brk-row">
+                      <span>ค่าธรรมเนียม</span>
+                      <b>{fmt(fee)} {currency}</b>
+                    </div>
+                  )}
+                  {totalPaid !== null && (
+                    <div className="dh-slip-brk-row dh-slip-brk-total">
+                      <span>รวม{isSell ? 'รับจริง' : 'จ่ายจริง'}</span>
+                      <b>{fmt(totalPaid)} {currency}</b>
+                    </div>
+                  )}
+                  <p className="dh-form-note" style={{ margin: '6px 0 0' }}>
+                    {fee !== null && fee > 0
+                      ? `ระบบบันทึก "มูลค่าหุ้น" เป็นต้นทุน — ต่างจากยอดที่${isSell ? 'รับ' : 'จ่าย'}เพราะค่าธรรมเนียม ไม่ใช่ระบบอ่านผิด`
+                      : 'ใช้ราคาจากสลิป ไม่ใช่ราคาตลาดวันนี้ (ล้างช่องจำนวนหน่วยหรือราคาเพื่อกลับไปใช้จำนวนเงินด้านบน)'}
+                  </p>
+                </div>
+              );
+            })()}
           </div>
         )}
 
-        {/* ช่องรายละเอียดยังต้องมีที่กรอกได้เสมอแม้เป็นหุ้นไทย (ราคา/หน่วยแทนที่ตำแหน่ง
-            รายละเอียดในคอลัมน์ขวา) — ย้ายรายละเอียดมาไว้แถวถัดไปเมื่อเป็นหุ้นไทย */}
-        {needsManualPrice && (
+        {/* ช่องรายละเอียดต้องมีที่กรอกได้เสมอ — เมื่อคอลัมน์ขวาถูกใช้แสดงช่องราคา
+            (ตอนนี้คือทุกกรณีในโหมดซื้อ ยกเว้นตอนใช้ตัวเลขจากสลิป) ให้ย้ายมาแถวถัดไป */}
+        {showPriceField && (
           <div>
             <label className="dh-fl" htmlFor="dh-f-note-2">
               รายละเอียด <span className="dh-fl-opt">(ไม่บังคับ)</span>

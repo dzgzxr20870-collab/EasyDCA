@@ -3271,6 +3271,11 @@ function ocrPostback(action, ocr, sideOverride = null) {
   // Multi-Currency (Round 10) — พกสกุลเงินที่ AI อ่านได้ (เฉพาะ USD; THB เป็น Default
   // ที่ Handler เติมเองถ้าไม่มี) เพื่อให้ ocr_confirm/ocr_edit ประกอบคำสั่งสกุลถูกต้อง
   if (ocr.currency === 'USD') p.set('cur', 'USD');
+  // ค่าธรรมเนียมจากสลิป (Migration 041) — ส่งเฉพาะปุ่มยืนยัน เพราะเป็นจังหวะเดียวที่
+  // Transaction ถูกสร้างจริง · ไม่ส่งเมื่อสลิปไม่ระบุ (null = "ไม่รู้" ห้ามเดาเป็น 0)
+  if (action === 'ocr_confirm' && ocr.feeTotal !== null && ocr.feeTotal !== undefined) {
+    p.set('fee', String(ocr.feeTotal));
+  }
   // วันที่ส่งเฉพาะปุ่มยืนยัน (Path Postback ไม่ผ่าน Command Parser ที่ไม่รองรับวันที่)
   if (action === 'ocr_confirm' && ocr.dateIso) p.set('date', ocr.dateIso);
   // แนบรูปสลิป (S8) — พก "token" ของไฟล์ที่อัปโหลดไว้แล้ว (รูปแบบ "{timestamp}.{ext}"
@@ -3373,10 +3378,46 @@ function buildOcrPreviewMessage(ocr) {
       { size: 'sm', color: ocr.pricePerUnit !== null ? COLOR.textSecondary : COLOR.warning }
     )
   );
+  // ── ยอดเงิน: แยกบรรทัดให้บวกกันเห็นชัดเมื่อรู้ค่าธรรมเนียม (Migration 041) ──
+  //
+  // ⚠️ เหตุผลที่ต้องแยกบรรทัด: ผู้ใช้จำ "ยอดที่จ่ายจริง" (เช่น 1,500) แต่ระบบบันทึก
+  // "มูลค่าหุ้น" (1,497.60) ซึ่งเป็นฐานต้นทุนที่ถูกต้อง — ถ้าโชว์เลขเดียวโดดๆ ผู้ใช้
+  // จะคิดว่าระบบอ่านสลิปผิด (Founder เองยังเข้าใจผิดตอนทดสอบ) การแสดงเป็นรายการที่
+  // บวกกันแล้วได้ยอดที่จ่ายจริง ทำให้เข้าใจได้ทันทีโดยไม่ต้องเดา
   if (ocr.amountThb !== null) {
+    const hasFee = ocr.feeTotal !== null && ocr.feeTotal !== undefined && ocr.feeTotal > 0;
+
     body.push(
-      textLine(`ยอดรวม: ${formatNumber(ocr.amountThb)} ${unit}`, { size: 'sm', color: COLOR.textSecondary })
+      textLine(`มูลค่าหุ้น: ${formatNumber(ocr.amountThb)} ${unit}`, {
+        size: 'sm',
+        color: COLOR.textSecondary,
+      })
     );
+
+    if (hasFee) {
+      body.push(
+        textLine(`ค่าธรรมเนียม: ${formatNumber(ocr.feeTotal)} ${unit}`, {
+          size: 'sm',
+          color: COLOR.textSecondary,
+        })
+      );
+      // ยอดรวมจ่ายจริง: ใช้ net จากสลิปถ้ามี (แม่นที่สุด) ไม่มีค่อยบวกเอง
+      const totalPaid =
+        ocr.netAmount !== null && ocr.netAmount !== undefined
+          ? ocr.netAmount
+          : Math.round((ocr.amountThb + ocr.feeTotal) * 100) / 100;
+      body.push(
+        textLine(`รวม${isBuy ? 'จ่ายจริง' : 'รับจริง'}: ${formatNumber(totalPaid)} ${unit}`, {
+          size: 'sm',
+          weight: 'bold',
+          color: COLOR.textPrimary,
+        }),
+        textLine(
+          `* ระบบบันทึก "มูลค่าหุ้น" เป็นต้นทุน (${formatNumber(ocr.amountThb)} ${unit}) — ต่างจากยอดที่${isBuy ? 'จ่าย' : 'รับ'}เพราะค่าธรรมเนียม ไม่ใช่ระบบอ่านผิด`,
+          { size: 'xs', color: COLOR.textSecondary, wrap: true }
+        )
+      );
+    }
   }
   body.push(
     textLine(`วันที่: ${ocr.date ?? 'วันนี้ (ไม่พบวันที่ในสลิป)'}`, {
