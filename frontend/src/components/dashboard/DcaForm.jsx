@@ -132,6 +132,13 @@ function DcaForm({
   // ว่ายังต้องเลือกเอง (ระบบไม่เดาให้ — ดู lib/slipOcrPrefill.js)
   const [ocrSideUnresolved, setOcrSideUnresolved] = useState(false);
 
+  // ── ตัวเลขจากสลิปที่จะถูกบันทึกจริง (โหมดซื้อ) ─────────────────────────────
+  // ⚠️ ต้องเป็นช่องที่ "ผู้ใช้เห็นและแก้ได้" ไม่ใช่ค่าซ่อนที่ไหลลง Ledger เงียบๆ
+  // (มติ Founder: ผู้ใช้ควรเห็นตัวเลขที่กำลังจะถูกบันทึกก่อนกดบันทึก)
+  // ว่างทั้งคู่ = ไม่ได้มาจากสลิป → ฟอร์มทำงานแบบเดิมทุกประการ (ใช้จำนวนเงิน)
+  const [slipQuantityInput, setSlipQuantityInput] = useState('');
+  const [slipPriceInput, setSlipPriceInput] = useState('');
+
   // Revoke Object URL ล่าสุด "ตอน Unmount เท่านั้น" (กัน Memory leak) — ใช้ ref กัน
   // ไม่ให้ revoke ทุกครั้งที่ URL เปลี่ยน (การเปลี่ยน/ลบ revoke เองอยู่แล้วในแต่ละ Handler)
   const slipPreviewRef = useRef(null);
@@ -335,8 +342,18 @@ function DcaForm({
       return;
     }
 
+    // ── ตัวเลขจากสลิป (จำนวนหน่วย + ราคาที่ได้จริง) ─────────────────────────────
+    // เมื่อสลิประบุครบทั้งคู่ ให้ส่งค่าคู่นั้นเป็นหลักแทน "จำนวนเงิน" — Backend จะ
+    // บันทึกตามนี้ตรงๆ ไม่ไปดึงราคาตลาดมาคำนวณจำนวนหน่วยใหม่ (ซึ่งทำให้รายการ
+    // ที่บันทึกย้อนหลังเพี้ยนตามราคาวันที่กดบันทึก ไม่ใช่ราคาที่ซื้อได้จริง)
+    const slipQty = parseAmount(slipQuantityInput);
+    const slipPrice = parseAmount(slipPriceInput);
+    const useSlipNumbers = slipQty !== null && slipQty > 0 && slipPrice !== null && slipPrice > 0;
+
+    // จำนวนเงินยังบังคับเหมือนเดิม "ยกเว้น" ตอนใช้ตัวเลขจากสลิป (ยอดรวมคำนวณได้เอง
+    // จาก จำนวน × ราคา — Backend คำนวณให้ด้วยสูตรเดียวกับทุกจุดของระบบ)
     const amountTotal = parseAmount(amountInput);
-    if (amountTotal === null || amountTotal <= 0) {
+    if (!useSlipNumbers && (amountTotal === null || amountTotal <= 0)) {
       setAmountFieldError(true);
       setFormError('กรุณากรอกจำนวนเงินที่ถูกต้อง (มากกว่า 0)');
       return;
@@ -348,7 +365,7 @@ function DcaForm({
     }
 
     let priceValue = null;
-    if (needsManualPrice) {
+    if (needsManualPrice && !useSlipNumbers) {
       priceValue = parseAmount(pricePerUnit);
       if (priceValue === null || priceValue <= 0) {
         setFormError('หุ้นไทยยังไม่มีราคาตลาดอัตโนมัติ กรุณากรอก "ราคาต่อหน่วย" ที่ซื้อด้วย');
@@ -358,11 +375,15 @@ function DcaForm({
 
     const payload = {
       symbol: picked.symbol,
-      amountTotal,
       currency,
       date,
       ...(note.trim() ? { note: note.trim() } : {}),
-      ...(needsManualPrice ? { pricePerUnit: priceValue } : {}),
+      // ใช้ตัวเลขจากสลิป → ส่ง quantity + pricePerUnit (ไม่ส่ง amountTotal เพราะ
+      // Backend คำนวณยอดรวมจากคู่นี้เอง การส่งยอดที่ปัดเศษแล้วมาด้วยไม่มีประโยชน์
+      // และเสี่ยงให้เข้าใจผิดว่ายอดนั้นเป็นตัวตั้ง)
+      ...(useSlipNumbers
+        ? { quantity: slipQty, pricePerUnit: slipPrice }
+        : { amountTotal, ...(needsManualPrice ? { pricePerUnit: priceValue } : {}) }),
       // AI อ่านสลิป (งานที่ 2.2) — รูปถูกอัปโหลดไว้แล้วตอนอ่าน Backend จะแนบเข้า
       // รายการที่เพิ่งสร้างให้เอง (Fail Isolated ฝั่ง Backend) จึง "ไม่" ต้องอัปโหลดซ้ำ
       // ผ่าน apiUpload ด้านล่าง — ดู ocrSlipToken ใน Guard ของ slipFile
@@ -462,6 +483,8 @@ function DcaForm({
       setSellQuantity('');
       setSellPrice('');
       setCurrency('THB');
+      setSlipQuantityInput('');
+      setSlipPriceInput('');
 
       // ⚠️ setSide เฉพาะตอนที่ "รู้ทิศทางจริง" เท่านั้น — side = null (อ่านไม่ออก/
       // สัญญาณขัดกัน) ต้องปล่อยฟอร์มไว้ตามที่ผู้ใช้เปิดมา ห้ามเดาให้เด็ดขาด
@@ -472,6 +495,10 @@ function DcaForm({
       if (prefill.pricePerUnit) setPricePerUnit(prefill.pricePerUnit);
       if (prefill.sellQuantity) setSellQuantity(prefill.sellQuantity);
       if (prefill.sellPrice) setSellPrice(prefill.sellPrice);
+      // โหมดซื้อ: สลิปให้จำนวนหน่วย+ราคาครบ → บันทึกด้วยตัวเลขจริงจากสลิป ไม่ใช่
+      // ยอดเงินที่ต้องเอาไปหารด้วยราคาตลาดวันนี้ (ดู buildOcrPrefill.buyQuantity)
+      if (prefill.buyQuantity) setSlipQuantityInput(prefill.buyQuantity);
+      if (prefill.buyPricePerUnit) setSlipPriceInput(prefill.buyPricePerUnit);
 
       // ไฮไลต์ปุ่มซื้อ/ขายให้เห็นชัดว่า "ยังต้องเลือกเอง" (ข้อความเตือนอย่างเดียว
       // ผู้ใช้ที่กดเร็วๆ มักไม่ทันอ่าน — นี่คือช่องที่ทำให้บั๊ก BCPG หลุดมาได้)
@@ -798,6 +825,58 @@ function DcaForm({
             </div>
           </div>
         </div>
+        )}
+
+        {/* ── ตัวเลขจากสลิปที่จะถูกบันทึกจริง (โหมดซื้อ) ────────────────────────
+            โผล่เฉพาะตอนที่ AI อ่านสลิปแล้วได้ "จำนวนหน่วย + ราคา" ครบทั้งคู่
+            ⚠️ ต้องแสดงให้เห็นและแก้ได้ ไม่ใช่ค่าซ่อนที่ไหลลง Ledger เงียบๆ —
+            เมื่อมีบล็อกนี้ ระบบจะบันทึกตามตัวเลขนี้ ไม่ใช่ช่อง "จำนวนเงิน" ด้านบน
+            (ยอดเงินกลายเป็นผลคูณของสองช่องนี้แทน) */}
+        {!isSell && slipQuantityInput !== '' && slipPriceInput !== '' && (
+          <div className="dh-slip-numbers">
+            <p className="dh-slip-numbers-title">
+              🧾 ตัวเลขจากสลิป — ระบบจะบันทึกตามนี้
+            </p>
+            <div className="dh-frow">
+              <div>
+                <label className="dh-fl" htmlFor="dh-f-slip-qty">
+                  จำนวนหน่วยที่ได้จริง
+                </label>
+                <input
+                  className="dh-inp"
+                  id="dh-f-slip-qty"
+                  inputMode="decimal"
+                  value={slipQuantityInput}
+                  onChange={(e) => setSlipQuantityInput(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="dh-fl" htmlFor="dh-f-slip-price">
+                  ราคาต่อหน่วยที่ได้จริง ({currency})
+                </label>
+                <input
+                  className="dh-inp"
+                  id="dh-f-slip-price"
+                  inputMode="decimal"
+                  value={slipPriceInput}
+                  onChange={(e) => setSlipPriceInput(e.target.value)}
+                />
+              </div>
+            </div>
+            <p className="dh-form-note dh-slip-numbers-total">
+              รวมเป็น{' '}
+              <b>
+                {(() => {
+                  const q = parseAmount(slipQuantityInput);
+                  const p = parseAmount(slipPriceInput);
+                  return q > 0 && p > 0
+                    ? `${(Math.round(q * p * 100) / 100).toLocaleString('th-TH')} ${currency}`
+                    : '—';
+                })()}
+              </b>{' '}
+              · ใช้ราคาจากสลิป ไม่ใช่ราคาตลาดวันนี้ (ล้างช่องใดช่องหนึ่งเพื่อกลับไปใช้จำนวนเงินด้านบน)
+            </p>
+          </div>
         )}
 
         {/* ช่องรายละเอียดยังต้องมีที่กรอกได้เสมอแม้เป็นหุ้นไทย (ราคา/หน่วยแทนที่ตำแหน่ง

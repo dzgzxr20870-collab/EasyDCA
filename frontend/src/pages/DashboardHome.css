@@ -177,6 +177,11 @@ label.dh-fl .dh-fl-opt { color: var(--muted); font-weight: 500; }
 .dh-scan-btn:hover { filter: brightness(1.05); }
 .dh-scan-btn-busy { opacity: .7; cursor: progress; }
 .dh-ocr-notice { border-left: 3px solid var(--green); padding-left: 10px; }
+/* ตัวเลขจากสลิปที่จะถูกบันทึกจริง — เน้นให้เห็นชัดว่าคนละชุดกับ "จำนวนเงิน" ด้านบน
+   (ผู้ใช้ต้องเห็นตัวเลขที่กำลังจะลง Ledger ก่อนกดบันทึก ไม่ใช่ค่าซ่อน) */
+.dh-slip-numbers { border: 1.5px solid var(--green); border-radius: 12px; padding: 12px 14px; background: var(--green-soft2); display: flex; flex-direction: column; gap: 10px; }
+.dh-slip-numbers-title { font-size: 12.5px; font-weight: 700; color: var(--green-ink); margin: 0; }
+.dh-slip-numbers-total { margin: 0; }
 /* AI อ่านทิศทาง (ซื้อ/ขาย) ไม่ได้ → ไฮไลต์ปุ่มเลือกโหมดให้เห็นชัดว่ายังต้องเลือกเอง
    ระบบไม่เดาให้ (เคส BCPG — ดู lib/slipOcrPrefill.js) ข้อความเตือนอย่างเดียวไม่พอ
    เพราะผู้ใช้ที่สแกนแล้วกดบันทึกเร็วๆ มักไม่ทันอ่าน */
