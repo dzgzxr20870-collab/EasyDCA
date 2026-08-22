@@ -3567,14 +3567,31 @@ function buildOcrManualQuantityMessage(prefillText) {
 
 // อ่านสลิปเป็นฟีเจอร์ Premium — ตอบเมื่อผู้ใช้ที่ไม่ใช่ Premium ส่งรูป (ไม่มีคำขอชำระเงิน
 // ค้าง) พร้อม CTA อัพเกรด (Reuse ปุ่มแพ็กเกจเดิม premiumPeriodButtons)
-function buildOcrPremiumRequiredMessage() {
+// reason: undefined = ยังไม่เคยได้สิทธิ์ทดลอง (ข้อความเดิม) — Backward Compatible
+//         'TRIAL_EXHAUSTED'  = ใช้สิทธิ์ทดลองฟรีครบ 3 ครั้งแล้ว
+//         'TRIAL_CALL_LIMIT' = ชนเพดานคุมต้นทุนของผู้ใช้ Free (ส่งรูปที่อ่านไม่ออกซ้ำๆ)
+function buildOcrPremiumRequiredMessage(reason) {
+  // ⚠️ จงใจไม่ใส่ตัวเลขโควตาทดลองในข้อความนี้ เพื่อไม่ให้ View Layer ต้อง import
+  // slipOcrAccess.service (ซึ่งลากสาย repository → config/supabase ที่มี Side Effect
+  // เข้ามาในไฟล์ที่ตอนนี้ import แค่ thaiDate.util) — จำนวนครั้งที่เหลือถูกบอกผู้ใช้
+  // ตั้งแต่การ์ด Preview ทุกใบระหว่างที่ยังทดลองอยู่แล้ว (ดู buildOcrPreviewMessage)
+  const isTrialEnded = reason === 'TRIAL_EXHAUSTED' || reason === 'TRIAL_CALL_LIMIT';
+  const headline = isTrialEnded
+    ? 'ใช้สิทธิ์ทดลองอ่านสลิปด้วย AI ครบแล้ว'
+    : 'อ่านสลิปด้วย AI เป็นฟีเจอร์สมาชิก Premium 👑';
+
+  const detail =
+    reason === 'TRIAL_CALL_LIMIT'
+      ? 'อัพเกรดเป็น Premium เพื่อส่งรูปสลิปให้ระบบอ่านและกรอกรายการซื้อ/ขายให้อัตโนมัติ (รวมถึงรูปที่อ่านไม่ออกและต้องส่งใหม่)'
+      : 'อัพเกรดเป็น Premium เพื่อส่งรูปสลิปให้ระบบอ่านและกรอกรายการซื้อ/ขายให้อัตโนมัติ';
+
   const body = [
-    textLine('อ่านสลิปด้วย AI เป็นฟีเจอร์สมาชิก Premium 👑', {
+    textLine(headline, {
       size: 'md',
       weight: 'bold',
       color: COLOR.textPrimary,
     }),
-    textLine('อัพเกรดเป็น Premium เพื่อส่งรูปสลิปให้ระบบอ่านและกรอกรายการซื้อ/ขายให้อัตโนมัติ', {
+    textLine(detail, {
       size: 'sm',
       color: COLOR.textSecondary,
     }),
@@ -3673,6 +3690,80 @@ function buildOcrErrorMessage(code) {
   });
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// ถามหาสลิปหลังบันทึกรายการที่ผู้ใช้ "พิมพ์เอง" (transactionSlipSession)
+// ═══════════════════════════════════════════════════════════════════════
+// ⚠️ ข้อความในกลุ่มนี้ "ห้ามอ้างเรื่องภาษี" เด็ดขาด (คำสั่งชัดเจนของงานนี้):
+// ห้ามเขียนทำนอง "เก็บไว้ยื่นภาษี" / "ใช้ลดหย่อนภาษีได้" เพราะเท่ากับระบบรับรองว่า
+// สลิปนี้ใช้กับภาษีได้จริง ซึ่งเราไม่อยู่ในฐานะรับประกัน และสุ่มเสี่ยงเข้าข่ายให้
+// คำแนะนำด้านภาษี — ใช้สำนวนกลางๆ "เป็นหลักฐาน เผื่อต้องใช้ภายหลัง" ซึ่งสื่อประโยชน์
+// เหมือนกันแต่ไม่สัญญาแทนผู้ใช้ (ยึดแนวเดียวกับ Disclaimer เดิมของระบบที่ย้ำว่า
+// EasyDCA เป็นผู้ช่วยบันทึก ไม่ใช่ที่ปรึกษา)
+function buildSlipAttachPromptMessage() {
+  return bubble({
+    headerText: '📎 แนบสลิปไว้ด้วยไหม',
+    headerColor: COLOR.info,
+    headerBg: COLOR.infoBg,
+    bodyContents: [
+      textLine('ส่งรูปสลิปของรายการนี้เข้ามาได้เลย ระบบจะเก็บแนบไว้กับรายการเป็นหลักฐาน เผื่อต้องใช้ภายหลัง', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+      separator(),
+      textLine('ถ้าไม่แนบก็ข้ามได้เลย ไม่ต้องทำอะไรเพิ่ม (คำขอนี้จะหมดอายุเองใน 10 นาที)', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
+}
+
+function buildSlipAttachedMessage() {
+  return bubble({
+    headerText: '✅ แนบสลิปเรียบร้อย',
+    headerColor: COLOR.profit,
+    headerBg: COLOR.profitBg,
+    bodyContents: [
+      textLine('เก็บรูปสลิปไว้กับรายการนี้แล้ว เปิดดูย้อนหลังได้ที่หน้าเว็บ Dashboard → ประวัติรายการ', {
+        size: 'sm',
+        color: COLOR.textPrimary,
+      }),
+    ],
+  });
+}
+
+// code มาจาก StorageServiceError (INVALID_SLIP_CONTENT_TYPE / SLIP_TOO_LARGE) หรือ
+// undefined เมื่อเป็นความล้มเหลวอื่น — ย้ำเสมอว่า "ธุรกรรมบันทึกสำเร็จแล้ว" เพราะ
+// เส้นทางนี้เกิดหลัง Commit เท่านั้น ผู้ใช้ต้องไม่เข้าใจผิดว่ารายการหายไปด้วย
+const SLIP_ATTACH_FAILED_DETAIL = {
+  INVALID_SLIP_CONTENT_TYPE: 'ไฟล์ต้องเป็นรูปภาพ (JPG, PNG, WebP หรือ GIF) เท่านั้น',
+  SLIP_TOO_LARGE: 'ไฟล์รูปใหญ่เกินไป (สูงสุด 10 MB)',
+};
+
+function buildSlipAttachFailedMessage(code) {
+  const detail =
+    SLIP_ATTACH_FAILED_DETAIL[code] ?? 'แนบรูปไม่สำเร็จในขณะนี้ กรุณาลองใหม่ภายหลัง';
+
+  return bubble({
+    headerText: '⚠️ แนบสลิปไม่สำเร็จ',
+    headerColor: COLOR.warning,
+    headerBg: COLOR.warningBg,
+    bodyContents: [
+      textLine('รายการของคุณถูกบันทึกเรียบร้อยแล้ว — ไม่ได้หายไปไหน', {
+        size: 'sm',
+        weight: 'bold',
+        color: COLOR.textPrimary,
+      }),
+      textLine(detail, { size: 'sm', color: COLOR.textSecondary }),
+      separator(),
+      textLine('แนบสลิปย้อนหลังได้ที่หน้าเว็บ Dashboard → ประวัติรายการ', {
+        size: 'xs',
+        color: COLOR.textSecondary,
+      }),
+    ],
+  });
+}
+
 module.exports = {
   ERROR_MESSAGES,
   buildOcrPreviewMessage,
@@ -3680,6 +3771,9 @@ module.exports = {
   buildOcrManualQuantityMessage,
   buildOcrSideRequiredMessage,
   buildOcrPremiumRequiredMessage,
+  buildSlipAttachPromptMessage,
+  buildSlipAttachedMessage,
+  buildSlipAttachFailedMessage,
   buildOcrErrorMessage,
   buildExportFormatQuickReply,
   buildReportReadyMessage,

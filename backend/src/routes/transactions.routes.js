@@ -26,6 +26,12 @@ router.post('/', transactionsController.createTransaction);
 // Immutable Ledger ไม่มี DELETE by id และ Service หารายการล่าสุดจาก userId เอง)
 router.post('/undo-last', transactionsController.undoLast);
 
+// ให้ AI อ่านสลิปแล้วคืนค่าที่อ่านได้ (ยังไม่บันทึกลง Ledger — ผู้ใช้ต้องตรวจ+ยืนยันก่อน)
+// Premium หรือผู้ใช้ Free ที่ยังเหลือสิทธิ์ทดลอง (Gate ตรวจใน Controller ผ่าน
+// slipOcrAccess ตัวเดียวกับฝั่ง LINE) — ต้องมาก่อน '/:id/slip' ไม่ได้ เพราะ Path
+// คนละรูปแบบกัน (ไม่มี Param ชนกัน) แต่วางไว้ติดกันเพื่อให้อ่านง่าย
+router.post('/slip-ocr', rawSlipBody, transactionsController.scanSlipWithAi);
+
 // แนบรูปสลิปหลักฐานให้รายการที่บันทึกแล้ว (Premium — Gate ตรวจใน Controller)
 // rawSlipBody ต้องมาก่อน Controller เพื่อแปลง Body เป็น Buffer (มิเรอร์ payment.routes)
 router.post('/:id/slip', rawSlipBody, transactionsController.uploadTransactionSlip);

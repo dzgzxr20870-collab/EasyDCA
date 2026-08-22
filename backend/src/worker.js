@@ -30,6 +30,9 @@ const { schedulePurgeStaleSetupSessions } = require('./jobs/reminderSetupCleanup
 const { schedulePurgeStaleBulkImportSessions } = require('./jobs/bulkImportCleanup.job');
 const { schedulePurgeStaleGuidedBuySessions } = require('./jobs/guidedBuyCleanup.job');
 const {
+  schedulePurgeStaleTransactionSlipSessions,
+} = require('./jobs/transactionSlipSessionCleanup.job');
+const {
   scheduleWeeklySummaryPush,
   scheduleMonthlySummaryPush,
 } = require('./jobs/portfolioSummary.job');
@@ -61,6 +64,9 @@ function scheduleAllJobs() {
     // Purge Guided Buy Session ที่หมดอายุค้าง ตี 3 (guidedBuyCleanup.job.js — S8 R2
     // รอบ 2) — Pending ที่ Flow นี้สร้างถูก Cron pendingCleanup.job.js Cover ให้แล้ว
     purgeStaleGuidedBuySessions: schedulePurgeStaleGuidedBuySessions(),
+    // Purge Session "รอรูปสลิป" ที่หมดอายุค้าง ตี 3 (transactionSlipSessionCleanup.job.js)
+    // — TTL ถูกบังคับที่ชั้นอ่านอยู่แล้ว Cron นี้เก็บกวาดแถวตายเท่านั้น
+    purgeStaleTransactionSlipSessions: schedulePurgeStaleTransactionSlipSessions(),
     // Push สรุปพอร์ตรายสัปดาห์ (อาทิตย์ 08:00) และรายเดือน (วันที่ 1 08:00)
     // Asia/Bangkok (portfolioSummary.job.js)
     weeklySummaryPush: scheduleWeeklySummaryPush(),

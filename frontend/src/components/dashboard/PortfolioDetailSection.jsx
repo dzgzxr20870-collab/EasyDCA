@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
-import { apiDownload, apiGet } from '../../lib/api.js';
-import { formatTransactionNote } from '../../lib/transactionNote.js';
+import { apiDownload, apiGet, apiUpload } from '../../lib/api.js';
+import { formatTransactionNote, isReversalNote } from '../../lib/transactionNote.js';
+import { slipUploadErrorMessage } from '../../lib/dcaErrors.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PortfolioDetailSection — ฟีเจอร์ที่ย้ายมาจาก Dashboard.jsx เดิม (S8 R3 รอบ 2)
@@ -52,7 +53,10 @@ function formatMoneyCur(value, currency, decimals) {
 //     หน้าใหม่หลัก — ไม่บล็อกฟอร์มบันทึก DCA/สถิติด้านบนที่ไม่พึ่งข้อมูลชุดนี้เลย)
 //   activeTab / onTabChange: Lift State ขึ้นไปที่ DashboardHome เพื่อให้ Sidebar/
 //     Bottom-nav "พอร์ตของฉัน"/"ประวัติรายการ" สลับแท็บ + Scroll มาที่นี่ได้พร้อมกัน
-function PortfolioDetailSection({ portfolio, profitBySymbol, transactions, loadError, activeTab, onTabChange, onUpgrade }) {
+//   isPremiumActive: ใช้ตัดสินว่าจะโชว์ปุ่ม "แนบสลิป" ในตารางประวัติไหม (งานที่ 2.1)
+//     — เป็นแค่ UX Gate เท่านั้น Security Boundary จริงอยู่ที่ Backend ซึ่งเช็ค
+//     entitlement.isPremiumActive เองอีกชั้นเสมอ (transactions.controller)
+function PortfolioDetailSection({ portfolio, profitBySymbol, transactions, loadError, activeTab, onTabChange, onUpgrade, isPremiumActive = false }) {
   const [symbolFilter, setSymbolFilter] = useState('all');
 
   // Export (Round 8 เดิม) + Preview ก่อนยืนยัน (Requirement ใหม่รอบนี้)
@@ -91,6 +95,36 @@ function PortfolioDetailSection({ portfolio, profitBySymbol, transactions, loadE
       );
     } finally {
       setSlipLoadingId(null);
+    }
+  }
+
+  // ── แนบสลิปเข้ารายการที่บันทึกไปแล้ว (งานที่ 2.1) ─────────────────────────
+  // เรียก POST /api/v1/transactions/:id/slip ที่ "มีอยู่แล้ว" ตั้งแต่ S8 (Premium Gate +
+  // Ownership + บล็อกแถว Reversal + Compensating Delete ครบในตัว) — รอบนี้จึงเป็นงาน
+  // ฝั่ง UI ล้วน ไม่แตะ Backend เลยแม้แต่บรรทัดเดียว
+  //
+  // ⚠️ ไม่แตะพฤติกรรม "ดูสลิป" เดิม (openSlip ด้านบน) — รายการที่มีสลิปอยู่แล้วยังคง
+  // แสดงปุ่มดูเหมือนเดิมทุกประการ ปุ่มแนบจะโผล่เฉพาะแถวที่ยังไม่มีสลิปเท่านั้น
+  // (Backend เองก็ Reject SLIP_ALREADY_ATTACHED อยู่แล้ว — UI แค่ไม่ล่อให้กด)
+  const [attachingId, setAttachingId] = useState(null);
+  const [attachError, setAttachError] = useState(null);
+  // เก็บ id ที่แนบสำเร็จในรอบนี้ไว้ใน State — transactions เป็น Props ที่ Parent Fetch
+  // มาตอนโหลดหน้า การแนบสำเร็จจึงไม่ทำให้ hasSlip ใน Props เปลี่ยนเองจนกว่าจะรีเฟรช
+  // (ไม่บังคับ Parent Refetch ทั้งชุด เพราะ /history?limit=1000 หนักเกินไปสำหรับการ
+  // อัปเดตแถวเดียว — Optimistic ที่ระดับแถวพอ)
+  const [justAttachedIds, setJustAttachedIds] = useState(() => new Set());
+
+  async function handleAttachSlip(txId, file) {
+    if (!file) return;
+    setAttachError(null);
+    setAttachingId(txId);
+    try {
+      await apiUpload(`/api/v1/transactions/${txId}/slip`, file);
+      setJustAttachedIds((prev) => new Set(prev).add(txId));
+    } catch (err) {
+      setAttachError(`แนบสลิปไม่สำเร็จ: ${slipUploadErrorMessage(err.message)}`);
+    } finally {
+      setAttachingId(null);
     }
   }
 
@@ -285,6 +319,9 @@ function PortfolioDetailSection({ portfolio, profitBySymbol, transactions, loadE
                 </select>
               </div>
 
+              {/* ผลการแนบสลิป (งานที่ 2.1) — วางเหนือตารางให้เห็นชัด ไม่ซ่อนในแถว */}
+              {attachError && <p className="dh-modal-error">{attachError}</p>}
+
               {filteredTransactions.length === 0 ? (
                 <p className="dh-empty-msg">ยังไม่มีประวัติธุรกรรม</p>
               ) : (
@@ -314,10 +351,12 @@ function PortfolioDetailSection({ portfolio, profitBySymbol, transactions, loadE
                           <td>{formatNumber(tx.quantity, 8)}</td>
                           <td>{tx.date}</td>
                           <td>{formatTransactionNote(tx.note) ?? '-'}</td>
-                          {/* สลิป (S8) — มีลิงก์เฉพาะรายการที่บันทึกจากรูปสลิป (hasSlip)
-                              รายการที่พิมพ์เอง/นำเข้าเป็น '-' เหมือนคอลัมน์อื่น */}
+                          {/* สลิป (S8) — รายการที่มีสลิปแล้ว (hasSlip หรือเพิ่งแนบสำเร็จ
+                              ในรอบนี้) แสดงปุ่มดูเหมือนเดิมทุกประการ
+                              รายการที่ยังไม่มีสลิป: Premium เห็นปุ่ม "แนบสลิป" (งานที่ 2.1)
+                              — ผู้ใช้ Free เห็น '-' เหมือนเดิม ไม่ล่อให้กดแล้วโดนปฏิเสธ */}
                           <td>
-                            {tx.hasSlip ? (
+                            {tx.hasSlip || justAttachedIds.has(tx.id) ? (
                               <button
                                 type="button"
                                 className="dh-link-btn"
@@ -326,6 +365,25 @@ function PortfolioDetailSection({ portfolio, profitBySymbol, transactions, loadE
                               >
                                 {slipLoadingId === tx.id ? 'กำลังเปิด…' : '🧾 ดูสลิป'}
                               </button>
+                            ) : isPremiumActive && !isReversalNote(tx.note) ? (
+                              <label className="dh-slip-attach-cell">
+                                <input
+                                  type="file"
+                                  accept="image/jpeg,image/png,image/webp,image/gif"
+                                  hidden
+                                  disabled={attachingId === tx.id}
+                                  onChange={(e) => {
+                                    const file = e.target.files?.[0] ?? null;
+                                    // Reset input ทันที เพื่อให้เลือก "ไฟล์เดิม" ซ้ำได้
+                                    // หลังแนบพลาด (onChange ไม่ยิงถ้าค่าเดิมไม่เปลี่ยน)
+                                    e.target.value = '';
+                                    handleAttachSlip(tx.id, file);
+                                  }}
+                                />
+                                <span className="dh-link-btn">
+                                  {attachingId === tx.id ? 'กำลังแนบ…' : '📎 แนบสลิป'}
+                                </span>
+                              </label>
                             ) : (
                               '-'
                             )}

@@ -2,7 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import AssetPicker from './AssetPicker.jsx';
 import { apiPost, apiUpload } from '../../lib/api.js';
-import { transactionErrorMessage, slipUploadErrorMessage } from '../../lib/dcaErrors.js';
+import {
+  transactionErrorMessage,
+  slipUploadErrorMessage,
+  slipOcrErrorMessage,
+  isSlipOcrUpgradeError,
+} from '../../lib/dcaErrors.js';
+import { buildOcrPrefill } from '../../lib/slipOcrPrefill.js';
 import { todayBangkokIso } from '../../lib/dateBangkok.js';
 import { resolvePrefillState } from '../../lib/dcaPlanPrefill.js';
 import { buildSellPayload, findHolding, formatUnits } from '../../lib/sellForm.js';
@@ -107,6 +113,25 @@ function DcaForm({
   const [slipPreviewUrl, setSlipPreviewUrl] = useState(null);
   const [slipNotice, setSlipNotice] = useState(null);
 
+  // ── AI อ่านสลิป (งานที่ 2.2) ───────────────────────────────────────────────
+  // Flow: เลือกรูป → POST /transactions/slip-ocr → Prefill ฟอร์มด้วยค่าที่อ่านได้ →
+  // ผู้ใช้ "ตรวจ + แก้ไขได้" → กดปุ่มบันทึกเดิม → POST /transactions พร้อม slipToken
+  //
+  // ⚠️ ห้ามบันทึกลง Ledger ทันทีหลัง AI อ่านเสร็จเด็ดขาด (Requirement) — Endpoint
+  // /slip-ocr ไม่สร้างธุรกรรมอยู่แล้ว และหน้านี้แค่ "เติมค่าในฟอร์ม" ให้ผู้ใช้ยืนยันเอง
+  // (Pattern เดียวกับการ์ด Preview ใน LINE)
+  //
+  // ocrSlipToken: รูปที่ถูกอัปโหลดไว้แล้วตอนอ่าน (Premium เท่านั้น — ผู้ใช้ทดลองฟรี
+  // ได้ null) ส่งไปกับ Payload ตอนยืนยันเพื่อให้ Backend แนบเข้ารายการที่เพิ่งสร้าง
+  const [ocrScanning, setOcrScanning] = useState(false);
+  const [ocrError, setOcrError] = useState(null);
+  const [ocrUpgrade, setOcrUpgrade] = useState(false);
+  const [ocrSlipToken, setOcrSlipToken] = useState(null);
+  const [ocrNotice, setOcrNotice] = useState(null);
+  // true = AI อ่านทิศทาง (ซื้อ/ขาย) ไม่ได้ → ไฮไลต์ปุ่มเลือกโหมดให้ผู้ใช้เห็นชัด
+  // ว่ายังต้องเลือกเอง (ระบบไม่เดาให้ — ดู lib/slipOcrPrefill.js)
+  const [ocrSideUnresolved, setOcrSideUnresolved] = useState(false);
+
   // Revoke Object URL ล่าสุด "ตอน Unmount เท่านั้น" (กัน Memory leak) — ใช้ ref กัน
   // ไม่ให้ revoke ทุกครั้งที่ URL เปลี่ยน (การเปลี่ยน/ลบ revoke เองอยู่แล้วในแต่ละ Handler)
   const slipPreviewRef = useRef(null);
@@ -188,6 +213,9 @@ function DcaForm({
     // สลิปเป็นของฝั่งซื้อ (แนบเป็นหลักฐานตอน DCA) — ล้างไฟล์ที่ค้างไว้ด้วย
     clearSlip();
     setSlipNotice(null);
+    // ⚠️ ต้องล้าง token ของสลิปที่ AI อ่านไว้ด้วย: ผู้ใช้สลับโหมดเอง = ตั้งใจเริ่มรายการ
+    // ใหม่ ถ้าปล่อย token ค้าง รูปสลิปใบเดิมจะถูกแนบเข้ารายการใหม่ที่คนละใบกัน
+    clearOcrState();
   }
 
   // ล้างสลิปที่เลือกไว้ + revoke Preview URL (เรียกทั้งตอนกด "ลบรูป" และหลังบันทึกสำเร็จ)
@@ -238,6 +266,18 @@ function DcaForm({
     setNote('');
     setDate(todayBangkokIso());
     clearSlip();
+    clearOcrState();
+  }
+
+  // ล้างสถานะ AI อ่านสลิป — ⚠️ ต้องล้าง ocrSlipToken ทุกครั้งที่ฟอร์มถูก Reset/สลับโหมด
+  // ไม่งั้น token ของสลิปใบเก่าจะค้างไปแนบเข้ารายการ "ใบถัดไป" ที่ไม่เกี่ยวข้องกันเลย
+  // (หลักฐานผิดรายการ = ร้ายแรงกว่าไม่มีหลักฐาน)
+  function clearOcrState() {
+    setOcrSlipToken(null);
+    setOcrError(null);
+    setOcrUpgrade(false);
+    setOcrNotice(null);
+    setOcrSideUnresolved(false);
   }
 
   // ── บันทึกการขาย ──────────────────────────────────────────────────────────
@@ -323,6 +363,10 @@ function DcaForm({
       date,
       ...(note.trim() ? { note: note.trim() } : {}),
       ...(needsManualPrice ? { pricePerUnit: priceValue } : {}),
+      // AI อ่านสลิป (งานที่ 2.2) — รูปถูกอัปโหลดไว้แล้วตอนอ่าน Backend จะแนบเข้า
+      // รายการที่เพิ่งสร้างให้เอง (Fail Isolated ฝั่ง Backend) จึง "ไม่" ต้องอัปโหลดซ้ำ
+      // ผ่าน apiUpload ด้านล่าง — ดู ocrSlipToken ใน Guard ของ slipFile
+      ...(ocrSlipToken ? { slipToken: ocrSlipToken } : {}),
     };
 
     setSubmitting(true);
@@ -334,8 +378,13 @@ function DcaForm({
       // แล้ว (Endpoint รับ transaction id) — Best-effort: ธุรกรรม "บันทึกสำเร็จแล้วจริง"
       // ต่อให้แนบรูปพลาด ต้องไม่ทำให้ผู้ใช้เข้าใจว่าบันทึก DCA ไม่สำเร็จ → ไม่ throw
       // แค่แสดง Warning แยก (รายการยังอยู่ครบ แค่ไม่มีรูปแนบ) Backend Gate Premium ซ้ำเอง
+      // ⚠️ ข้ามการอัปโหลดซ้ำเมื่อรายการนี้มาจาก AI อ่านสลิป — รูปใบนั้นถูกอัปโหลดและ
+      // แนบโดย Backend ไปแล้ว (slipToken ใน Payload) ถ้ายิงซ้ำจะได้ SLIP_ALREADY_ATTACHED
+      // แล้วขึ้น Warning หลอกว่า "แนบไม่สำเร็จ" ทั้งที่แนบไปแล้วเรียบร้อย
       let slipWarning = null;
-      if (slipFile && isPremiumActive) {
+      if (ocrSlipToken) {
+        // ไม่ทำอะไร — Backend แนบให้แล้ว
+      } else if (slipFile && isPremiumActive) {
         try {
           await apiUpload(`/api/v1/transactions/${response.transaction.id}/slip`, slipFile);
         } catch (err) {
@@ -362,6 +411,105 @@ function DcaForm({
     }
   }
 
+  // ── ให้ AI อ่านสลิปแล้ว Prefill ฟอร์ม (งานที่ 2.2) ─────────────────────────
+  async function handleScanSlip(file) {
+    if (!file) return;
+    setOcrError(null);
+    setOcrUpgrade(false);
+    setOcrNotice(null);
+    setFormError(null);
+    setOcrScanning(true);
+
+    try {
+      const result = await apiUpload('/api/v1/transactions/slip-ocr', file);
+      const { slip, slipToken, quota } = result;
+
+      // ⚠️ คำสั่งที่ "ยังไม่เกิดขึ้นจริง" (Limit Order รอจับคู่/ถูกยกเลิก) ห้าม Prefill
+      // ให้กดบันทึกง่ายๆ — เหตุผลเดียวกับที่การ์ด Preview ฝั่ง LINE ตัดปุ่มยืนยันออก
+      // (slipOcr.service.isUnfilledStatus): Ledger ต้องไม่มีรายการที่ไม่เคยเกิดขึ้น
+      if (slip.orderStatus === 'pending' || slip.orderStatus === 'cancelled') {
+        setOcrError(
+          slip.orderStatus === 'pending'
+            ? 'สลิปนี้เป็นคำสั่งที่ "ยังไม่สำเร็จ" (รอจับคู่/รอดำเนินการ) จึงยังไม่บันทึกให้อัตโนมัติ — ถ้าคำสั่งจับคู่แล้ว กรุณากรอกรายการเอง'
+            : 'สลิปนี้เป็นคำสั่งที่ถูกยกเลิก/ไม่สำเร็จ จึงไม่บันทึกเป็นรายการให้'
+        );
+        return;
+      }
+
+      // Symbol ต้องมีอยู่ใน Registry ที่หน้านี้รู้จัก ไม่งั้น AssetPicker เลือกไม่ได้
+      const matched = symbols.find((s) => s.symbol === slip.symbol) ?? null;
+      if (!matched) {
+        setOcrError(
+          `อ่านสลิปได้ว่าเป็น "${slip.symbol}" แต่ระบบยังไม่รองรับสินทรัพย์นี้ กรุณาเลือกสินทรัพย์เองแล้วกรอกรายการต่อ`
+        );
+        return;
+      }
+
+      // ── Prefill ── ทุกค่าที่เติมยัง "แก้ไขได้ทั้งหมด" ผู้ใช้ต้องกดบันทึกเองอยู่ดี
+      // ตรรกะว่า "เติมอะไรได้บ้าง" อยู่ใน lib/slipOcrPrefill.js (Pure + มี Test คลุม)
+      // — ที่นี่ทำหน้าที่ Apply ผลลัพธ์ลง State เท่านั้น ไม่ตัดสินใจอะไรเอง
+      const prefill = buildOcrPrefill(slip);
+
+      setPicked(matched);
+      setSelectedChip(null);
+      if (prefill.date) setDate(prefill.date);
+
+      // ⚠️ ล้างช่องที่ผูกกับทิศทางก่อนเติมใหม่เสมอ — กันค่าจากสลิป "ใบก่อนหน้า"
+      // ค้างอยู่แล้วดูเหมือนเป็นค่าของใบนี้ (สแกนใบที่ 2 ทับใบที่ 1) ซึ่งอันตราย
+      // ที่สุดตอน side ไม่ชัด เพราะเราจะไม่เติมทับให้เลย
+      setAmountInput('');
+      setPricePerUnit('');
+      setSellQuantity('');
+      setSellPrice('');
+      setCurrency('THB');
+
+      // ⚠️ setSide เฉพาะตอนที่ "รู้ทิศทางจริง" เท่านั้น — side = null (อ่านไม่ออก/
+      // สัญญาณขัดกัน) ต้องปล่อยฟอร์มไว้ตามที่ผู้ใช้เปิดมา ห้ามเดาให้เด็ดขาด
+      // (ดูเหตุผลเต็ม + เคส BCPG ใน lib/slipOcrPrefill.js)
+      if (prefill.side) setSide(prefill.side);
+      if (prefill.currency) setCurrency(prefill.currency);
+      if (prefill.amountInput) setAmountInput(prefill.amountInput);
+      if (prefill.pricePerUnit) setPricePerUnit(prefill.pricePerUnit);
+      if (prefill.sellQuantity) setSellQuantity(prefill.sellQuantity);
+      if (prefill.sellPrice) setSellPrice(prefill.sellPrice);
+
+      // ไฮไลต์ปุ่มซื้อ/ขายให้เห็นชัดว่า "ยังต้องเลือกเอง" (ข้อความเตือนอย่างเดียว
+      // ผู้ใช้ที่กดเร็วๆ มักไม่ทันอ่าน — นี่คือช่องที่ทำให้บั๊ก BCPG หลุดมาได้)
+      setOcrSideUnresolved(prefill.sideUnresolved);
+
+      setOcrSlipToken(slipToken ?? null);
+
+      // ⚠️ ทิศทางอ่านไม่ชัด = ต้องเตือนให้ผู้ใช้เลือกเอง ห้ามเดา (เคส BCPG: สลิป "ขาย"
+      // เคยถูกบันทึกเป็น "ซื้อ" มาแล้ว — เป็นบั๊กที่กระทบ P&L/จำนวนหน่วยโดยตรง)
+      const parts = [];
+      if (prefill.sideUnresolved) {
+        // ข้อความต้องตรงกับพฤติกรรมจริง: ระบบ "ไม่ได้เลือกให้" และ "ไม่ได้กรอกตัวเลข"
+        // (เดิมเขียนว่า "กรุณาเลือกเองให้ถูกต้อง" ทั้งที่โค้ดเลือก buy ให้ไปแล้ว —
+        // ข้อความกับพฤติกรรมขัดกันเอง ทำให้ผู้ใช้เข้าใจผิดว่าที่เห็นคือค่าจากสลิป)
+        parts.push(
+          '⚠️ อ่านทิศทางรายการ (ซื้อ/ขาย) จากสลิปไม่ได้ — ระบบจึงยังไม่เลือกโหมดและไม่กรอกจำนวนให้ กรุณาเลือกซื้อ/ขายเอง แล้วกรอกจำนวนจากสลิป'
+        );
+      }
+      if (slip.confidence === 'low') {
+        parts.push('ความมั่นใจในการอ่านต่ำ กรุณาตรวจตัวเลขทุกช่องก่อนกดบันทึก');
+      }
+      parts.push(
+        quota?.mode === 'trial'
+          ? `ทดลองใช้ฟรี — เหลืออีก ${quota.remaining} ครั้ง`
+          : `โควตาอ่านสลิปเดือนนี้เหลือ ${quota?.remaining ?? '-'} ครั้ง`
+      );
+      if (quota?.mode === 'trial') {
+        parts.push('(การเก็บรูปสลิปเป็นหลักฐานเป็นสิทธิ์ของสมาชิก Premium)');
+      }
+      setOcrNotice(parts.join(' · '));
+    } catch (err) {
+      setOcrError(slipOcrErrorMessage(err.message));
+      setOcrUpgrade(isSlipOcrUpgradeError(err.message));
+    } finally {
+      setOcrScanning(false);
+    }
+  }
+
   // โหมดขายที่ยังไม่มีอะไรให้ขาย — บอกตรงๆ ดีกว่าปล่อยให้เปิด Picker แล้วเจอ
   // "ไม่พบรายการ" (ข้อความของ Picker ชวนให้แจ้งทีมงานเพิ่มสินทรัพย์ ซึ่งไม่ใช่ปัญหานี้)
   const sellEmpty = isSell && holdings.length === 0;
@@ -369,10 +517,53 @@ function DcaForm({
   return (
     <div className={`dh-dca-grid${confirmed ? '' : ' dh-dca-grid-full'}`}>
       <form className="dh-dca-form" autoComplete="off" onSubmit={handleSubmit}>
+        {/* ── ทางเลือกการกรอก: กรอกเอง หรือ ให้ AI อ่านสลิป (งานที่ 2.2) ──────────
+            วางไว้บนสุดของฟอร์มโดยเจตนา — Requirement ระบุว่าต้อง "เด่นและใช้ง่าย
+            ระดับเดียวกับปุ่มบันทึก" และผู้ใช้ต้องเห็นทางเลือกก่อนเริ่มกรอก ไม่ใช่
+            หลังกรอกไปครึ่งฟอร์มแล้ว
+            ไม่ใช่ Toggle โหมด: กดแล้วเปิดหน้าต่างเลือกไฟล์ทันที (Action ไม่ใช่ State)
+            ฟอร์มด้านล่างยังเป็นตัวเดิมเสมอ — AI แค่ "เติมค่าให้" แล้วผู้ใช้ตรวจ/แก้/ยืนยันเอง */}
+        <div className="dh-entry-choice">
+          <span className="dh-entry-choice-lbl">กรอกเอง หรือ</span>
+          <label className={`dh-scan-btn${ocrScanning ? ' dh-scan-btn-busy' : ''}`}>
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/gif"
+              hidden
+              disabled={ocrScanning || submitting}
+              onChange={(e) => {
+                const file = e.target.files?.[0] ?? null;
+                // Reset ทันทีเพื่อให้เลือกไฟล์เดิมซ้ำได้หลังอ่านพลาด
+                e.target.value = '';
+                handleScanSlip(file);
+              }}
+            />
+            {ocrScanning ? '🤖 กำลังอ่านสลิป…' : '📷 อัปโหลดสลิปให้ AI อ่าน'}
+          </label>
+        </div>
+
+        {ocrError && (
+          <div className="dh-form-error">
+            {ocrError}
+            {ocrUpgrade && (
+              <div style={{ marginTop: 8 }}>
+                <button type="button" className="dh-btn-main" onClick={handleUpgrade}>
+                  👑 อัพเกรด Premium
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+        {ocrNotice && <div className="dh-form-note dh-ocr-notice">🤖 {ocrNotice}</div>}
+
         {/* ── Toggle ซื้อ/ขาย ─────────────────────────────────────────────────
             role="tablist" + aria-selected เพื่อให้ Screen Reader รู้ว่าเป็นการสลับ
             "โหมดของฟอร์มเดียวกัน" ไม่ใช่ปุ่มสั่งงาน 2 ปุ่มที่กดแล้วบันทึกทันที */}
-        <div className="dh-side-toggle" role="tablist" aria-label="เลือกประเภทรายการ">
+        <div
+          className={`dh-side-toggle${ocrSideUnresolved ? ' dh-side-toggle-attention' : ''}`}
+          role="tablist"
+          aria-label="เลือกประเภทรายการ"
+        >
           <button
             type="button"
             role="tab"

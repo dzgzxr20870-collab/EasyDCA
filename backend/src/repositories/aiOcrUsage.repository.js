@@ -56,8 +56,38 @@ async function incrementCallCount(userId, yearMonth) {
   return data; // call_count ใหม่ (Number)
 }
 
+// ยอดใช้งาน "ตลอดอายุบัญชี" (รวมทุกเดือน) ของ user — คืน { count, callCount }
+//
+// ⚠️ จงใจ SUM จากตาราง ai_ocr_usage เดิมทั้งสองคอลัมน์ ไม่สร้างตัวนับใหม่แยก
+// (Requirement ชัดเจน: "ต้องนับจากโควตาชุดเดียวกับระบบเดิม") — ตัวนับใหม่จะ Drift
+// จากของเดิมทันทีที่มีเส้นทางไหนลืมเรียก และทำให้ "ใช้ทางเว็บแล้วโควตา LINE ไม่ลด"
+// ซึ่งเป็นช่องให้ใช้เกินโควตา 2 เท่าตามที่ Requirement เตือนไว้ตรงๆ
+//
+// ใช้กับโควตาทดลองฟรี 3 ครั้ง/บัญชี ของผู้ใช้ Free (ไม่ใช่ต่อเดือน — จึงต้องรวมทุก
+// เดือน ไม่ใช่อ่านแถวเดือนปัจจุบันแถวเดียวเหมือน getUsageCount)
+//
+// Supabase JS ไม่มี SUM() ตรงๆ ใน Query Builder — ดึงเฉพาะ 2 คอลัมน์ที่ต้องใช้แล้ว
+// รวมในชั้น App (จำนวนแถวต่อ user = จำนวนเดือนที่เคยใช้ ซึ่งเล็กมากโดยธรรมชาติ)
+async function getLifetimeUsage(userId) {
+  const { data, error } = await supabaseAdmin
+    .from('ai_ocr_usage')
+    .select('count, call_count')
+    .eq('user_id', userId);
+
+  if (error) {
+    throw new Error(`Failed to get lifetime AI OCR usage for user ${userId}: ${error.message}`);
+  }
+
+  const rows = data ?? [];
+  return {
+    count: rows.reduce((sum, r) => sum + (r.count ?? 0), 0),
+    callCount: rows.reduce((sum, r) => sum + (r.call_count ?? 0), 0),
+  };
+}
+
 module.exports = {
   getUsageCount,
+  getLifetimeUsage,
   incrementUsage,
   incrementCallCount,
 };

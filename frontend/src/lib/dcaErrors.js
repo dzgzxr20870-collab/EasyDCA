@@ -56,6 +56,47 @@ const SLIP_UPLOAD_ERROR_MESSAGES = {
   INTERNAL_ERROR: 'แนบรูปสลิปไม่สำเร็จ กรุณาลองใหม่อีกครั้ง',
 };
 
+// AI อ่านสลิปบนเว็บ — Error Code จาก POST /transactions/slip-ocr
+// (transactions.controller WEB_ERROR_MESSAGES ชุด OCR_*) แยกตารางเพราะเป็นคนละ
+// Endpoint/ชุด code กับการแนบสลิปหลักฐานด้านบน
+//
+// ⚠️ ข้อความต้องบอกให้ชัดว่า "ครั้งนี้ถูกนับโควตาไหม" ในเคสที่อ่านไม่สำเร็จ —
+// ผู้ใช้ที่จ่ายเงินค่า Premium ต้องไม่รู้สึกว่าโควตาหายไปกับรูปที่ระบบอ่านไม่ออก
+// (ตรงกับที่ฝั่ง LINE สื่อไว้ใน flexMessage.OCR_ERROR ทุกประการ)
+const SLIP_OCR_ERROR_MESSAGES = {
+  OCR_PREMIUM_REQUIRED:
+    'อ่านสลิปด้วย AI เป็นฟีเจอร์สำหรับสมาชิก Premium — อัพเกรดเพื่อให้ระบบอ่านสลิปและกรอกรายการให้อัตโนมัติ',
+  OCR_TRIAL_EXHAUSTED:
+    'คุณใช้สิทธิ์ทดลองอ่านสลิปด้วย AI ครบแล้ว — อัพเกรดเป็น Premium เพื่อใช้ต่อได้ไม่จำกัด',
+  OCR_QUOTA_EXCEEDED: 'ใช้โควตาอ่านสลิปด้วย AI ของเดือนนี้ครบแล้ว กรุณารอรอบเดือนถัดไป',
+  OCR_CALL_LIMIT_EXCEEDED:
+    'ระบบอ่านสลิปถูกใช้งานเกินเพดานของเดือนนี้แล้ว กรุณาลองใหม่ในรอบเดือนถัดไป หรือกรอกรายการเอง',
+  OCR_RATE_LIMITED: 'คุณส่งรูปถี่เกินไป กรุณารอสักครู่ (ประมาณ 10 วินาที) แล้วลองใหม่',
+  OCR_NOT_A_SLIP:
+    'อ่านรูปนี้เป็นสลิปซื้อ/ขายสินทรัพย์ไม่ได้ กรุณาส่งรูปที่เห็นชื่อสินทรัพย์และตัวเลขชัดเจน (ครั้งนี้ไม่ถูกนับโควตา)',
+  OCR_MULTIPLE_ITEMS:
+    'รูปนี้มีหลายรายการ ระบบยังไม่รองรับการอ่านหลายรายการต่อรูป กรุณาส่งสลิปทีละรายการ (ครั้งนี้ไม่ถูกนับโควตา)',
+  OCR_FAILED: 'อ่านสลิปไม่สำเร็จในขณะนี้ กรุณาลองใหม่อีกครั้ง หรือกรอกรายการเอง (ไม่ถูกนับโควตา)',
+  OCR_NOT_CONFIGURED: 'ระบบอ่านสลิปด้วย AI ยังไม่พร้อมใช้งานในขณะนี้ กรุณาลองใหม่ภายหลัง',
+  INVALID_SLIP_CONTENT_TYPE: 'ไฟล์ต้องเป็นรูปภาพ (JPG, PNG, WebP หรือ GIF) เท่านั้น',
+  SLIP_TOO_LARGE: 'ไฟล์รูปใหญ่เกินไป (สูงสุด 10 MB)',
+  EMPTY_BODY: 'ไม่พบไฟล์รูป กรุณาเลือกรูปสลิปใหม่',
+  UNAUTHORIZED: 'เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่อีกครั้ง',
+  INTERNAL_ERROR: 'อ่านสลิปไม่สำเร็จ กรุณาลองใหม่อีกครั้ง',
+};
+
+// Error ที่ควรโชว์ปุ่ม "อัพเกรด Premium" คู่กับข้อความ (ไม่ใช่ทุก Error — เช่น
+// รูปเบลอ/ส่งถี่เกินไป ผู้ใช้แก้เองได้ ไม่ควรถูกขายของ)
+const SLIP_OCR_UPGRADE_CODES = new Set(['OCR_PREMIUM_REQUIRED', 'OCR_TRIAL_EXHAUSTED']);
+
+export function slipOcrErrorMessage(code) {
+  return SLIP_OCR_ERROR_MESSAGES[code] ?? SLIP_OCR_ERROR_MESSAGES.INTERNAL_ERROR;
+}
+
+export function isSlipOcrUpgradeError(code) {
+  return SLIP_OCR_UPGRADE_CODES.has(code);
+}
+
 const UNDO_ERROR_MESSAGES = {
   NO_TRANSACTION_TO_UNDO: 'ไม่มีรายการให้ยกเลิก',
   ALREADY_UNDONE: 'รายการล่าสุดถูกยกเลิกไปแล้ว',
