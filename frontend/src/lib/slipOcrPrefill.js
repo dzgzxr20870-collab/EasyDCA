@@ -49,6 +49,11 @@ export function buildOcrPrefill(slip) {
     pricePerUnit: null,
     sellQuantity: null,
     sellPrice: null,
+    // โหมดซื้อ: จำนวนหน่วย + ราคาที่ได้จริงจากสลิป (มีค่าเมื่อสลิประบุครบทั้งคู่)
+    // ⚠️ นี่คือค่าที่ "จะถูกบันทึกลง Ledger จริง" แทนการเอายอดเงินไปหารด้วยราคาตลาด
+    // ณ ตอนกดบันทึก — ดูเหตุผลเต็มใน § "ทำไมต้องใช้ตัวเลขจากสลิป" ท้ายไฟล์
+    buyQuantity: null,
+    buyPricePerUnit: null,
   };
 
   // ── ทิศทางชัดเจน: Prefill ครบเหมือนเดิมทุกประการ (คุณค่าหลักของฟีเจอร์) ──
@@ -64,15 +69,24 @@ export function buildOcrPrefill(slip) {
   }
 
   if (slip?.side === 'buy') {
+    const buyQuantity = inputValueOrNull(slip.quantity);
+    const buyPricePerUnit = inputValueOrNull(slip.pricePerUnit);
+    // สลิประบุครบทั้งจำนวนหน่วยและราคา = รู้ "สิ่งที่เกิดขึ้นจริง" แล้ว ไม่ต้องประมาณ
+    const hasExactNumbers = buyQuantity !== null && buyPricePerUnit !== null;
+
     return {
       ...base,
       side: 'buy',
       sideUnresolved: false,
-      // โหมดซื้อกรอกเป็น "จำนวนเงินรวม" (ไม่ใช่จำนวนหน่วย)
       currency: slip.currency === 'USD' ? 'USD' : null,
+      // ⚠️ ยอดเงินยังเติมให้เสมอเพื่อให้ผู้ใช้เห็นภาพรวม แต่เมื่อมีตัวเลขครบ ค่าที่
+      // "ถูกบันทึกจริง" คือ buyQuantity × buyPricePerUnit ไม่ใช่ยอดนี้ (ดู DcaForm)
       amountInput: inputValueOrNull(slip.amountTotal),
-      // หุ้นไทยไม่มี Price Feed ต้องกรอกราคาต่อหน่วยเอง — เติมให้ถ้าสลิปมี
-      pricePerUnit: inputValueOrNull(slip.pricePerUnit),
+      // หุ้นไทยไม่มี Price Feed ต้องกรอกราคาต่อหน่วยเอง — เติมช่องเดิมไว้เฉพาะตอน
+      // ที่ "ไม่มีตัวเลขครบ" เท่านั้น กันสองช่องราคาโชว์ค่าเดียวกันซ้ำซ้อนบนหน้าจอ
+      pricePerUnit: hasExactNumbers ? null : buyPricePerUnit,
+      buyQuantity: hasExactNumbers ? buyQuantity : null,
+      buyPricePerUnit: hasExactNumbers ? buyPricePerUnit : null,
     };
   }
 

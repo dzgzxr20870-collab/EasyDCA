@@ -258,6 +258,19 @@ async function createTransaction(req, res) {
   //   ขาย: quantity = "จำนวนหน่วยที่ขาย" (ไม่ใช่เงิน) — ยกเว้น sellAll ที่ไม่ต้องส่ง
   let amountTotal = null;
   let sellQuantity = null;
+  // ── ซื้อด้วย "จำนวนหน่วย + ราคาต่อหน่วยที่รู้จริง" (มาจากสลิป) ────────────────
+  // ⚠️ เพิ่มใหม่: เดิมฝั่งซื้อรับได้แต่ "จำนวนเงินรวม" อย่างเดียว ทำให้รายการที่มา
+  // จากสลิป (ซึ่งระบุจำนวนหุ้นและราคาที่ได้จริงไว้ชัดเจน) ถูกทิ้งตัวเลขจริงแล้วไป
+  // คำนวณใหม่จาก "ราคาตลาด ณ ตอนกดบันทึก" — ยิ่งสลิปเก่ายิ่งเพี้ยน (เคสจริง: สลิป
+  // ASTS 12 ส.ค. บันทึก 22 ส.ค. → จำนวนหุ้นและต้นทุนไม่ตรงสลิปเลย)
+  //
+  // สลิปคือหลักฐานของสิ่งที่เกิดขึ้นจริง ราคาตลาดเป็นแค่ตัวประมาณสำหรับกรณีที่ไม่มี
+  // ข้อมูลจริง (มติ Founder) — เมื่อรู้ทั้งคู่ต้องใช้ค่าจากสลิปเสมอ
+  //
+  // ปลายทางคือ transaction.service.resolveQuantityAndPrice Branch แรก
+  // (isPresent(quantity) && isPresent(pricePerUnit)) ที่ใช้ค่าตรงๆ ไม่แตะ Price Feed
+  // และตั้ง priceSource='user' — Branch เดียวกับที่เส้นทาง LINE ใช้อยู่แล้ว
+  let buyQuantity = null;
   if (isSell) {
     if (!sellAll) {
       sellQuantity = toPositiveNumber(body.quantity);
@@ -266,8 +279,19 @@ async function createTransaction(req, res) {
       }
     }
   } else {
+    // quantity เป็น Optional สำหรับฝั่งซื้อ — ส่งมาก็ต่อเมื่อรู้จำนวนหน่วยจริง
+    buyQuantity = body.quantity === undefined || body.quantity === null || body.quantity === ''
+      ? null
+      : toPositiveNumber(body.quantity);
+    if (body.quantity !== undefined && body.quantity !== null && body.quantity !== '' && buyQuantity === null) {
+      return fail(res, 'VALIDATION_ERROR', { field: 'quantity' });
+    }
+
     amountTotal = toPositiveNumber(body.amountTotal);
-    if (amountTotal === null) {
+    // amountTotal ยังบังคับเหมือนเดิม "ยกเว้น" กรณีที่ส่งจำนวนหน่วยมาแล้ว (ยอดรวม
+    // คำนวณได้จาก quantity × pricePerUnit อยู่แล้ว ไม่ต้องให้ Client ส่งซ้ำ) —
+    // Payload เดิมทุกตัวที่ไม่ส่ง quantity จึงยังทำงานเหมือนเดิมทุกประการ
+    if (amountTotal === null && buyQuantity === null) {
       return fail(res, 'VALIDATION_ERROR', { field: 'amountTotal' });
     }
   }
@@ -333,6 +357,10 @@ async function createTransaction(req, res) {
     if (!sellAll && !hasPrice) {
       return fail(res, 'SELL_PRICE_REQUIRED', { symbol });
     }
+  } else if (buyQuantity !== null && !hasPrice) {
+    // ส่งจำนวนหน่วยมาแต่ไม่มีราคาต่อหน่วย = ระบุครึ่งเดียว ประกอบเป็นธุรกรรมไม่ได้
+    // (Service ต้องได้ครบคู่ถึงจะข้าม Price Feed ได้ — ดู resolveQuantityAndPrice)
+    return fail(res, 'VALIDATION_ERROR', { field: 'pricePerUnit' });
   } else if (!hasPrice && !LIVE_PRICE_TYPES.includes(type)) {
     // หุ้นไทย (และสินทรัพย์อื่นที่ไม่มีราคาสด) — บังคับกรอกราคาเอง ไม่งั้นเส้นทาง
     // "จำนวนเงินอย่างเดียว" จะไปจบที่ PRICE_FEED_NOT_IMPLEMENTED ของ Service อยู่ดี
@@ -371,6 +399,17 @@ async function createTransaction(req, res) {
       params.quantity = sellQuantity;
       params.pricePerUnit = pricePerUnit;
     }
+  } else if (buyQuantity !== null) {
+    // ── ซื้อด้วยตัวเลขจากสลิป: รู้ทั้งจำนวนหน่วยและราคาที่ได้จริง ─────────────
+    // ⚠️ ต้องมาก่อน Branch hasPrice ด้านล่างเสมอ — ไม่งั้นจะตกไปเข้า
+    // deriveQuantityFromAmount ซึ่ง "คำนวณจำนวนหน่วยใหม่จากยอดเงิน" ทั้งที่เรารู้
+    // จำนวนหน่วยจริงจากสลิปอยู่แล้ว (ผลลัพธ์ต่างกันเพราะยอดเงินถูกปัดเศษ 2 ตำแหน่ง
+    // แต่จำนวนหุ้นจริงมีทศนิยมได้ถึง 8 ตำแหน่ง เช่น ASTS 20.0104114 หุ้น)
+    //
+    // ส่งค่าตรงๆ เข้า Service — Branch แรกของ resolveQuantityAndPrice จะใช้ค่าคู่นี้
+    // ตามที่ให้มาเลย ไม่แตะ Price Feed (เส้นทางเดียวกับที่ LINE ใช้อยู่แล้ว)
+    params.quantity = buyQuantity;
+    params.pricePerUnit = pricePerUnit;
   } else if (hasPrice) {
     // ── เส้นทาง LINE #2: "ผู้ใช้ระบุราคาเอง" (quantity + pricePerUnit) ───────
     // ฟอร์มเว็บส่ง "จำนวนเงินรวม" มาเสมอ (ไม่ใช่จำนวนหน่วย) จึงต้องแปลงเป็นจำนวน
