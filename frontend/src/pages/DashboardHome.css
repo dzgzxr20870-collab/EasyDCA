@@ -182,6 +182,12 @@ label.dh-fl .dh-fl-opt { color: var(--muted); font-weight: 500; }
 .dh-slip-numbers { border: 1.5px solid var(--green); border-radius: 12px; padding: 12px 14px; background: var(--green-soft2); display: flex; flex-direction: column; gap: 10px; }
 .dh-slip-numbers-title { font-size: 12.5px; font-weight: 700; color: var(--green-ink); margin: 0; }
 .dh-slip-numbers-total { margin: 0; }
+/* สรุปยอดแยกบรรทัด — ต้องเห็นชัดว่า มูลค่าหุ้น + ค่าธรรมเนียม = ยอดที่จ่ายจริง
+   (กันผู้ใช้เข้าใจผิดว่าระบบอ่านสลิปผิดเพราะยอดไม่ตรงกับที่จำได้) */
+.dh-slip-breakdown { display: flex; flex-direction: column; gap: 4px; }
+.dh-slip-brk-row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font-size: 12.5px; color: var(--ink2); }
+.dh-slip-brk-row b { font-variant-numeric: tabular-nums; }
+.dh-slip-brk-total { border-top: 1.5px solid var(--green); margin-top: 4px; padding-top: 6px; color: var(--ink); font-weight: 700; }
 /* AI อ่านทิศทาง (ซื้อ/ขาย) ไม่ได้ → ไฮไลต์ปุ่มเลือกโหมดให้เห็นชัดว่ายังต้องเลือกเอง
    ระบบไม่เดาให้ (เคส BCPG — ดู lib/slipOcrPrefill.js) ข้อความเตือนอย่างเดียวไม่พอ
    เพราะผู้ใช้ที่สแกนแล้วกดบันทึกเร็วๆ มักไม่ทันอ่าน */

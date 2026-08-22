@@ -296,6 +296,19 @@ async function createTransaction(req, res) {
     }
   }
 
+  // ── 2.5) ค่าธรรมเนียม (Migration 041) ──────────────────────────────────────
+  // ไม่ส่งมา = undefined = "ไม่รู้" → ลง DB เป็น NULL (ไม่ใช่ 0)
+  // ส่ง 0 มา = ผู้ใช้ยืนยันเองว่าไม่มีค่าธรรมเนียม → ลง DB เป็น 0
+  // ⚠️ ยอมรับ 0 ได้ (ต่างจาก toPositiveNumber ที่ปฏิเสธ 0) จึงตรวจเองที่นี่
+  let feeThb;
+  if (body.feeThb !== undefined && body.feeThb !== null && body.feeThb !== '') {
+    const parsed = Number(body.feeThb);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      return fail(res, 'VALIDATION_ERROR', { field: 'feeThb' });
+    }
+    feeThb = parsed;
+  }
+
   // ── 3) สกุลเงิน ────────────────────────────────────────────────────────────
   const currency = body.currency ?? 'THB';
   if (currency !== 'THB' && currency !== 'USD') {
@@ -384,6 +397,9 @@ async function createTransaction(req, res) {
     ...(currency === 'USD' && !sellAll ? { currency: 'USD' } : {}),
     ...(date ? { date } : {}),
     ...(note ? { note } : {}),
+    // ค่าธรรมเนียมจากสลิป/ที่ผู้ใช้กรอกเอง — ไม่ส่ง Key เลยเมื่อไม่รู้ (undefined)
+    // เพื่อให้ transaction.service ตั้งเป็น null ตามค่า Default ของมัน
+    ...(feeThb !== undefined ? { feeThb } : {}),
     // ช่องทาง 'web' — Field เดียวที่ตั้งใจให้ต่างจากรายการที่บันทึกผ่าน LINE
     source: 'web',
   };
@@ -738,6 +754,13 @@ async function scanSlipWithAi(req, res) {
         currency: ocr.currency,
         date: ocr.dateIso,
         confidence: ocr.confidence,
+        // ค่าธรรมเนียม (Migration 041) — null = สลิปไม่ระบุ ไม่ใช่ "ไม่มี"
+        feeTotal: ocr.feeTotal,
+        // ยอดสุทธิที่จ่าย/รับจริงตามสลิป — ให้ฟอร์มแสดงว่ายอดที่ผู้ใช้จำได้ต่างจาก
+        // มูลค่าหุ้นเพราะค่าธรรมเนียม ไม่ใช่ระบบอ่านผิด
+        netAmount: ocr.netAmount,
+        // 'slip_gross' = ใช้เลขจากสลิปตรงๆ / 'computed' = คำนวณเอง (ดู resolveGrossAmount)
+        amountSource: ocr.amountSource,
       },
       // พก token ไปกับฟอร์ม แล้วส่งกลับมาใน POST /transactions ตอนกดยืนยัน
       // (null = ไม่มีรูปให้แนบ — ทดลองฟรี หรืออัปโหลดพลาด)

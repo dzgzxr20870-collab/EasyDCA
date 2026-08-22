@@ -191,6 +191,87 @@ SELECT symbol, date, created_at::date AS บันทึกวันที่,
 
 ---
 
+## ขั้นที่ 3.6 — ค่าธรรมเนียม (feature/transaction-fee · migration 041)
+
+> ⚠️ **ต้อง Apply migration 041 ก่อน Deploy โค้ดเสมอ** — ถ้า Deploy โค้ดก่อน
+> การส่ง `fee_thb = NULL` จะโดน NOT NULL constraint ปฏิเสธ = **บันทึกรายการไม่ได้เลย**
+> (ต่างจาก migration 040 ที่ Fail แบบ Best-effort — อันนี้บล็อกการบันทึกจริง)
+
+### VERIFY หลัง Apply (ก่อน Deploy โค้ด)
+
+```sql
+SELECT table_name, column_name, is_nullable
+  FROM information_schema.columns
+ WHERE column_name = 'fee_thb'
+   AND table_name IN ('transactions', 'pending_transactions');
+-- คาดหวัง: is_nullable = YES ทั้ง 2 แถว
+```
+
+### Smoke Test หลัง Deploy
+
+**A. สลิปที่มีค่าธรรมเนียม (ใช้ EOSE หรือ ASTS ใบเดิม)**
+
+1. เว็บ → สแกนสลิป → **คาดหวัง:** กล่องเขียวแสดงแยกบรรทัด
+
+   ```
+   มูลค่าหุ้น (บันทึกเป็นต้นทุน)   1,497.60 USD
+   ค่าธรรมเนียม                        2.40 USD
+   ─────────────────────────────────────────
+   รวมจ่ายจริง                     1,500.00 USD
+   ```
+2. ต้องมีข้อความกำกับว่า *"ต่างจากยอดที่จ่ายเพราะค่าธรรมเนียม ไม่ใช่ระบบอ่านผิด"*
+3. กดบันทึก แล้ว Query:
+
+```sql
+SELECT a.symbol, t.amount_thb AS มูลค่าหุ้น, t.fee_thb AS ค่าธรรมเนียม,
+       t.quantity, t.price_per_unit, t.currency, t.date
+  FROM transactions t JOIN assets a ON a.id = t.asset_id
+ WHERE t.user_id = '<user_id>' ORDER BY t.created_at DESC LIMIT 1;
+```
+
+**คาดหวัง (ASTS):** `มูลค่าหุ้น = 1497.60` · `ค่าธรรมเนียม = 2.40` · `quantity = 20.0104114`
+
+**B. LINE — สลิปเดียวกัน** ต้องเห็นการ์ด Preview แยกบรรทัดแบบเดียวกัน แล้วบันทึกได้ค่าตรงกัน
+
+**C. Regression — "ไม่รู้" ต้องเป็น NULL ไม่ใช่ 0**
+
+พิมพ์ `ซื้อ BTC 100` ใน LINE (ไม่มีสลิป) → กดยืนยัน แล้ว Query:
+
+```sql
+SELECT a.symbol, t.fee_thb, t.source
+  FROM transactions t JOIN assets a ON a.id = t.asset_id
+ WHERE t.user_id = '<user_id>' ORDER BY t.created_at DESC LIMIT 1;
+```
+
+**คาดหวัง:** `fee_thb` เป็น **NULL** (ไม่ใช่ 0) — นี่คือความหมาย "ระบบไม่รู้ค่าธรรมเนียม"
+
+**D. 🔴 P&L ต้องไม่ขยับแม้แต่บาทเดียว**
+
+จดตัวเลขนี้ไว้ **ก่อน** Deploy แล้วเทียบหลัง Deploy:
+
+```sql
+SELECT round(sum(CASE WHEN type='buy' THEN amount_thb ELSE -amount_thb END), 2) AS เงินลงทุนสุทธิ,
+       count(*) AS จำนวนรายการ
+  FROM transactions WHERE note IS NULL OR note NOT LIKE 'UNDO_OF:%';
+```
+
+**คาดหวัง:** ตัวเลขเท่าเดิมเป๊ะ (รายการใหม่ที่บันทึกระหว่างทดสอบจะทำให้ขยับตามปกติ
+เท่านั้น) · หน้า Dashboard ต้องแสดงกำไร/ขาดทุนเท่าเดิมทุกตัว
+
+**E. ช่องราคาต่อหน่วยใช้ได้ทุกสินทรัพย์แล้ว**
+
+| เคส | คาดหวัง |
+|---|---|
+| เลือก BTC/หุ้น US แล้วเว้นช่องราคาว่าง | ข้อความ *"เว้นว่างไว้ = ระบบดึงราคาตลาด…"* · บันทึกได้ปกติด้วยราคาตลาด |
+| กรอกราคาเอง | ข้อความเปลี่ยนเป็น *"จะบันทึกด้วยราคาที่คุณกรอก — ไม่ดึงราคาตลาด"* |
+| หุ้นไทย | ยังบังคับกรอกเหมือนเดิม |
+| โหมดสลิป | ช่องราคาปกติ**หายไป** (ใช้กล่องเขียวแทน) และ**ไม่มี**ข้อความเรื่องราคาตลาดโผล่ขัดกัน |
+
+⚠️ ช่องราคาต้อง **ว่างเสมอตอนเปิดฟอร์ม** — ห้ามมีการเติมราคาให้อัตโนมัติ
+(จะกลายเป็นยิง Price Feed ทุกครั้งที่เปิดฟอร์ม ซึ่ง Twelve Data ชนเพดาน 8 ครั้ง/นาที)
+
+---
+
 ## ขั้นที่ 4 — เช็คหลัง Deploy 24 ชม.
 
 ```bash

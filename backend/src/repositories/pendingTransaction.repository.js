@@ -66,7 +66,7 @@ async function create(data) {
       amount_thb: data.amountThb,
       // Multi-Currency (Round 10) — Default 'THB' เมื่อ Caller ไม่ส่ง (Path เดิม)
       currency: data.currency ?? 'THB',
-      fee_thb: data.feeThb ?? 0,
+      fee_thb: data.feeThb ?? null,
       txn_date: data.txnDate,
       // batch_id (migration 008) — nullable, ผูก N แถวที่มาจาก Bulk Import Batch
       // เดียวกัน (Phase 3 Round 6) เพื่อให้ Postback ยืนยัน/ยกเลิกทั้งก้อนใช้ค่านี้

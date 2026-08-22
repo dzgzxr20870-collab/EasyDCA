@@ -87,7 +87,7 @@ async function create(data) {
     p_quantity: data.quantity,
     // Multi-Currency (Round 10) — Default 'THB' เมื่อ Caller ไม่ส่ง (Path เดิม)
     p_currency: data.currency ?? 'THB',
-    p_fee_thb: data.feeThb ?? 0,
+    p_fee_thb: data.feeThb ?? null,
     p_date: data.date,
     p_note: data.note ?? null,
     p_source: data.source ?? 'line',

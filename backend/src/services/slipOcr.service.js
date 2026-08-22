@@ -128,6 +128,16 @@ const SYSTEM_PROMPT = [
   '- net_amount = ยอดสุทธิที่จ่ายจริง/ได้รับจริงตามที่สลิประบุ (หลังหักหรือรวมค่าธรรมเนียม',
   '  แล้ว เช่น "ยอดที่จะได้รับคืนโดยประมาณ" หรือ "ยอดชำระทั้งสิ้น") ถ้าไม่มีให้ null',
   '  ⚠️ ห้ามคำนวณเอง ให้ใส่เฉพาะตัวเลขที่พิมพ์อยู่ในสลิปจริงเท่านั้น',
+  // ── ค่าธรรมเนียม: อ่านตรงๆ จากสลิป แม่นกว่าการหักลบเอาเองมาก ─────────────
+  // สลิปไทยแสดง "ค่าคอมมิชชัน" และ "ภาษีมูลค่าเพิ่ม 7%" แยกบรรทัดชัดเจน — การเอา
+  // net - gross มาหักลบเองจะเพี้ยนเพราะตัวเลขบนสลิปถูกปัดเศษมาแล้ว (เคส EOSE จริง:
+  // หักลบได้ 0.40 แต่ค่าธรรมเนียมจริงคือ 0.27 = ค่าคอม 0.25 + VAT 0.02)
+  '- commission = ค่าคอมมิชชัน/ค่าธรรมเนียมการซื้อขายตามที่สลิประบุ (ตัวเลขล้วน)',
+  '  ถ้าสลิปไม่ระบุให้ null (ห้ามเดา ห้ามคำนวณเอง)',
+  '- vat = ภาษีมูลค่าเพิ่ม (VAT) ตามที่สลิประบุ (ตัวเลขล้วน) ถ้าไม่ระบุให้ null',
+  '- fee_total = ค่าธรรมเนียมรวมทั้งหมดตามที่สลิประบุเป็นยอดเดียว (เช่นบางโบรกแสดง',
+  '  "ค่าธรรมเนียมรวม" บรรทัดเดียวไม่แยกค่าคอม/VAT) ถ้าสลิปแยกเป็นค่าคอม+VAT อยู่แล้ว',
+  '  หรือไม่ระบุยอดรวมไว้ ให้ null (ฝั่งโค้ดจะรวมให้เอง — ห้ามบวกเลขเองเด็ดขาด)',
   '- ⚠️ สำคัญ: ถ้าสลิปแสดง "เฉพาะมูลค่า/ยอดเงินรวม" โดยไม่มีจำนวนหน่วยและไม่มีราคาต่อหน่วย',
   '  (เช่น แอปหุ้นต่างประเทศอย่าง Dime! ที่ซื้อเป็นจำนวนเงิน) ให้ใส่ตัวเลขนั้นใน amount เท่านั้น',
   '  และให้ quantity = null, price_per_unit = null (ห้ามเอายอดรวมไปใส่เป็น price_per_unit)',
@@ -150,7 +160,7 @@ const SYSTEM_PROMPT = [
   '  หรือ "จับคู่แล้ว" ⚠️ ห้ามคัดคำอธิบาย/เงื่อนไขท้ายสลิปมาด้วย ถ้าหาไม่เจอให้ null',
   '',
   'ตอบกลับเป็น JSON object เดียวเท่านั้น ห้ามมีข้อความอื่น ห้ามใส่ markdown code fence รูปแบบ:',
-  '{"is_slip":boolean,"multiple_items":boolean,"symbol":string|null,"side":"buy"|"sell"|null,"side_evidence":string|null,"order_status":"filled"|"pending"|"cancelled"|null,"order_status_evidence":string|null,"quantity":number|null,"price_per_unit":number|null,"amount":number|null,"net_amount":number|null,"currency":"THB"|"USD","date":string|null,"confidence":"high"|"medium"|"low"}',
+  '{"is_slip":boolean,"multiple_items":boolean,"symbol":string|null,"side":"buy"|"sell"|null,"side_evidence":string|null,"order_status":"filled"|"pending"|"cancelled"|null,"order_status_evidence":string|null,"quantity":number|null,"price_per_unit":number|null,"amount":number|null,"net_amount":number|null,"commission":number|null,"vat":number|null,"fee_total":number|null,"currency":"THB"|"USD","date":string|null,"confidence":"high"|"medium"|"low"}',
 ].join('\n');
 
 // แปลง Text ที่ Claude ตอบ → Object (เผื่อเผลอห่อ ```json ... ``` ก็ถอดออกก่อน Parse)
@@ -356,6 +366,122 @@ function resolveSide({ aiSide, evidenceSide, numericSide }) {
 
   // เหลือแค่คำตอบของ AI ล้วนๆ ซึ่งเป็นสิ่งที่พลาดมาแล้วในเคส BCPG → ไม่เชื่อ ให้ผู้ใช้เลือก
   return { side: null, reason: aiSide ? 'ai_only_not_trusted' : 'no_signal' };
+}
+
+// ── ค่าธรรมเนียมรวม ──────────────────────────────────────────────────────
+// รวมจากสิ่งที่สลิป "ระบุไว้จริง" เท่านั้น — ไม่หักลบเอาเองจาก net - gross เพราะ
+// ตัวเลขบนสลิปถูกปัดเศษมาแล้ว (เคส EOSE จริง: หักลบได้ 0.40 แต่ค่าจริง 0.27)
+//
+// ลำดับ: fee_total (โบรกที่ให้ยอดรวมมาเลย) → commission + vat (โบรกที่แยกบรรทัด)
+// คืน null เมื่อสลิปไม่ระบุอะไรเลย = "ไม่รู้" ห้ามเดาเป็น 0 (0 แปลว่า "ยืนยันว่าไม่มี"
+// ซึ่งคนละความหมายกัน — ดู migration 041)
+function resolveFeeTotal({ feeTotal, commission, vat }) {
+  const total = positiveNumberOrNull(feeTotal);
+  if (total !== null) return total;
+
+  const com = positiveNumberOrNull(commission);
+  const tax = positiveNumberOrNull(vat);
+  if (com === null && tax === null) return null;
+
+  // มีอย่างน้อย 1 ตัว — บวกเฉพาะตัวที่มี (บางโบรกไม่มี VAT แยก)
+  return Math.round(((com ?? 0) + (tax ?? 0)) * 100) / 100;
+}
+
+// ── มูลค่าซื้อขายก่อนค่าธรรมเนียม: เลือกแหล่งแบบ Deterministic ───────────────
+//
+// ⚠️ อ่านก่อนแก้: การ "บังคับคำนวณเอง" (quantity × pricePerUnit) เป็นการแก้บั๊กจริง
+// เคส BCPG — AI คนละรุ่นหยิบเลขคนละตัวจากสลิปเดียวกัน (Haiku หยิบ 68.89 = ยอดสุทธิ
+// ส่วน Sonnet หยิบ 69.00 = มูลค่าหุ้น) ทำให้ต้นทุนเพี้ยนไม่เท่ากันแล้วแต่ Broker
+// ห้ามกลับไปเชื่อ raw.amount ลำพังเด็ดขาด
+//
+// แต่การคำนวณเองก็มีข้อเสียของมัน: ราคาต่อหน่วยบนสลิปเป็นค่าที่ "ปัดเศษมาแสดง"
+// (EOSE จริง 4.2548 แสดง 4.25) พอคูณกลับจึงไม่ตรงกับมูลค่าหุ้นที่สลิประบุไว้ตรงๆ
+// (ระบบได้ 106.32 สลิปเขียน 106.44)
+//
+// ── ทางออก: ใช้ค่าธรรมเนียมเป็นตัวพิสูจน์ ────────────────────────────────────
+// เมื่อรู้ทั้ง net และ fee เราตรวจได้แบบ Deterministic ว่าเลขที่ AI หยิบมาคืออะไร
+// เพราะ "มูลค่าหุ้น" กับ "ยอดสุทธิ" ต่างกันเท่ากับค่าธรรมเนียมพอดีเสมอ:
+//     ซื้อ : net = gross + fee   (จ่ายเพิ่ม)
+//     ขาย  : net = gross - fee   (ได้รับน้อยลง)
+//
+// ลำดับการตัดสิน:
+//   1) aiAmount ตรงกับ net เป๊ะ (และมี fee > 0) → AI หยิบยอดสุทธิมาผิดช่อง (เคส BCPG)
+//      → ใช้ค่าที่ได้จาก net ∓ fee แทน ไม่ใช้ aiAmount
+//   2) aiAmount ตรงกับ (net ∓ fee) เป๊ะ → ยืนยันแล้วว่าเป็นมูลค่าหุ้นจริง → ใช้เลย
+//      (แม่นที่สุด เพราะเป็นเลขที่พิมพ์อยู่บนสลิปตรงๆ ไม่ผ่านการปัดเศษซ้ำ)
+//   3) ไม่เข้าเงื่อนไขไหนเลย → กลับไปใช้ค่าคำนวณ (พฤติกรรมเดิม) + Log ไว้สืบย้อนหลัง
+//
+// ── Threshold ─────────────────────────────────────────────────────────────
+// EXACT_MATCH (0.01 = 1 สตางค์): ใช้เทียบ "ตัวเลขที่ควรตรงกันเป๊ะ" (aiAmount vs net,
+// aiAmount vs net∓fee) — ทั้งคู่มาจากสลิปใบเดียวกัน ปัดเศษ 2 ตำแหน่งเหมือนกัน
+// จึงต้องตรงกันในระดับสตางค์ ไม่ต้องเผื่อ Tolerance กว้าง
+//
+// SANITY_RATIO (2%): ใช้เทียบค่าที่เลือกได้กับค่าคำนวณ (qty × price) เป็นด่านสุดท้าย
+// กันเคสที่ AI หยิบเลขมั่วคนละเรื่อง — 2% กว้างพอรองรับความคลาดเคลื่อนจากการปัดเศษ
+// ราคาต่อหน่วย (ราคา 1.005 แสดงเป็น 1.00 = คลาด 0.5%) แต่แคบพอที่เลขคนละตัวจะไม่รอด
+// ⚠️ ตั้งใจ "ไม่" พึ่ง Threshold นี้ในการจับเคส BCPG เพราะค่าธรรมเนียมมักน้อยกว่า 2%
+// ของมูลค่า (ASTS: 2.40/1497.60 = 0.16%) — เคสนั้นถูกจับด้วยข้อ 1 ที่เทียบ net ตรงๆ
+// ⚠️ 0.02 (2 สตางค์) ไม่ใช่ 0.01 — เพราะสลิป "ปัดเศษทุกช่องแยกกัน" ที่ทศนิยม 2
+// ตำแหน่ง ความคลาดเคลื่อนจึงสะสมได้ถึงครึ่งสตางค์ต่อช่อง เมื่อเทียบสมการที่ใช้ 2-3
+// ช่องพร้อมกัน (gross vs net - fee) ผลรวมจึงคลาดได้ถึง ~1.5 สตางค์
+// พิสูจน์ด้วยสลิป EOSE จริง: สลิปเขียน gross 106.44 · fee 0.27 · net 106.72
+//   → net - fee = 106.45 ต่างจาก gross ที่สลิปเขียนเอง 0.01 ทั้งที่เป็นสลิปใบเดียวกัน
+// ถ้าตั้ง 0.01 เป๊ะ เคสนี้จะหลุดไป Branch "ไม่น่าเชื่อถือ" ทั้งที่ตัวเลขถูกต้องทุกช่อง
+const SLIP_ROUNDING_TOLERANCE = 0.02;
+const SANITY_RATIO = 0.02;
+
+// เทียบสองจำนวนเงินโดยตัด Floating Point Noise ออกก่อนเสมอ
+// (106.72 - 0.27 = 106.45000000000002 ใน IEEE 754 → ถ้าเทียบดิบๆ จะเกิน Tolerance
+// ไปนิดเดียวแล้วตัดสินผิดทั้งที่ตัวเลขจริงตรงกัน)
+function withinTolerance(a, b, tolerance) {
+  return Math.round(Math.abs(a - b) * 100) / 100 <= tolerance + 1e-9;
+}
+
+function resolveGrossAmount({ side, aiAmount, netAmount, feeTotal, quantity, pricePerUnit }) {
+  const computed = grossAmount(quantity, pricePerUnit, null);
+  const ai = positiveNumberOrNull(aiAmount);
+  const net = positiveNumberOrNull(netAmount);
+  const fee = positiveNumberOrNull(feeTotal);
+
+  // ไม่มีข้อมูลพอให้ตรวจสอบ → พฤติกรรมเดิมทุกประการ (คำนวณเอง / Fallback ค่า AI)
+  if (computed === null && ai === null) {
+    return { amount: null, source: 'none', reason: 'no_amount_data' };
+  }
+  if (net === null || fee === null) {
+    return {
+      amount: computed ?? ai,
+      source: computed !== null ? 'computed' : 'ai_fallback',
+      reason: 'no_fee_or_net_to_verify',
+    };
+  }
+
+  // มูลค่าหุ้นที่อนุมานจากยอดสุทธิ — Deterministic ล้วน ไม่ต้องเชื่อ AI
+  const derived = Math.round((side === 'sell' ? net + fee : net - fee) * 100) / 100;
+
+  // Guard: derived ต้องเป็นบวกและใกล้เคียงค่าคำนวณพอสมควร ไม่งั้นแปลว่าอ่าน net/fee
+  // มาผิด (เช่นหยิบ fee ของรายการอื่น) — ไม่เอามาใช้
+  const derivedSane =
+    derived > 0 && (computed === null || Math.abs(derived - computed) / computed <= SANITY_RATIO);
+
+  // 1) AI หยิบ "ยอดสุทธิ" มาใส่ช่องมูลค่าหุ้น (บั๊กเคส BCPG) — จับได้เพราะรู้ fee แล้ว
+  if (ai !== null && withinTolerance(ai, net, SLIP_ROUNDING_TOLERANCE) && fee > 0) {
+    if (derivedSane) {
+      return { amount: derived, source: 'derived_from_net', reason: 'ai_returned_net_not_gross' };
+    }
+    return { amount: computed, source: 'computed', reason: 'ai_returned_net_derived_unreliable' };
+  }
+
+  // 2) AI หยิบมูลค่าหุ้นถูกต้อง — ยืนยันด้วยสมการ net ∓ fee แล้ว
+  if (ai !== null && withinTolerance(ai, derived, SLIP_ROUNDING_TOLERANCE)) {
+    return { amount: ai, source: 'slip_gross', reason: 'verified_against_net_minus_fee' };
+  }
+
+  // 3) ตัวเลขไม่ลงตัวกับสมการ — ไม่เชื่อ AI กลับไปใช้ค่าคำนวณ (ปลอดภัยที่สุด)
+  return {
+    amount: computed ?? derived,
+    source: computed !== null ? 'computed' : 'derived_from_net',
+    reason: 'ai_amount_inconsistent_with_net_and_fee',
+  };
 }
 
 // ── สถานะคำสั่ง (filled/pending/cancelled) ───────────────────────────────
@@ -597,6 +723,41 @@ async function extractSlip(userId, buffer, contentType, now = new Date()) {
   const evidenceStatus = statusFromEvidence(raw.order_status_evidence);
   const { orderStatus, reason: statusReason } = resolveOrderStatus({ aiStatus, evidenceStatus });
 
+  // ── ค่าธรรมเนียม + มูลค่าหุ้นที่ตรวจสอบแล้ว (Migration 041) ─────────────────
+  // fee = null แปลว่า "สลิปไม่ระบุ" ไม่ใช่ "ไม่มีค่าธรรมเนียม" — ห้ามเดาเป็น 0
+  const feeTotal = resolveFeeTotal({
+    feeTotal: raw.fee_total,
+    commission: raw.commission,
+    vat: raw.vat,
+  });
+
+  // side ที่ใช้ตัดสินต้องเป็นค่าที่ resolveSide สรุปแล้วเท่านั้น (ไม่ใช่ raw.side ของ
+  // AI) — ถ้าทิศทางยังไม่ชัด ให้ถือเป็น 'buy' เฉพาะ "ในการคำนวณ gross" เท่านั้น
+  // เพราะสมการต่างกันแค่เครื่องหมาย และเคสกำกวมจะตกไป Branch computed อยู่ดี
+  const grossResolution = resolveGrossAmount({
+    side: side ?? 'buy',
+    aiAmount: raw.amount ?? raw.amount_thb,
+    netAmount,
+    feeTotal,
+    quantity,
+    pricePerUnit,
+  });
+
+  // Log ทุกครั้งที่ "ไม่ได้ใช้เลขที่สลิประบุตรงๆ" — จะได้สืบย้อนหลังได้ว่าทำไมยอดที่
+  // บันทึกไม่ตรงกับที่ผู้ใช้เห็นบนสลิป โดยไม่ต้องขอรูปมา Replay (บทเรียนเคส BCPG)
+  if (grossResolution.source !== 'slip_gross') {
+    logger.info('slip ocr gross amount resolved', {
+      userId,
+      symbol,
+      source: grossResolution.source,
+      reason: grossResolution.reason,
+      aiAmount: raw.amount ?? raw.amount_thb ?? null,
+      netAmount,
+      feeTotal,
+      resolvedAmount: grossResolution.amount,
+    });
+  }
+
   // ⚠️ Log ทุกครั้งที่อ่านสลิป — ตอนสืบเคส BCPG ต้องดาวน์โหลดรูปจาก Storage มา Replay
   // ผ่าน Claude ใหม่เพียงเพื่อตอบว่า "AI ตอบ side อะไรมา" ซึ่งไม่ควรต้องทำอีก
   // (ไม่ Log ตัวเลขเงิน/รูป — เก็บเฉพาะที่จำเป็นต่อการวินิจฉัยทิศทางรายการ)
@@ -648,7 +809,17 @@ async function extractSlip(userId, buffer, contentType, now = new Date()) {
     // และยอดสุทธิ Model แต่ละตัวหยิบคนละค่า: เคส BCPG Haiku หยิบ 68.89 (สุทธิ) ส่วน
     // Sonnet หยิบ 69.00 (มูลค่าหุ้น) → ต้นทุน/กำไรจะเพี้ยนตาม Broker ถ้าไม่บังคับนิยาม)
     // ปัดทศนิยม 2 ตำแหน่งกัน Floating Point (10 × 6.9 = 68.99999999999999)
-    amountThb: grossAmount(quantity, pricePerUnit, raw.amount ?? raw.amount_thb),
+    // ⚠️ เดิมเป็น grossAmount(...) ตรงๆ (บังคับคำนวณเองเสมอ) — ตอนนี้ผ่าน
+    // resolveGrossAmount ที่ "ยอมใช้เลขจากสลิปได้ก็ต่อเมื่อพิสูจน์ได้ด้วยสมการ
+    // net ∓ fee เท่านั้น" ช่องโหว่ BCPG จึงยังปิดอยู่ (ดู resolveGrossAmount)
+    amountThb: grossResolution.amount,
+    // แหล่งที่มาของยอด — ให้ชั้นบนแสดง/Debug ได้ว่าใช้เลขจากสลิปหรือคำนวณเอง
+    amountSource: grossResolution.source,
+    // ค่าธรรมเนียมรวม (สกุลเดียวกับ currency) — null = สลิปไม่ระบุ ไม่ใช่ "ไม่มี"
+    feeTotal,
+    // ยอดสุทธิที่จ่ายจริง/ได้รับจริงตามสลิป — ใช้แสดงให้ผู้ใช้เห็นว่ายอดที่จำได้
+    // (เช่น 1,500) ต่างจากมูลค่าหุ้น (1,497.60) เพราะค่าธรรมเนียม ไม่ใช่ระบบอ่านผิด
+    netAmount,
     // Multi-Currency (Round 10) — สกุลเงินที่อ่านจากสลิป (Default 'THB' ถ้าไม่ใช่ USD ชัดเจน)
     currency: raw.currency === 'USD' ? 'USD' : 'THB',
     date: dateIso ? dateRaw : null, // แสดง DD/MM/YYYY เฉพาะเมื่อ Parse เป็นวันที่จริงได้
@@ -673,6 +844,10 @@ module.exports = {
   statusFromEvidence,
   resolveOrderStatus,
   isUnfilledStatus,
+  // ค่าธรรมเนียม + การตัดสินมูลค่าหุ้น (Migration 041) — Export เพื่อ Unit Test
+  // ตรรกะแยกจากการยิง Claude จริง
+  resolveFeeTotal,
+  resolveGrossAmount,
   SlipOcrError,
   MONTHLY_QUOTA,
   MONTHLY_CALL_LIMIT,

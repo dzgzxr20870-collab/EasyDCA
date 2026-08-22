@@ -30,7 +30,10 @@ function toCommitParams(pending) {
     type: pending.assetType ?? undefined,
     quantity: Number(pending.quantity),
     pricePerUnit: Number(pending.pricePerUnit),
-    feeThb: pending.feeThb !== null && pending.feeThb !== undefined ? Number(pending.feeThb) : 0,
+    // ⚠️ NULL ต้องรอดข้าม Preview→Confirm ไปเป็น NULL ใน transactions ด้วย (ห้ามบีบ
+    // เป็น 0) — NULL = "สลิปไม่ระบุค่าธรรมเนียม" ส่วน 0 = "ยืนยันว่าไม่มี" คนละความหมาย
+    // (Migration 041) เดิมบรรทัดนี้แปลง null → 0 ทำให้ข้อมูล "ไม่รู้" หายไปเงียบๆ
+    feeThb: pending.feeThb !== null && pending.feeThb !== undefined ? Number(pending.feeThb) : null,
     date: pending.txnDate,
     portfolioId: pending.portfolioId ?? null,
     // Multi-Currency (Round 10) — พก currency ที่ Snapshot ไว้ตอน Preview ไปบันทึกจริง
@@ -90,7 +93,7 @@ async function createPending(userId, parsed, options = {}) {
     amountThb: amounts.amountThb,
     // Multi-Currency (Round 10) — สกุลของ amount/price (Default 'THB' สำหรับ Path เดิม)
     currency: amounts.currency ?? 'THB',
-    feeThb: params.feeThb ?? 0,
+    feeThb: params.feeThb ?? null,
     txnDate: params.date ?? transactionService.todayInBangkok(),
     // กองทุนรวม (Round 7) — พก Class ผ่าน Flow Preview→Confirm (null สำหรับสินทรัพย์อื่น)
     projId: params.projId ?? null,
@@ -249,7 +252,7 @@ async function createBatch(userId, validatedItems) {
       amountThb: amounts.amountThb,
       // Multi-Currency (Round 10) — พก currency ต่อรายการ (Default 'THB')
       currency: amounts.currency ?? 'THB',
-      feeThb: params.feeThb ?? 0,
+      feeThb: params.feeThb ?? null,
       txnDate: params.date ?? transactionService.todayInBangkok(),
       batchId,
     });
