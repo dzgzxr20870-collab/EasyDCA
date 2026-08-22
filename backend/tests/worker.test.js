@@ -13,6 +13,7 @@ jest.mock('../src/jobs/dcaReminder.job');
 jest.mock('../src/jobs/reminderSetupCleanup.job');
 jest.mock('../src/jobs/bulkImportCleanup.job');
 jest.mock('../src/jobs/guidedBuyCleanup.job');
+jest.mock('../src/jobs/transactionSlipSessionCleanup.job');
 jest.mock('../src/jobs/portfolioSummary.job');
 jest.mock('../src/jobs/portfolioSnapshot.job');
 jest.mock('../src/jobs/webhookEventCleanup.job');
@@ -26,6 +27,7 @@ const dcaReminder = require('../src/jobs/dcaReminder.job');
 const reminderSetupCleanup = require('../src/jobs/reminderSetupCleanup.job');
 const bulkImportCleanup = require('../src/jobs/bulkImportCleanup.job');
 const guidedBuyCleanup = require('../src/jobs/guidedBuyCleanup.job');
+const transactionSlipSessionCleanup = require('../src/jobs/transactionSlipSessionCleanup.job');
 const portfolioSummary = require('../src/jobs/portfolioSummary.job');
 const portfolioSnapshot = require('../src/jobs/portfolioSnapshot.job');
 const webhookEventCleanup = require('../src/jobs/webhookEventCleanup.job');
@@ -62,9 +64,13 @@ describe('worker.js — Schedule ทุก Cron Job ครบ (แยกจา�
     expect(portfolioSnapshot.schedulePortfolioSnapshot).toHaveBeenCalledTimes(1);
     // webhookEventCleanup.job.js (migration 013 — เพิ่มหลัง Spec นี้ถูกร่างไว้ ต้องย้ายมาด้วย)
     expect(webhookEventCleanup.schedulePurgeStaleWebhookEvents).toHaveBeenCalledTimes(1);
+    // transactionSlipSessionCleanup.job.js (migration 040 — Session "รอรูปสลิป")
+    expect(
+      transactionSlipSessionCleanup.schedulePurgeStaleTransactionSlipSessions
+    ).toHaveBeenCalledTimes(1);
   });
 
-  test('Log ยืนยัน Startup ผ่าน logger.info หลัง Schedule ครบ (jobCount = 15 พอดี)', () => {
+  test('Log ยืนยัน Startup ผ่าน logger.info หลัง Schedule ครบ (jobCount = 16 พอดี)', () => {
     // ⚠️ ยึด "เลขที่ Derive จาก Object.keys จริง" ไว้เป็น Regression Guard — ไม่ได้
     // Hardcode เดา: นับจาก 14 Function call ข้างบน (test แรกในไฟล์นี้) พอดี ถ้าเพิ่ม/
     // ลด Job ในอนาคตแล้วลืมแก้เลขนี้ Test จะแดงทันที (ตรงข้ามกับปัญหาเดิมที่ jobCount
@@ -72,14 +78,16 @@ describe('worker.js — Schedule ทุก Cron Job ครบ (แยกจา�
     // จึงเหลือแค่ Test นี้ที่ต้องคอย Sync คู่มือเป็นจำนวนเต็มตายตัวไว้เตือน — jobCount
     // ลดจาก 15 กลับมาเป็น 14 หลัง Drop supportRequestCleanup.job.js — Migration 027
     // Pivot Flow "ติดต่อ Admin" ไปเป็นหน้าเว็บ /support ไม่มี Session ให้ Purge อีกแล้ว
-    // แล้วกลับขึ้นเป็น 15 อีกครั้งเมื่อเพิ่ม premiumExpiryReminder.job.js)
+    // แล้วกลับขึ้นเป็น 15 อีกครั้งเมื่อเพิ่ม premiumExpiryReminder.job.js
+    // และเป็น 16 เมื่อเพิ่ม transactionSlipSessionCleanup.job.js — migration 040
+    // Purge Session "รอรูปสลิป" ที่หมดอายุค้าง ตี 3 เวลาเดียวกับ Session Cleanup ตัวอื่น)
     //
     // ⚠️ บทเรียนจากรอบนี้: ไฟล์ Job ใหม่ "ต้อง" ถูก jest.mock() ที่หัวไฟล์นี้ด้วยเสมอ
     // ไม่งั้น cron.schedule จริงจะถูกเรียกตอน require worker.js → Timer ค้างใน Event
     // Loop → jest แฮงก์ไม่จบ (ไม่ใช่ Test แดง แต่ค้างเฉยๆ ซึ่งหาสาเหตุยากกว่ามาก)
     expect(logger.info).toHaveBeenCalledWith(
       'worker process started',
-      expect.objectContaining({ jobCount: 15 })
+      expect.objectContaining({ jobCount: 16 })
     );
   });
 });

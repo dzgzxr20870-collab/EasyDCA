@@ -23,6 +23,8 @@ const bulkImportSession = require('../services/bulkImportSession.service');
 const bulkImportService = require('../services/bulkImport.service');
 const reportExportService = require('../services/reportExport.service');
 const slipOcrService = require('../services/slipOcr.service');
+const slipOcrAccess = require('../services/slipOcrAccess.service');
+const transactionSlipSession = require('../services/transactionSlipSession.service');
 const flexMessage = require('../utils/flexMessage.util');
 const logger = require('../utils/logger.util');
 const { buildExternalUrl } = require('../utils/externalUrl.util');
@@ -567,15 +569,36 @@ async function routePostback(user, data) {
       // (Pattern เดียวกับ attachTransaction ใน pendingTransaction.service ที่ Swallow
       // Error ไว้ด้วยเหตุผลเดียวกัน)
       await attachSlipBestEffort(user.id, pending, result);
+
+      // ── ถามหาสลิปสำหรับรายการที่ "พิมพ์เอง" ────────────────────────────────
+      // เงื่อนไขครบ 3 ข้อเท่านั้นถึงจะถาม (ไม่งั้นข้ามไปเงียบๆ):
+      //   1) ไม่ได้มาจากสลิป AI อยู่แล้ว (pending.slipToken ว่าง) — ไม่งั้นถามหารูป
+      //      ที่ผู้ใช้เพิ่งส่งมาเมื่อครู่ซ้ำอีก
+      //   2) เป็น Premium จริง — "แนบสลิปเป็นหลักฐาน" เป็นสิทธิ์ Premium
+      //      (transactions.controller: TRANSACTION_SLIP_PREMIUM_REQUIRED) ห้ามถามคน
+      //      ที่ไม่มีสิทธิ์แล้วค่อยปฏิเสธทีหลัง — Requirement ห้ามชัดเจน
+      //   3) เปิด Session สำเร็จ — ถ้าเปิดไม่ได้ (DB ล่ม) ส่งรูปมาก็ไม่มีอะไรรับ
+      const shouldAskForSlip =
+        !pending?.slipToken &&
+        entitlement.isPremiumActive(user) &&
+        (await transactionSlipSession.startWaiting(user.id, result.transactionId));
+
       // ⚠️ ถ้ามาถึงบรรทัดนี้ = Transaction จริงถูกบันทึกลง DB สำเร็จแล้ว
       // (pendingService.confirmPending คืน result ก็ต่อเมื่อ Commit สำเร็จ) —
       // กรณี attachTransaction พังทีหลัง Service จะ Swallow ไว้แล้ว (ดู Comment
       // ใน pendingTransaction.service) เราจึงตอบผู้ใช้ว่า "สำเร็จ" ได้เสมอ
       // และ "ห้าม Retry" เด็ดขาด เพราะ pending ถูก Claim ไปแล้ว การกดซ้ำจะได้
       // PENDING_ALREADY_RESOLVED (ไม่สร้าง Transaction ซ้ำ)
-      return commandType === 'buy'
-        ? flexMessage.buildBuyConfirmMessage(result)
-        : flexMessage.buildSellConfirmMessage(result);
+      const confirmMessage =
+        commandType === 'buy'
+          ? flexMessage.buildBuyConfirmMessage(result)
+          : flexMessage.buildSellConfirmMessage(result);
+
+      // ต่อท้ายด้วยข้อความชวนแนบสลิป (ข้อความที่ 2 ใน Reply เดียวกัน — LINE ส่งได้
+      // สูงสุด 5 ข้อความต่อ Reply อยู่แล้ว) การ์ดยืนยันเดิมไม่ถูกแก้แม้แต่ Field เดียว
+      return shouldAskForSlip
+        ? [confirmMessage, flexMessage.buildSlipAttachPromptMessage()]
+        : confirmMessage;
     }
 
     case 'cancel': {
@@ -952,15 +975,20 @@ async function routePostback(user, data) {
     }
 
     // ── AI Slip OCR (Round 9): ผู้ใช้กด "ยืนยันบันทึก" จากการ์ดที่ AI อ่านสลิป ────────
-    // เช็ค Premium ซ้ำ (กันสถานะเปลี่ยนระหว่างกดปุ่ม) → ประกอบเป็นคำสั่ง BUY/SELL แล้ว
-    // "Route ผ่าน routeCommand เดิม" (Reuse type resolution + fund + createPending +
-    // validateBuy/validateSell ทั้งหมด) → เข้า Preview→Confirm ปกติเหมือนคำสั่งพิมพ์เอง
-    // ทุกประการ ไม่ Skip Validation ใดๆ (ตาม Design ข้อ 6)
+    // ประกอบเป็นคำสั่ง BUY/SELL แล้ว "Route ผ่าน routeCommand เดิม" (Reuse type
+    // resolution + fund + createPending + validateBuy/validateSell ทั้งหมด) → เข้า
+    // Preview→Confirm ปกติเหมือนคำสั่งพิมพ์เองทุกประการ ไม่ Skip Validation ใดๆ
+    //
+    // ⚠️ ถอด Premium Gate ออกจากขั้นนี้โดยเจตนา (ทดลองฟรี 3 ครั้ง — Founder อนุมัติ):
+    // เดิมเช็ค isPremiumActive ซ้ำที่นี่ "กันสถานะเปลี่ยนระหว่างกดปุ่ม" แต่เมื่อผู้ใช้ Free
+    // อ่านสลิปได้ 3 ครั้งแล้ว การคง Gate ไว้จะทำให้เขา "เห็นการ์ด Preview แต่กดยืนยัน
+    // ไม่ได้" ซึ่งคือการถามแล้วปฏิเสธทีหลัง (สิ่งที่ Requirement ห้ามชัดเจน)
+    //
+    // ปลอดภัยที่จะถอดเพราะขั้นนี้ "ไม่เรียก Claude เลยสักครั้ง" (ไม่มีต้นทุน) และปลายทาง
+    // คือ routeCommand → createPending → บันทึกธุรกรรม ซึ่งเป็นฟีเจอร์ฟรีไม่จำกัดอยู่แล้ว
+    // (ผู้ใช้พิมพ์ "ซื้อ BTC 1000" เองก็ได้ผลเดียวกัน) — Gate ที่มีความหมายจริงอยู่ที่
+    // handleAssetSlipImage ซึ่งเป็นจุดเดียวที่เสียเงิน และยังบังคับอยู่ครบ
     case 'ocr_confirm': {
-      if (!entitlement.isPremiumActive(user)) {
-        return flexMessage.buildOcrPremiumRequiredMessage();
-      }
-
       // ⚠️ ห้าม Default เป็น 'buy' เมื่อ side หายไป/ไม่ถูกต้อง (บั๊กสลิปขายถูกบันทึกเป็นซื้อ)
       // การ์ด Preview ส่ง side มาเสมอเมื่อทิศทางชัด และส่งค่าที่ "ผู้ใช้เลือกเอง" เมื่อไม่ชัด
       // ดังนั้นการที่ไม่มี side = Postback เก่า/ถูกแก้มา → ให้ผู้ใช้ยืนยันทิศทางใหม่ ดีกว่าเดา
@@ -1234,7 +1262,64 @@ async function handleImage(event) {
     return handlePaymentSlipImage(event, pending, user);
   }
 
+  // ── (ใหม่) กำลังรอสลิปของรายการที่เพิ่งบันทึกอยู่หรือไม่ ────────────────────
+  // ต้องเช็ค "ก่อน" handleAssetSlipImage เสมอ เพราะเส้นทางนี้ไม่เรียก Claude เลย
+  // (ไม่มีต้นทุน + ไม่กินโควตา OCR) ถ้าปล่อยให้ตกไป OCR ก่อน ผู้ใช้ที่แค่จะแนบ
+  // หลักฐานจะเสียโควตาฟรีๆ ทุกครั้ง
+  //
+  // ⚠️ ไม่มี Session = คืน null = ตกไป handleAssetSlipImage เหมือนเดิมทุกประการ
+  // (Requirement ข้อ 2: "ส่งรูปโดยไม่ได้อยู่ในสถานะนี้ ต้องยังเข้า OCR เหมือนเดิม")
+  const slipSession = await transactionSlipSession.getActiveSession(user.id);
+  if (slipSession) {
+    return handleAwaitedTransactionSlipImage(event, user, slipSession);
+  }
+
   return handleAssetSlipImage(event, user);
+}
+
+// ── แนบสลิปเข้ารายการที่ผู้ใช้เพิ่งบันทึก (ไม่เรียก AI) ──────────────────────
+// เส้นทางนี้เกิดเฉพาะเมื่อมี transaction_slip_sessions ที่ยังไม่หมดอายุเท่านั้น
+//
+// Reuse ทุกชั้นของเดิม: storageService.uploadTransactionSlip (Validate MIME/ขนาดในตัว)
+// → transactionRepository.attachSlipImagePath (กรอง user_id ในตัว) — ไม่มี Logic
+// อัปโหลด/ตรวจสิทธิ์คู่ขนานใหม่
+//
+// ⚠️ ปิด Session "ทุกเส้นทางออก" รวมถึงตอนล้มเหลว (ดูเหตุผลใน transactionSlipSession
+// .service.stopWaiting) — ไม่งั้นรูปใบถัดไปที่ผู้ใช้ตั้งใจส่งให้ AI อ่านจะโดนดูดเข้า
+// รายการเดิมซ้ำอีกจนกว่าจะครบ TTL
+async function handleAwaitedTransactionSlipImage(event, user, session) {
+  let uploadedPath = null;
+  try {
+    const { buffer, contentType } = await lineService.getMessageContent(event.message.id);
+    const { path } = await storageService.uploadTransactionSlip(user.id, buffer, contentType);
+    uploadedPath = path;
+    await transactionRepository.attachSlipImagePath(session.transactionId, path, user.id);
+
+    await transactionSlipSession.stopWaiting(user.id);
+    await lineService.replyMessage(event.replyToken, flexMessage.buildSlipAttachedMessage());
+  } catch (err) {
+    // Compensating Delete — ถ้า attach พังหลังอัปโหลดสำเร็จ ไฟล์จะกลายเป็น Orphan
+    // (Pattern เดียวกับ transactions.controller.uploadTransactionSlip)
+    if (uploadedPath) {
+      try {
+        await storageService.deleteTransactionSlip(uploadedPath);
+      } catch (cleanupErr) {
+        console.error(
+          `[webhook] ORPHAN transaction slip — attach failed and cleanup failed too: ` +
+            `path=${uploadedPath} cleanupError=${cleanupErr.message}`
+        );
+      }
+    }
+
+    console.error(
+      `[webhook] awaited slip attach failed (transactionId=${session.transactionId}): ${err.message}`
+    );
+    await transactionSlipSession.stopWaiting(user.id);
+    await lineService.replyMessage(
+      event.replyToken,
+      flexMessage.buildSlipAttachFailedMessage(err.code)
+    );
+  }
 }
 
 // ── (Round 5) สลิปโอนเงิน Premium — มีคำขอ pending ค้าง ────────────────────
@@ -1394,8 +1479,15 @@ async function uploadOcrSlipBestEffort(userId, buffer, contentType) {
 // แล้วแปลง code เป็นข้อความไทยเฉพาะผ่าน buildOcrErrorMessage (Quota เต็ม/ไม่ใช่สลิป/
 // หลายรายการ/Rate Limit/ล้มเหลว) — replyMessage เองไม่ throw อยู่แล้ว
 async function handleAssetSlipImage(event, user) {
-  if (!entitlement.isPremiumActive(user)) {
-    await lineService.replyMessage(event.replyToken, flexMessage.buildOcrPremiumRequiredMessage());
+  // ทดลองฟรี 3 ครั้ง/บัญชี (Founder อนุมัติ) — Premium ผ่านเสมอ / Free ผ่านได้จนกว่า
+  // จะครบโควตาทดลองตลอดอายุบัญชี (นับจาก ai_ocr_usage ถังเดียวกับ Premium — ดู
+  // slipOcrAccess.service) นี่คือ "จุดเดียวที่เสียเงินจริง" ของ Flow นี้ Gate จึงอยู่ที่นี่
+  const access = await slipOcrAccess.checkAccess(user);
+  if (!access.allowed) {
+    await lineService.replyMessage(
+      event.replyToken,
+      flexMessage.buildOcrPremiumRequiredMessage(access.reason)
+    );
     return;
   }
 
@@ -1409,10 +1501,21 @@ async function handleAssetSlipImage(event, user) {
     // ตอนผู้ใช้กดยืนยันเป็นคนละ Webhook Event ซึ่ง buffer หายไปแล้ว จึงเก็บไฟล์ไว้ก่อน
     // แล้วพก token สั้นๆ ไปกับ Postback ให้ขั้นยืนยันประกอบ path กลับเอง
     //
+    // ⚠️ เฉพาะ Premium เท่านั้นที่เก็บรูปไว้: "แนบสลิปเป็นหลักฐาน" เป็นสิทธิ์ Premium
+    // แยกต่างหาก (transactions.controller.uploadTransactionSlip — TRANSACTION_SLIP_
+    // PREMIUM_REQUIRED) ผู้ใช้ที่กำลังทดลองฟรีจึงได้ "ผลอ่าน" แต่ไม่ได้สิทธิ์เก็บรูป —
+    // ทิ้ง buffer ไปเลยไม่อัปโหลด (พฤติกรรมเดียวกับ OCR ก่อนมี S8) ดีกว่าอัปโหลดแล้ว
+    // ไม่ได้ใช้ ซึ่งจะกลายเป็นไฟล์ค้างใน Storage ที่ไม่มีธุรกรรมไหนอ้างถึง
+    //
     // ⚠️ Fail Isolated: อัปโหลดไม่สำเร็จ (Storage ล่ม/ไฟล์ใหญ่เกิน/MIME ไม่รองรับ)
     // ต้องไม่ทำให้ Flow OCR เดิมพัง — ผู้ใช้ยังเห็นการ์ด Preview และบันทึกธุรกรรมได้
     // ตามปกติ แค่ไม่มีรูปแนบเท่านั้น (Log ไว้พอ)
-    ocr.slipToken = await uploadOcrSlipBestEffort(user.id, buffer, contentType);
+    ocr.slipToken =
+      access.mode === 'premium' ? await uploadOcrSlipBestEffort(user.id, buffer, contentType) : null;
+    // ให้การ์ด Preview บอกโควตาทดลองที่เหลือได้ (Premium ไม่มี Field นี้ = ไม่แสดง)
+    if (access.mode === 'trial') {
+      ocr.trialRemaining = Math.max(0, (access.trialRemaining ?? 1) - 1);
+    }
     await lineService.replyMessage(event.replyToken, flexMessage.buildOcrPreviewMessage(ocr));
   } catch (err) {
     // getMessageContent (ไม่มี code) → OCR_FAILED | SlipOcrError → code เฉพาะ

@@ -5,6 +5,8 @@ const dcaStatsService = require('../services/dcaStats.service');
 const transactionRepository = require('../repositories/transaction.repository');
 const entitlementService = require('../services/entitlement.service');
 const storageService = require('../services/storage.service');
+const slipOcrService = require('../services/slipOcr.service');
+const slipOcrAccess = require('../services/slipOcrAccess.service');
 
 // ═══════════════════════════════════════════════════════════════════════════
 // transactions.controller — บันทึก DCA (ซื้อ) และการขาย จากเว็บ (S8 Round 1a)
@@ -103,6 +105,23 @@ const WEB_ERROR_MESSAGES = {
   EMPTY_BODY: 'ไม่พบไฟล์รูป กรุณาเลือกรูปสลิปใหม่',
   INVALID_SLIP_CONTENT_TYPE: 'ไฟล์ต้องเป็นรูปภาพ (JPG, PNG, WebP หรือ GIF) เท่านั้น',
   SLIP_TOO_LARGE: 'ไฟล์รูปใหญ่เกินไป (สูงสุด 10 MB)',
+  // ── AI อ่านสลิปบนเว็บ (Reuse slipOcr.service ตัวเดียวกับ LINE) ──────────────
+  // ข้อความชุดนี้คือคู่ขนานฝั่งเว็บของ flexMessage.OCR_ERROR — ต่างกันแค่สำนวน
+  // (ไม่สั่งให้ "พิมพ์คำสั่ง" แบบแชท) ส่วน Error Code เป็นชุดเดียวกันเป๊ะ
+  OCR_PREMIUM_REQUIRED:
+    'อ่านสลิปด้วย AI เป็นฟีเจอร์สำหรับสมาชิก Premium — อัพเกรดเพื่อให้ระบบอ่านสลิปและกรอกรายการให้อัตโนมัติ',
+  OCR_TRIAL_EXHAUSTED:
+    'คุณใช้สิทธิ์ทดลองอ่านสลิปด้วย AI ครบแล้ว — อัพเกรดเป็น Premium เพื่อใช้ต่อได้ไม่จำกัด',
+  OCR_QUOTA_EXCEEDED: 'ใช้โควตาอ่านสลิปด้วย AI ของเดือนนี้ครบแล้ว กรุณารอรอบเดือนถัดไป',
+  OCR_CALL_LIMIT_EXCEEDED:
+    'ระบบอ่านสลิปถูกใช้งานเกินเพดานของเดือนนี้แล้ว กรุณาลองใหม่ในรอบเดือนถัดไป หรือกรอกรายการเอง',
+  OCR_RATE_LIMITED: 'คุณส่งรูปถี่เกินไป กรุณารอสักครู่ (ประมาณ 10 วินาที) แล้วลองใหม่',
+  OCR_NOT_A_SLIP:
+    'อ่านรูปนี้เป็นสลิปซื้อ/ขายสินทรัพย์ไม่ได้ กรุณาส่งรูปสลิปที่เห็นชื่อสินทรัพย์และตัวเลขชัดเจน (ครั้งนี้ไม่ถูกนับโควตา)',
+  OCR_MULTIPLE_ITEMS:
+    'รูปนี้มีหลายรายการ ระบบยังไม่รองรับการอ่านหลายรายการต่อรูป กรุณาส่งสลิปทีละรายการ (ครั้งนี้ไม่ถูกนับโควตา)',
+  OCR_FAILED: 'อ่านสลิปไม่สำเร็จในขณะนี้ กรุณาลองใหม่อีกครั้ง หรือกรอกรายการเอง (ไม่ถูกนับโควตา)',
+  OCR_NOT_CONFIGURED: 'ระบบอ่านสลิปด้วย AI ยังไม่พร้อมใช้งานในขณะนี้ กรุณาลองใหม่ภายหลัง',
   INTERNAL_ERROR: 'เกิดข้อผิดพลาดภายในระบบ กรุณาลองใหม่อีกครั้ง',
 };
 
@@ -142,6 +161,17 @@ const ERROR_STATUS = {
   EMPTY_BODY: 400,
   INVALID_SLIP_CONTENT_TYPE: 415,
   SLIP_TOO_LARGE: 413,
+  // AI อ่านสลิปบนเว็บ — Status ตรงตามความหมายของแต่ละกรณี (API.md § 5-6)
+  OCR_PREMIUM_REQUIRED: 403,
+  OCR_TRIAL_EXHAUSTED: 403,
+  OCR_QUOTA_EXCEEDED: 429,
+  OCR_CALL_LIMIT_EXCEEDED: 429,
+  OCR_RATE_LIMITED: 429,
+  // อ่านไม่ออก/หลายรายการ = ปัญหาที่ "รูปที่ส่งมา" ซึ่งผู้ใช้แก้เองได้ (ส่งรูปใหม่)
+  OCR_NOT_A_SLIP: 422,
+  OCR_MULTIPLE_ITEMS: 422,
+  OCR_FAILED: 502,
+  OCR_NOT_CONFIGURED: 503,
 };
 
 // UUID v4-ish รูปแบบ (Postgres uuid column) — Validate ก่อน Query กัน id ผิดรูปทำ Postgres
@@ -393,6 +423,42 @@ async function createTransaction(req, res) {
       await transactionRepository.findAllByUser(req.user.id)
     );
 
+    // ── แนบรูปสลิปที่อัปโหลดไว้ตอน AI อ่าน (Flow เว็บ: scanSlipWithAi → ยืนยัน) ──
+    //
+    // ⚠️ Fail Isolated เต็มรูปแบบ — เหตุผลเดียวกับ attachSlipBestEffort ใน
+    // webhook.controller: ถึงบรรทัดนี้แปลว่าธุรกรรมถูก Commit ลง Ledger แล้ว ถ้าแนบ
+    // รูปพลาดแล้วโยน Error ออกไป ผู้ใช้จะเห็นว่า "บันทึกไม่สำเร็จ" ทั้งที่สำเร็จแล้ว
+    // → กดซ้ำ → ได้ธุรกรรมซ้ำใน Ledger ซึ่งแก้ได้ด้วย Reversal เท่านั้น
+    //
+    // ⚠️ path ประกอบจาก req.user.id (JWT ที่ Verify แล้ว) เสมอ ไม่ใช่ค่าจาก Body —
+    // ผู้ใช้ที่เดา token ของคนอื่นจะได้ path ใต้ userId ตัวเองซึ่งไม่มีไฟล์อยู่จริง
+    // (Pattern เดียวกับที่ webhook.controller ทำกับ slipToken จาก Postback)
+    const rawSlipToken = body.slipToken;
+    if (typeof rawSlipToken === 'string' && rawSlipToken !== '') {
+      if (!entitlementService.isPremiumActive(req.userRecord)) {
+        // ไม่ throw — ธุรกรรมบันทึกสำเร็จแล้ว แค่ไม่แนบรูปให้ (ผู้ใช้ทดลองฟรีจะไม่มี
+        // token อยู่แล้วตั้งแต่ขั้น scanSlipWithAi นี่เป็นแค่ Defense-in-depth)
+        console.error(`[transactions] slipToken ignored for non-premium user ${req.user.id}`);
+      } else {
+        const slipPath = storageService.buildTransactionSlipPath(req.user.id, rawSlipToken);
+        if (slipPath) {
+          try {
+            await transactionRepository.attachSlipImagePath(
+              result.transactionId,
+              slipPath,
+              req.user.id
+            );
+          } catch (err) {
+            console.error(
+              `[transactions] attachSlipImagePath failed AFTER commit ` +
+                `(transactionId=${result.transactionId}): ${err.message} — transaction is ` +
+                'already persisted; slip will simply be missing from history'
+            );
+          }
+        }
+      }
+    }
+
     return res.status(201).json({
       transaction: {
         id: result.transactionId,
@@ -560,4 +626,101 @@ async function uploadTransactionSlip(req, res) {
   }
 }
 
-module.exports = { createTransaction, undoLast, uploadTransactionSlip };
+// POST /api/v1/transactions/slip-ocr — ให้ AI อ่านสลิปแล้วคืนค่าที่อ่านได้ (ยังไม่บันทึก)
+//
+// ═══════════════════════════════════════════════════════════════════════════
+// ⚠️ Endpoint นี้ "ไม่สร้างธุรกรรม" และ "ไม่แตะ Ledger" เด็ดขาด — คืนค่าที่อ่านได้
+// ให้ Frontend แสดงเป็นฟอร์มให้ผู้ใช้ "ตรวจ + แก้ไข + กดยืนยัน" ก่อนเสมอ แล้วค่อยส่ง
+// POST /api/v1/transactions ตามปกติ (Pattern เดียวกับการ์ด Preview ใน LINE ที่ไม่มี
+// ทางที่ข้อมูลจาก AI ถูกบันทึกโดยไม่ผ่านการยืนยัน — Requirement ระบุชัดเจน)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Reuse 100% ไม่มี Logic คู่ขนานใหม่:
+//   - โควตา/Rate Limit/เพดานต้นทุน/การเรียก Claude → slipOcrService.extractSlip ตัวเดิม
+//     (ถังโควตาเดียวกับ LINE เป๊ะ — ai_ocr_usage ตาราง/คอลัมน์เดียวกัน ใช้ทางเว็บแล้ว
+//     โควตาฝั่ง LINE ลดตามทันที ซึ่งเป็นเงื่อนไขที่ Requirement ย้ำเป็นพิเศษ)
+//   - สิทธิ์เข้าใช้ (Premium / ทดลองฟรี 3 ครั้ง) → slipOcrAccess.checkAccess ตัวเดียว
+//     กับที่ webhook.controller ใช้ (ไม่เทียบ isPremiumActive เองที่นี่)
+//   - อัปโหลดรูป → storageService.uploadTransactionSlip เดิม
+//
+// Body เป็น Binary รูปภาพดิบ (express.raw ที่ Route) เหมือน POST /:id/slip ทุกประการ
+async function scanSlipWithAi(req, res) {
+  // 1) สิทธิ์ก่อนแตะ Body — ไม่ประมวลผลไฟล์/ไม่ยิง Claude ให้ผู้ที่ไม่มีสิทธิ์เลย
+  const access = await slipOcrAccess.checkAccess(req.userRecord);
+  if (!access.allowed) {
+    // แยก 2 กรณีให้ Frontend เลือกข้อความ/ปุ่มได้ตรง: ไม่เคยมีสิทธิ์ vs ใช้ทดลองครบแล้ว
+    return fail(res, access.reason ? 'OCR_TRIAL_EXHAUSTED' : 'OCR_PREMIUM_REQUIRED');
+  }
+
+  const buffer = req.body;
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
+    return fail(res, 'EMPTY_BODY');
+  }
+  const contentType = req.get('content-type');
+
+  try {
+    // 2) อ่านสลิป (Rate Limit + Quota + เพดานต้นทุน อยู่ใน Service ทั้งหมด)
+    const ocr = await slipOcrService.extractSlip(req.user.id, buffer, contentType);
+
+    // 3) เก็บรูปไว้แนบตอนยืนยัน — เฉพาะ Premium เท่านั้น
+    //
+    // ⚠️ "แนบสลิปเป็นหลักฐาน" เป็นสิทธิ์ Premium แยกต่างหาก (ดู uploadTransactionSlip
+    // — TRANSACTION_SLIP_PREMIUM_REQUIRED) ผู้ใช้ที่กำลังทดลองฟรีจึงได้ "ผลอ่าน" แต่
+    // ไม่ได้สิทธิ์เก็บรูป — ทิ้ง buffer ไปเลยไม่อัปโหลด (พฤติกรรมเดียวกับฝั่ง LINE
+    // ที่แก้ในรอบเดียวกันนี้) ดีกว่าอัปโหลดแล้วไม่มีธุรกรรมไหนอ้างถึง = ไฟล์ค้าง
+    //
+    // ⚠️ Fail Isolated: อัปโหลดพลาดต้องไม่ทำให้ผลอ่านที่จ่ายเงินไปแล้วสูญเปล่า —
+    // ผู้ใช้ยังได้ฟอร์มที่กรอกไว้ให้ครบ แค่ไม่มีรูปแนบ (Pattern เดียวกับ
+    // uploadOcrSlipBestEffort ใน webhook.controller)
+    let slipToken = null;
+    if (access.mode === 'premium') {
+      try {
+        const uploaded = await storageService.uploadTransactionSlip(
+          req.user.id,
+          buffer,
+          contentType
+        );
+        slipToken = uploaded.token;
+      } catch (err) {
+        console.error(`[transactions] slip upload after OCR failed (non-fatal): ${err.message}`);
+      }
+    }
+
+    return res.status(200).json({
+      // ค่าที่อ่านได้ — Frontend เอาไป Prefill ฟอร์มให้ผู้ใช้ตรวจ/แก้ไข
+      // side/orderStatus เป็น null ได้ (อ่านไม่ชัด) → Frontend ต้องบังคับให้ผู้ใช้เลือกเอง
+      slip: {
+        symbol: ocr.symbol,
+        side: ocr.side,
+        orderStatus: ocr.orderStatus,
+        quantity: ocr.quantity,
+        pricePerUnit: ocr.pricePerUnit,
+        amountTotal: ocr.amountThb,
+        currency: ocr.currency,
+        date: ocr.dateIso,
+        confidence: ocr.confidence,
+      },
+      // พก token ไปกับฟอร์ม แล้วส่งกลับมาใน POST /transactions ตอนกดยืนยัน
+      // (null = ไม่มีรูปให้แนบ — ทดลองฟรี หรืออัปโหลดพลาด)
+      slipToken,
+      // โควตาคงเหลือ: Premium = รายเดือน / ทดลองฟรี = ตลอดอายุบัญชี (คนละความหมาย
+      // จึงส่ง mode ไปด้วยให้ Frontend เลือกข้อความเองได้ ไม่ต้องเดา)
+      quota: {
+        mode: access.mode,
+        remaining:
+          access.mode === 'premium'
+            ? ocr.remainingQuota
+            : Math.max(0, (access.trialRemaining ?? 1) - 1),
+      },
+    });
+  } catch (err) {
+    if (err instanceof slipOcrService.SlipOcrError) {
+      return fail(res, err.code, err.details ?? {});
+    }
+
+    console.error(`[transactions] scanSlipWithAi failed: ${err.message}`);
+    return fail(res, 'OCR_FAILED');
+  }
+}
+
+module.exports = { createTransaction, undoLast, uploadTransactionSlip, scanSlipWithAi };

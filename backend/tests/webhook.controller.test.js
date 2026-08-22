@@ -2544,13 +2544,30 @@ describe('handleEvent — AI Slip OCR Postback (Round 9)', () => {
     );
   });
 
-  test('ocr_confirm ไม่ใช่ Premium (Plan เปลี่ยนระหว่างกดปุ่ม) → Premium required, ไม่ createPending', async () => {
+  // ⚠️ พฤติกรรมนี้ "เปลี่ยนโดยเจตนา" ตอนเปิดให้ทดลองอ่านสลิปฟรี 3 ครั้ง (Founder อนุมัติ)
+  //
+  // เดิม: ocr_confirm เช็ค isPremiumActive ซ้ำ "กันสถานะเปลี่ยนระหว่างกดปุ่ม" → ผู้ใช้
+  //       ที่ไม่ใช่ Premium กดยืนยันไม่ได้ ตอบการ์ดชวนอัพเกรดแทน
+  // ใหม่: ไม่เช็คแล้ว — ผู้ใช้ Free ที่ได้สิทธิ์ทดลองอ่านสลิปต้อง "กดยืนยันบันทึกได้จริง"
+  //       ไม่งั้นจะกลายเป็นให้ชิมแล้วปฏิเสธตอนจบ ซึ่ง Requirement ห้ามชัดเจน
+  //
+  // ปลอดภัยเพราะขั้นนี้ไม่เรียก Claude เลย (ไม่มีต้นทุน) และปลายทางคือการบันทึกธุรกรรม
+  // ซึ่งเป็นฟีเจอร์ฟรีไม่จำกัดอยู่แล้ว (พิมพ์ "ซื้อ BTC 1000" เองก็ได้ผลเดียวกัน) —
+  // Gate ที่มีความหมายจริงอยู่ที่ handleAssetSlipImage (จุดเดียวที่เสียเงิน) ซึ่งยังบังคับครบ
+  test('ocr_confirm ผู้ใช้ Free (ทดลองอ่านสลิปฟรี) → บันทึกได้ตามปกติ ไม่ถูกบล็อกด้วย Premium Gate', async () => {
     entitlement.isPremiumActive.mockReturnValue(false);
+    pendingService.createPending.mockResolvedValue({
+      id: 'p-trial', commandType: 'buy', assetSymbol: 'BTC',
+      quantity: 0.5, pricePerUnit: 1500000, amountThb: 750000, priceSource: 'user',
+    });
 
     await handleEvent(postbackEvent('action=ocr_confirm&sym=BTC&side=buy&qty=0.5&price=1500000'));
 
-    expect(pendingService.createPending).not.toHaveBeenCalled();
-    expect(lastReplyText()).toContain('Premium');
+    expect(pendingService.createPending).toHaveBeenCalledWith(
+      FREE_USER.id,
+      expect.objectContaining({ command: 'BUY' }),
+      expect.anything()
+    );
   });
 
   // ── Bug Fix: สลิป "ขาย" ถูกบันทึกเป็น "ซื้อ" ────────────────────────────
