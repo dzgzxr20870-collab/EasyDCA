@@ -223,6 +223,16 @@ describe('Render smoke test (renderToStaticMarkup — no crash given realistic A
     expect(html).not.toContain('↩︎ ยกเลิก');
   });
 
+  // fix/undo-command-aliases: Title (Tooltip) ต้องบอกทั้ง 2 คำสั่งที่พิมพ์ได้จริง
+  // ใน LINE (ย้อนล่าสุด คำใหม่ + ยกเลิกล่าสุด คำเดิม — ทั้งคู่ Parse ได้เหมือนกัน)
+  test('RecentList — Title ปุ่ม Undo บอกครบทั้ง "ย้อนล่าสุด" และ "ยกเลิกล่าสุด" (คำสั่งที่ commandParser รับจริง)', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(RecentList, { recent: overviewFull.recent, assetTypeBySymbol, onRequestUndo: () => {} })
+    );
+    expect(html).toContain('ย้อนล่าสุด');
+    expect(html).toContain('ยกเลิกล่าสุด');
+  });
+
   // Label ของรายการ Reversal ในประวัติถาวรก็ต้องใช้คำเดียวกัน — จุดที่ผู้ใช้เห็น
   // ซ้ำๆ ทุกครั้งที่เปิดดูรายการ ไม่ใช่แค่ตอนกดปุ่ม
   test('RecentList — Note ของรายการ Reversal แสดง "ย้อนรายการ" ไม่ใช่ "ยกเลิกรายการ"', () => {
@@ -501,6 +511,23 @@ describe('Render smoke test (renderToStaticMarkup — no crash given realistic A
         })
       )
     ).not.toThrow();
+  });
+
+  // ── fix/undo-command-aliases: คำสั่งที่สอนในแท็บนี้ต้องตรงกับที่ commandParser
+  // รับจริง (ย้อนล่าสุด เพิ่งถูกเพิ่มเข้า UNDO_LAST คู่กับคำเดิม "ยกเลิกล่าสุด") ──
+  test('PortfolioDetailSection — แท็บวิธีใช้งาน สอนคำสั่ง "ย้อนล่าสุด" (คำใหม่ที่ตรงกับ Regex) พร้อมบอกว่า "ยกเลิกล่าสุด" ยังใช้ได้', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(PortfolioDetailSection, {
+        portfolio: LEGACY_PORTFOLIO,
+        profitBySymbol: LEGACY_PROFIT,
+        transactions: LEGACY_TRANSACTIONS,
+        loadError: null,
+        activeTab: 'howto',
+        onTabChange: () => {},
+      })
+    );
+    expect(html).toContain('ย้อนล่าสุด');
+    expect(html).toContain('ยกเลิกล่าสุด');
   });
 
   test('PortfolioDetailSection — พอร์ตว่างเปล่า (isEmpty)', () => {

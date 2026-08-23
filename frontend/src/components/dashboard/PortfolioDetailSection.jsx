@@ -440,9 +440,15 @@ function PortfolioDetailSection({ portfolio, profitBySymbol, transactions, loadE
                 <div className="dh-howto-step">
                   <div className="dh-howto-num">5</div>
                   <div>
-                    <h4>ยกเลิกล่าสุด</h4>
-                    <p>ยกเลิก/ย้อนรายการซื้อ-ขายล่าสุดที่เพิ่งบันทึก</p>
-                    <pre className="dh-cmd">ยกเลิกล่าสุด</pre>
+                    {/* fix/undo-command-aliases: การ์ดยืนยัน/ปุ่มบนเว็บเขียนว่า "ย้อน
+                        รายการ" มาตั้งแต่ fix/misleading-messages (d89c2b6) — สอนคำที่
+                        ตรงกับที่ระบบพูดเอง คำเดิม "ยกเลิกล่าสุด" ยังใช้ได้จริง (Backward
+                        Compat) จึงระบุไว้เป็นทางเลือกคู่กัน ไม่ใช่แทนที่ */}
+                    <h4>ย้อนล่าสุด</h4>
+                    <p>
+                      ย้อนรายการซื้อ-ขายล่าสุดที่เพิ่งบันทึก (พิมพ์ "ยกเลิกล่าสุด" ก็ได้เหมือนกัน)
+                    </p>
+                    <pre className="dh-cmd">ย้อนล่าสุด</pre>
                   </div>
                 </div>
               </div>

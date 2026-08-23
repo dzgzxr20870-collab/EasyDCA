@@ -2795,7 +2795,14 @@ function buildHelpMessage() {
       textLine('• กำไร BTC — กำไร/ขาดทุนรายตัว', { size: 'sm', color: COLOR.textSecondary }),
       textLine('• ประวัติ — รายการล่าสุด', { size: 'sm', color: COLOR.textSecondary }),
       textLine('จัดการ', { size: 'xs', weight: 'bold', color: COLOR.textPrimary }),
-      textLine('• ยกเลิกล่าสุด — ย้อนรายการล่าสุด', { size: 'sm', color: COLOR.textSecondary }),
+      // fix/undo-command-aliases: การ์ดยืนยันเขียนว่า "ย้อนรายการ" มาตั้งแต่
+      // fix/misleading-messages (d89c2b6) แล้ว — ต้องสอนคำที่ตรงกับที่ระบบพูดเอง
+      // ("ย้อนล่าสุด") ไม่ใช่แค่คำเดิม มิฉะนั้นผู้ใช้จะพิมพ์ตามที่การ์ดสอนแล้วไม่มี
+      // คำสั่งไหนรับ (คำเดิม "ยกเลิกล่าสุด" ยังใช้ได้จริง ระบุไว้เป็นทางเลือกคู่กัน)
+      textLine('• ย้อนล่าสุด (หรือ ยกเลิกล่าสุด) — ย้อนรายการซื้อ/ขายล่าสุด', {
+        size: 'sm',
+        color: COLOR.textSecondary,
+      }),
       textLine('• นำเข้าพอร์ต — เพิ่มหลายรายการพร้อมกัน', { size: 'sm', color: COLOR.textSecondary }),
       textLine('• ดูเตือน / ลบเตือน BTC', { size: 'sm', color: COLOR.textSecondary }),
     ],
