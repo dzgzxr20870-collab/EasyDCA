@@ -4,6 +4,45 @@
 
 ## [Unreleased]
 ### Added
+- **มาสคอต "อีซี่" ท่าคิด/ประมวลผล ระหว่างรอ AI อ่านสลิปบนเว็บ**
+  (Branch `feat/undo-command-aliases` เดียวกับงานคำสั่งพ้อง — ยัง**ไม่ได้
+  Push/Merge** รออนุมัติ) · ไม่มี Migration · ไม่แตะ Logic การอ่านสลิป/โควตา/
+  Ledger — งานนี้แค่ใส่รูประหว่างรอ
+  - **ปิดช่องว่างจาก feature/mascot-flex-redesign (c93e83a)**: ตอน Wire รูป
+    มาสคอตรอบแรก Wire ไป 8 จาก 9 รูป เหลือ `02-processing-thinking.png`
+    ที่ยังไม่ได้ใช้ เพราะตอนนั้นไม่มีการ์ด Flex ที่ตรงกับสถานะ "กำลังประมวลผล"
+  - **มติ Founder: ใช้เฉพาะฝั่งเว็บเท่านั้น** — ตัดฝั่ง LINE ออกโดยตั้งใจ เพราะ
+    LINE ตอบกลับได้ครั้งเดียวต่อ 1 Event ถ้าจะโชว์ "กำลังอ่าน…" ต้องเปลี่ยนไปใช้
+    `pushMessage` ที่มีโควตาจำกัดตามแพ็กเกจ LINE ถ้าโควตาหมดผู้ใช้จะไม่ได้รับ
+    ผลอ่านสลิปเลย — แย่กว่าการไม่มีรูปมาก
+  - **ยืนยันไฟล์อยู่บน Supabase Storage แล้วจริง** — `curl -I` ที่
+    `.../flex-assets/02-processing-thinking.png` คืน `200` `Content-Length:
+    1382062` ตรงกับไฟล์ในโปรเจกต์เป๊ะ (`Last-Modified` ตรงกับวันที่ Commit
+    c93e83a) — **ไม่ต้องอัปโหลดใหม่** (ค้นแล้วพบว่าอัปไว้แล้วตั้งแต่รอบแรก
+    พร้อมอีก 8 รูป เพียงแต่ยังไม่ได้ Wire เข้าโค้ด)
+  - `frontend/src/components/dashboard/DcaForm.jsx`: แยก `ScanningMascot`
+    เป็น Sub-component รับ Prop ตรงๆ (`scanning`/`failed`/`onImgError`) วางไว้
+    ข้างปุ่ม "📷 อัปโหลดสลิปให้ AI อ่าน" ภายใน `.dh-entry-choice` เดิม
+    - **กัน Layout กระโดด**: `<span>` ขนาดคงที่ 29×44px (สัดส่วนจริงของรูป
+      1024×1536) **Render อยู่เสมอ**ไม่ว่า `ocrScanning` จะเป็น `true`/`false`
+      สลับแค่ Class ผ่าน `opacity` (ไม่ Mount/Unmount) จึง "จอง" พื้นที่ไว้ตลอด
+      ไม่มี Element ถูกเพิ่ม/ลดออกจาก Flow เลย
+    - `alt="กำลังอ่านสลิป"` (ไม่ใช่ `alt=""`) ตามที่กำหนด
+    - `onError` set `ocrMascotFailed` → ซ่อนรูปเงียบๆ ไม่ให้ไอคอนรูปแตกค้าง
+      (Reset กลับ `false` ทุกครั้งที่เริ่มสแกนใหม่) ปุ่มข้างๆ ยังโชว์ "🤖
+      กำลังอ่านสลิป…" ตามปกติเสมอไม่ว่ากรณีนี้
+    - Animation ลอยเบาๆ (`translateY` ±4px, 2.6s) เคารพ
+      `prefers-reduced-motion: reduce`
+  - Test: `dashboardComponents.render.test.js` — เพิ่ม 4 เคสยืนยัน
+    `scanning=true` → มี Class `visible` + `alt` สื่อความหมาย,
+    `scanning=false` → ไม่มี Class `visible` แต่ `<span>`/`<img>` ยัง Render
+    อยู่ (พิสูจน์ว่าไม่ได้ Unmount), `failed=true` → ไม่มี Class `visible`
+    แม้ `scanning=true`, และนับจำนวน Element เท่ากันทุก State (ยืนยันว่าไม่มี
+    อะไรถูกเพิ่ม/ลดออกจาก Flow) · Red-Green: ถอด Logic Toggle ออก → 1 เคสแดง
+    ตรงจุด เทสต์ที่เหลือเขียวตลอด — Frontend 280 → 284 (+4) เขียวทั้งหมด ·
+    `vite build` ผ่าน · ESLint: Frontend ไม่มี `eslint.config.*`/`.eslintrc.*`
+    ในโปรเจกต์เลย (ปัญหาเดิมของ Repo ไม่เกี่ยวกับงานนี้) รันไม่ได้จริง —
+    ตรวจ Diff ด้วยมือแทน (ไม่มี Import ค้าง/ตัวแปรไม่ใช้)
 - **Link Facebook Page จริงบนหน้า `/support`** — เดิมเป็น Placeholder `📘 Facebook`
   พร้อมป้าย "เร็วๆ นี้" ที่กดไม่ได้
   - ไอคอนโลโก้ Facebook จริง (Inline SVG วงกลมน้ำเงิน `#1877F2` + ตัว "f") แทน Emoji
