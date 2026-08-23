@@ -4,6 +4,9 @@ const priceFeedService = require('./priceFeed.service');
 const fxRateService = require('./fxRate.service');
 const symbolRegistry = require('./symbolRegistry.service');
 const entitlement = require('./entitlement.service');
+// Stage 6a — แหล่งตัดสิน "ความหมายของ transaction type" ที่เดียวของทั้งระบบ
+// (แทน Pattern Binary `=== 'buy' ? ... : ...` ที่ตีความ type ใหม่เป็น sell เงียบๆ)
+const { heldQuantitySign } = require('../utils/transactionType.util');
 
 // แหล่งราคาจริงตาม Asset Type (Pattern เดียวกับที่ priceFeed.service.js ใช้
 // จัดเส้นทาง Crypto → CoinGecko / หุ้นสหรัฐ → Twelve Data) — priceFeedService
@@ -387,9 +390,14 @@ function calculateHeldQuantity(transactions) {
   // และ resolveQuantityAndPrice ที่ปัด quantity ด้วย roundToEight เสมอ — ห้ามใช้
   // roundToTwo เพราะจะปัด Crypto ยอดน้อย (เช่น BTC 0.00049068) เป็น 0 ทำให้ Asset
   // นั้นหายจากพอร์ต/คำนวณกำไรไม่ได้
+  // Stage 6a — เดิมเขียนแบบ Binary `tx.type === 'buy' ? sum + qty : sum - qty`
+  // ซึ่งแปลว่า "ทุก type ที่ไม่ใช่ buy = หักจำนวนออก" — ถ้า dividend เข้ามาได้
+  // จำนวนที่ถือจะหายไปเท่ากับ quantity ของรายการปันผลทันทีโดยไม่มี Error ใดๆ
+  // ตอนนี้ถามความหมายจาก transactionType.util ที่เดียว (default: throw)
   const held = transactions.reduce((sum, tx) => {
     const qty = Number(tx.quantity);
-    return tx.type === 'buy' ? sum + qty : sum - qty;
+    const sign = heldQuantitySign(tx.type, 'transaction.calculateHeldQuantity');
+    return sum + sign * qty;
   }, 0);
 
   return roundToEight(held);

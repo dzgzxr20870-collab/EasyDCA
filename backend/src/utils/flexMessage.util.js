@@ -1,4 +1,6 @@
 const { dowToDayName, THAI_DAY_NAMES, formatThaiDate } = require('./thaiDate.util');
+// Stage 6a — แหล่งตัดสิน "ความหมายของ transaction type" ที่เดียวของทั้งระบบ
+const { thaiLabel, directionTone } = require('./transactionType.util');
 
 // Flex Message Builders ตาม Design System ใน UI_UX.md § 1, § 3
 // สี Sync กับ Theme จริงของเว็บ Dashboard (frontend/src/pages/DashboardHome.css
@@ -723,9 +725,12 @@ function buildHistoryMessage(transactions) {
   const body = [];
 
   transactions.forEach((tx) => {
-    const isBuy = tx.type === 'buy';
-    const label = isBuy ? '🟢 ซื้อ' : '🔴 ขาย';
-    const color = isBuy ? COLOR.profit : COLOR.loss;
+    // Stage 6a — เดิม `const isBuy = tx.type === 'buy'` แล้วตกทุก type ที่เหลือ
+    // เป็น "🔴 ขาย" ซึ่งจะทำให้ LINE แสดงรายการปันผลว่า "ขาย" (Design Doc § 2)
+    const tone = directionTone(tx.type, 'flexMessage.transactionList');
+    const isPositive = tone === 'positive';
+    const label = `${isPositive ? '🟢' : '🔴'} ${thaiLabel(tx.type, 'flexMessage.transactionList')}`;
+    const color = isPositive ? COLOR.profit : COLOR.loss;
     // Multi-Currency (Round 10) — หน่วยตามสกุลของธุรกรรม (Default THB)
     const unit = tx.currency === 'USD' ? 'USD' : 'บาท';
 

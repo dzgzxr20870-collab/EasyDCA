@@ -7,6 +7,8 @@ const entitlementService = require('../services/entitlement.service');
 const storageService = require('../services/storage.service');
 const slipOcrService = require('../services/slipOcr.service');
 const slipOcrAccess = require('../services/slipOcrAccess.service');
+// Stage 6a — แหล่งตัดสิน "ความหมายของ transaction type" ที่เดียวของทั้งระบบ
+const { thaiLabel } = require('../utils/transactionType.util');
 
 // ═══════════════════════════════════════════════════════════════════════════
 // transactions.controller — บันทึก DCA (ซื้อ) และการขาย จากเว็บ (S8 Round 1a)
@@ -610,7 +612,9 @@ async function undoLast(req, res) {
       // "ย้อน" ไม่ใช่ "ยกเลิก" — รายการนี้บันทึกลง Ledger ไปแล้วจริงก่อนถูกกดย้อน
       // (Pattern เดียวกับ flexMessage.buildUndoMessage ฝั่ง LINE — มติ Founder:
       // ห้ามใช้คำเดียวกับ Pending ที่ยังไม่บันทึก)
-      message: `ย้อนรายการ${result.originalType === 'buy' ? 'ซื้อ' : 'ขาย'} ${result.symbol} เรียบร้อยแล้ว`,
+      // Stage 6a — เดิม `result.originalType === 'buy' ? 'ซื้อ' : 'ขาย'` ตกทุก type
+      // ที่เหลือเป็น "ขาย" ทำให้ข้อความ Undo ของปันผลผิด (Design Doc § 2)
+      message: `ย้อนรายการ${thaiLabel(result.originalType, 'transactions.undoLast')} ${result.symbol} เรียบร้อยแล้ว`,
     });
   } catch (err) {
     if (err instanceof undoTransactionService.UndoTransactionError) {
