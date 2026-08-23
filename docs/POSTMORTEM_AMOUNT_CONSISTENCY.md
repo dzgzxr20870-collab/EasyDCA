@@ -272,7 +272,9 @@ Production Log (Railway service `EasyDCA`, 22 ส.ค. 2569) — ค่าดิ
 
 ### Test Coverage
 
-- **Backend:** 2,175 tests / 111 suites เขียวทั้งหมด (เพิ่มใหม่ 34 เคส)
+- **Backend:** 2,175 tests / 111 suites เขียวทั้งหมด (2,143 → 2,175 = **เพิ่มใหม่ 32 เคส**
+  ใน 5 ไฟล์: `amountConsistency.regression` +8 · `slipOcrFee` +8 · `flexMessage.ocr` +7 ·
+  `transactions.controller` +5 · `webhook.controller` +4)
 - **Frontend:** 259 tests / 15 files เขียวทั้งหมด (เพิ่มใหม่ 4 เคส) · `vite build` ผ่าน
 - **Red-Green พิสูจน์จริงทั้ง 3 ก้อน** (AI_WORK_POLICY § 3 ข้อ 3):
 

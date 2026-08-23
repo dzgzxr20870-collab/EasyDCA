@@ -125,7 +125,7 @@
     — Prompt ใหม่ทำให้ Rule 2 เดิมทำงานแทน · การเขียน Ledger ด้วยยอด 106.44 จากสลิป
     (Founder ตรวจถึงหน้าจอแล้วหยุด ไม่ได้กดบันทึก — Log ยืนยันว่าไม่มี
     `POST /api/v1/transactions` หลัง 03:38:29) · Postback `gross` ทาง LINE · `sellAll`
-  - Test: Backend **2,175 tests / 111 suites เขียว** (+34 เคสใหม่) · Frontend
+  - Test: Backend **2,175 tests / 111 suites เขียว** (+32 เคสใหม่) · Frontend
     **259 tests / 15 files เขียว** (+4 เคสใหม่) · **Red-Green พิสูจน์จริงทั้ง 3 ก้อน**
     (ถอด Fix ออกแล้วแดงด้วยเลขจริงจาก Production: 100.01 · 106.32 · 1497.58 โดยเทสต์
     เดิมทั้งหมดเขียวตลอดช่วงที่ใส่บั๊คกลับ)

@@ -431,7 +431,7 @@ Verification" ≠ "ยืนยันด้วย Test เท่านั้น"
   Production มาค้นข้อความใหม่ครบ 3 ตัว (Hash ต่างจาก Build ในเครื่องเพราะ Env Var
   ถูก Bake ตอน Build — CSS Hash ตรงกันเป๊ะ) · `/health` 200 · ไม่มี Error Log
 
-**Test Coverage:** Backend 2,175 tests / 111 suites เขียว (+34) · Frontend 259 tests /
+**Test Coverage:** Backend 2,175 tests / 111 suites เขียว (2,143 → 2,175 = +32) · Frontend 259 tests /
 15 files เขียว (+4) · Red-Green พิสูจน์จริงครบทั้ง 3 ก้อน
 
 ---
