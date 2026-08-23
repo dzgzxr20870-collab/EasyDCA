@@ -20,6 +20,10 @@ function toPending(row) {
     id: row.id,
     userId: row.user_id,
     portfolioId: row.portfolio_id,
+    // โบรกที่ Resolve ไว้ตอน Preview (Stage 5 — migration 046) — พกข้ามขั้น
+    // Preview→Confirm เพื่อให้ตอนบันทึกจริงชี้กลับไปที่สินทรัพย์แถวเดิมได้เป๊ะ
+    // แม้ผู้ใช้จะถือ Symbol เดียวกันอยู่หลายโบรก (null = ไม่ระบุโบรก)
+    brokerId: row.broker_id ?? null,
     commandType: row.command_type,
     assetSymbol: row.asset_symbol,
     assetName: row.asset_name,
@@ -57,6 +61,9 @@ async function create(data) {
     .insert({
       user_id: data.userId,
       portfolio_id: data.portfolioId ?? null,
+      // Stage 5 (migration 046) — nullable, มีค่าเมื่อ Symbol นั้นถูก Resolve ไปยัง
+      // สินทรัพย์ที่ผูกโบรกไว้ (หรือผู้ใช้เลือกโบรกจากปุ่มตอนคำสั่งกำกวม)
+      broker_id: data.brokerId ?? null,
       command_type: data.commandType,
       asset_symbol: data.assetSymbol,
       asset_name: data.assetName ?? null,

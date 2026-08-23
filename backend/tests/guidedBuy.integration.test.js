@@ -152,12 +152,12 @@ function insertedRow() {
 }
 
 function resetMoneyBoundary() {
-  assetRepository.findByUserAndSymbol.mockResolvedValue({
+  assetRepository.findAllByUserAndSymbol.mockResolvedValue([{
     id: ASSET_ID,
     symbol: 'BTC',
     type: 'crypto',
-  });
-  assetRepository.countActiveByUser.mockResolvedValue(1);
+  }]);
+  assetRepository.findActiveSymbolsByUser.mockResolvedValue(Array.from({ length: 1 }, (_, i) => `__OTHER${i}`));
   assetRepository.findByIds.mockResolvedValue([{ id: ASSET_ID, symbol: 'BTC' }]);
   transactionRepository.findAllByUser.mockResolvedValue([]);
   transactionRepository.findAllByAsset.mockResolvedValue([]);
@@ -298,8 +298,8 @@ describe('Guided Flow — ลำดับขั้นและการจบ Se
   test('routeCommand ล้มเหลว (เกินลิมิต Free) → Session "ยังค้าง" ให้ลองยอดใหม่ได้ทันที', async () => {
     userRepository.findByLineUserId.mockResolvedValue({ ...USER, plan: 'free', planExpiresAt: null });
     // Asset ใหม่ + ถือครบ 2 ตัวแล้ว → ASSET_LIMIT_REACHED จาก validateBuy จริง
-    assetRepository.findByUserAndSymbol.mockResolvedValue(null);
-    assetRepository.countActiveByUser.mockResolvedValue(2);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([]);
+    assetRepository.findActiveSymbolsByUser.mockResolvedValue(Array.from({ length: 2 }, (_, i) => `__OTHER${i}`));
 
     await handleEvent(postbackEvent('action=buy_guide'));
     await handleEvent(postbackEvent('action=gbuy_symbol&sym=BTC'));
@@ -421,8 +421,8 @@ describe('PDPA Consent Gate', () => {
 // ═══════════════════════════════════════════════════════════════════════════
 describe('Manual Quantity Fallback — สินทรัพย์ที่ไม่มีราคาตลาดอัตโนมัติ', () => {
   test('EOSE (ไม่อยู่ใน Registry, ไม่มี Price Feed) → ชี้ทางกรอกจำนวนหุ้นเอง ไม่ตอบ Error ตัน', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(null);
-    assetRepository.countActiveByUser.mockResolvedValue(0);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([]);
+    assetRepository.findActiveSymbolsByUser.mockResolvedValue(Array.from({ length: 0 }, (_, i) => `__OTHER${i}`));
     priceFeedService.getCurrentPrice.mockResolvedValue(null);
 
     await handleEvent(postbackEvent('action=buy_guide'));
@@ -439,8 +439,8 @@ describe('Manual Quantity Fallback — สินทรัพย์ที่ไ�
   });
 
   test('ข้อความ Prefill ที่ผู้ใช้ Copy กลับมา → Expert Path เดิมบันทึกได้ตามปกติ', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(null);
-    assetRepository.countActiveByUser.mockResolvedValue(0);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([]);
+    assetRepository.findActiveSymbolsByUser.mockResolvedValue(Array.from({ length: 0 }, (_, i) => `__OTHER${i}`));
     // Asset ใหม่ถูกสร้างตอน Confirm (EOSE ยังไม่เคยถืออยู่)
     assetRepository.create.mockResolvedValue({ id: ASSET_ID, symbol: 'EOSE', type: 'stock_th' });
     priceFeedService.getCurrentPrice.mockResolvedValue(null);
@@ -466,22 +466,22 @@ describe('Multi-Currency — Guided Flow รองรับ USD สำหรั�
 
   // สลับ Boundary เป็นหุ้นสหรัฐ (MSFT) ที่มีราคา USD จริง
   function useUsStock() {
-    assetRepository.findByUserAndSymbol.mockResolvedValue({
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{
       id: ASSET_ID,
       symbol: 'MSFT',
       type: 'stock_us',
-    });
+    }]);
     assetRepository.findByIds.mockResolvedValue([{ id: ASSET_ID, symbol: 'MSFT' }]);
     priceFeedService.getCurrentPriceUsd.mockResolvedValue(MSFT_USD_PRICE);
   }
 
   // หุ้นไทย (PTT) — ไม่มีราคา USD (getCurrentPriceUsd คืน null ตาม resetMoneyBoundary)
   function useThaiStock() {
-    assetRepository.findByUserAndSymbol.mockResolvedValue({
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{
       id: ASSET_ID,
       symbol: 'PTT',
       type: 'stock_th',
-    });
+    }]);
     assetRepository.findByIds.mockResolvedValue([{ id: ASSET_ID, symbol: 'PTT' }]);
   }
 
@@ -606,11 +606,11 @@ describe('Multi-Currency — Guided Flow รองรับ USD สำหรั�
 // ═══════════════════════════════════════════════════════════════════════════
 describe('Regression: stock_th (THB) — Flow เดิมไม่เปลี่ยนแปลงเลย', () => {
   beforeEach(() => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue({
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{
       id: ASSET_ID,
       symbol: 'PTT',
       type: 'stock_th',
-    });
+    }]);
     assetRepository.findByIds.mockResolvedValue([{ id: ASSET_ID, symbol: 'PTT' }]);
   });
 
@@ -660,11 +660,11 @@ describe('หน่วยเงินสะกดผิด/คลุมเคร
   const MSFT_USD_PRICE = 350;
 
   beforeEach(() => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue({
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{
       id: ASSET_ID,
       symbol: 'MSFT',
       type: 'stock_us',
-    });
+    }]);
     assetRepository.findByIds.mockResolvedValue([{ id: ASSET_ID, symbol: 'MSFT' }]);
     priceFeedService.getCurrentPriceUsd.mockResolvedValue(MSFT_USD_PRICE);
     priceFeedService.getCurrentPrice.mockResolvedValue(11725);
@@ -780,11 +780,11 @@ describe('หน่วยเงินสะกดผิด/คลุมเคร
 // Fallback ต่างจาก MSFT — ต้องพิสูจน์ว่ากฎสกุลเงินถูกบังคับ "ก่อน" เส้นนั้นเสมอ
 describe('Production Repro — EOSE (stock_us small-cap) + หน่วยเงินสะกดผิด', () => {
   beforeEach(() => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue({
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{
       id: ASSET_ID,
       symbol: 'EOSE',
       type: 'stock_us',
-    });
+    }]);
     assetRepository.findByIds.mockResolvedValue([{ id: ASSET_ID, symbol: 'EOSE' }]);
   });
 

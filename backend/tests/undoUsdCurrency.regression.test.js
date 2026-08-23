@@ -98,13 +98,13 @@ function setupFakeDb() {
   );
 
   assetRepository.findActiveByUser.mockResolvedValue([AAPL, PTT]);
-  assetRepository.findByUserAndSymbol.mockImplementation(async (userId, symbol) =>
-    symbol === 'AAPL' ? AAPL : PTT
-  );
+  assetRepository.findAllByUserAndSymbol.mockImplementation(async (userId, symbol) => [
+    symbol === 'AAPL' ? AAPL : PTT,
+  ]);
   assetRepository.findByIds.mockImplementation(async (ids) =>
     [AAPL, PTT].filter((a) => ids.includes(a.id))
   );
-  assetRepository.countActiveByUser.mockResolvedValue(2);
+  assetRepository.findActiveSymbolsByUser.mockResolvedValue(['AAPL', 'PTT']);
 }
 
 beforeEach(() => {

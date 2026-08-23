@@ -59,9 +59,18 @@ async function runPortfolioSnapshot(snapshotDate = todayInBangkok()) {
           // Production (ยิงหลาย Symbol หุ้นสหรัฐรัวๆ เกิน 8 Credit/นาทีของ Twelve
           // Data Free Tier) ไม่ Sensitive เรื่อง Latency จึงยอมรอ Throttle Slot +
           // Retry เมื่อโดน 429 แทนที่จะทิ้ง Asset นั้นไปเงียบๆ เหมือนเดิม
-          const profit = await profitService.getAssetProfit(userId, holding.symbol, null, {
-            allowRetry: true,
-          });
+          // ⚠️ ต้องส่ง holding.brokerId เสมอ (Stage 5 — migration 046): ผู้ใช้ที่ถือ
+          // Symbol เดียวกัน 2 โบรกจะมี holding 2 แถวที่ symbol เท่ากัน ถ้าไม่ระบุโบรก
+          // getAssetProfit จะ throw AMBIGUOUS_ASSET_BROKER ทั้งสองแถว แล้วถูก catch
+          // ด้านล่างนับเป็น excludedCount → มูลค่ารวมรายคืนขาด Symbol นั้นไปทั้งก้อน
+          // แบบไม่มี Error ให้เห็นเลย (Snapshot คือตัวเลขเงินที่ผู้ใช้เห็นย้อนหลัง)
+          const profit = await profitService.getAssetProfit(
+            userId,
+            holding.symbol,
+            null,
+            { allowRetry: true },
+            holding.brokerId ?? null
+          );
           totalCurrentValue += profit.currentValue;
           totalProfitLoss += profit.profitLoss;
           hasAny = true;

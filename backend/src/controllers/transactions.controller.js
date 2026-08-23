@@ -1,6 +1,9 @@
 const transactionService = require('../services/transaction.service');
 const undoTransactionService = require('../services/undoTransaction.service');
 const symbolRegistry = require('../services/symbolRegistry.service');
+// Stage 5 (migration 046) — assertOwnedBrokerId: ด่านบังคับก่อนเอา brokerId จาก
+// Request Body ไปใช้ (FK ตรวจแค่ว่ามีอยู่จริง ไม่ได้ตรวจว่าเป็นของใคร)
+const brokerService = require('../services/broker.service');
 const dcaStatsService = require('../services/dcaStats.service');
 const transactionRepository = require('../repositories/transaction.repository');
 const entitlementService = require('../services/entitlement.service');
@@ -76,6 +79,11 @@ const WEB_ERROR_MESSAGES = {
   // แล้ว) แต่ไม่เคยถูก Map ที่ชั้นนี้เลยเพราะเว็บยังไม่มีปุ่มขาย — ถ้าไม่เติม
   // จะตกไป INTERNAL_ERROR 500 ทั้งที่เป็น Business Rule ที่ผู้ใช้แก้เองได้ (400)
   ASSET_NOT_FOUND: 'คุณยังไม่มีสินทรัพย์นี้ในพอร์ต จึงบันทึกการขายไม่ได้',
+  // Stage 5 (migration 046) — ถือ Symbol เดียวกันหลายโบรก แต่คำขอไม่ระบุว่าโบรกไหน
+  // (details.candidates พก assetId/brokerId ไปให้ Frontend ทำตัวเลือกได้ทันที)
+  AMBIGUOUS_ASSET_BROKER:
+    'คุณถือสินทรัพย์นี้อยู่มากกว่า 1 โบรก/Exchange กรุณาเลือกก่อนว่าจะบันทึกรายการนี้ที่ไหน',
+  BROKER_NOT_FOUND: 'ไม่พบโบรก/Exchange ที่เลือก (อาจถูกลบไปแล้ว) กรุณาเลือกใหม่อีกครั้ง',
   NOTHING_TO_SELL: 'สินทรัพย์นี้ขายออกไปหมดแล้ว ไม่มียอดคงเหลือให้ขาย',
   INSUFFICIENT_QUANTITY: 'ขายเกินจำนวนที่ถืออยู่จริง กรุณาตรวจสอบยอดคงเหลือแล้วลองใหม่',
   SELL_PRICE_REQUIRED: 'กรุณากรอก "ราคาที่ขายได้ต่อหน่วย" ด้วย (หรือกดปุ่ม "ขายทั้งหมด" เพื่อใช้ราคาตลาด)',
@@ -148,6 +156,10 @@ const ERROR_STATUS = {
   // ฝั่งขาย — ทั้ง 4 ตัวเป็น Business Rule ที่ผู้ใช้แก้เองได้ (เลือกสินทรัพย์อื่น /
   // ลดจำนวน / กรอกราคา) จึงเป็น 400 ไม่ใช่ 404/500 ตาม API.md § 5-6
   ASSET_NOT_FOUND: 400,
+  // "คำขอยังไม่ครบพอจะตอบได้" ไม่ใช่ Input ผิดรูป — 409 (Pattern เดียวกับ
+  // ASSET_ALREADY_EXISTS: ขัดกับสถานะปัจจุบันของข้อมูล ไม่ใช่ Validation ล้วน)
+  AMBIGUOUS_ASSET_BROKER: 409,
+  BROKER_NOT_FOUND: 404,
   NOTHING_TO_SELL: 400,
   INSUFFICIENT_QUANTITY: 400,
   SELL_PRICE_REQUIRED: 400,
@@ -391,8 +403,43 @@ async function createTransaction(req, res) {
     return fail(res, 'PRICE_REQUIRED_FOR_ASSET', { symbol, type });
   }
 
+  // ── 6.5) โบรก/Exchange ที่ทำรายการนี้ (Stage 5 — migration 046) ────────────
+  // ผู้ใช้ถือ Symbol เดียวกันได้หลายโบรกแล้ว "symbol" จึงระบุสินทรัพย์ไม่ได้อีก
+  //   ไม่ส่ง Key มาเลย  = undefined → ถ้ากำกวมจริงจะได้ 409 AMBIGUOUS_ASSET_BROKER
+  //                       พร้อม candidates กลับไปให้ Frontend ถามผู้ใช้ต่อ
+  //   null / 'none'     = เจาะจงว่า "ไม่ระบุโบรก" (แถวที่ broker_id IS NULL)
+  //   '<uuid>'          = โบรกนั้น
+  //
+  // ⚠️ ต้องผ่าน assertOwnedBrokerId ก่อน "ทุกครั้ง" ห้ามส่งค่าดิบจาก Body ต่อ —
+  // FK ระดับ DB ตรวจได้แค่ "โบรกแถวนี้มีอยู่จริง" ไม่ได้ตรวจ "เป็นของใคร" ถ้าข้าม
+  // ขั้นนี้ ผู้ใช้ A จะสร้างสินทรัพย์ที่ผูกกับโบรกของผู้ใช้ B ได้ทันที (Design Doc § 6.3)
+  const hasBrokerKey = Object.prototype.hasOwnProperty.call(body, 'brokerId');
+  let brokerId;
+  if (hasBrokerKey) {
+    const raw = body.brokerId;
+    if (raw !== null && raw !== undefined && typeof raw !== 'string') {
+      return fail(res, 'VALIDATION_ERROR', { field: 'brokerId' });
+    }
+    try {
+      brokerId = await brokerService.assertOwnedBrokerId(
+        req.user.id,
+        raw === 'none' || raw === '' || raw === undefined ? null : raw
+      );
+    } catch (err) {
+      if (err instanceof brokerService.BrokerServiceError) {
+        return fail(res, err.code === 'BROKER_NOT_FOUND' ? 'BROKER_NOT_FOUND' : 'VALIDATION_ERROR', {
+          field: 'brokerId',
+        });
+      }
+      throw err;
+    }
+  }
+
   const params = {
     symbol,
+    // ส่งต่อ "ตามที่เป็น" — ไม่ใส่ Key เลยเมื่อผู้ใช้ไม่ได้ระบุ (undefined = ยังไม่ได้
+    // ถาม ≠ null = ตอบแล้วว่าไม่มีโบรก) ดูหัวไฟล์ assetResolution.service
+    ...(hasBrokerKey ? { brokerId } : {}),
     // type ใช้เฉพาะตอนซื้อ (validateBuy ต้องใช้สร้าง Asset ใหม่) — คำสั่งขายไม่ส่ง
     // เหมือนเส้นทาง LINE เป๊ะ (validateSell หา Asset จาก symbol ที่ผู้ใช้ถืออยู่จริง)
     ...(isSell ? {} : { type }),
@@ -575,6 +622,15 @@ async function createTransaction(req, res) {
       monthSummary: summary,
     });
   } catch (err) {
+    // Stage 5 (migration 046) — ผู้ใช้ถือ Symbol นี้หลายโบรก แต่คำขอไม่ได้บอกว่าโบรก
+    // ไหน: ตอบ 409 พร้อม candidates (assetId + brokerId) ให้ Frontend ถามผู้ใช้แล้ว
+    // ยิงซ้ำพร้อม brokerId — ห้ามเดาให้เองเด็ดขาด (กฎยืนข้อ 11)
+    if (err?.code === 'AMBIGUOUS_ASSET_BROKER') {
+      return fail(res, 'AMBIGUOUS_ASSET_BROKER', {
+        symbol: err.details?.symbol,
+        candidates: err.details?.candidates ?? [],
+      });
+    }
     if (err instanceof transactionService.TransactionServiceError) {
       return fail(res, err.code, err.details ?? {});
     }

@@ -1,5 +1,8 @@
 const portfolioService = require('../services/portfolio.service');
 const profitService = require('../services/profit.service');
+// Stage 5 (migration 046) — assertOwnedBrokerId: ด่านบังคับก่อนเอา brokerId จาก
+// Query String ของผู้ใช้ไปใช้ (FK ตรวจแค่ว่ามีอยู่ ไม่ได้ตรวจว่าเป็นของใคร)
+const brokerService = require('../services/broker.service');
 const fxRateService = require('../services/fxRate.service');
 const dashboardOverviewService = require('../services/dashboardOverview.service');
 const transactionRepository = require('../repositories/transaction.repository');
@@ -95,9 +98,39 @@ async function getHistory(req, res) {
 // เพราะฝั่ง Web ยังไม่มี Requirement เรื่องข้อความ)
 async function getProfit(req, res) {
   try {
-    const profit = await profitService.getAssetProfit(req.user.id, req.params.symbol.toUpperCase());
+    // Stage 5 (migration 046) — ?brokerId=<uuid|none> เจาะจงว่าหมายถึงสินทรัพย์
+    // แถวไหน เมื่อผู้ใช้ถือ Symbol เดียวกันหลายโบรก
+    //   ไม่ส่งมาเลย = undefined → ถ้ากำกวมจะได้ 409 AMBIGUOUS_ASSET_BROKER กลับไป
+    //                 พร้อม candidates ให้ Frontend เอาไปทำตัวเลือก
+    //   'none'      = เจาะจงแถวที่ไม่ได้ผูกโบรก (null) — ไม่ใช่ "ยังไม่ได้ระบุ"
+    //
+    // ⚠️ ต้องผ่าน assertOwnedBrokerId เสมอ: brokerId มาจาก Query String ที่ผู้ใช้
+    // กำหนดเองได้ 100% (Design Doc § 6.3)
+    const rawBroker = req.query.brokerId;
+    const brokerId =
+      rawBroker === undefined
+        ? undefined
+        : await brokerService.assertOwnedBrokerId(req.user.id, rawBroker === 'none' ? null : rawBroker);
+
+    const profit = await profitService.getAssetProfit(
+      req.user.id,
+      req.params.symbol.toUpperCase(),
+      null,
+      {},
+      brokerId
+    );
     return res.status(200).json(profit);
   } catch (err) {
+    // กำกวม = "คำขอยังไม่ครบพอจะตอบได้" ไม่ใช่ "ไม่พบ" — ตอบ 409 พร้อม candidates
+    // ให้ Frontend ถามผู้ใช้ต่อได้ทันทีโดยไม่ต้องยิง Query เพิ่ม
+    if (err?.code === 'AMBIGUOUS_ASSET_BROKER') {
+      return res
+        .status(409)
+        .json({ error: err.code, candidates: err.details?.candidates ?? [] });
+    }
+    if (err instanceof brokerService.BrokerServiceError) {
+      return res.status(err.code === 'BROKER_NOT_FOUND' ? 404 : 400).json({ error: err.code });
+    }
     if (err instanceof profitService.ProfitServiceError) {
       return res.status(404).json({ error: err.code });
     }

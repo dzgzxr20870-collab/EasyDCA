@@ -62,6 +62,18 @@ const ERROR_MESSAGES = {
   // สำเร็จไปแล้ว จึงชวนตรวจพอร์ตแทนบอกให้ "ลองใหม่" (ซึ่งจะซ้ำอีกไม่มีจบ)
   ASSET_ALREADY_EXISTS: 'สินทรัพย์นี้เพิ่งถูกเพิ่มเข้าพอร์ตไปแล้ว (อาจกดซ้ำ) ลองพิมพ์ "พอต" เพื่อตรวจสอบพอร์ตของคุณ',
   ASSET_NOT_FOUND: 'ไม่พบสินทรัพย์นี้ในพอร์ตของคุณ ลองบันทึกรายการซื้อก่อนนะครับ',
+  // Stage 5 (migration 046) — ถือ Symbol เดียวกันหลายโบรก แล้วคำสั่งไม่ได้ระบุว่าโบรกไหน
+  //
+  // ⚠️ ข้อความนี้เป็น "ตาข่ายกันตก" ไม่ใช่เส้นทางหลัก — เส้นทางหลักคือ
+  // buildBrokerPickerMessage (ปุ่มให้เลือกโบรก) ที่ routeCommand ดักไว้ก่อนแล้ว
+  // จะมาถึงข้อความนี้ได้เฉพาะ Path ที่ตอบเป็นปุ่มไม่ได้จริงๆ (เช่น นำเข้าพอร์ตแบบ
+  // หลายบรรทัดที่ 1 Batch มีหลาย Symbol พร้อมกัน จะถามทีละตัวไม่ไหว)
+  AMBIGUOUS_ASSET_BROKER:
+    'คุณถือสินทรัพย์นี้อยู่มากกว่า 1 ที่ (คนละโบรก/Exchange) ระบบจึงไม่ทราบว่าหมายถึงที่ไหน กรุณาบันทึกทีละรายการผ่านคำสั่งปกติ แล้วเลือกโบรกจากปุ่มที่ระบบถามกลับครับ',
+  // ผู้ใช้กดปุ่มเลือกโบรกช้าเกินไปจนโบรกนั้นถูกลบไปแล้ว (หรือปุ่มมาจากข้อความเก่า)
+  // — assertOwnedBrokerId ตอบ 404 เดียวกับกรณี "เป็นของผู้ใช้คนอื่น" โดยเจตนา
+  // เพื่อไม่ยืนยันการมีอยู่ของข้อมูลผู้ใช้รายอื่น (Design Doc § 6.3)
+  BROKER_NOT_FOUND: 'ไม่พบโบรก/Exchange ที่เลือก (อาจถูกลบไปแล้ว) กรุณาพิมพ์คำสั่งใหม่อีกครั้งครับ',
   INSUFFICIENT_QUANTITY:
     'จำนวนที่ต้องการขายมากกว่าที่คุณถือครองอยู่ กรุณาตรวจสอบยอดคงเหลืออีกครั้ง',
   NO_HOLDING_TO_CALCULATE_PROFIT:
@@ -1427,6 +1439,81 @@ function buildFundClassPickerMessage(project, buy = {}) {
     `กองทุน ${project.projAbbrName} มีหลายชนิดหน่วยลงทุน กรุณาเลือกชนิดที่ต้องการบันทึกครับ:\n${lines}`;
 
   return { type: 'text', text, quickReply: { items } };
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Broker Picker (Stage 5 — migration 046) — "BTC ที่โบรกไหน?"
+// ═══════════════════════════════════════════════════════════════════════
+// ตั้งแต่ UNIQUE Key มี broker_id อยู่ด้วย ผู้ใช้ถือ BTC ได้ทั้งที่ Bitkub และ
+// Binance พร้อมกัน คำสั่ง "ซื้อ BTC 100" จึงกำกวม — assetResolution.service โยน
+// AMBIGUOUS_ASSET_BROKER ขึ้นมาแทนที่จะเดาแถวใดแถวหนึ่ง (กฎยืนข้อ 11: Silent
+// Default เป็น Anti-pattern เสมอ) ที่นี่คือหน้าตาของ "การถามกลับ"
+//
+// ⚠️ ถือโบรกเดียว = ไม่กำกวม = ไม่มีวันมาถึงฟังก์ชันนี้ (กฎยืนข้อ 10 — ห้ามเพิ่ม
+// Latency/ขั้นตอนบน Live Path โดยไม่จำเป็น) การถามเกิดเฉพาะตอนกำกวมจริงเท่านั้น
+//
+// Reuse Pattern เดิมของ Fund Class Picker เป๊ะ: Quick Reply + Postback ที่พก
+// พารามิเตอร์คำสั่งเดิมไปด้วย จึงไม่ต้องมีตาราง Session ใหม่ให้ค้าง/หมดอายุเพิ่ม
+// (LINE Postback ≤ 300 ตัวอักษร — cmd + symbol + uuid + ยอด พอสบาย)
+
+// ตัดข้อความให้ยาวไม่เกิน n **Unicode Code Point** (กฎยืนข้อ 5: label ของ
+// quickReply.items[].action ยาวได้ ≤ 20)
+//
+// ⚠️ ห้ามใช้ String.prototype.slice() ตรงๆ กับงานนี้ — slice นับเป็น UTF-16 Code
+// Unit ซึ่งตัด Surrogate Pair (Emoji) ขาดกลางตัวได้ กลายเป็นอักขระเสีย
+function truncateCodePoints(text, max) {
+  const points = [...String(text ?? '')];
+  return points.length <= max ? points.join('') : points.slice(0, max).join('');
+}
+
+// Postback ของปุ่มเลือกโบรก — พกคำสั่งเดิมกลับไปให้ Controller เล่นซ้ำได้ทั้งดุ้น
+// brokerId = null หมายถึงแถว "ไม่ระบุโบรก" (broker_id IS NULL) ซึ่งเป็นตัวเลือก
+// ที่ถูกต้องพอๆ กับโบรกจริง จึง Encode เป็น 'none' ไม่ใช่ปล่อย Key หายไป (ถ้า
+// ปล่อยหาย ปลายทางจะอ่านได้เป็น undefined = "ยังไม่ได้ถาม" แล้ววนถามซ้ำไม่รู้จบ)
+function brokerPickPostback(commandType, symbol, brokerId, buy = {}) {
+  const p = new URLSearchParams();
+  p.set('action', 'pick_broker');
+  p.set('cmd', commandType);
+  p.set('sym', symbol);
+  p.set('broker', brokerId ?? 'none');
+  if (buy.amountThb !== undefined && buy.amountThb !== null) p.set('amt', String(buy.amountThb));
+  if (buy.quantity !== undefined && buy.quantity !== null) p.set('qty', String(buy.quantity));
+  if (buy.pricePerUnit !== undefined && buy.pricePerUnit !== null) {
+    p.set('price', String(buy.pricePerUnit));
+  }
+  if (buy.currency === 'USD') p.set('cur', 'USD');
+  if (buy.sellAll) p.set('all', '1');
+  return p.toString();
+}
+
+const NO_BROKER_LABEL = 'ไม่ระบุโบรก';
+
+// commandType = 'buy' | 'sell' | 'profit'
+// choices = [{ brokerId, brokerName }] — brokerId null = แถวที่ไม่ได้ผูกโบรก
+// buy = พารามิเตอร์คำสั่งเดิม (amountThb หรือ quantity+pricePerUnit หรือ sellAll)
+function buildBrokerPickerMessage(commandType, symbol, choices, buy = {}) {
+  // LINE จำกัด 13 items ต่อข้อความ — ตัดที่ 13 พอดี (ไม่มีปุ่มยกเลิกต่อท้ายเพราะ
+  // Flow นี้ไม่มี Session ค้างให้ต้องเคลียร์: ผู้ใช้แค่ไม่กดปุ่มก็จบไปเอง)
+  const items = choices.slice(0, 13).map((c) => ({
+    type: 'action',
+    action: {
+      type: 'postback',
+      label: truncateCodePoints(c.brokerName || NO_BROKER_LABEL, 20),
+      data: brokerPickPostback(commandType, symbol, c.brokerId ?? null, buy),
+      displayText: `${symbol} ที่ ${c.brokerName || NO_BROKER_LABEL}`,
+    },
+  }));
+
+  const verb =
+    commandType === 'buy' ? 'บันทึกการซื้อ' : commandType === 'sell' ? 'บันทึกการขาย' : 'ดูกำไร';
+  const lines = choices.map((c) => `• ${c.brokerName || NO_BROKER_LABEL}`).join('\n');
+
+  return {
+    type: 'text',
+    text:
+      `คุณถือ ${symbol} อยู่มากกว่า 1 ที่ กรุณาเลือกก่อนว่าจะ${verb}ของที่ไหนครับ:\n${lines}`,
+    quickReply: { items },
+  };
 }
 
 // ไม่พบกองทุนที่ค้นหา (Scope ข้อ 4) — ไม่ทำ Did-you-mean
@@ -3985,6 +4072,7 @@ module.exports = {
   buildBulkImportPreviewMessage,
   buildBulkImportConfirmedMessage,
   buildFundClassPickerMessage,
+  buildBrokerPickerMessage,
   buildFundNotFoundMessage,
   buildDashboardLinkMessage,
   buildPlanDowngradedMessage,

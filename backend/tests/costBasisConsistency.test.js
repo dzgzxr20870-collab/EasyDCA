@@ -32,7 +32,7 @@ beforeEach(() => {
   jest.clearAllMocks();
 
   assetRepository.findActiveByUser.mockResolvedValue([ASSET_BTC]);
-  assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_BTC);
+  assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_BTC]);
   transactionRepository.findAllByAsset.mockResolvedValue(TRANSACTIONS);
   transactionRepository.findByUserAndDateRange.mockResolvedValue([]);
   userRepository.findById.mockResolvedValue({ id: USER_ID, displayName: 'Test User' });

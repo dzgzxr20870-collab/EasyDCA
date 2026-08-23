@@ -4,6 +4,58 @@
 
 ## [Unreleased]
 ### Added
+- **Multi-Portfolio / Broker / Sector / Dividend — Stage 5: ถือ Symbol เดียวกันได้หลายโบรก**
+  (Branch `feat/dashboard-production-wire` — ยัง**ไม่ได้ Push/Merge/Deploy**
+  รออนุมัติ · Migration **ยังไม่ได้ Apply บน Supabase**)
+  - **migration 046** — `assets` UNIQUE `(user_id, symbol, portfolio_id)` →
+    **`UNIQUE NULLS NOT DISTINCT (user_id, symbol, portfolio_id, broker_id)`**
+    · ยังกันบั๊กเดิมของ migration 014 ได้ครบ (asset ซ้ำทำให้ประวัติธุรกรรม
+    แตกคนละ `asset_id` → Moving Average Cost Basis เห็นแค่ครึ่งเดียว → P&L ผิด)
+    เพราะ `NULLS NOT DISTINCT` ถือว่า NULL เท่ากัน — ข้อมูลเดิม 100% มี `broker_id` NULL
+    · **ไม่ต้องใช้ COALESCE/Partial Index** · เพิ่ม `pending_transactions.broker_id`
+    · `create_asset_locked()` รับ `p_broker_id` (ต่อท้าย + DEFAULT NULL เพื่อให้โค้ดรุ่น
+    เก่าที่ยังรันอยู่ตอน Apply ไม่พัง) + **DROP Signature 8 Argument ทิ้ง** กัน
+    PostgREST ตอบ "Could not choose the best candidate function"
+  - **`assetResolution.service.js` (ไฟล์ใหม่)** — แหล่งตัดสิน "Symbol นี้หมายถึง
+    สินทรัพย์แถวไหน" **ที่เดียวของทั้งระบบ** · กำกวมเมื่อไหร่ → **throw
+    `AMBIGUOUS_ASSET_BROKER`** ไม่ใช่หยิบแถวแรก (กฎยืนข้อ 11: Silent Default
+    เป็น Anti-pattern เสมอ) · กติกา `brokerId`: `undefined` = ยังไม่ได้ถาม /
+    `null` = ตอบแล้วว่า "ไม่ระบุโบรก" / `uuid` = โบรกนั้น — **ห้ามเขียน `?? null`
+    ก่อนส่งเข้า** (จะเปลี่ยน "ยังไม่ได้ถาม" เป็น "ตอบแล้ว" เงียบๆ)
+  - **`asset.repository`** — `findByUserAndSymbol()` (`.maybeSingle()`) →
+    **`findAllByUserAndSymbol()`** · `.maybeSingle()` จะ Error ทันที (PGRST116) เมื่อ
+    symbol มี 2 แถว = **ทั้งคำสั่งซื้อ/ขาย/ดูกำไรของ Symbol นั้นพังทั้งหมด** — ไล่แก้
+    ครบทั้ง 5 จุดบนเส้นทางเงิน (`transaction.validateBuy` / `validateSell` /
+    `webhook.controller` / `bulkImport.service` / `profit.service`)
+  - **เพดาน Free นับ "Symbol ที่ต่างกัน" ไม่ใช่จำนวนแถว** (มติ Founder
+    23 ส.ค. 2569: ถือ BTC ที่ 2 โบรก = **1** สินทรัพย์) · `countActiveByUser()` →
+    `findActiveSymbolsByUser()` · บังคับซ้ำที่ระดับ DB ด้วย `count(DISTINCT symbol)`
+    ใต้ Lock ของ RPC · แก้ `bulkImport.checkAggregateAssetLimit` ให้นับหน่วยเดียวกัน
+  - **Flow ถามโบรกทาง LINE** — `buildBrokerPickerMessage()` (Quick Reply + Postback)
+    · **ถือโบรกเดียว = ห้ามถาม** บันทึกตรงเหมือนเดิม (กฎยืนข้อ 10 — ห้ามเพิ่ม
+    Latency บน Live Path โดยไม่จำเป็น) · Reuse Pattern เดิมของ Fund Class Picker
+    ทั้งชุด — **ไม่มีตาราง Session ใหม่ให้ค้าง/หมดอายุ** · label ตัดที่ 20 **Unicode
+    Code Point** ด้วย `[...str]` ไม่ใช่ `slice()` (กัน Surrogate Pair ของ Emoji ขาดกลางตัว)
+  - **Cross-User Isolation** — `brokerId` ทุกทางเข้า (Request Body / Query String /
+    LINE Postback) ต้องผ่าน `brokerService.assertOwnedBrokerId()` ก่อนเสมอ — FK
+    ระดับ DB ตรวจได้แค่ "โบรกนี้มีอยู่จริง" ไม่ได้ตรวจ "เป็นของใคร"
+  - **`AMBIGUOUS_ASSET_BROKER` → HTTP 409** พร้อม `candidates` (`assetId` + `brokerId`)
+    ให้ Frontend ถามผู้ใช้ต่อได้ทันที (ไม่ใช่ 404 — เป็น "คำขอยังไม่ครบพอจะตอบได้")
+  - **จุดที่เกือบหลุด — `portfolioSnapshot.job`**: ถ้าไม่ส่ง `holding.brokerId` ต่อ
+    ผู้ใช้ที่ถือ Symbol เดียวกัน 2 โบรกจะได้ `AMBIGUOUS_ASSET_BROKER` ทั้งสองแถว → ถูก
+    catch นับเป็น `excludedAssetCount` → **มูลค่าพอร์ตรายคืนขาด Symbol นั้นไปทั้งก้อน
+    โดยไม่มี Error ให้เห็นเลย** · เพิ่ม `assetId`/`brokerId` เข้า `holding` ของ
+    `portfolio.service` เพื่ออุดจุดนี้
+  - **Red-Green จริง 6 ชุด** (ถอด Fix ออก → แดง → ใส่กลับ → เขียว):
+    (1) ถอด throw กำกวม → **แดง 4/37** (2) ถอดการยกเว้น Symbol เดิมจากเพดาน →
+    **แดง 2/15** (3) ถอด `brokerId` จาก `toCommitParams` → **แดง 2/4** (4) ถอด
+    `holding.brokerId` จาก Snapshot Job → **แดง 2/10** (5) ถอด `assertOwnedBrokerId`
+    ฝั่ง HTTP → **แดง 2/9** (6) ถอด `assertOwnedBrokerId` ฝั่ง LINE Postback → **แดง 1/13**
+  - Test ทั้งชุด **118 suites / 2,381 tests → 122 suites / 2,427 tests** เขียวทั้งหมด
+  - ⚠️ **Red-Green ระดับ SQL ของ Constraint เองยังไม่ได้รัน** (เครื่องนี้ไม่มี
+    Docker/psql) — Script เขียนไว้ท้าย migration 046 แล้ว รอ Founder รันบน
+    Supabase Branch · **ยังไม่ได้ Production Verification ทั้งหมด** (ห้าม Deploy)
+
 - **Multi-Portfolio / Broker / Sector / Dividend — Stage 1–4 + 6a**
   (Branch `feat/dashboard-production-wire` — ยัง**ไม่ได้ Push/Merge/Deploy**
   รออนุมัติ · Migration **ยังไม่ได้ Apply บน Supabase**)

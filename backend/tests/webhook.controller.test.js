@@ -156,7 +156,7 @@ beforeEach(() => {
   guidedBuyFlow.cancelFlow.mockResolvedValue(undefined);
   // Default: ไม่ถือ Asset ใดอยู่ + ค้นกองทุนไม่พบ (Symbol ที่ไม่รู้จักถือเป็น unknown asset)
   // — Test ของ Flow กองทุนจะ Override เอง
-  assetRepository.findByUserAndSymbol.mockResolvedValue(null);
+  assetRepository.findAllByUserAndSymbol.mockResolvedValue([]);
   mutualFundService.resolveFundForBuy.mockResolvedValue({ status: 'not_found' });
   // Default: Claim สำเร็จเสมอ (Event ใหม่) — Test ของ Dedup จะ Override เอง
   // (ไม่กระทบ Test เดิมทั้งหมดที่ไม่ได้ใส่ webhookEventId มาด้วย เพราะ Guard เป็น
@@ -2201,10 +2201,10 @@ describe('handleEvent — กองทุนรวมไทย (Round 7)', () =>
       command: COMMANDS.BUY,
       params: { symbol: 'K-SELECT', amountThb: 2000 },
     });
-    assetRepository.findByUserAndSymbol.mockResolvedValue({
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{
       id: 'a-fund', type: 'fund', symbol: 'K-SELECT', name: 'เค ซีเล็คท์',
       projId: 'M0001', fundClassName: 'K-SELECT-A(A)',
-    });
+    }]);
     pendingService.createPending.mockResolvedValue({
       id: 'pf-4', commandType: 'buy', assetSymbol: 'K-SELECT', fundClassName: 'K-SELECT-A(A)',
       quantity: 160, pricePerUnit: 12.5, amountThb: 2000, priceSource: 'secnav',

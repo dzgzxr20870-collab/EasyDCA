@@ -7,6 +7,9 @@ const entitlement = require('./entitlement.service');
 // Stage 6a — แหล่งตัดสิน "ความหมายของ transaction type" ที่เดียวของทั้งระบบ
 // (แทน Pattern Binary `=== 'buy' ? ... : ...` ที่ตีความ type ใหม่เป็น sell เงียบๆ)
 const { heldQuantitySign } = require('../utils/transactionType.util');
+// Stage 5 (migration 046) — แหล่งตัดสิน "Symbol นี้หมายถึงสินทรัพย์แถวไหน" ที่เดียว
+// ของทั้งระบบ (ตั้งแต่ถือ Symbol เดียวกันได้หลายโบรก Symbol เดียวอาจตรงหลายแถว)
+const assetResolution = require('./assetResolution.service');
 
 // แหล่งราคาจริงตาม Asset Type (Pattern เดียวกับที่ priceFeed.service.js ใช้
 // จัดเส้นทาง Crypto → CoinGecko / หุ้นสหรัฐ → Twelve Data) — priceFeedService
@@ -426,27 +429,48 @@ async function validateBuy(userId, params, options = {}) {
   // แปลง/ตรวจจำนวนก่อน (อาจ throw PRICE_FEED/VALIDATION) — ยังไม่แตะ DB
   const amounts = await resolveQuantityAndPrice(params);
 
-  const existingAsset = await assetRepository.findByUserAndSymbol(
-    userId,
-    params.symbol,
-    portfolioId
-  );
+  // ⚠️ ส่ง params.brokerId ต่อ "ตามที่เป็น" ห้ามใส่ `?? null` — undefined
+  // (ยังไม่ได้ถามผู้ใช้) กับ null (ผู้ใช้ตอบแล้วว่าไม่ระบุโบรก) เป็นคนละความหมาย
+  // ทั้งคู่มีผลต่อการสร้างสินทรัพย์ซ้ำแถวใหม่ (ดูหัวไฟล์ assetResolution.service)
+  const { asset: existingAsset } = await assetResolution.resolveOwnedAsset(userId, params.symbol, {
+    portfolioId,
+    brokerId: params.brokerId,
+  });
   if (existingAsset) {
-    return { asset: existingAsset, assetType: existingAsset.type, newAsset: false, amounts };
+    return {
+      asset: existingAsset,
+      assetType: existingAsset.type,
+      newAsset: false,
+      amounts,
+      // ⚠️ คืน "โบรกที่ Resolve ได้จริง" ไม่ใช่ค่าที่ Caller ส่งมา — pendingTransaction
+      // ต้องเก็บค่านี้ลง DB เพื่อให้ตอนกดยืนยันทีหลังกลับมาเจอสินทรัพย์แถวเดิมเป๊ะ
+      // (ถ้าเก็บค่าที่ Caller ส่งมา ซึ่งเป็น undefined ตอนไม่กำกวม จะกลายเป็น NULL
+      // ใน DB แล้วตอน Confirm จะไปสร้างสินทรัพย์แถวใหม่ "ไม่ระบุโบรก" ซ้ำขึ้นมา
+      // = ประวัติแตกคนละ asset_id ซึ่งคือบั๊กที่ migration 014 เคยแก้)
+      brokerId: existingAsset.brokerId ?? null,
+    };
   }
 
   // Asset ใหม่ — เช็ค Freemium Limit เฉพาะตอนจะสร้าง Asset ใหม่ (SRS.md § 2.3 [2])
   // ตัดสินสิทธิ์ผ่าน entitlement (แหล่งตัดสินสิทธิ์เดียว) แทนการเทียบ plan ตรงๆ:
   // getActiveAssetLimit คืน null = ไม่จำกัด (Premium ที่ยัง Active) / เลข = เพดาน Free
   // พฤติกรรมเหมือนเดิมทุกอย่าง ต่างแค่ "premium ที่หมดอายุ = ถือเป็น free"
+  //
+  // ⚠️ Stage 5 (migration 046) — เพดาน Free นับ "จำนวน Symbol ที่ต่างกัน" ไม่ใช่
+  // จำนวนแถว (มติ Founder 23 ส.ค. 2569: ถือ BTC ที่ 2 โบรก = 1 สินทรัพย์) และ
+  // ต้อง "ข้ามการเทียบเพดานไปเลย" ถ้า Symbol นี้ถืออยู่แล้ว เพราะกรณีนั้นคือการ
+  // เพิ่มโบรกที่ N ให้สินทรัพย์เดิม ซึ่งไม่ได้เพิ่มจำนวนสินทรัพย์เลยแม้แต่ตัวเดียว
+  // — ผู้ใช้ Free ที่เต็มเพดาน 2 ตัวแล้วต้องยังเพิ่มโบรกให้ของเดิมได้เสมอ
+  // (Logic เดียวกันถูกบังคับซ้ำใต้ Lock ที่ RPC create_asset_locked — migration 046)
   const assetLimit = entitlement.getActiveAssetLimit({ plan, planExpiresAt });
   if (assetLimit !== null) {
-    const activeCount = await assetRepository.countActiveByUser(userId);
-    if (activeCount >= assetLimit) {
+    const activeSymbols = await assetRepository.findActiveSymbolsByUser(userId);
+    const isNewSymbol = !activeSymbols.includes(params.symbol);
+    if (isNewSymbol && activeSymbols.length >= assetLimit) {
       throw new TransactionServiceError(
         'ASSET_LIMIT_REACHED',
         `Free plan is limited to ${assetLimit} active assets`,
-        { limit: assetLimit, current: activeCount }
+        { limit: assetLimit, current: activeSymbols.length }
       );
     }
   }
@@ -464,7 +488,15 @@ async function validateBuy(userId, params, options = {}) {
   // assetLimit ติดไปกับผลลัพธ์ด้วย (ไม่ใช่แค่ใช้ตรวจแล้วทิ้ง) — processBuyCommand
   // ต้องใช้ค่าเดียวกันนี้ส่งต่อให้ assetRepository.create() (RPC create_asset_locked
   // — migration 035) เป็นด่านตัดสินจริงตอน Insert อีกชั้น ไม่คำนวณซ้ำสองที่
-  return { asset: null, assetType: params.type, newAsset: true, amounts, assetLimit };
+  return {
+    asset: null,
+    assetType: params.type,
+    newAsset: true,
+    amounts,
+    assetLimit,
+    // Asset ใหม่ยังไม่มีโบรกใน DB — ใช้ค่าที่ผู้ใช้เลือกมา (null = ไม่ระบุ)
+    brokerId: params.brokerId ?? null,
+  };
 }
 
 async function processBuyCommand(userId, params, options = {}) {
@@ -490,7 +522,10 @@ async function processBuyCommand(userId, params, options = {}) {
         // กองทุนรวม (Round 7) — เก็บ Class ที่เลือกไว้ถาวรเพื่อ Mark-to-market ตรง Class
         // (สินทรัพย์อื่น projId/fundClassName = undefined → คอลัมน์เป็น null)
         { projId: params.projId, fundClassName: params.fundClassName },
-        assetLimit
+        assetLimit,
+        // Stage 5 — โบรกที่ผู้ใช้เลือก (null = ไม่ระบุ ซึ่งเป็นค่าของทุกแถวเดิม)
+        // ต้องผ่าน brokerService.assertOwnedBrokerId() มาแล้วจากชั้น Controller
+        params.brokerId ?? null
       );
     } catch (err) {
       // ── ด่านจริงของ "เกินเพดาน Free Plan" อยู่ที่ DB (migration 035) ───────────
@@ -561,7 +596,12 @@ async function processBuyCommand(userId, params, options = {}) {
 async function validateSell(userId, params) {
   const portfolioId = params.portfolioId ?? null;
 
-  const asset = await assetRepository.findByUserAndSymbol(userId, params.symbol, portfolioId);
+  // ⚠️ ห้ามใส่ `?? null` ให้ params.brokerId (ดู validateBuy/assetResolution.service)
+  // ขายผิดโบรก = ตัดยอดคงเหลือของโบรกที่ไม่ได้ขายจริง แล้วต้นทุนเฉลี่ยเพี้ยนทั้งคู่
+  const { asset } = await assetResolution.resolveOwnedAsset(userId, params.symbol, {
+    portfolioId,
+    brokerId: params.brokerId,
+  });
   if (!asset) {
     throw new TransactionServiceError('ASSET_NOT_FOUND', `Asset ${params.symbol} not found for this user`, {
       symbol: params.symbol,
@@ -623,7 +663,12 @@ async function validateSell(userId, params) {
     // (coingecko/twelvedata) เพื่อให้ Preview เตือนที่มาของราคา (priceSourceNote)
     allAmounts.priceSource = resolvePriceSource(params.symbol);
 
-    return { asset, amounts: allAmounts, heldQuantity: heldForAll };
+    return {
+      asset,
+      amounts: allAmounts,
+      heldQuantity: heldForAll,
+      brokerId: asset.brokerId ?? null,
+    };
   }
 
   const amounts = await resolveQuantityAndPrice(params, 'sell');
@@ -656,7 +701,7 @@ async function validateSell(userId, params) {
     );
   }
 
-  return { asset, amounts, heldQuantity };
+  return { asset, amounts, heldQuantity, brokerId: asset.brokerId ?? null };
 }
 
 async function processSellCommand(userId, params) {

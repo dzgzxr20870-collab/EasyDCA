@@ -19,25 +19,31 @@ const pendingTransactionService = require('./pendingTransaction.service');
 //  - Aggregate Asset Limit (รวมทั้ง Batch ไม่ใช่บรรทัดใดบรรทัดหนึ่ง): { line: null, code }
 
 // ตรวจ Free Plan Asset Limit แบบ "รวมทั้ง Batch" — ต่างจาก transactionService.
-// validateBuy ที่เช็คเฉพาะ 1 รายการ (อ่าน countActiveByUser ที่ยังไม่ถูกเขียนจริง
+// validateBuy ที่เช็คเฉพาะ 1 รายการ (อ่านจำนวนสินทรัพย์ที่ยังไม่ถูกเขียนจริง
 // ระหว่าง Dry-run จึงเห็นค่าเดิมซ้ำทุกรายการ) ถ้าไม่เช็ครวมที่นี่ก่อน การ Import
 // หลาย Symbol ใหม่พร้อมกันใน Batch เดียวจะ "หลุด" ผ่าน validateBuy ทีละรายการได้
 // ทั้งที่รวมกันเกิน Limit จริง (เช่น มี 1 Asset อยู่แล้ว + Import 3 Symbol ใหม่ =
 // 4 ตัว เกิน Limit Free 2 ตัว แต่ validateBuy ทีละตัวเห็น count เดิม=1 ทุกครั้ง
 // จึงผ่านหมดทั้ง 3) — ไม่แตะ/ไม่เขียน Logic นับ Asset ใน transactionService ซ้ำ
 // เพียงเสริมมุมมอง "รวมทั้ง Batch" ที่ Field เดิมไม่มีให้
+//
+// ⚠️ Stage 5 (migration 046) — เปลี่ยนหน่วยนับเป็น "Symbol ที่ต่างกัน" ให้ตรงกับ
+// transaction.validateBuy + RPC create_asset_locked (มติ Founder 23 ส.ค. 2569:
+// ถือ BTC ที่ 2 โบรก = 1 สินทรัพย์) ถ้าที่นี่ยังนับแถวอยู่ ผู้ใช้ Free ที่ถือ BTC
+// 2 โบรกจะถูก Import บล็อกว่า "เต็มเพดาน" ทั้งที่อีกสองด่านบอกว่ายังไม่เต็ม
+//
+// findActiveSymbolsByUser() คืนรายชื่อ Symbol (ไม่ใช่ตัวเลข) จึงตอบได้ทั้ง
+// "ตอนนี้กี่สินทรัพย์" และ "Symbol ใน Batch ตัวไหนเป็นของใหม่" จาก Query เดียว —
+// เดิมต้องยิง findByUserAndSymbol เพิ่มอีก 1 Query ต่อ Symbol ใน Batch
 async function checkAggregateAssetLimit(userId, items, options) {
   const assetLimit = entitlement.getActiveAssetLimit(options);
   if (assetLimit === null) return null; // Premium Active — ไม่จำกัด
 
-  const existingCount = await assetRepository.countActiveByUser(userId);
+  const activeSymbols = await assetRepository.findActiveSymbolsByUser(userId);
+  const existingCount = activeSymbols.length;
 
   const uniqueSymbols = [...new Set(items.map((item) => item.symbol))];
-  let newSymbolCount = 0;
-  for (const symbol of uniqueSymbols) {
-    const existing = await assetRepository.findByUserAndSymbol(userId, symbol, null);
-    if (!existing) newSymbolCount += 1;
-  }
+  const newSymbolCount = uniqueSymbols.filter((symbol) => !activeSymbols.includes(symbol)).length;
 
   if (existingCount + newSymbolCount > assetLimit) {
     return {

@@ -20,7 +20,7 @@ beforeEach(() => {
 
 describe('getAssetProfit — Error cases', () => {
   test('Asset ไม่มีในระบบ → ASSET_NOT_FOUND (ไม่แตะ transactions/price feed)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(null);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([]);
 
     await expect(getAssetProfit(USER_ID, 'BTC')).rejects.toMatchObject({ code: 'ASSET_NOT_FOUND' });
 
@@ -29,7 +29,7 @@ describe('getAssetProfit — Error cases', () => {
   });
 
   test('Asset มีแต่ขายหมดแล้ว (heldQuantity=0) → NO_HOLDING_TO_CALCULATE_PROFIT (ไม่เรียก Price Feed)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_BTC);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_BTC]);
     transactionRepository.findAllByAsset.mockResolvedValue([
       { type: 'buy', quantity: 0.01, amountThb: 30000 },
       { type: 'sell', quantity: 0.01, amountThb: 40000 },
@@ -43,12 +43,12 @@ describe('getAssetProfit — Error cases', () => {
   });
 
   test('ราคาหาไม่ได้ (หุ้นไทย/Price Feed คืน null) → PRICE_FEED_NOT_IMPLEMENTED', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue({
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{
       id: 'asset-ptt',
       userId: USER_ID,
       symbol: 'PTT',
       type: 'stock_th',
-    });
+    }]);
     transactionRepository.findAllByAsset.mockResolvedValue([
       { type: 'buy', quantity: 50, amountThb: 1700 },
     ]);
@@ -62,7 +62,7 @@ describe('getAssetProfit — Error cases', () => {
 
 describe('getAssetProfit — คำนวณกำไร/ขาดทุน', () => {
   test('กำไร — ราคาปัจจุบันสูงกว่าต้นทุนเฉลี่ย', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_BTC);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_BTC]);
     // ถือ 0.01 BTC ต้นทุนรวม 30,000 บาท → avg = 3,000,000
     transactionRepository.findAllByAsset.mockResolvedValue([
       { type: 'buy', quantity: 0.01, amountThb: 30000 },
@@ -105,7 +105,7 @@ describe('getAssetProfit — คำนวณกำไร/ขาดทุน', ()
   // ตรงๆ ไม่ตกหล่นระหว่างทาง (Caller อื่นที่ไม่ส่งมาต้อง Default {} เหมือนเดิม ดู Test
   // ด้านบน)
   test('priceOptions (allowRetry) จาก Caller (Cron) ถูกส่งต่อให้ priceFeedService.getCurrentPrice ตรงๆ', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_BTC);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_BTC]);
     transactionRepository.findAllByAsset.mockResolvedValue([
       { type: 'buy', quantity: 0.01, amountThb: 30000 },
     ]);
@@ -120,12 +120,12 @@ describe('getAssetProfit — คำนวณกำไร/ขาดทุน', ()
 
   // ── Multi-Currency (Round 10): สินทรัพย์ USD คิดกำไรในสกุล USD ไม่ปนบาท ─────────
   test('สินทรัพย์ USD → ต้นทุน/กำไรคิดเป็น USD ล้วน (ใช้ getCurrentPriceUsd) + แนบยอดเทียบบาท', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue({
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{
       id: 'asset-msft',
       userId: USER_ID,
       symbol: 'MSFT',
       type: 'stock_us',
-    });
+    }]);
     // ถือ 2 หุ้น ต้นทุนรวม 600 USD (avg 300 USD) — ธุรกรรมเป็น USD
     transactionRepository.findAllByAsset.mockResolvedValue([
       { type: 'buy', quantity: 2, amountThb: 600, currency: 'USD' },
@@ -154,9 +154,9 @@ describe('getAssetProfit — คำนวณกำไร/ขาดทุน', ()
   });
 
   test('สินทรัพย์ USD แต่ไม่มี USD Price Feed → PRICE_FEED_NOT_IMPLEMENTED', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue({
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{
       id: 'asset-nvda', userId: USER_ID, symbol: 'NVDA', type: 'stock_us',
-    });
+    }]);
     transactionRepository.findAllByAsset.mockResolvedValue([
       { type: 'buy', quantity: 1, amountThb: 900, currency: 'USD' },
     ]);
@@ -168,7 +168,7 @@ describe('getAssetProfit — คำนวณกำไร/ขาดทุน', ()
   });
 
   test('ขาดทุน — ราคาปัจจุบันต่ำกว่าต้นทุนเฉลี่ย', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_BTC);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_BTC]);
     transactionRepository.findAllByAsset.mockResolvedValue([
       { type: 'buy', quantity: 0.01, amountThb: 30000 },
     ]);
@@ -187,7 +187,7 @@ describe('getAssetProfit — คำนวณกำไร/ขาดทุน', ()
   });
 
   test('รวมหลายธุรกรรม (buy + partial sell) → คำนวณ held/invested/avg ถูกต้องตาม Moving Average', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_BTC);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_BTC]);
     // buy 0.02 @ 60,000 รวม (avg 3,000,000/หน่วย) → sell 0.01 ได้เงิน 40,000
     // Moving Average: ต้นทุนส่วนที่ขาย = 3,000,000*0.01 = 30,000 (ไม่ใช่ Net Cash Flow
     // 60,000-40,000=20,000 แบบเดิม) → เหลือทุน 60,000-30,000=30,000, avg คงที่ 3,000,000
@@ -215,7 +215,7 @@ describe('getAssetProfit — คำนวณกำไร/ขาดทุน', ()
 
 describe('getAssetProfit — priceSource ตาม Asset Type จริง', () => {
   test('BTC (crypto) → priceSource ยังเป็น coingecko เหมือนเดิม (ไม่ Regression)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_BTC);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_BTC]);
     transactionRepository.findAllByAsset.mockResolvedValue([
       { type: 'buy', quantity: 0.01, amountThb: 30000 },
     ]);
@@ -227,12 +227,12 @@ describe('getAssetProfit — priceSource ตาม Asset Type จริง', () 
   });
 
   test('AAPL (stock_us) → priceSource เป็น twelvedata ไม่ใช่ coingecko', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue({
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{
       id: 'asset-aapl',
       userId: USER_ID,
       symbol: 'AAPL',
       type: 'stock_us',
-    });
+    }]);
     transactionRepository.findAllByAsset.mockResolvedValue([
       { type: 'buy', quantity: 5, amountThb: 30000 },
     ]);
@@ -246,7 +246,7 @@ describe('getAssetProfit — priceSource ตาม Asset Type จริง', () 
 
 describe('ProfitServiceError', () => {
   test('มี code และ details ติดไปกับ Error', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(null);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([]);
 
     const error = await getAssetProfit(USER_ID, 'BTC').catch((e) => e);
 
@@ -261,7 +261,7 @@ describe('getAssetProfit — ทองคำ (Phase 3 Round 7)', () => {
   const ASSET_GOLDORN = { id: 'asset-goldorn', userId: USER_ID, symbol: 'GOLDORN', type: 'gold_ornament' };
 
   test('กำไรทอง → ใช้ราคา "รับซื้อคืน" (buy) เป็นราคาปัจจุบัน (ไม่ใช่ sell)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_GOLD);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_GOLD]);
     transactionRepository.findAllByAsset.mockResolvedValue([
       { type: 'buy', quantity: 1, amountThb: 70000 }, // ต้นทุน 70,000
     ]);
@@ -281,7 +281,7 @@ describe('getAssetProfit — ทองคำ (Phase 3 Round 7)', () => {
   });
 
   test('ทอง → Enrich USD (ราคา/มูลค่าปัจจุบันเป็น USD) ด้วย getUsdThbFxRate', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_GOLD);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_GOLD]);
     transactionRepository.findAllByAsset.mockResolvedValue([
       { type: 'buy', quantity: 2, amountThb: 140000 },
     ]);
@@ -299,7 +299,7 @@ describe('getAssetProfit — ทองคำ (Phase 3 Round 7)', () => {
   });
 
   test('ทอง + ดึง FX ไม่ได้ (null) → usd = null แต่ยังคำนวณกำไร THB ได้ปกติ', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_GOLD);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_GOLD]);
     transactionRepository.findAllByAsset.mockResolvedValue([
       { type: 'buy', quantity: 1, amountThb: 70000 },
     ]);
@@ -313,7 +313,7 @@ describe('getAssetProfit — ทองคำ (Phase 3 Round 7)', () => {
   });
 
   test('ดึงราคาทองไม่ได้ (feed throw) → GOLD_PRICE_UNAVAILABLE (ไม่ใช่ PRICE_FEED_NOT_IMPLEMENTED)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_GOLD);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_GOLD]);
     transactionRepository.findAllByAsset.mockResolvedValue([
       { type: 'buy', quantity: 1, amountThb: 70000 },
     ]);
@@ -327,7 +327,7 @@ describe('getAssetProfit — ทองคำ (Phase 3 Round 7)', () => {
   });
 
   test('ทองรูปพรรณ (gold_ornament) → เรียก getGoldPriceThb ด้วย type ที่ถูก ไม่ปนกับทองคำแท่ง', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_GOLDORN);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_GOLDORN]);
     transactionRepository.findAllByAsset.mockResolvedValue([
       { type: 'buy', quantity: 1, amountThb: 71000 },
     ]);
@@ -348,7 +348,7 @@ describe('getAssetProfit — กองทุนรวมไทย (Round 7 Mark-
   };
 
   test('(e) กำไรกองทุน → ใช้ NAV ล่าสุด (last_val) เป็นราคาปัจจุบัน + priceSource secnav', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_FUND);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_FUND]);
     transactionRepository.findAllByAsset.mockResolvedValue([
       { type: 'buy', quantity: 100, amountThb: 1000 }, // ต้นทุนเฉลี่ย 10
     ]);
@@ -368,7 +368,7 @@ describe('getAssetProfit — กองทุนรวมไทย (Round 7 Mark-
   });
 
   test('(f) ดึง NAV ไม่ได้ → MUTUAL_FUND_NAV_UNAVAILABLE (ไม่ใช่ PRICE_FEED_NOT_IMPLEMENTED)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_FUND);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_FUND]);
     transactionRepository.findAllByAsset.mockResolvedValue([{ type: 'buy', quantity: 100, amountThb: 1000 }]);
     priceFeedService.getMutualFundNav.mockRejectedValue(
       Object.assign(new Error('down'), { code: 'MUTUAL_FUND_NAV_UNAVAILABLE' })
@@ -380,7 +380,7 @@ describe('getAssetProfit — กองทุนรวมไทย (Round 7 Mark-
   });
 
   test('SEC ไม่ config → SEC_NOT_CONFIGURED (ข้อความไทยแยกจาก NAV ล่ม)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_FUND);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_FUND]);
     transactionRepository.findAllByAsset.mockResolvedValue([{ type: 'buy', quantity: 100, amountThb: 1000 }]);
     priceFeedService.getMutualFundNav.mockRejectedValue(
       Object.assign(new Error('nc'), { code: 'SEC_NOT_CONFIGURED' })
@@ -390,9 +390,9 @@ describe('getAssetProfit — กองทุนรวมไทย (Round 7 Mark-
   });
 
   test('fund แบบ Manual (ไม่มี projId) → ตกไป path ปกติ (getCurrentPrice) ไม่เรียก NAV', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue({
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{
       id: 'a', userId: USER_ID, symbol: 'XFUND', type: 'fund', projId: null, fundClassName: null,
-    });
+    }]);
     transactionRepository.findAllByAsset.mockResolvedValue([{ type: 'buy', quantity: 10, amountThb: 100 }]);
     priceFeedService.getCurrentPrice.mockResolvedValue(null);
 

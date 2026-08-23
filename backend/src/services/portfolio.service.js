@@ -124,6 +124,14 @@ async function getPortfolioSummary(userId) {
       symbol: asset.symbol,
       name: asset.name,
       type: asset.type,
+      // ⚠️ Stage 5 (migration 046) — ตั้งแต่ถือ Symbol เดียวกันได้หลายโบรก
+      // "symbol" ไม่ใช่ Key ที่ระบุ Holding ได้อีกต่อไป (BTC โผล่ได้ 2 แถว)
+      // ทุก Consumer ที่เอา holding.symbol ไป Lookup ต่อ ต้องพา brokerId ไปด้วย
+      // มิฉะนั้นจะเจอ AMBIGUOUS_ASSET_BROKER แล้ว "ตกหล่นทั้งสองแถว" เงียบๆ
+      // (เคสจริงที่ต้องระวัง: portfolioSnapshot.job นับ excludedAssetCount แล้ว
+      // มูลค่ารวมรายคืนจะขาด BTC ไปทั้งก้อนโดยไม่มี Error ให้เห็น)
+      assetId: asset.id,
+      brokerId: asset.brokerId ?? null,
       // กองทุนรวม (Round 7) — พา proj_id/fund_class_name ไปให้ portfolioSummary ดึง NAV
       // ตรง Class (null สำหรับสินทรัพย์อื่น) ไม่กระทบ Consumer เดิมที่ไม่ได้อ่าน Field นี้
       projId: asset.projId ?? null,

@@ -65,12 +65,12 @@ beforeEach(() => {
   jest.clearAllMocks();
   jest.useFakeTimers({ now: new Date('2026-07-17T05:00:00Z'), doNotFake: ['performance'] });
 
-  assetRepository.findByUserAndSymbol.mockResolvedValue({
+  assetRepository.findAllByUserAndSymbol.mockResolvedValue([{
     id: 'asset-1',
     symbol: 'AAPL',
     type: 'stock_us',
-  });
-  assetRepository.countActiveByUser.mockResolvedValue(1);
+  }]);
+  assetRepository.findActiveSymbolsByUser.mockResolvedValue(Array.from({ length: 1 }, (_, i) => `__OTHER${i}`));
   transactionRepository.findAllByUser.mockResolvedValue([]);
   transactionRepository.findAllByAsset.mockResolvedValue([]);
   transactionRepository.create.mockImplementation(async (data) => ({
@@ -117,7 +117,7 @@ describe('POST /transactions — Validation', () => {
   });
 
   test('หุ้นไทยไม่ส่งราคา → 400 PRICE_REQUIRED_FOR_ASSET (ไม่ใช่ 503 ของ Price Feed)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue({ id: 'a', symbol: 'PTT', type: 'stock_th' });
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{ id: 'a', symbol: 'PTT', type: 'stock_th' }]);
 
     const res = mockRes();
     await createTransaction(mockReq({ symbol: 'PTT', amountTotal: 1000 }), res);
@@ -129,7 +129,7 @@ describe('POST /transactions — Validation', () => {
   });
 
   test('หุ้นไทยส่งราคามาด้วย → บันทึกได้ (ไม่แตะ Price Feed เลย)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue({ id: 'a', symbol: 'PTT', type: 'stock_th' });
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{ id: 'a', symbol: 'PTT', type: 'stock_th' }]);
 
     const res = mockRes();
     await createTransaction(mockReq({ symbol: 'PTT', amountTotal: 1700, pricePerUnit: 34 }), res);
@@ -181,7 +181,7 @@ describe('POST /transactions — Validation', () => {
   });
 
   test('USD กับหุ้นไทย → 400 CURRENCY_NOT_SUPPORTED_FOR_ASSET', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue({ id: 'a', symbol: 'PTT', type: 'stock_th' });
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{ id: 'a', symbol: 'PTT', type: 'stock_th' }]);
 
     const res = mockRes();
     await createTransaction(
@@ -195,7 +195,7 @@ describe('POST /transactions — Validation', () => {
   });
 
   test('USD กับทองคำ → 400 (ทองเป็นราคาบาททองคำ THB เท่านั้น)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue({ id: 'a', symbol: 'GOLD', type: 'gold_bar' });
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{ id: 'a', symbol: 'GOLD', type: 'gold_bar' }]);
 
     const res = mockRes();
     await createTransaction(mockReq({ symbol: 'GOLD', amountTotal: 1000, currency: 'USD' }), res);
@@ -233,7 +233,7 @@ describe('POST /transactions — Validation', () => {
   });
 
   test('จำนวนเงินน้อยจนคำนวณหน่วยไม่ได้ → 400 (ไม่ปล่อยให้ DB CHECK quantity > 0 พัง)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue({ id: 'a', symbol: 'PTT', type: 'stock_th' });
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{ id: 'a', symbol: 'PTT', type: 'stock_th' }]);
 
     const res = mockRes();
     await createTransaction(
@@ -301,8 +301,8 @@ describe('POST /transactions — Success', () => {
 
 describe('POST /transactions — Error จาก Service', () => {
   test('Free Plan เกิน Asset Limit → 403 ASSET_LIMIT_REACHED', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(null); // Asset ใหม่
-    assetRepository.countActiveByUser.mockResolvedValue(2);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([]); // Asset ใหม่
+    assetRepository.findActiveSymbolsByUser.mockResolvedValue(Array.from({ length: 2 }, (_, i) => `__OTHER${i}`));
 
     const res = mockRes();
     await createTransaction(
@@ -680,7 +680,7 @@ describe('POST /transactions (side=sell) — Validation', () => {
 
 describe('POST /transactions (side=sell) — Business Rule จาก validateSell', () => {
   test('ไม่เคยถือสินทรัพย์นี้ → 400 ASSET_NOT_FOUND (ไม่ใช่ 500)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(null);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([]);
 
     const res = mockRes();
     await createTransaction(
@@ -791,7 +791,7 @@ describe('POST /transactions (side=sell) — บันทึกสำเร็�
   });
 
   test('ขายหุ้นไทย (ไม่มี Price Feed) → บันทึกได้ โดยไม่แตะ Price Feed เลย', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue({ id: 'asset-1', symbol: 'PTT', type: 'stock_th' });
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{ id: 'asset-1', symbol: 'PTT', type: 'stock_th' }]);
     transactionRepository.findAllByAsset.mockResolvedValue(holdingHistory(100));
 
     const res = mockRes();
@@ -853,7 +853,7 @@ describe('POST /transactions (side=sell) — บันทึกสำเร็�
   });
 
   test('Free Plan ที่ใช้สินทรัพย์เต็มโควตาแล้ว ยังขายได้ (Asset Limit คุมแค่การสร้างใหม่)', async () => {
-    assetRepository.countActiveByUser.mockResolvedValue(99);
+    assetRepository.findActiveSymbolsByUser.mockResolvedValue(Array.from({ length: 99 }, (_, i) => `__OTHER${i}`));
     transactionRepository.findAllByAsset.mockResolvedValue(holdingHistory(10));
 
     const res = mockRes();
@@ -871,7 +871,7 @@ describe('POST /transactions (side=sell) — บันทึกสำเร็�
   test('Symbol นอก Registry แต่ถืออยู่จริง (Dynamic Symbol) → ขายได้ ไม่ติด SYMBOL_NOT_SUPPORTED', async () => {
     // เคสจริง: หุ้น Small-cap ที่ถูกสร้างผ่าน Manual Quantity Fallback ทาง LINE
     // (Round 10-B) — ถ้ากั้นด้วย Registry ผู้ใช้จะซื้อได้แต่ขายไม่ได้
-    assetRepository.findByUserAndSymbol.mockResolvedValue({ id: 'asset-1', symbol: 'EOSE', type: 'stock_us' });
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{ id: 'asset-1', symbol: 'EOSE', type: 'stock_us' }]);
     transactionRepository.findAllByAsset.mockResolvedValue(holdingHistory(100));
 
     const res = mockRes();
@@ -923,7 +923,7 @@ describe('POST /transactions (side=sell) — currency ที่ถูกละ�
     // ทองบันทึกเป็น USD ไม่ได้ (CURRENCY_NOT_SUPPORTED_FOR_ASSET ฝั่งซื้อ) — แต่เมื่อ
     // sellAll ค่า currency ที่ Client ส่งมาไม่ถูกใช้เลย (Service อนุมานจากประวัติจริง)
     // การปฏิเสธ Request เพราะ Field ที่ไม่ได้ใช้ = Error ที่ผู้ใช้แก้ตามไม่ถูก
-    assetRepository.findByUserAndSymbol.mockResolvedValue({ id: 'asset-1', symbol: 'GOLD', type: 'gold_bar' });
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{ id: 'asset-1', symbol: 'GOLD', type: 'gold_bar' }]);
     transactionRepository.findAllByAsset.mockResolvedValue(holdingHistory(2));
     priceFeedService.getCurrentPrice.mockResolvedValue(52000);
     priceFeedService.getUsdThbFxRate.mockResolvedValue(35);
@@ -942,7 +942,7 @@ describe('POST /transactions (side=sell) — currency ที่ถูกละ�
   });
 
   test('ขายระบุจำนวนเอง + currency USD กับทอง → ยัง Reject ตามเดิม (ค่านั้นถูกใช้จริง)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue({ id: 'asset-1', symbol: 'GOLD', type: 'gold_bar' });
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{ id: 'asset-1', symbol: 'GOLD', type: 'gold_bar' }]);
     transactionRepository.findAllByAsset.mockResolvedValue(holdingHistory(2));
 
     const res = mockRes();
@@ -977,11 +977,11 @@ describe('POST /transactions — ยอดที่บันทึกต้อ�
   }
 
   test('กรอก 100 บาท + ราคา 2,513,380 → บันทึก 100 ไม่ใช่ 100.01', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue({
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{
       id: 'asset-btc',
       symbol: 'BTC',
       type: 'crypto',
-    });
+    }]);
     const res = mockRes();
 
     await createTransaction(
@@ -1002,11 +1002,11 @@ describe('POST /transactions — ยอดที่บันทึกต้อ�
   });
 
   test('หุ้นไทยราคาหลักร้อย → ยอดเท่าเดิมเป๊ะเหมือนก่อนแก้ (ไม่ถดถอย)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue({
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{
       id: 'asset-ptt',
       symbol: 'PTT',
       type: 'stock_th',
-    });
+    }]);
     const res = mockRes();
 
     await createTransaction(

@@ -242,7 +242,13 @@ CREATE TABLE assets (
   -- เดียวกับ portfolio_snapshots ด้านล่าง (§ "ข้อควรระวัง: NULL กับ UNIQUE Constraint")
   -- — Plain UNIQUE เดิมถือว่า NULL <> NULL จึงปล่อยให้สอง Symbol เดียวกันของ User
   -- เดียวกันสร้างซ้ำเป็นคนละ asset_id ได้ ทำให้ Transaction History แตกกระจาย
-  UNIQUE NULLS NOT DISTINCT (user_id, symbol, portfolio_id)
+  --
+  -- migration 046 — เพิ่ม broker_id เข้า Key เพื่อให้ถือ Symbol เดียวกันได้หลายโบรก
+  -- ⚠️ ต้องคง NULLS NOT DISTINCT ไว้เสมอ ถ้าหลุดไปเมื่อไหร่ = เปิดบั๊ก Duplicate
+  -- ของ migration 014 กลับมาทั้งดุ้น (ข้อมูลเดิม 100% มี broker_id เป็น NULL)
+  --   (U, BTC, P1, NULL) + (U, BTC, P1, NULL)     → ชนกัน ✅ (กันบั๊กเดิมได้ครบ)
+  --   (U, BTC, P1, Bitkub) + (U, BTC, P1, Binance) → อยู่ร่วมกันได้ ✅ (ฟีเจอร์ใหม่)
+  UNIQUE NULLS NOT DISTINCT (user_id, symbol, portfolio_id, broker_id)
 );
 ```
 
@@ -254,7 +260,7 @@ CREATE TABLE assets (
 | symbol | TEXT | ตัวย่อสินทรัพย์ เช่น `BTC`, `PTT`, `AAPL` |
 | name | TEXT | ชื่อเต็ม เช่น "Bitcoin", "PTT Public Company" |
 | type | TEXT | ประเภทสินทรัพย์: `crypto` / `stock_th` / `stock_us` / `etf` / `fund` |
-| broker_id | UUID | (migration 042) FK → brokers.id · NULL = ไม่ระบุโบรก (แถวเดิมทั้งหมดก่อน 042) — **UI ต้องแสดงเป็นกลุ่ม "ไม่ระบุ" ไม่ใช่ซ่อนแถว** มิฉะนั้นยอดรวมกราฟโดนัทจะไม่เท่ามูลค่าพอร์ตจริง · ไม่เข้าสูตรคำนวณเงินใดๆ |
+| broker_id | UUID | (migration 042) FK → brokers.id · NULL = ไม่ระบุโบรก (แถวเดิมทั้งหมดก่อน 042) — **UI ต้องแสดงเป็นกลุ่ม "ไม่ระบุ" ไม่ใช่ซ่อนแถว** มิฉะนั้นยอดรวมกราฟโดนัทจะไม่เท่ามูลค่าพอร์ตจริง · ไม่เข้าสูตรคำนวณเงินโดยตรง **แต่ (migration 046) อยู่ใน UNIQUE Key แล้ว** จึงเป็นส่วนหนึ่งของ "ตัวตนของสินทรัพย์": `symbol` อย่างเดียวระบุแถวไม่ได้อีกต่อไป ทุกจุดที่แปลง Symbol → asset row ต้องผ่าน `assetResolution.service` เท่านั้น |
 | sector | TEXT | (migration 043) หมวดธุรกิจ/กลุ่มสินทรัพย์ที่ผู้ใช้ระบุเอง · NULL = ไม่ระบุ · เก็บรูปแบบตัวพิมพ์ตามที่ผู้ใช้พิมพ์ แต่**จัดกลุ่มแบบ Case-insensitive ด้วย `lower(sector)`** (Index `idx_assets_sector_lower`) · ไม่เข้าสูตรคำนวณเงินใดๆ |
 | is_active | BOOLEAN | false = ขายออกหมดแล้ว แต่ยังเก็บประวัติ |
 | created_at | TIMESTAMPTZ | วันที่เพิ่มสินทรัพย์ |

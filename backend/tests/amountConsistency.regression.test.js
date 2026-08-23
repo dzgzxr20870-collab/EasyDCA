@@ -43,7 +43,7 @@ const BTC_PRICE = 2513380;
 beforeEach(() => {
   jest.clearAllMocks();
 
-  assetRepository.findByUserAndSymbol.mockResolvedValue(BTC_ASSET);
+  assetRepository.findAllByUserAndSymbol.mockResolvedValue([BTC_ASSET]);
   assetRepository.create.mockResolvedValue(BTC_ASSET);
   transactionRepository.create.mockResolvedValue({ id: 'tx-uuid-1' });
   transactionRepository.findAllByAsset.mockResolvedValue([]);
@@ -124,12 +124,12 @@ describe('บั๊ค A — Preview→Confirm: ยอดที่บันท�
         feeThb: 2.4,
       },
     };
-    assetRepository.findByUserAndSymbol.mockResolvedValue({
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{
       id: 'asset-asts',
       userId: USER_ID,
       symbol: 'ASTS',
       type: 'stock_us',
-    });
+    }]);
 
     const preview = await createPending(USER_ID, parsed, { plan: 'premium' });
     await confirmPending(PENDING_ID, USER_ID);
@@ -147,12 +147,12 @@ describe('บั๊ค A — Preview→Confirm: ยอดที่บันท�
   test('เส้นทาง 3b "ยอดจากสลิปที่พิสูจน์แล้ว" — ยอดที่ตกลงไว้ชนะการคูณกลับ', async () => {
     // เคส EOSE จริง: สลิประบุมูลค่าหุ้น 106.44 แต่ quantity × price (ที่ปัดมาแสดง)
     // = 106.32 — เมื่อยอดถูก Snapshot ไว้ตอน Preview ต้องบันทึกยอดนั้น ไม่ใช่คูณใหม่
-    assetRepository.findByUserAndSymbol.mockResolvedValue({
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{
       id: 'asset-eose',
       userId: USER_ID,
       symbol: 'EOSE',
       type: 'stock_us',
-    });
+    }]);
 
     const parsed = {
       command: COMMANDS.BUY,

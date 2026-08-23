@@ -40,30 +40,46 @@ function toAsset(row) {
     // กองทุนรวมไทย (Round 7) — เก็บ Class ที่ถือจริง (nullable สำหรับสินทรัพย์อื่น)
     projId: row.proj_id ?? null,
     fundClassName: row.fund_class_name ?? null,
+    // โบรก/Exchange ที่ถือสินทรัพย์นี้ (migration 042) — NULL = "ไม่ระบุ"
+    brokerId: row.broker_id ?? null,
+    // Sector สำหรับ Sector Allocation (migration 043) — NULL = "ไม่ระบุ"
+    sector: row.sector ?? null,
     isActive: row.is_active,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
-async function findByUserAndSymbol(userId, symbol, portfolioId) {
-  let query = supabaseAdmin
-    .from('assets')
-    .select('*')
-    .eq('user_id', userId)
-    .eq('symbol', symbol);
-
-  // portfolio_id เป็น nullable (Free Plan ไม่มี Multiple Portfolio)
-  // ต้องใช้ .is() แทน .eq() เมื่อเทียบกับ null ตาม PostgREST
-  query = portfolioId ? query.eq('portfolio_id', portfolioId) : query.is('portfolio_id', null);
-
-  const { data, error } = await query.maybeSingle();
+// ═══════════════════════════════════════════════════════════════════════════
+// findAllByUserAndSymbol — คืน "ทุกแถว" ของ Symbol นั้น (อาจมากกว่า 1 แถว)
+// ═══════════════════════════════════════════════════════════════════════════
+// ⚠️ Stage 5 (migration 046): ฟังก์ชันนี้มาแทน findByUserAndSymbol เดิมที่ใช้
+// .maybeSingle() — ตั้งแต่ UNIQUE Key มี broker_id อยู่ด้วย ผู้ใช้ถือ BTC ได้
+// ทั้งที่ Bitkub และ Binance พร้อมกัน = assets 2 แถวที่ (user, symbol, portfolio)
+// ชุดเดียวกัน .maybeSingle() ของ PostgREST จะตอบ Error (PGRST116 "more than one
+// row returned") ทันทีในกรณีนั้น ทำให้ "ทั้งคำสั่งซื้อ/ขาย/ดูกำไรของ Symbol นั้น
+// พังทั้งหมด" ไม่ใช่แค่ตอบผิด
+//
+// ⚠️ ห้ามเปลี่ยนกลับไปใช้ .maybeSingle()/.limit(1) เพื่อ "ให้มันไม่พัง" เด็ดขาด —
+// การหยิบแถวแรกมาใช้เงียบๆ คือ Silent Default ที่จะเขียนธุรกรรมเข้าโบรกผิด
+// (ต้นทุนเฉลี่ยของทั้งสองโบรกเพี้ยนพร้อมกัน) การตัดสินว่า "หมายถึงแถวไหน" เป็น
+// หน้าที่ของ assetResolution.service ที่เดียวเท่านั้น
+//
+// เรียงตาม created_at ขึ้น เพื่อให้ลำดับปุ่มที่ผู้ใช้เห็นบน LINE คงที่ทุกครั้ง
+// (ปุ่มสลับที่กันเองระหว่างครั้ง = ผู้ใช้กดผิดโบรกได้ง่ายมาก)
+async function findAllByUserAndSymbol(userId, symbol, portfolioId) {
+  const { data, error } = await queryForUser('assets', userId, (q) => {
+    const base = q.select('*').eq('symbol', symbol);
+    // portfolio_id เป็น nullable (Free Plan ไม่มี Multiple Portfolio)
+    // ต้องใช้ .is() แทน .eq() เมื่อเทียบกับ null ตาม PostgREST
+    return portfolioId ? base.eq('portfolio_id', portfolioId) : base.is('portfolio_id', null);
+  }).order('created_at', { ascending: true });
 
   if (error) {
-    throw new Error(`Failed to find asset by user and symbol: ${error.message}`);
+    throw new Error(`Failed to find assets by user and symbol: ${error.message}`);
   }
 
-  return toAsset(data);
+  return (data ?? []).map(toAsset);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -91,7 +107,21 @@ async function findByUserAndSymbol(userId, symbol, portfolioId) {
 //
 // fundInfo (Optional) = { projId, fundClassName } สำหรับ Asset ประเภทกองทุนรวม
 // (Round 7) — สินทรัพย์อื่นไม่ส่งมา → เป็น null ตามปกติ
-async function create(userId, portfolioId, symbol, name, type, fundInfo = {}, assetLimit = null) {
+//
+// brokerId (Optional, Stage 5 — migration 046) = โบรกที่ถือสินทรัพย์ก้อนนี้
+// (null = "ไม่ระบุ" ซึ่งเป็นค่าของทุกแถวเดิมในระบบ) — ต้องผ่าน
+// brokerService.assertOwnedBrokerId() มาก่อนเสมอถ้ามาจาก Input ของผู้ใช้
+// (FK ระดับ DB ตรวจแค่ว่า broker แถวนี้มีอยู่จริง ไม่ได้ตรวจว่าเป็นของใคร)
+async function create(
+  userId,
+  portfolioId,
+  symbol,
+  name,
+  type,
+  fundInfo = {},
+  assetLimit = null,
+  brokerId = null
+) {
   const { data: rows, error } = await supabaseAdmin.rpc('create_asset_locked', {
     p_user_id: userId,
     p_portfolio_id: portfolioId,
@@ -101,6 +131,7 @@ async function create(userId, portfolioId, symbol, name, type, fundInfo = {}, as
     p_asset_limit: assetLimit,
     p_proj_id: fundInfo.projId ?? null,
     p_fund_class_name: fundInfo.fundClassName ?? null,
+    p_broker_id: brokerId ?? null,
   });
 
   if (error) {
@@ -230,27 +261,43 @@ async function countActiveSymbolsGroupedByUser() {
   return counts;
 }
 
-async function countActiveByUser(userId) {
-  const { count, error } = await supabaseAdmin
-    .from('assets')
-    .select('*', { count: 'exact', head: true })
-    .eq('user_id', userId)
-    .eq('is_active', true);
+// ═══════════════════════════════════════════════════════════════════════════
+// findActiveSymbolsByUser — "Symbol ที่ต่างกัน" ของ User รายนี้ (ไม่ใช่จำนวนแถว)
+// ═══════════════════════════════════════════════════════════════════════════
+// ⚠️ Stage 5 (migration 046): ฟังก์ชันนี้มาแทน countActiveByUser() เดิมที่นับ
+// "จำนวนแถว" — ตั้งแต่ถือ Symbol เดียวกันได้หลายโบรก การนับแถวจะแปลว่า
+// "ถือ BTC ที่ Bitkub + Binance = 2 สินทรัพย์" ซึ่งขัดกับมติ Founder
+// (23 ส.ค. 2569): **ถือ BTC ที่ 2 โบรก = 1 สินทรัพย์**
+//
+// คืนเป็นรายชื่อ Symbol (ไม่ใช่แค่ตัวเลข) โดยเจตนา เพราะ Caller ต้องตอบ 2 คำถาม
+// จาก Query เดียว ไม่ใช่สองรอบ:
+//   (1) "ตอนนี้มีกี่สินทรัพย์" → symbols.length
+//   (2) "Symbol ที่กำลังจะซื้อ เป็นของใหม่ไหม" → symbols.includes(symbol)
+// ข้อ (2) จำเป็นมาก: การเพิ่ม "โบรกที่ 2" ให้ Symbol เดิมต้องผ่านได้เสมอแม้ผู้ใช้
+// Free จะเต็มเพดานอยู่ เพราะมันไม่ได้เพิ่มจำนวนสินทรัพย์เลยแม้แต่ตัวเดียว
+//
+// (Logic เดียวกันนี้ถูกบังคับซ้ำที่ระดับ DB ใน create_asset_locked — migration 046
+// count(DISTINCT symbol) + v_symbol_exists — ที่นี่คือ Pre-check ที่ตอบผู้ใช้ได้
+// เร็วและสวย ส่วนด่านที่ Race Condition ข้ามไม่ได้อยู่ใน RPC)
+async function findActiveSymbolsByUser(userId) {
+  const { data, error } = await queryForUser('assets', userId, (q) =>
+    q.select('symbol').eq('is_active', true)
+  );
 
   if (error) {
-    throw new Error(`Failed to count active assets for user ${userId}: ${error.message}`);
+    throw new Error(`Failed to find active symbols for user ${userId}: ${error.message}`);
   }
 
-  return count ?? 0;
+  return [...new Set((data ?? []).map((row) => row.symbol))];
 }
 
 module.exports = {
   AssetWriteError,
-  findByUserAndSymbol,
+  findAllByUserAndSymbol,
   create,
   findActiveByUser,
   findByIds,
-  countActiveByUser,
+  findActiveSymbolsByUser,
   countActiveSymbolsGroupedByUser,
   findUserIdsWithActiveAssets,
 };

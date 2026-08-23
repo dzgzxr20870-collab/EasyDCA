@@ -4,6 +4,9 @@ jest.mock('../src/services/fxRate.service');
 jest.mock('../src/repositories/transaction.repository');
 jest.mock('../src/repositories/user.repository');
 jest.mock('../src/services/storage.service');
+// Stage 5 (migration 046) — getProfit รับ ?brokerId ได้แล้ว ต้องผ่าน
+// assertOwnedBrokerId ก่อนใช้เสมอ (brokerId มาจาก Query String ที่ผู้ใช้กำหนดเอง)
+jest.mock('../src/services/broker.service');
 
 const portfolioService = require('../src/services/portfolio.service');
 const profitService = require('../src/services/profit.service');
@@ -11,6 +14,7 @@ const fxRateService = require('../src/services/fxRate.service');
 const transactionRepository = require('../src/repositories/transaction.repository');
 const userRepository = require('../src/repositories/user.repository');
 const storageService = require('../src/services/storage.service');
+const brokerService = require('../src/services/broker.service');
 const {
   getPortfolio,
   getHistory,
@@ -248,7 +252,9 @@ describe('getProfit', () => {
     const res = mockRes();
     await getProfit(req, res);
 
-    expect(profitService.getAssetProfit).toHaveBeenCalledWith(USER_ID, 'BTC');
+    // Stage 5 (migration 046) — Argument ที่ 5 คือ brokerId
+    // undefined = "ผู้ใช้ยังไม่ได้ระบุโบรก" (คนละความหมายกับ null = "ไม่ระบุโบรก")
+    expect(profitService.getAssetProfit).toHaveBeenCalledWith(USER_ID, 'BTC', null, {}, undefined);
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith(profit);
   });
@@ -260,7 +266,81 @@ describe('getProfit', () => {
     const res = mockRes();
     await getProfit(req, res);
 
-    expect(profitService.getAssetProfit).toHaveBeenCalledWith(USER_ID, 'BTC');
+    expect(profitService.getAssetProfit).toHaveBeenCalledWith(USER_ID, 'BTC', null, {}, undefined);
+  });
+
+  // ── Stage 5 (migration 046) — ?brokerId เจาะจงว่า "BTC ที่โบรกไหน" ─────────
+  test('?brokerId=<uuid> ของตัวเอง → ผ่าน assertOwnedBrokerId แล้วส่งต่อให้ profitService', async () => {
+    brokerService.assertOwnedBrokerId.mockResolvedValue('broker-a');
+    profitService.getAssetProfit.mockResolvedValue({ symbol: 'BTC' });
+
+    const req = mockReq({ params: { symbol: 'BTC' }, query: { brokerId: 'broker-a' } });
+    const res = mockRes();
+    await getProfit(req, res);
+
+    expect(brokerService.assertOwnedBrokerId).toHaveBeenCalledWith(USER_ID, 'broker-a');
+    expect(profitService.getAssetProfit).toHaveBeenCalledWith(USER_ID, 'BTC', null, {}, 'broker-a');
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  test('?brokerId=none → เจาะจงแถวที่ไม่ผูกโบรก (null) ไม่ใช่สตริง "none"', async () => {
+    brokerService.assertOwnedBrokerId.mockResolvedValue(null);
+    profitService.getAssetProfit.mockResolvedValue({ symbol: 'BTC' });
+
+    const req = mockReq({ params: { symbol: 'BTC' }, query: { brokerId: 'none' } });
+    const res = mockRes();
+    await getProfit(req, res);
+
+    expect(brokerService.assertOwnedBrokerId).toHaveBeenCalledWith(USER_ID, null);
+    expect(profitService.getAssetProfit).toHaveBeenCalledWith(USER_ID, 'BTC', null, {}, null);
+  });
+
+  // ⚠️ Cross-User: brokerId มาจาก Query String ที่ผู้ใช้กำหนดเองได้ 100%
+  // ถ้าไม่ผ่าน assertOwnedBrokerId ผู้ใช้ A จะสำรวจการมีอยู่ของโบรกผู้ใช้ B ได้
+  test('⚠️ ?brokerId ของผู้ใช้คนอื่น → 404 BROKER_NOT_FOUND และไม่แตะ profitService เลย', async () => {
+    class MockBrokerServiceError extends Error {
+      constructor(code) {
+        super(code);
+        this.code = code;
+      }
+    }
+    brokerService.BrokerServiceError = MockBrokerServiceError;
+    brokerService.assertOwnedBrokerId.mockRejectedValue(
+      new MockBrokerServiceError('BROKER_NOT_FOUND')
+    );
+
+    const req = mockReq({ params: { symbol: 'BTC' }, query: { brokerId: 'broker-of-user-b' } });
+    const res = mockRes();
+    await getProfit(req, res);
+
+    expect(profitService.getAssetProfit).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith({ error: 'BROKER_NOT_FOUND' });
+  });
+
+  // กำกวม = "คำขอยังไม่ครบพอจะตอบได้" ไม่ใช่ "ไม่พบ" → 409 พร้อม candidates
+  // ให้ Frontend ถามผู้ใช้ต่อได้ทันทีโดยไม่ต้องยิง Query เพิ่ม (ห้ามเดาให้เอง)
+  test('⚠️ ถือ BTC 2 โบรก + ไม่ส่ง brokerId → 409 AMBIGUOUS_ASSET_BROKER พร้อม candidates', async () => {
+    const err = new Error('ambiguous');
+    err.code = 'AMBIGUOUS_ASSET_BROKER';
+    err.details = {
+      symbol: 'BTC',
+      candidates: [
+        { assetId: 'asset-a', brokerId: 'broker-a' },
+        { assetId: 'asset-b', brokerId: 'broker-b' },
+      ],
+    };
+    profitService.getAssetProfit.mockRejectedValue(err);
+
+    const req = mockReq({ params: { symbol: 'BTC' } });
+    const res = mockRes();
+    await getProfit(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith({
+      error: 'AMBIGUOUS_ASSET_BROKER',
+      candidates: err.details.candidates,
+    });
   });
 
   test('Symbol ไม่มีในพอร์ต → 404 { error: "ASSET_NOT_FOUND" } (Error Code เดิม)', async () => {

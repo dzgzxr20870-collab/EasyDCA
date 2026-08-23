@@ -21,7 +21,7 @@ jest.mock('../src/config/supabase', () => {
     line_user_id: 'U123',
     display_name: 'Real Name', // ไม่ใช่ Fallback → resolveUser ไม่เรียก updateDisplayName
     picture_url: null,
-    plan: 'premium', // Premium → validateBuy ข้าม countActiveByUser (ไม่ต้อง Mock count)
+    plan: 'premium', // Premium → validateBuy ข้าม findActiveSymbolsByUser (ไม่ต้อง Mock count)
     plan_expires_at: FUTURE,
     is_locked: false,
     // PDPA Consent Gate (migration 017) — ผู้ใช้เดิมที่ Consent แล้ว (Backfill ตาม

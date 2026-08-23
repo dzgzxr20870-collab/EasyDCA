@@ -1,5 +1,6 @@
-const assetRepository = require('../repositories/asset.repository');
 const transactionRepository = require('../repositories/transaction.repository');
+// Stage 5 (migration 046) — แหล่งตัดสิน "Symbol นี้หมายถึงสินทรัพย์แถวไหน" ที่เดียว
+const assetResolution = require('./assetResolution.service');
 const { calculateHeldQuantity } = require('./transaction.service');
 const { calculateTotalInvested } = require('./portfolio.service');
 const priceFeedService = require('./priceFeed.service');
@@ -54,8 +55,17 @@ function roundToEight(value) {
 // ตรงๆ เฉพาะ { allowRetry: true } ที่ portfolioSnapshot.job.js (Cron เที่ยงคืน) ส่งมา
 // เพื่อให้ Twelve Data Throttle/Retry ทำงาน — Caller อื่น (Dashboard /profit, คำสั่ง
 // "กำไร" ทาง LINE) เป็น Live Path ไม่ส่ง จึง Default {} = Fail Fast เหมือนเดิมทุกประการ
-async function getAssetProfit(userId, symbol, portfolioId = null, priceOptions = {}) {
-  const asset = await assetRepository.findByUserAndSymbol(userId, symbol, portfolioId);
+//
+// brokerId (Optional, Stage 5 — migration 046): ผู้ใช้ถือ Symbol เดียวกันได้หลายโบรก
+// แล้ว "กำไร BTC" จึงอาจกำกวม — ถ้าไม่ส่งมาและกำกวมจริง assetResolution จะ throw
+// AMBIGUOUS_ASSET_BROKER ให้ชั้นบนไปถามผู้ใช้ว่าหมายถึงโบรกไหน (ห้ามรวมต้นทุนข้าม
+// โบรกให้เองเงียบๆ — นั่นเป็นการเปลี่ยนสูตรต้นทุนเฉลี่ยที่ยังไม่ได้ออกแบบ)
+// ค่าที่ส่งได้: undefined = ยังไม่ระบุ · null = ระบุว่า "ไม่ระบุโบรก" · uuid = โบรกนั้น
+async function getAssetProfit(userId, symbol, portfolioId = null, priceOptions = {}, brokerId) {
+  const { asset } = await assetResolution.resolveOwnedAsset(userId, symbol, {
+    portfolioId,
+    brokerId,
+  });
   if (!asset) {
     throw new ProfitServiceError('ASSET_NOT_FOUND', `Asset ${symbol} not found for this user`, {
       symbol,
