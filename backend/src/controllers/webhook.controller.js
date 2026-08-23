@@ -1226,10 +1226,15 @@ async function handleBulkImportBatchText(user, text) {
 // webhookEventId (Optional) — Correlation Key ของ Event ต้นตอ (S6 Part B) ใช้ตาม
 // event.webhookEventId แทน HTTP Request ID เพราะ LINE อาจ Batch หลาย Event มาในคำขอ
 // HTTP เดียว (ดู logger.util.js หัวไฟล์)
+//
+// err.details ถูกส่งต่อให้ buildErrorMessage เสมอ (เช่น { status } ของ
+// PENDING_ALREADY_RESOLVED/PAYMENT_NOT_PENDING ที่ Service แนบมาอยู่แล้ว) เพื่อให้
+// เลือกข้อความตาม status จริงได้ — Error ที่ไม่มี details (Error ธรรมดา/ไม่คาดคิด)
+// ยังทำงานเหมือนเดิมทุกประการ (buildErrorMessage รับ details = {} เป็น Default)
 async function replyWithError(replyToken, err, webhookEventId) {
   const code = err.code ?? 'INTERNAL_ERROR';
   logger.error('handleEvent failed', { webhookEventId, code, error: err.message });
-  await lineService.replyMessage(replyToken, flexMessage.buildErrorMessage(code));
+  await lineService.replyMessage(replyToken, flexMessage.buildErrorMessage(code, err.details));
 }
 
 // ประมวลผล Image Message — แยก 2 กรณีตามลำดับความสำคัญ:

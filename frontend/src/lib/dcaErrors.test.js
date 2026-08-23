@@ -1,5 +1,11 @@
 import { describe, test, expect } from 'vitest';
-import { transactionErrorMessage, undoErrorMessage } from './dcaErrors.js';
+import {
+  transactionErrorMessage,
+  undoErrorMessage,
+  slipOcrErrorMessage,
+  slipUploadErrorMessage,
+  PREMIUM_OCR_MONTHLY_QUOTA,
+} from './dcaErrors.js';
 
 describe('transactionErrorMessage', () => {
   test('code ที่รู้จัก → ข้อความไทยที่ตรงกัน', () => {
@@ -59,5 +65,50 @@ describe('undoErrorMessage', () => {
 
   test('code ที่ไม่รู้จัก → Fallback เป็น INTERNAL_ERROR', () => {
     expect(undoErrorMessage('NOT_A_REAL_CODE')).toBe(undoErrorMessage('INTERNAL_ERROR'));
+  });
+
+  // ── ข้อ 2 (fix/misleading-messages): "ย้อน" ไม่ใช่ "ยกเลิก" ────────────────
+  // คำสั่งนี้ทำงานกับรายการที่บันทึกลง Ledger ไปแล้วจริง (สร้าง Reversal หักล้าง)
+  // คนละสถานะกับ Pending ที่ยังไม่เคยบันทึก (transactionErrorMessage ใช้ "ยกเลิก"
+  // ถูกแล้วสำหรับกรณีนั้น) — มติ Founder: ห้ามใช้คำเดียวกันสองความหมาย
+  test('ทุก Error Code ในกลุ่มนี้ใช้คำว่า "ย้อน" ไม่ใช่ "ยกเลิก"', () => {
+    const codes = ['NO_TRANSACTION_TO_UNDO', 'ALREADY_UNDONE', 'CANNOT_UNDO_QUANTITY_MISMATCH'];
+    for (const code of codes) {
+      expect(undoErrorMessage(code)).not.toContain('ยกเลิก');
+      expect(undoErrorMessage(code)).toContain('ย้อน');
+    }
+  });
+});
+
+describe('ข้อ 1 (fix/misleading-messages) — OCR_TRIAL_EXHAUSTED ไม่โกหกว่า Premium "ไม่จำกัด"', () => {
+  test('ไม่มีคำว่า "ไม่จำกัด" อีกต่อไป', () => {
+    expect(slipOcrErrorMessage('OCR_TRIAL_EXHAUSTED')).not.toContain('ไม่จำกัด');
+  });
+
+  // พิสูจน์ว่าข้อความ "อ้างอิง" PREMIUM_OCR_MONTHLY_QUOTA จริง ไม่ใช่ Hardcode เลข 50
+  // ลอยๆ ที่บังเอิญตรงกับค่าคงที่ (Assert เทียบกับ String(ค่าคงที่) ไม่ใช่ "50" ตรงๆ
+  // — ถ้าใครแก้ค่าคงที่แต่ลืมแก้ข้อความ Test นี้จะจับได้ทันที)
+  test('มีเลขโควตาจริงจาก PREMIUM_OCR_MONTHLY_QUOTA อยู่ในข้อความ', () => {
+    expect(slipOcrErrorMessage('OCR_TRIAL_EXHAUSTED')).toContain(String(PREMIUM_OCR_MONTHLY_QUOTA));
+  });
+});
+
+describe('ข้อ 2 (fix/misleading-messages) — CANNOT_ATTACH_TO_REVERSAL ไม่เขียน "(ยกเลิก)" กำกับ "ย้อน"', () => {
+  test('ไม่มีคำว่า "(ยกเลิก)" ต่อท้าย "รายการย้อน" อีกต่อไป (สองคำซ้อนกันสื่อผิด)', () => {
+    const text = slipUploadErrorMessage('CANNOT_ATTACH_TO_REVERSAL');
+    expect(text).not.toContain('(ยกเลิก)');
+    expect(text).toContain('ย้อน');
+  });
+});
+
+describe('ข้อ 6 (fix/misleading-messages) — PRICE_FEED_NOT_IMPLEMENTED ไม่อ้างว่า "รองรับเฉพาะ Crypto"', () => {
+  test('ไม่มีคำว่า "เฉพาะ" อีกต่อไป (หุ้นสหรัฐก็ดึงราคาอัตโนมัติได้เช่นกัน)', () => {
+    expect(transactionErrorMessage('PRICE_FEED_NOT_IMPLEMENTED')).not.toContain('เฉพาะ');
+  });
+
+  test('พูดถึงหุ้นสหรัฐ + สกุล USD เป็นทางที่ใช้ได้จริง', () => {
+    const text = transactionErrorMessage('PRICE_FEED_NOT_IMPLEMENTED');
+    expect(text).toContain('หุ้นสหรัฐ');
+    expect(text).toContain('USD');
   });
 });

@@ -40,6 +40,15 @@ function handlePaymentError(res, err, context) {
   if (isKnownServiceError) {
     const status = STATUS_BY_CODE[err.code];
     if (status) {
+      // PAYMENT_NOT_PENDING เท่านั้นที่ต้องส่ง status ต่อให้ Frontend เลือกข้อความ
+      // ตาม approved/rejected/reviewing/expired (บั๊ค "ถูกดำเนินการไปแล้ว" ไม่บอก
+      // ว่าอนุมัติหรือถูกปฏิเสธ) — payment.service.js แนบ err.details = { paymentId,
+      // status } มาอยู่แล้วตอน throw (notifyPaymentSubmitted/
+      // assertPaymentClaimableByUser) ที่นี่แค่ส่งต่อ ไม่มี Query/Logic ใหม่ · Code
+      // อื่นไม่แตะ (คง Response Shape เดิม `{ error }` เป๊ะ กันพัง Test/Contract เดิม)
+      if (err.code === 'PAYMENT_NOT_PENDING' && err.details?.status) {
+        return res.status(status).json({ error: err.code, details: { status: err.details.status } });
+      }
       return res.status(status).json({ error: err.code });
     }
   }

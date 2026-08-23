@@ -143,6 +143,8 @@ const ERROR_MESSAGES = {
   SATANG_POOL_EXHAUSTED: 'ขณะนี้มีคำขอชำระเงินจำนวนมาก กรุณาลองใหม่อีกครั้งในอีกสักครู่',
   ALLOCATION_CONFLICT: 'สร้างคำขอไม่สำเร็จ กรุณาลองใหม่อีกครั้ง',
   PAYMENT_NOT_FOUND: 'ไม่พบคำขอชำระเงินนี้ กรุณาเริ่มใหม่',
+  // Fallback เมื่อไม่รู้ status จริง (err.details.status ไม่มีมาหรือไม่รู้จัก) —
+  // ยังคงคำเดิมไว้ ดู PAYMENT_NOT_PENDING_BY_STATUS ด้านล่างสำหรับข้อความเจาะจง
   PAYMENT_NOT_PENDING: 'คำขอนี้ถูกดำเนินการไปแล้ว กรุณาเริ่มใหม่',
   SLIP_NOT_ATTACHED: 'กรุณาแนบรูปสลิปก่อนกดแจ้งชำระเงิน',
   SLIP_ALREADY_USED: 'สลิปนี้เคยถูกใช้ยืนยันการชำระเงินไปแล้ว กรุณาใช้สลิปการโอนจริงของรอบนี้',
@@ -152,7 +154,27 @@ const ERROR_MESSAGES = {
   INTERNAL_ERROR: 'เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง',
 };
 
-function errorText(code) {
+// PAYMENT_NOT_PENDING เจาะจงตาม payments.status จริง (บั๊ค "ถูกดำเนินการไปแล้ว"
+// ไม่บอกว่าอนุมัติหรือถูกปฏิเสธ) — ระบบรู้คำตอบอยู่แล้ว (payment.service.js แนบ
+// { status } มากับ Error เสมอ, payment.controller.handlePaymentError ส่งต่อผ่าน
+// `details`, frontend/src/lib/api.js แนบ err.details ให้แล้ว) แค่ "เลือกข้อความ"
+// จาก status ที่มีอยู่ ไม่มี Logic/Query ใหม่ · status ที่เป็นไปได้ ณ จุดนี้คือ
+// reviewing/approved/rejected/expired เท่านั้น (ไม่ใช่ 'pending' อยู่แล้วถึงจะเจอ Error นี้)
+const PAYMENT_NOT_PENDING_BY_STATUS = {
+  reviewing: 'คำขอนี้อยู่ระหว่างตรวจสอบแล้ว ไม่ต้องแจ้งซ้ำ รอทีมงานอนุมัติ',
+  approved: 'คำขอนี้ได้รับการอนุมัติแล้ว คุณได้รับสิทธิ์ Premium เรียบร้อย',
+  rejected: 'คำขอนี้ถูกปฏิเสธ กรุณาติดต่อทีมงาน หรือทำคำขอใหม่',
+  expired: 'คำขอหมดเวลาแล้ว กรุณาทำคำขอใหม่',
+};
+
+// Export ไว้ให้ Test เรียกตรงๆ ได้ (Premium.jsx เป็น Page Component ที่ไม่มี Test
+// Harness แบบ Render อยู่แล้วในโปรเจกต์นี้ — Export Pure Function ออกมา Unit Test
+// เดียวพอ ไม่ต้องเพิ่ม Dependency ใหม่อย่าง React Testing Library)
+export function errorText(code, details) {
+  if (code === 'PAYMENT_NOT_PENDING' && details?.status) {
+    const specific = PAYMENT_NOT_PENDING_BY_STATUS[details.status];
+    if (specific) return specific;
+  }
   return ERROR_MESSAGES[code] ?? ERROR_MESSAGES.INTERNAL_ERROR;
 }
 
@@ -306,7 +328,9 @@ function Premium() {
       await apiUpload(`/api/v1/payment/${payment.paymentId}/slip`, slipFile);
       setSlipUploaded(true);
     } catch (err) {
-      setUploadError(errorText(err.message));
+      // err.details.status (ถ้ามี) ให้ errorText เลือกข้อความตาม approved/rejected/
+      // reviewing/expired จริง แทนคำกลางๆ "ถูกดำเนินการไปแล้ว"
+      setUploadError(errorText(err.message, err.details));
     } finally {
       setUploading(false);
     }
@@ -319,7 +343,9 @@ function Premium() {
       await apiPost(`/api/v1/payment/${payment.paymentId}/notify`, {});
       setNotified(true);
     } catch (err) {
-      setNotifyError(errorText(err.message));
+      // err.details.status (ถ้ามี) ให้ errorText เลือกข้อความตาม approved/rejected/
+      // reviewing/expired จริง แทนคำกลางๆ "ถูกดำเนินการไปแล้ว"
+      setNotifyError(errorText(err.message, err.details));
     } finally {
       setNotifying(false);
     }

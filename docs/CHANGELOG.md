@@ -60,6 +60,73 @@
   - โหมดขายเลือกได้เฉพาะสินทรัพย์ที่ถืออยู่จริง + แสดงยอดคงเหลือ + ปุ่ม "ขายทั้งหมด"
     (ส่ง `sellAll` ให้ Backend หายอด+ราคาตลาดเอง จึงไม่เหลือเศษค้างในพอร์ต)
 ### Fixed
+- **ข้อความในระบบผิดข้อเท็จจริง/กำกวม 6 จุด** (fix/misleading-messages — ยัง**ไม่ได้
+  Push/Merge** รออนุมัติ) · ไม่มี Migration · ไม่แตะ Logic การเงิน/Ledger เลย
+  ยกเว้นข้อ 3 (แค่อ่าน `status` ที่มีอยู่แล้วมาเลือกข้อความ ไม่มี Query/เงื่อนไข
+  ทางธุรกิจใหม่) — หลักที่ยึด: บอก **ผลลัพธ์ที่เกิดกับผู้ใช้ก่อน** แล้วค่อยอธิบาย
+  กลไก, ห้ามอ้างสิ่งที่ระบบทำไม่ได้จริง, เรื่องเงินต้องไม่กำกวม
+  1. **`OCR_TRIAL_EXHAUSTED` อ้างว่า Premium อ่านสลิปได้ "ไม่จำกัด"** — ผิด จริง
+     คือจำกัด `MONTHLY_QUOTA` = 50 ครั้ง/เดือน คนจ่ายเงินแล้วเจอเพดานจะรู้สึกถูก
+     หลอก แก้ให้อ้างอิงตัวเลขจริงแทน (Backend: `slipOcrService.MONTHLY_QUOTA`
+     ตรงๆ · Frontend: ค่าคงที่ `PREMIUM_OCR_MONTHLY_QUOTA` คู่กันเพราะ Import
+     ข้าม Deploy ไม่ได้) ตรวจครบทั้งระบบแล้วว่า "สินทรัพย์/แผน DCA ไม่จำกัด"
+     (Premium) เป็นความจริง ไม่ต้องแก้ (`entitlement.getActiveAssetLimit`/
+     `getActiveDcaPlanLimit` คืน `null` จริงเมื่อ Premium Active)
+  2. **คำว่า "ยกเลิก" ใช้กับ 2 เหตุการณ์ที่ผลต่างกันสิ้นเชิง** — Pending ที่ยังไม่
+     เคยบันทึก (`buildCancelledMessage`) กับรายการที่บันทึกลง Ledger ไปแล้วจริง
+     แล้วถูกย้อน (`buildUndoMessage`/`NO_TRANSACTION_TO_UNDO`/`ALREADY_UNDONE`/
+     `CANNOT_UNDO_QUANTITY_MISMATCH`/`CANNOT_ATTACH_TO_REVERSAL`) ใช้คำเดียวกัน
+     ผู้ใช้แยกไม่ออกว่าข้อมูลตัวเองอยู่สถานะไหน — เปลี่ยนกลุ่มหลังทั้งหมดเป็น
+     "ย้อน" (LINE + เว็บ Backend + Frontend คู่กันครบ) `buildCancelledMessage`
+     ไม่ถูกแตะ (ใช้ "ยกเลิก" ถูกอยู่แล้ว)
+     - รอบตรวจก่อน Deploy พบเพิ่มอีก 2 จุดที่ขัดกับคำที่เพิ่งแก้ (Founder อนุมัติ
+       ให้รวมเข้ารอบนี้): `transactionNote.js` Label รายการ Reversal ใน
+       ประวัติถาวร (`'↩︎ ยกเลิกรายการ'` → `'↩︎ ย้อนรายการ'` — จุดที่ผู้ใช้เห็น
+       บ่อยสุดเพราะติดอยู่กับทุกแถวรายการ Reversal ตลอดไป) และปุ่มที่เปิด
+       `UndoConfirmModal` ใน `RecentList.jsx` (`'↩︎ ยกเลิก'` → `'↩︎ ย้อน'`) กับ
+       `DcaForm.jsx` การ์ดยืนยันหลังบันทึกสำเร็จ (`'↩︎ ยกเลิกรายการนี้'` →
+       `'↩︎ ย้อนรายการนี้'`) — เดิมปุ่มเขียน "ยกเลิก" แต่เปิด Modal ที่เขียน
+       "ย้อน" ขัดกันเองบนหน้าจอเดียว
+  3. **"ถูกดำเนินการไปแล้ว" ไม่บอกว่าสำเร็จหรือถูกยกเลิก** (`PENDING_ALREADY_
+     RESOLVED` กดยืนยันซ้ำ · `PAYMENT_NOT_PENDING` แจ้งชำระซ้ำ) — ระบบรู้คำตอบ
+     อยู่แล้วจาก `status` ที่ Error แนบมาด้วยเสมอ (`pendingTransaction.service`/
+     `payment.service`) แค่ไม่เคยส่งต่อมาถึงชั้นสร้างข้อความ — เดินสาย
+     `err.details` ผ่านทุกชั้น: `webhook.controller.replyWithError` →
+     `flexMessage.buildErrorMessage(code, details)` (LINE) และ
+     `payment.controller.handlePaymentError` → `frontend/src/lib/api.js`
+     (`apiPost`/`apiUpload` แนบ `.details` ให้ Error ที่ throw) → `Premium.jsx`
+     (เว็บ) แยกข้อความตาม `confirmed`/`cancelled`/`expired` และ
+     `approved`/`rejected`/`reviewing`/`expired` ตามลำดับ — ไม่มี `status` แนบมา
+     (Error เก่า/ไม่คาดคิด) Fallback ข้อความเดิมเป๊ะ ไม่ throw
+  4. **ปุ่ม "ไม่ยกเลิก" ในหน้าต่าง "ยืนยันยกเลิกรายการ"** (`UndoConfirmModal.jsx`)
+     — ปฏิเสธซ้อนปฏิเสธ ตีความได้ 2 ทาง (ไม่ย้อนรายการ? ไม่ปิดหน้าต่าง?) และเป็น
+     ปุ่มฝั่งปลอดภัยที่กดผิดแล้วข้อมูลเปลี่ยน เปลี่ยนเป็น "ปิด" (ไม่กำกวม) พร้อม
+     หัวข้อ/ปุ่มยืนยันใช้คำว่า "ย้อน" สอดคล้องกับข้อ 2
+  5. **การ์ดย้อนรายการอธิบายกลไกก่อนบอกผลลัพธ์** — เดิมขึ้นต้นด้วย "สร้างรายการ
+     ตรงข้ามเพื่อชดเชย" (ภาษาบัญชี Founder เองยังสะดุด) ย้ายผลลัพธ์ขึ้นก่อน
+     ("ยอด {symbol} ในพอร์ตกลับไปเป็นเหมือนก่อนบันทึกรายการนี้แล้ว") คำอธิบาย
+     กลไกยังอยู่ครบแต่ย้ายไปเป็นหมายเหตุตัวเล็กท้ายการ์ด
+  6. **`PRICE_FEED_NOT_IMPLEMENTED` อ้างว่า "รองรับเฉพาะ Crypto"** — ผิด: ไล่โค้ด
+     ยืนยันแล้วว่า `priceFeed.service.getCurrentPrice` Route ผ่าน Twelve Data
+     สำหรับ `stock_us` ด้วย (ทั้งเส้นทาง LINE และเว็บ — `symbolRegistry.lookupType`
+     เติม `type` ก่อนถึง Service เสมอทั้งสองทาง) ต่างกันแค่ THB ต้องยิง 2 Request
+     (ราคาหุ้น + เรต FX) ส่วน USD ยิงแค่ 1 Request จึงเสถียรกว่าเมื่อโดน Rate
+     Limit 8 Credit/นาที — Error นี้ส่วนใหญ่คือ "ดึงราคาไม่สำเร็จชั่วคราว" ไม่ใช่
+     "ไม่รองรับสินทรัพย์นี้" (ยกเว้นหุ้นไทย/กองทุนที่ไม่มี Price Feed จริง) แก้
+     ข้อความให้ตรงตามนี้ + แนะนำ "usd" เป็นทางที่เสถียรกว่า
+  - Test: Backend **2,206 tests / 113 suites เขียว** (2,175 → 2,206 = +31 เคสใหม่
+    ใน 5 ไฟล์ทั้งใหม่และเดิม) · Frontend **278 tests / 16 files เขียว** (259 → 278
+    = +19 เคสใหม่ รวม `Premium.errorText.test.js` ไฟล์ใหม่ — `errorText` Export
+    เพิ่มจาก `Premium.jsx` เพื่อ Unit Test ได้ตรงๆ โดยไม่ต้องเพิ่ม Dependency
+    Render Test ใหม่) · Red-Green พิสูจน์จริงสำหรับ Logic ข้อ 3 ทั้งสองฝั่ง (LINE:
+    `buildErrorMessage` ถอด Branch ออก → 9 เคสแดงตรงจุด, เว็บ: `payment.controller`
+    ถอด Passthrough ออก → 1 เคสแดงตรงจุด, ทั้งสองครั้งเทสต์ที่เหลือเขียวตลอด) ·
+    `vite build` ผ่าน · ESLint 0 error บนไฟล์ที่แตะทั้งหมด (1 error เดิมที่
+    `entitlement.service.js` เป็นของก่อนหน้า ไม่เกี่ยวกับงานนี้)
+  - แก้เทสต์เดิม 1 จุด: `webhook.controller.test.js` เคส "หุ้นไทยที่ยังไม่มี Price
+    Feed" เดิม Assert คำว่า `'เฉพาะบางสินทรัพย์'` ซึ่งเป็นข้อความที่เพิ่งพิสูจน์ว่า
+    ผิดข้อเท็จจริง (ข้อ 6) เปลี่ยนไป Assert `'ดึงราคาตลาด'` แทน (ยืนยันแค่ว่าแปล
+    เป็นไทยแล้วไม่โชว์ Error Code ดิบ ไม่ตรึงคำที่ตอนนี้เป็นเท็จ)
 - **ยอดเงินที่แสดง ≠ ยอดเงินที่บันทึกลง Ledger (2 บั๊คแยกกัน · บั๊ค A พบ 3 ทางเข้า)** — Deploy `2c75941`
   (23 ส.ค. 2569) · **ไม่มี Migration** · Post-mortem เต็ม:
   [`POSTMORTEM_AMOUNT_CONSISTENCY.md`](./POSTMORTEM_AMOUNT_CONSISTENCY.md)

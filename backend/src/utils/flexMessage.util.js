@@ -64,8 +64,15 @@ const ERROR_MESSAGES = {
     'จำนวนที่ต้องการขายมากกว่าที่คุณถือครองอยู่ กรุณาตรวจสอบยอดคงเหลืออีกครั้ง',
   NO_HOLDING_TO_CALCULATE_PROFIT:
     'ไม่มีการถือครองสินทรัพย์นี้อยู่ในขณะนี้ จึงยังคำนวณกำไร/ขาดทุนไม่ได้ ลองพิมพ์ "พอต" เพื่อดูสินทรัพย์ที่คุณถืออยู่',
+  // ⚠️ ห้ามเขียนว่า "รองรับเฉพาะ Crypto" — ผิดข้อเท็จจริง: หุ้นสหรัฐก็ดึงราคาอัตโนมัติ
+  // ได้เช่นกัน (getCurrentPrice route ผ่าน Twelve Data สำหรับ type=stock_us ด้วย —
+  // ดู priceFeed.service.js) ทั้งแบบ THB (ต้องยิง 2 Request: ราคาหุ้น + เรต FX) และ
+  // แบบ USD ต่อท้าย "usd" (ยิงแค่ 1 Request ราคาหุ้นตรงๆ จึงเสถียรกว่าเมื่อโดน Rate
+  // Limit 8 Credit/นาทีของ Twelve Data) Error นี้จริงๆ มักมาจาก "ดึงราคาไม่สำเร็จ
+  // ชั่วคราว" (Rate Limit/API ล่ม) ไม่ใช่ "ไม่รองรับสินทรัพย์นี้" เสมอไป — ยกเว้น
+  // หุ้นไทย/กองทุนที่ไม่มี Price Feed อัตโนมัติจริงๆ (กรณีนั้นข้อความนี้ถูกต้อง)
   PRICE_FEED_NOT_IMPLEMENTED:
-    'การบันทึกด้วยจำนวนเงินรองรับเฉพาะบางสินทรัพย์ (เช่น Crypto อย่าง BTC/ETH) เท่านั้น สำหรับสินทรัพย์อื่นกรุณาระบุจำนวนหน่วยและราคา เช่น "ซื้อ PTT 50 หุ้น ราคา 34"',
+    'ดึงราคาตลาดของสินทรัพย์นี้ไม่ได้ในขณะนี้ (คริปโตและหุ้นสหรัฐมีราคาอัตโนมัติ — หุ้นสหรัฐลองพิมพ์ "usd" ต่อท้ายจะดึงราคาได้เสถียรกว่า) กรุณาลองใหม่อีกครั้ง หรือระบุจำนวนหน่วยและราคาเอง เช่น "ซื้อ PTT 50 หุ้น ราคา 34"',
   // ทองคำ (Phase 3 Round 7) — ดึงราคาจากสมาคมค้าทองคำฯ (Community API) ไม่สำเร็จ
   // หรือราคายังว่าง (เช่นก่อนตลาดเปิด) — ไม่เดาราคา ให้ผู้ใช้ลองใหม่/ระบุราคาเอง
   GOLD_PRICE_UNAVAILABLE:
@@ -97,10 +104,16 @@ const ERROR_MESSAGES = {
   PENDING_NOT_FOUND: 'ไม่พบรายการที่รอยืนยัน อาจหมดอายุหรือถูกยกเลิกไปแล้ว กรุณาพิมพ์คำสั่งใหม่',
   PENDING_ALREADY_RESOLVED: 'รายการนี้ถูกดำเนินการไปแล้ว ไม่สามารถทำซ้ำได้',
   // Command History — คำสั่ง "ยกเลิกล่าสุด" (undoTransaction.service)
-  NO_TRANSACTION_TO_UNDO: 'ยังไม่มีรายการให้ยกเลิก ลองบันทึกรายการซื้อ/ขายก่อนนะครับ',
-  ALREADY_UNDONE: 'รายการล่าสุดถูกยกเลิกไปแล้ว ไม่สามารถยกเลิกซ้ำได้',
+  //
+  // ⚠️ ใช้คำว่า "ย้อน" ไม่ใช่ "ยกเลิก" ในข้อความตอบกลับกลุ่มนี้โดยตั้งใจ — คำสั่งนี้
+  // ทำงานกับรายการที่ "บันทึกลง Ledger ไปแล้วจริง" (สร้าง Reversal ตรงข้ามหักล้าง
+  // ไม่ใช่ลบ) ต่างจาก "ยกเลิก" ที่ใช้กับ Pending ที่ยังไม่เคยบันทึก
+  // (buildCancelledMessage ด้านล่าง) — ถ้าใช้คำเดียวกันทั้งคู่ ผู้ใช้จะแยกไม่ออกว่า
+  // ข้อมูลตัวเองอยู่ในสถานะไหน (มติ Founder: ห้ามใช้คำเดียวกัน)
+  NO_TRANSACTION_TO_UNDO: 'ยังไม่มีรายการให้ย้อน ลองบันทึกรายการซื้อ/ขายก่อนนะครับ',
+  ALREADY_UNDONE: 'รายการล่าสุดถูกย้อนไปแล้ว ไม่สามารถย้อนซ้ำได้',
   CANNOT_UNDO_QUANTITY_MISMATCH:
-    'ยกเลิกรายการล่าสุดไม่ได้ เพราะยอดคงเหลือปัจจุบันน้อยกว่าจำนวนในรายการนั้น (อาจมีการขายไปแล้วบางส่วน)',
+    'ย้อนรายการล่าสุดไม่ได้ เพราะยอดคงเหลือปัจจุบันน้อยกว่าจำนวนในรายการนั้น (อาจมีการขายไปแล้วบางส่วน)',
   // DCA Reminder (dcaReminder.service) — ตั้ง/ลบเตือน
   REMINDER_NOT_FOUND:
     'ไม่พบการตั้งเตือนของสินทรัพย์นี้ที่กำลังใช้งานอยู่ ลองพิมพ์ "ดูเตือน" เพื่อดูรายการที่ตั้งไว้',
@@ -546,8 +559,45 @@ function buildProfitMessage(profit) {
   });
 }
 
-function buildErrorMessage(code) {
-  const message = ERROR_MESSAGES[code] ?? ERROR_MESSAGES.INTERNAL_ERROR;
+// ── ข้อความตาม status จริง (บั๊ค "ถูกดำเนินการไปแล้ว" ไม่บอกว่าสำเร็จหรือถูกยกเลิก) ──
+//
+// เดิม PENDING_ALREADY_RESOLVED ตอบ "รายการนี้ถูกดำเนินการไปแล้ว ไม่สามารถทำซ้ำ
+// ได้" เหมือนกันหมดไม่ว่าจะ confirmed/cancelled/expired — ผู้ใช้กดยืนยันซ้ำแล้ว
+// ไม่รู้ว่าธุรกรรมเข้าพอร์ตหรือยัง ทั้งที่ระบบรู้คำตอบอยู่แล้วจาก
+// pending_transactions.status (PendingTransactionError แนบ { pendingId, status }
+// มาด้วยเสมอ — ดู pendingTransaction.service.js confirmPending/cancelPending)
+//
+// ⚠️ ไม่มี Logic การตัดสินใจใหม่ใดๆ ที่นี่ — แค่ "เลือกข้อความ" จาก status ที่มีอยู่
+// แล้วเท่านั้น ไม่มี Query/เงื่อนไขทางธุรกิจใหม่ (status ที่เป็นไปได้ ณ จุดนี้คือ
+// confirmed/cancelled/expired เท่านั้น เพราะ status === 'pending' ถูกดักไปเป็น
+// PENDING_EXPIRED ตั้งแต่ใน Service แล้ว) status ที่ไม่รู้จัก/ไม่มี → fallback เป็น
+// ข้อความเดิม (กันพังกรณี Error ที่ไม่มี details แนบมา เช่น Error ธรรมดาที่ตั้ง
+// .code เอง)
+const PENDING_ALREADY_RESOLVED_MESSAGES = {
+  confirmed: 'บันทึกรายการนี้เรียบร้อยแล้ว ดูได้ที่พอร์ตของคุณ',
+  cancelled: 'รายการนี้ถูกยกเลิกไปก่อนหน้านี้ ไม่ได้บันทึกลงพอร์ต',
+  expired: 'รายการหมดเวลายืนยัน ไม่ได้บันทึก กรุณาพิมพ์คำสั่งใหม่',
+};
+
+// PAYMENT_NOT_PENDING เช่นเดียวกัน — payments.status ∈ {reviewing,approved,rejected,
+// expired} เมื่อมาถึงจุดนี้ (ไม่ใช่ 'pending' อยู่แล้วถึงจะ throw code นี้ — ดู
+// payment.service.js notifyPaymentSubmitted/assertPaymentClaimableByUser)
+const PAYMENT_NOT_PENDING_MESSAGES = {
+  reviewing: 'คำขอนี้อยู่ระหว่างตรวจสอบแล้ว ไม่ต้องแจ้งซ้ำ รอทีมงานอนุมัติ',
+  approved: 'คำขอนี้ได้รับการอนุมัติแล้ว คุณได้รับสิทธิ์ Premium เรียบร้อย',
+  rejected: 'คำขอนี้ถูกปฏิเสธ กรุณาติดต่อทีมงาน หรือทำคำขอใหม่',
+  expired: 'คำขอหมดเวลาแล้ว กรุณาทำคำขอใหม่',
+};
+
+const STATUS_AWARE_MESSAGES = {
+  PENDING_ALREADY_RESOLVED: PENDING_ALREADY_RESOLVED_MESSAGES,
+  PAYMENT_NOT_PENDING: PAYMENT_NOT_PENDING_MESSAGES,
+};
+
+function buildErrorMessage(code, details = {}) {
+  const byStatus = STATUS_AWARE_MESSAGES[code];
+  const message =
+    (byStatus && byStatus[details?.status]) ?? ERROR_MESSAGES[code] ?? ERROR_MESSAGES.INTERNAL_ERROR;
 
   return bubble({
     headerText: '⚠️ ไม่สำเร็จ',
@@ -867,21 +917,33 @@ function buildEditHintMessage() {
 
 // ตอบกลับคำสั่ง "ยกเลิกล่าสุด" (Command History) — แจ้งว่าย้อนรายการเดิมแล้ว
 // โดยระบุว่าเป็นการสร้างรายการตรงข้ามชดเชย (ไม่ได้ลบของเดิม) ตาม DATABASE.md § 8
+//
+// ⚠️ Header ใช้คำว่า "ย้อน" ไม่ใช่ "ยกเลิก" โดยตั้งใจ (ต่างจาก buildCancelledMessage
+// ด้านบนที่ใช้ "ยกเลิก" ถูกแล้ว) — รายการนี้บันทึกลง Ledger ไปแล้วจริง ผลลัพธ์คือ
+// "ย้อน/หักล้าง" ไม่ใช่ "ไม่เคยเกิดขึ้น" มติ Founder: ห้ามใช้คำเดียวกันสองความหมาย
+//
+// ⚠️ บรรทัดแรกต้องบอก "ผลลัพธ์ที่เกิดกับผู้ใช้" ก่อน (ยอดในพอร์ตกลับไปเป็นเท่าไหร่)
+// ไม่ใช่อธิบายกลไกทางบัญชี ("สร้างรายการตรงข้ามเพื่อชดเชย") ขึ้นก่อน — Founder เอง
+// ยังสะดุดตอนเห็นข้อความกลไกเป็นบรรทัดแรกครั้งแรก คำอธิบายกลไก (ประวัติยังเก็บไว้ครบ)
+// ยังคงอยู่ แต่ย้ายไปเป็นหมายเหตุตัวเล็กท้ายการ์ดแทน
 function buildUndoMessage(result) {
   const wasBuy = result.originalType === 'buy';
   const originalLabel = wasBuy ? 'ซื้อ' : 'ขาย';
   const symbol = result.symbol ?? '';
 
   return bubble({
-    headerText: '↩️ ยกเลิกรายการล่าสุดแล้ว',
+    headerText: '↩️ ย้อนรายการล่าสุดแล้ว',
     headerColor: COLOR.info,
     headerBg: COLOR.warningBg,
     bodyContents: [
-      textLine(`ย้อนรายการ${originalLabel} ${symbol}`.trim(), {
-        size: 'md',
-        weight: 'bold',
-        color: COLOR.textPrimary,
-      }),
+      textLine(
+        `ยอด ${symbol} ในพอร์ตกลับไปเป็นเหมือนก่อนบันทึกรายการ${originalLabel}นี้แล้ว`.trim(),
+        {
+          size: 'md',
+          weight: 'bold',
+          color: COLOR.textPrimary,
+        }
+      ),
       textLine(`จำนวน: ${formatNumber(result.quantity)} ${symbol}`.trimEnd(), {
         size: 'sm',
         color: COLOR.textSecondary,
@@ -890,7 +952,7 @@ function buildUndoMessage(result) {
         size: 'sm',
         color: COLOR.textSecondary,
       }),
-      textLine('* สร้างรายการตรงข้ามเพื่อชดเชย ประวัติเดิมยังถูกเก็บไว้ครบถ้วน', {
+      textLine('* ระบบสร้างรายการตรงข้ามเพื่อชดเชย (ไม่ได้ลบ) ประวัติเดิมยังถูกเก็บไว้ครบถ้วน', {
         size: 'xs',
         color: COLOR.textSecondary,
       }),

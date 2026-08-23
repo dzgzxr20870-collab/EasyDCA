@@ -109,7 +109,13 @@ async function apiPost(path, body) {
 
   if (!response.ok) {
     const errBody = await response.json().catch(() => null);
-    throw new Error(errBody?.error || `Request failed: ${response.status}`);
+    const error = new Error(errBody?.error || `Request failed: ${response.status}`);
+    // แนบ details ที่ Backend ส่งมาด้วย (ถ้ามี) — เช่น { status } ของ
+    // PAYMENT_NOT_PENDING (payment.controller.handlePaymentError) ให้ Caller เลือก
+    // ข้อความตาม status จริงได้ (บั๊ค "ถูกดำเนินการไปแล้ว" ไม่บอกอนุมัติ/ปฏิเสธ) —
+    // Additive ล้วน: ไม่กระทบ Caller เดิมที่อ่านแค่ err.message
+    if (errBody?.details) error.details = errBody.details;
+    throw error;
   }
 
   return response.json();
@@ -182,7 +188,12 @@ async function apiUpload(path, file) {
 
   if (!response.ok) {
     const errBody = await response.json().catch(() => null);
-    throw new Error(errBody?.error || `Request failed: ${response.status}`);
+    const error = new Error(errBody?.error || `Request failed: ${response.status}`);
+    // แนบ details ที่ Backend ส่งมาด้วย (ถ้ามี) — เช่น { status } ของ
+    // PAYMENT_NOT_PENDING (payment.controller.handlePaymentError) — Pattern เดียวกับ
+    // apiPost ด้านบน (assertPaymentClaimableByUser ก็ throw code เดียวกันนี้ได้)
+    if (errBody?.details) error.details = errBody.details;
+    throw error;
   }
 
   return response.json();
