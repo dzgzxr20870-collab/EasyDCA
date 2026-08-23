@@ -10,6 +10,34 @@
 
 ---
 
+## [Decided] - 23 สิงหาคม 2569 — Open Questions ของ Multi-Portfolio / Broker / Sector / Dividend
+
+คำตอบของ **Open Questions § 8** ใน
+[`DESIGN_MULTI_PORTFOLIO_BROKER_SECTOR.md`](./DESIGN_MULTI_PORTFOLIO_BROKER_SECTOR.md)
+— ตัดสินโดย Founder ครบทุกข้อ **ห้ามเปลี่ยนเองโดยไม่ถาม**
+
+| # | คำถาม | มติ |
+|---|---|---|
+| § 8.1 | Free-tier limit เมื่อมีหลายพอร์ต | **ตัวเลือก C — Free ล็อกพอร์ตเดียว** · Multi-portfolio เป็นฟีเจอร์ Premium ล้วน · เพดานเดิม `FREE_TIER_ASSET_LIMIT = 2` / `FREE_TIER_DCA_PLAN_LIMIT = 2` **ไม่ต้องแก้เลย** · ตรงกับ `AI_CONTEXT.md` บรรทัด 95 ที่ระบุไว้ตั้งแต่แรก (`Multiple Portfolio: Free ❌ / Premium ✅`) |
+| § 8.1 (ก) | Premium หมดอายุแต่มี 3 พอร์ต | **"อ่านได้ แต่เขียนไม่ได้"** — พอร์ตที่เกินโควตาเปิดดูข้อมูลย้อนหลังได้ปกติ แต่เพิ่มสินทรัพย์/บันทึกรายการใหม่เข้าไปไม่ได้ · ต่ออายุแล้วกลับมาใช้ได้ทันที · **ห้ามลบข้อมูลเด็ดขาด** (กฎเหล็ก `AI_CONTEXT.md` ข้อ 2) · การตัดสินว่า "พอร์ตไหนคือส่วนเกิน" ต้อง **Deterministic**: เรียงตาม `created_at` — **พอร์ตแรกสุด = พอร์ตที่ยังเขียนได้** (migration 044 STEP 4 ใช้กฎเดียวกันนี้เลือกพอร์ต Default) |
+| § 8.1 (ข) | Premium มีเพดานจำนวนพอร์ตไหม | **มี — Sanity Cap 50 พอร์ต** (กัน abuse ไม่ใช่ Monetization Cap) |
+| § 8.2 | `brokers` per-user หรือ Master List กลาง | **per-user — ผู้ใช้พิมพ์ชื่อเอง + ระบบรวมชื่อคล้ายกันอัตโนมัติ** · Normalize ก่อนเทียบ/จัดกลุ่ม (trim หัวท้าย + ช่องว่างซ้ำ + เทียบแบบ case-insensitive) เพื่อไม่ให้ `Bitkub`/`bitkub`/`Bitkub ` กลายเป็น 3 กลุ่มบนกราฟโดนัท · **แต่ต้องเก็บรูปแบบที่ผู้ใช้พิมพ์ครั้งแรกไว้แสดงผล** (ไม่บังคับเป็นตัวพิมพ์เล็กหมด) · **ไม่ทำ Autocomplete รายชื่อโบรกในรอบนี้** |
+| § 8.3 | ถือสินทรัพย์เดียวกันที่ 2 โบรก | **รองรับ** — แต่ดู "สถานะ" ด้านล่าง (งานนี้ยังไม่จบ ติดคำถามที่ต้องตัดสินเพิ่ม) |
+| § 8.4 | Stock Dividend (ปันผลเป็นหุ้น) | **เลื่อนไปรอบหน้า** — ไม่ทำในรอบนี้ เพื่อไม่ให้ Migration ที่เสี่ยงที่สุดบวมเกินจำเป็น · จะเป็น type ที่ 5 (`stock_dividend`) ที่เพิ่ม `heldQty` แต่ไม่เพิ่ม `costBasis` |
+| § 8.5 | Dividend เป็น Free หรือ Premium | **Free** — ไม่ Gate ด้วย Premium (เป็นการบันทึกธุรกรรมพื้นฐาน) |
+
+**หมายเหตุการตัดสินใจเชิงเทคนิคที่ตามมา (AI ตัดสินเองได้เพราะมี Pattern เดิมรองรับ):**
+
+- **Sector ไม่ใช้ "Title Case" ตามที่ Design Doc § 3.2 เสนอ** — Title Case จะทำ
+  `SET50` → `Set50` และ `REIT` → `Reit` ซึ่งผิดรูปคำย่อ · ยึด Pattern เดียวกับ
+  มติ § 8.2 เรื่องโบรกแทน: เก็บรูปแบบที่ผู้ใช้พิมพ์ + จัดกลุ่มแบบ case-insensitive
+  ด้วย `lower(sector)`
+- **พอร์ตที่ Backfill สร้างให้ใช้ `type = 'custom'` ไม่ใช่ `'mixed'`** — `'mixed'`
+  ที่ Design Doc § 3.3 เขียนไว้ **ไม่อยู่ใน CHECK ของ `portfolios.type`** จะทำให้
+  Backfill ERROR ทั้งก้อน (ดู CHANGELOG Stage 3)
+
+---
+
 ## [Day 1] - 1 กรกฎาคม 2569
 
 ### Added

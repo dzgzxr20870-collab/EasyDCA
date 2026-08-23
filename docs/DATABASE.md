@@ -154,6 +154,57 @@ CREATE TABLE portfolios (
 **Index:**
 ```sql
 CREATE INDEX idx_portfolios_user_id ON portfolios(user_id);
+
+-- migration 044 — พอร์ต Default ได้ "1 อันต่อ user เท่านั้น" บังคับที่ระดับ DB
+-- Partial Index เพราะพอร์ตที่ไม่ใช่ Default มีกี่อันก็ได้
+CREATE UNIQUE INDEX idx_portfolios_one_default_per_user
+  ON portfolios(user_id) WHERE is_default = TRUE;
+```
+
+> **Invariant หลัง migration 044/045 (โค้ดทั้งระบบพึ่งข้อนี้ได้):**
+> **ผู้ใช้ทุกคนมีพอร์ต Default หนึ่งอันเป๊ะ และสินทรัพย์ทุกแถวสังกัดพอร์ตเสมอ**
+> — migration 045 เป็น Guard ที่ `RAISE EXCEPTION` ถ้า Invariant นี้ไม่จริง
+> (รันซ้ำได้ ไม่มีผลข้างเคียง ใช้เป็น Health Check ประจำได้)
+>
+> ⚠️ `type` ของพอร์ตที่ Backfill สร้างให้คือ **`'custom'`** ไม่ใช่ `'mixed'`
+> (`'mixed'` ไม่อยู่ใน CHECK ของ `portfolios.type` — เคยเขียนผิดไว้ใน Design Doc)
+
+---
+
+### `brokers`
+
+โบรกเกอร์/Exchange ที่ผู้ใช้สร้างเอง — **ต่อ User ไม่ใช่ Master List กลาง**
+(ผู้ใช้พิมพ์ชื่อเอง ระบบ Normalize ก่อนเทียบ · ยังไม่ทำ Autocomplete ในรอบนี้)
+ใช้จัดกลุ่ม "Broker Allocation" เท่านั้น **ไม่เข้าสูตรคำนวณเงินใดๆ**
+
+```sql
+-- migration 042
+CREATE TABLE brokers (
+  id          UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     UUID          NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  name        TEXT          NOT NULL
+              CHECK (btrim(name) <> '' AND char_length(name) <= 60),
+  created_at  TIMESTAMPTZ   NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ   NOT NULL DEFAULT now()
+);
+```
+
+| Field | Type | คำอธิบาย |
+|---|---|---|
+| id | UUID | Primary Key |
+| user_id | UUID | FK → users.id (`RESTRICT` — users ไม่เคยถูก DELETE จริง Anonymize เท่านั้น) |
+| name | TEXT | ชื่อโบรกตามที่ผู้ใช้พิมพ์ — **เก็บรูปแบบตัวพิมพ์ที่ผู้ใช้ตั้งใจไว้** ("InnovestX" ต้องไม่กลายเป็น "innovestx") ยาวไม่เกิน 60 ตัวอักษร (ต้องตรงกับ `BROKER_NAME_MAX_LENGTH` ใน `broker.service.js`) |
+| created_at | TIMESTAMPTZ | วันที่สร้าง |
+| updated_at | TIMESTAMPTZ | วันที่อัพเดทล่าสุด (มี Trigger `set_updated_at`) |
+
+**Index:**
+```sql
+-- ⚠️ UNIQUE แบบ Case-insensitive (Functional Index บน lower(name)) ไม่ใช่ UNIQUE ธรรมดา
+-- UNIQUE ธรรมดาเทียบ Case-sensitive ผู้ใช้คนเดียวกันจึงสร้าง "Bitkub"/"bitkub"/
+-- "BITKUB" ได้ครบ 3 แถว แล้วกราฟโดนัทจะแตกเป็น 3 กลุ่มทั้งที่เป็นโบรกเดียวกัน
+-- ต้องบังคับที่ระดับ DB (ไม่ใช่แค่เช็คในโค้ด) เพราะ check-then-insert ไม่ Atomic
+CREATE UNIQUE INDEX uniq_brokers_user_name_ci ON brokers (user_id, lower(name));
+CREATE INDEX idx_brokers_user_id ON brokers (user_id);
 ```
 
 ---
@@ -175,6 +226,14 @@ CREATE TABLE assets (
   -- (nullable: สินทรัพย์ชนิดอื่นไม่ใช้) ดู migration 010
   proj_id          TEXT,
   fund_class_name  TEXT,
+  -- migration 042 — โบรก/Exchange ที่ถือสินทรัพย์นี้อยู่ (NULL = ไม่ระบุ)
+  -- ON DELETE SET NULL ไม่ใช่ CASCADE: ลบโบรกต้องไม่ลบสินทรัพย์ทิ้ง
+  broker_id    UUID        REFERENCES brokers(id) ON DELETE SET NULL,
+  -- migration 043 — หมวด/Sector ของสินทรัพย์ (Free Text, NULL = ไม่ระบุ)
+  -- ไม่ล็อกค่าเพราะ Taxonomy ต่างกันตามประเภทสินทรัพย์ (SET Industry Group /
+  -- DeFi-L1-Meme / AIMC) — CHECK คุมแค่ "รูปร่าง" ไม่คุม "ค่า"
+  sector       TEXT        CONSTRAINT assets_sector_shape_check
+               CHECK (sector IS NULL OR (btrim(sector) <> '' AND char_length(sector) <= 60)),
   is_active    BOOLEAN     NOT NULL DEFAULT true,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -191,10 +250,12 @@ CREATE TABLE assets (
 |---|---|---|
 | id | UUID | Primary Key |
 | user_id | UUID | FK → users.id |
-| portfolio_id | UUID | FK → portfolios.id (nullable สำหรับ Free ที่ไม่มี Multiple Portfolio) |
+| portfolio_id | UUID | FK → portfolios.id — **หลัง migration 044 ไม่เป็น NULL อีกแล้ว** (ทุกแถวถูก Backfill เข้าพอร์ต Default ของเจ้าของ) คอลัมน์ยังคง Nullable ในเชิง Schema เพื่อรองรับ `ON DELETE SET NULL` ตอนผู้ใช้ลบพอร์ต |
 | symbol | TEXT | ตัวย่อสินทรัพย์ เช่น `BTC`, `PTT`, `AAPL` |
 | name | TEXT | ชื่อเต็ม เช่น "Bitcoin", "PTT Public Company" |
 | type | TEXT | ประเภทสินทรัพย์: `crypto` / `stock_th` / `stock_us` / `etf` / `fund` |
+| broker_id | UUID | (migration 042) FK → brokers.id · NULL = ไม่ระบุโบรก (แถวเดิมทั้งหมดก่อน 042) — **UI ต้องแสดงเป็นกลุ่ม "ไม่ระบุ" ไม่ใช่ซ่อนแถว** มิฉะนั้นยอดรวมกราฟโดนัทจะไม่เท่ามูลค่าพอร์ตจริง · ไม่เข้าสูตรคำนวณเงินใดๆ |
+| sector | TEXT | (migration 043) หมวดธุรกิจ/กลุ่มสินทรัพย์ที่ผู้ใช้ระบุเอง · NULL = ไม่ระบุ · เก็บรูปแบบตัวพิมพ์ตามที่ผู้ใช้พิมพ์ แต่**จัดกลุ่มแบบ Case-insensitive ด้วย `lower(sector)`** (Index `idx_assets_sector_lower`) · ไม่เข้าสูตรคำนวณเงินใดๆ |
 | is_active | BOOLEAN | false = ขายออกหมดแล้ว แต่ยังเก็บประวัติ |
 | created_at | TIMESTAMPTZ | วันที่เพิ่มสินทรัพย์ |
 | updated_at | TIMESTAMPTZ | วันที่อัพเดทล่าสุด |
@@ -217,6 +278,9 @@ CREATE TABLE transactions (
   id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id         UUID        NOT NULL REFERENCES users(id),
   asset_id        UUID        NOT NULL REFERENCES assets(id),
+  -- ⚠️ ยังเป็น ('buy','sell') อยู่ ณ ตอนนี้ — `dividend`/`dividend_reversal`
+  -- จะถูกเปิดใน Migration สุดท้ายของ Feature Set นี้เท่านั้น (Stage 6b)
+  -- ห้ามเปิดก่อนที่โค้ดทุกจุดจะ enumerate type ครบ (ดูตารางกฎการคำนวณด้านล่าง)
   type            TEXT        NOT NULL CHECK (type IN ('buy', 'sell')),
   amount_thb      NUMERIC(15,2) NOT NULL CHECK (amount_thb > 0),
   price_per_unit  NUMERIC(20,8) NOT NULL CHECK (price_per_unit > 0),
@@ -239,7 +303,7 @@ CREATE TABLE transactions (
 | id | UUID | Primary Key |
 | user_id | UUID | FK → users.id |
 | asset_id | UUID | FK → assets.id |
-| type | TEXT | ประเภท: `buy` / `sell` |
+| type | TEXT | ประเภท: `buy` / `sell` (จะเพิ่ม `dividend` / `dividend_reversal` ใน Stage 6b — ดูตารางกฎการคำนวณด้านล่าง) |
 | amount_thb | NUMERIC(15,2) | จำนวนเงินเป็นบาท |
 | price_per_unit | NUMERIC(20,8) | ราคาต่อหน่วย (รองรับ Crypto ทศนิยมสูง) |
 | quantity | NUMERIC(20,8) | จำนวนหน่วยที่ซื้อ/ขาย |
@@ -249,6 +313,33 @@ CREATE TABLE transactions (
 | source | TEXT | ช่องทางบันทึก: `line` / `web` / `slip_ai` (ตั้ง `slip_ai` เมื่อมาจาก AI Slip OCR — S8) |
 | slip_image_path | TEXT | Storage path รูปสลิปต้นฉบับใน Bucket `transaction-slips` (Private) — nullable |
 | created_at | TIMESTAMPTZ | วันที่บันทึกเข้าระบบ |
+
+#### ⭐ กฎการคำนวณของแต่ละ `type` (Single Source of Truth = `utils/transactionType.util.js`)
+
+> **ห้ามเขียน `type === 'buy' ? ... : ...` ที่ไหนอีกเด็ดขาด** — Pattern Binary
+> แบบนั้นแปลว่า *"ทุก type ที่ไม่ใช่ buy = ขาย"* ซึ่งจะทำให้ `dividend` ถูก
+> ตีความเป็นการขาย **เงียบๆ โดยไม่มี Error** ทันทีที่มันเข้า DB ได้
+> ทุกจุดต้องเรียกฟังก์ชันจาก `utils/transactionType.util.js` ซึ่งเป็น
+> exhaustive switch ที่ `default: throw` (migration/Stage 6a)
+
+| ผลกระทบต่อ | `buy` | `sell` | `dividend` | `dividend_reversal` |
+|---|---|---|---|---|
+| `heldQty` (จำนวนที่ถือ) | **+qty** | **−qty** | **0 — ไม่เปลี่ยน** | **0 — ไม่เปลี่ยน** |
+| `costBasis` (ต้นทุน) | **+amount** | ตัดตามสัดส่วนที่ขาย | **0 — ไม่เปลี่ยน** | **0 — ไม่เปลี่ยน** |
+| `realizedPnL` | — | **+(amount − ต้นทุนส่วนที่ขาย)** | **ไม่รวม** | **ไม่รวม** |
+| `totalDividendThb` | 0 | 0 | **+amount** | **−amount** |
+| ชนิดของแถวหักล้างตอน Undo | `sell` | `buy` | `dividend_reversal` | *ห้ามเกิด (throw)* |
+
+**เหตุผลที่ต้องเป็นแบบนี้:**
+- `dividend` **ไม่เปลี่ยน `heldQty`** เพราะปันผล *เงินสด* ไม่ได้ทำให้ถือหุ้นเพิ่ม
+  (ปันผลเป็น *หุ้น* เป็นคนละเรื่อง — จะเป็น type ที่ 5 แยกต่างหากในรอบถัดไป)
+- `dividend` **ไม่ตัด `costBasis`** เพราะการตัดต้นทุนจะทำให้ ROI ของสินทรัพย์เพี้ยน
+- `dividend` **ไม่รวมใน `realizedPnL`** เพราะปันผลเป็น **รายได้** คนละก้อนกับ
+  กำไรจากส่วนต่างราคา — ต้องแสดงแยกเป็นบรรทัดของตัวเอง
+- **ทำไมต้องมี `dividend_reversal` เป็น type แยก แทนการใส่ amount ติดลบ:**
+  `amount_thb` มี `CHECK (amount_thb > 0)` อยู่แล้ว การเปิดให้ติดลบเพื่อ dividend
+  อย่างเดียวเท่ากับ **ปิดเกราะที่ป้องกันทั้งตารางอยู่** ทำให้บั๊ก "เงินติดลบ" ใน
+  อนาคตทะลุถึง DB ได้ทุกชนิดธุรกรรม — แลกไม่คุ้ม (Immutable Ledger § 8)
 
 **Index:**
 ```sql

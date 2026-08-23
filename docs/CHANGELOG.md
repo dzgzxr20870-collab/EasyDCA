@@ -4,6 +4,58 @@
 
 ## [Unreleased]
 ### Added
+- **Multi-Portfolio / Broker / Sector / Dividend — Stage 1–4 + 6a**
+  (Branch `feat/dashboard-production-wire` — ยัง**ไม่ได้ Push/Merge/Deploy**
+  รออนุมัติ · Migration **ยังไม่ได้ Apply บน Supabase**)
+  ออกแบบไว้ที่ [`DESIGN_MULTI_PORTFOLIO_BROKER_SECTOR.md`](./DESIGN_MULTI_PORTFOLIO_BROKER_SECTOR.md)
+  - **Stage 1 (`a3bc2e5`) — migration 042 `brokers` + `assets.broker_id`**
+    ตาราง `brokers` ต่อ User (ไม่ใช่ Master List กลาง) + 4 Endpoint (Free ทั้งหมด)
+    · UNIQUE แบบ Case-insensitive `uniq_brokers_user_name_ci ON (user_id, lower(name))`
+    กัน "Bitkub"/"bitkub"/"BITKUB" แตกเป็น 3 กลุ่มบนกราฟโดนัท
+    · `ON DELETE SET NULL` ไม่ใช่ CASCADE (ลบโบรกต้องไม่ลบสินทรัพย์ทิ้ง)
+  - **Stage 2 (`2cee72f`) — migration 043 `assets.sector`**
+    คอลัมน์ธรรมดา ไม่ทำตาราง `sectors` แยก · ไม่ล็อกค่า (Taxonomy ต่างกันตาม
+    ประเภทสินทรัพย์) · Index บน `lower(sector)` เพื่อจัดกลุ่ม Case-insensitive
+    · **ต่างจาก Design Doc § 3.2 หนึ่งจุดโดยตั้งใจ**: ไม่ใช้ "Title Case" เพราะจะ
+    ทำ `SET50` → `Set50` และ `REIT` → `Reit` — ยึด Pattern เดียวกับโบรกแทน
+    (เก็บรูปแบบที่ผู้ใช้พิมพ์ + เทียบแบบ Case-insensitive)
+  - **Stage 3 (`2038a5d`) — migration 044 เปิด Multi-portfolio + Backfill**
+    Invariant ใหม่: **ทุก user มีพอร์ต Default 1 อันเป๊ะ + สินทรัพย์ทุกแถวสังกัดพอร์ต**
+    · **เจอบั๊กใน Design Doc 2 จุดแล้วแก้:**
+      **(1)** Design Doc เขียน Backfill เป็น `type = 'mixed'` ซึ่ง **ไม่อยู่ใน CHECK
+      ของ `portfolios.type`** (`crypto/stock_th/stock_us/etf/fund/custom`) และคำว่า
+      `'mixed'` ไม่ปรากฏที่ไหนเลยในโค้ดทั้งโปรเจกต์ → รันตาม Design Doc ตรงๆ
+      Backfill จะ ERROR ทั้งก้อน · แก้เป็น `'custom'` + เพิ่ม Pre-flight อ่าน
+      `pg_get_constraintdef` ของจริงมาตรวจ ไม่เชื่อเอกสาร
+      **(2)** Design Doc สรุปว่าการย้าย `portfolio_id` จาก NULL → uuid ไม่ทำให้ชน
+      UNIQUE ของ migration 014 เพิ่ม — **ถูกเฉพาะกรณี user ที่ไม่เคยมีพอร์ตมาก่อน**
+      ตกเคส user ที่มีพอร์ตอยู่แล้วและถือ symbol เดียวกัน 2 แถว (แถวหนึ่ง
+      `portfolio_id = NULL` อีกแถว `= P1`) ซึ่งพอย้ายเข้า P1 จะกลายเป็น
+      `(U,BTC,P1)` ทั้งคู่ = ชน UNIQUE กลางทาง · เพิ่ม STEP 6 ตรวจก่อนแล้วล้ม
+      พร้อมข้อความที่บอกวิธีแก้ แทน Error Constraint ดิบๆ
+    · **ต่างจาก Design Doc อีกจุด**: Backfill ให้ user **ทุกคน** ไม่ใช่เฉพาะคนที่มี
+    สินทรัพย์ (ไม่งั้นวันที่เขาซื้อตัวแรกโค้ดจะต้องมี Branch "ยังไม่มีพอร์ต" อีก)
+  - **Stage 4 (`caa68cf`) — migration 045 Guard ตรวจผล Backfill**
+    SELECT + RAISE ล้วน ไม่แก้ข้อมูล · 5 ข้อ รวม **CHECK 4 ที่ Design Doc ไม่ได้ระบุ**:
+    สินทรัพย์ต้องไม่สังกัดพอร์ตของผู้ใช้คนอื่น (FK ตรวจได้แค่ "พอร์ตมีอยู่จริง"
+    ไม่ได้ตรวจ "เป็นของใคร" — บทเรียนจาก Cross-User Audit 9 ส.ค.)
+  - **Stage 6a (`38aa28a`) — enumerate `transaction.type` ครบทุกค่า (ยังไม่เปิด dividend)**
+    เพิ่ม `src/utils/transactionType.util.js` เป็นแหล่งตัดสินความหมายของ type
+    ที่เดียวของทั้งระบบ ทุกฟังก์ชันเป็น exhaustive switch ที่ `default: throw`
+    · แก้ 6 จุดตามตารางใน Design Doc § 2 (`transaction.service` /
+    `portfolio.service` / `flexMessage.util` / `reportExport.service` ×3 /
+    `transactions.controller`)
+    · **เจอจุดที่ 7 ที่ Design Doc ไม่ได้อยู่ในตาราง 6 จุด และร้ายแรงที่สุด:**
+    `undoTransaction.service.js:121` `latest.type === 'buy' ? 'sell' : 'buy'`
+    — ถ้า `dividend` เข้ามาได้ การกด "ย้อนล่าสุด" บนรายการปันผลจะสร้างแถว
+    **`buy`** = เพิ่มทั้งจำนวนที่ถือและต้นทุนให้ผู้ใช้จากอากาศโดยไม่มี Error
+    · Regression Red-Green จริง (`dividendLedger.regression.test.js`): ถอด fix
+    ออก = **แดง 13 / เขียว 104 จาก 117** — 104 เคสของ buy/sell ยังเขียวตลอด
+    ยืนยันว่าเทสต์เจาะจงพอ ไม่ใช่แดงมั่ว · ใส่กลับ = เขียว 117/117
+    · Test ทั้งชุด **116 suites / 2264 tests → 118 suites / 2381 tests** เขียวทั้งหมด
+    (ส่วนต่าง = ไฟล์เทสต์ใหม่ 2 ไฟล์พอดี ไม่มีเทสต์เดิมตัวใดเปลี่ยนผล →
+    ยืนยันว่าเป็น Pure Refactor จริง)
+
 - **มาสคอต "อีซี่" ท่าคิด/ประมวลผล ระหว่างรอ AI อ่านสลิปบนเว็บ**
   (Branch `feat/undo-command-aliases` เดียวกับงานคำสั่งพ้อง — ยัง**ไม่ได้
   Push/Merge** รออนุมัติ) · ไม่มี Migration · ไม่แตะ Logic การอ่านสลิป/โควตา/
