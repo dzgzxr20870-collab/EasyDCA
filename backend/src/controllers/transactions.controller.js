@@ -426,6 +426,19 @@ async function createTransaction(req, res) {
     // ตามที่ให้มาเลย ไม่แตะ Price Feed (เส้นทางเดียวกับที่ LINE ใช้อยู่แล้ว)
     params.quantity = buyQuantity;
     params.pricePerUnit = pricePerUnit;
+    // ── มูลค่าหุ้นที่สลิประบุไว้ตรงๆ (บั๊ค B) ────────────────────────────────
+    // ฟอร์มส่ง amountTotal มาคู่กับ quantity + pricePerUnit เฉพาะเมื่อ "สลิประบุ
+    // มูลค่าหุ้นไว้และผ่านการพิสูจน์แล้ว" (slipOcr.resolveGrossAmount → 'slip_gross')
+    // ซึ่งเป็นเลขที่ผู้ใช้เห็นบนหน้าจอตอนกดบันทึก — ต้องบันทึกยอดนั้น ไม่ใช่คูณใหม่
+    //
+    // เหตุผลที่ต้องมี: ราคาต่อหน่วยบนสลิปถูกปัดมาแสดง (EOSE จริง 4.2548 แสดง 4.25)
+    // quantity × pricePerUnit จึงได้ 106.32 ไม่ตรงกับ 106.44 ที่สลิประบุ
+    //
+    // resolveAgreedAmount ฝั่ง Service ยังตรวจว่ายอดนี้เข้าคู่กับ quantity × price
+    // จริงก่อนใช้เสมอ (ไม่เกิน 2%) — ค่าที่ Client แก้มามั่วจึงไม่หลุดลง Ledger
+    if (amountTotal !== null) {
+      params.amountThb = amountTotal;
+    }
   } else if (hasPrice) {
     // ── เส้นทาง LINE #2: "ผู้ใช้ระบุราคาเอง" (quantity + pricePerUnit) ───────
     // ฟอร์มเว็บส่ง "จำนวนเงินรวม" มาเสมอ (ไม่ใช่จำนวนหน่วย) จึงต้องแปลงเป็นจำนวน
@@ -433,18 +446,28 @@ async function createTransaction(req, res) {
     // ของ transaction.service (กฎการปัดเศษตัวเดียวกับที่ Service ใช้ทุกจุด
     // = roundToEight(amount / price)) ไม่คิดสูตรปัดเศษใหม่เอง
     //
-    // หมายเหตุ: Service จะคำนวณ amountThb กลับเป็น roundToTwo(quantity × price)
-    // ซึ่งอาจต่างจาก amountTotal ที่กรอกมาได้ในระดับเศษสตางค์ ถ้าราคาต่อหน่วยสูงมาก
-    // (ความคลาดเคลื่อนของ quantity ≤ 0.5e-8 × ราคา) — สำหรับหุ้นไทย/สินทรัพย์ที่ต้อง
-    // กรอกราคาเอง ราคาต่อหน่วยอยู่ระดับหลักพันบาท ผลคูณจึงต่ำกว่า 0.005 เสมอ
-    // (ปัดกลับได้ยอดเดิมเป๊ะ) — Response คืน amountTotal ที่ "บันทึกจริง" กลับไปให้
-    // Frontend แสดง เพื่อไม่ต้องเดาเองว่าตรงกับที่กรอกไหม
     const quantity = transactionService.deriveQuantityFromAmount(amountTotal, pricePerUnit);
     if (!(quantity > 0)) {
       return fail(res, 'AMOUNT_TOO_SMALL_FOR_PRICE', { amountTotal, pricePerUnit });
     }
     params.quantity = quantity;
     params.pricePerUnit = pricePerUnit;
+    // ── บั๊ค A ทางเข้าที่ 3: ยอดที่ผู้ใช้กรอกเองบนฟอร์มเว็บ ────────────────────
+    //
+    // ⚠️ Comment เดิมตรงนี้เคยเขียนยอมรับไว้เองว่า "Service จะคำนวณ amountThb กลับเป็น
+    // roundToTwo(quantity × price) ซึ่งอาจต่างจาก amountTotal ที่กรอกมาได้ในระดับ
+    // เศษสตางค์ ถ้าราคาต่อหน่วยสูงมาก" แล้วสรุปว่ารับได้เพราะ "หุ้นไทยราคาหลักพัน
+    // ผลคูณจึงต่ำกว่า 0.005 เสมอ" — ข้อสรุปนั้นผิด เพราะ Branch นี้ไม่ได้ให้บริการแค่
+    // หุ้นไทย: ผู้ใช้กรอกราคาเองได้ทุกสินทรัพย์ (ดู Guard ด้านบน — บังคับเฉพาะหุ้นไทย
+    // แต่ "อนุญาต" ทุกตัว) กรอก BTC ราคา 2,513,380 ด้วยเงิน 100 บาท ก็ได้ 100.01
+    // เหมือนเส้นทาง LINE เป๊ะ
+    //
+    // ยอดที่ผู้ใช้กรอกคือยอดที่เห็นบนหน้าจอตอนกดบันทึก จึงเป็น "ยอดที่ตกลงกันไว้"
+    // ตามนิยามเดียวกับ Snapshot ของ Preview→Confirm — ต้องบันทึกยอดนั้น ไม่ใช่คูณกลับ
+    // (มติ Founder: ยอดที่บันทึกลง Ledger ต้องเท่ากับยอดที่ผู้ใช้เห็นเสมอ)
+    //
+    // resolveAgreedAmount ฝั่ง Service ตรวจ 2% ให้อีกชั้นเหมือนทางเข้าอื่นทุกทาง
+    params.amountThb = amountTotal;
   } else {
     // ── เส้นทาง LINE #1: "จำนวนเงินรวม" — Service ดึงราคาตลาดเองแล้วหารจำนวนหน่วย
     // (amountThb = ยอดเงินในสกุลของ currency ตาม Semantics เดิมของ Service/DB

@@ -127,7 +127,14 @@ const SYSTEM_PROMPT = [
   // เป็นสัญญาณ Deterministic ที่ไม่ต้องเชื่อการตีความของ AI เลย
   '- net_amount = ยอดสุทธิที่จ่ายจริง/ได้รับจริงตามที่สลิประบุ (หลังหักหรือรวมค่าธรรมเนียม',
   '  แล้ว เช่น "ยอดที่จะได้รับคืนโดยประมาณ" หรือ "ยอดชำระทั้งสิ้น") ถ้าไม่มีให้ null',
-  '  ⚠️ ห้ามคำนวณเอง ให้ใส่เฉพาะตัวเลขที่พิมพ์อยู่ในสลิปจริงเท่านั้น',
+  '  ⚠️ ห้ามคำนวณเอง ห้ามบวก/ลบ amount กับค่าธรรมเนียมเองเด็ดขาด ให้ใส่เฉพาะตัวเลข',
+  '  ที่พิมพ์อยู่ในสลิปจริงเท่านั้น ถ้าสลิปไม่ได้พิมพ์ยอดสุทธิไว้ ให้ null',
+  // ⚠️ เคสจริง EOSE/ASTS (สลิป Dime!): AI อ่าน amount + ค่าธรรมเนียมถูกทั้งคู่ แต่ตอบ
+  // net_amount = null ทุกใบ เพราะยอดรวมบนสลิปแบบนี้เป็นตัวเลขใหญ่บนสุด "ไม่มีป้ายกำกับ"
+  // แบบที่ตัวอย่างข้างบนยกไว้ → resolveGrossAmount ตรวจสอบอะไรไม่ได้เลย
+  '  ⚠️ แอปหุ้นต่างประเทศ (เช่น Dime!) มักแสดงยอดรวมเป็น "ตัวเลขขนาดใหญ่บนสุดของสลิป"',
+  '  โดยไม่มีป้ายกำกับ เช่น "106.72 USD" หรือ "1,500.00 USD" — ตัวเลขนั้นคือ net_amount',
+  '  ให้คัดมาใส่ด้วย (ยังคงกฎเดิม: ต้องเป็นตัวเลขที่พิมพ์อยู่บนสลิปจริง ห้ามคำนวณขึ้นเอง)',
   // ── ค่าธรรมเนียม: อ่านตรงๆ จากสลิป แม่นกว่าการหักลบเอาเองมาก ─────────────
   // สลิปไทยแสดง "ค่าคอมมิชชัน" และ "ภาษีมูลค่าเพิ่ม 7%" แยกบรรทัดชัดเจน — การเอา
   // net - gross มาหักลบเองจะเพี้ยนเพราะตัวเลขบนสลิปถูกปัดเศษมาแล้ว (เคส EOSE จริง:
@@ -437,6 +444,32 @@ function withinTolerance(a, b, tolerance) {
   return Math.round(Math.abs(a - b) * 100) / 100 <= tolerance + 1e-9;
 }
 
+// จำนวนทศนิยมที่ "ตัวเลขนั้นถูกแสดงมา" — ใช้หาว่าค่าจริงถูกปัดมาแล้วเท่าไหร่
+// (ราคา "4.25" = ค่าจริงอยู่ในช่วง 4.245–4.255 → คลาดได้ ±0.005 ต่อหน่วย)
+function decimalPlaces(value) {
+  const s = String(value);
+  // เลขยกกำลัง (1e-7) อ่านทศนิยมตรงๆ ไม่ได้ — ถือว่าละเอียดสุดตาม Precision ของระบบ
+  if (s.includes('e') || s.includes('E')) return 8;
+  const dot = s.indexOf('.');
+  return dot === -1 ? 0 : s.length - dot - 1;
+}
+
+// ขอบเขตความคลาดเคลื่อนสูงสุดที่ "อธิบายได้ด้วยการปัดราคาต่อหน่วยมาแสดง"
+//   |gross จริง − quantity × ราคาที่แสดง| ≤ quantity × (ครึ่งหน่วยท้ายของราคา)
+// บวก 0.01 เผื่อการปัด gross เองอีก 2 ตำแหน่ง
+// เคส EOSE: 25.0164512 × 0.005 + 0.01 = 0.135 (ต่างจริง 0.12 → อธิบายได้)
+//
+// ⚠️ อย่างน้อย 2 ตำแหน่งเสมอ (MIN_PRICE_DECIMALS): จำนวนทศนิยมนับจาก "ตัวเลขที่
+// JSON.parse ให้มา" ไม่ใช่จากรูปสลิป — ราคาที่พิมพ์ว่า "100.00" จะกลายเป็น 100
+// (ทศนิยม 0 ตำแหน่ง) ทำให้ช่องยอมรับกว้างขึ้น 100 เท่าโดยไม่มีเหตุผลรองรับ
+// เงินบนสลิปแสดงอย่างน้อย 2 ตำแหน่งแทบทุกกรณี จึงยึด 2 เป็นพื้นเสมอ
+const MIN_PRICE_DECIMALS = 2;
+
+function priceRoundingDrift(quantity, pricePerUnit) {
+  const decimals = Math.max(decimalPlaces(pricePerUnit), MIN_PRICE_DECIMALS);
+  return Math.abs(quantity) * 0.5 * Math.pow(10, -decimals) + 0.01;
+}
+
 function resolveGrossAmount({ side, aiAmount, netAmount, feeTotal, quantity, pricePerUnit }) {
   const computed = grossAmount(quantity, pricePerUnit, null);
   const ai = positiveNumberOrNull(aiAmount);
@@ -447,6 +480,49 @@ function resolveGrossAmount({ side, aiAmount, netAmount, feeTotal, quantity, pri
   if (computed === null && ai === null) {
     return { amount: null, source: 'none', reason: 'no_amount_data' };
   }
+  // ── ไม่มียอดสุทธิ แต่รู้ค่าธรรมเนียม: ยังพิสูจน์ได้ด้วยสมการอีกทาง (บั๊ค B) ──
+  //
+  // เคสจริง EOSE/ASTS (22 ส.ค. 2026): AI อ่าน "มูลค่าหุ้น" กับ "ค่าธรรมเนียม" ถูกทั้งคู่
+  // แต่ net_amount เป็น null (สลิป Dime! แสดงยอดรวมเป็นตัวเลขใหญ่บนสุด ไม่มีป้ายกำกับ
+  // แบบ "ยอดชำระทั้งสิ้น" ที่ Prompt ยกตัวอย่างไว้) → หลุดมาที่ Branch นี้แล้วคำนวณเอง
+  //   EOSE: สลิประบุ 106.44 · ระบบได้ 25.0164512 × 4.25 = 106.32
+  //   ASTS: สลิประบุ 1497.60 · ระบบได้ 1497.58
+  // ทำให้บรรทัด "รวมจ่ายจริง" บนการ์ด/ฟอร์มผิดข้อเท็จจริง (106.59 ทั้งที่จ่าย 106.72)
+  //
+  // ── พิสูจน์ได้อย่างไรโดยไม่ต้องมี net ──────────────────────────────────────
+  // คำถามเดียวที่ต้องตอบคือ "เลขที่ AI หยิบมาคือมูลค่าหุ้น หรือยอดสุทธิ (เคส BCPG)"
+  // สองความเป็นไปได้นี้มี "ลายเซ็นเชิงตัวเลข" ที่แยกจากกันได้แบบ Deterministic:
+  //
+  //   ก) AI หยิบยอดสุทธิมาผิดช่อง → ai ≈ computed ∓ fee  (ต่างจากค่าคำนวณ "เท่ากับ
+  //      ค่าธรรมเนียมพอดี" — ซื้อ: net = gross + fee / ขาย: net = gross − fee)
+  //      BCPG: computed 69.00 − fee 0.11 = 68.89 = ai เป๊ะ → ห้ามเชื่อ ai (VETO)
+  //   ข) ai คือมูลค่าหุ้นจริง → ต่างจาก computed ได้เฉพาะ "เท่าที่การปัดราคาต่อหน่วย
+  //      มาแสดงอธิบายได้" เท่านั้น (EOSE ราคาจริง 4.2548 แสดง 4.25 → ต่าง 0.12
+  //      ซึ่งอยู่ในขอบเขต 0.135 ที่ priceRoundingDrift คำนวณได้)
+  //
+  // ยอมรับ ai ก็ต่อเมื่อ "ไม่เข้าลายเซ็น ก)" และ "อยู่ในขอบเขตของ ข)" พร้อมกัน
+  // ช่องโหว่ BCPG จึงยังปิดอยู่แม้ไม่มี net (VETO ดักไว้ก่อนเสมอ)
+  //
+  // ⚠️ SANITY_RATIO ยังบังคับซ้อนอีกชั้น เพราะ priceRoundingDrift กว้างมากเมื่อราคา
+  // ถูกแสดงเป็นจำนวนเต็ม (ทศนิยม 0 ตำแหน่ง → ครึ่งหน่วย = 0.5 ต่อหน่วย)
+  if (net === null && fee !== null && ai !== null && computed !== null && computed > 0) {
+    const netSignature = side === 'sell' ? computed - fee : computed + fee;
+    const looksLikeNet = fee > 0 && withinTolerance(ai, netSignature, SLIP_ROUNDING_TOLERANCE);
+    const gap = Math.abs(ai - computed);
+    const explainableByPriceRounding =
+      gap <= priceRoundingDrift(quantity, pricePerUnit) + 1e-9 &&
+      gap / computed <= SANITY_RATIO + 1e-9;
+
+    if (!looksLikeNet && explainableByPriceRounding) {
+      return { amount: ai, source: 'slip_gross', reason: 'verified_against_price_rounding' };
+    }
+    return {
+      amount: computed,
+      source: 'computed',
+      reason: looksLikeNet ? 'ai_returned_net_not_gross_no_net_field' : 'ai_amount_beyond_price_rounding',
+    };
+  }
+
   if (net === null || fee === null) {
     return {
       amount: computed ?? ai,
@@ -743,20 +819,21 @@ async function extractSlip(userId, buffer, contentType, now = new Date()) {
     pricePerUnit,
   });
 
-  // Log ทุกครั้งที่ "ไม่ได้ใช้เลขที่สลิประบุตรงๆ" — จะได้สืบย้อนหลังได้ว่าทำไมยอดที่
-  // บันทึกไม่ตรงกับที่ผู้ใช้เห็นบนสลิป โดยไม่ต้องขอรูปมา Replay (บทเรียนเคส BCPG)
-  if (grossResolution.source !== 'slip_gross') {
-    logger.info('slip ocr gross amount resolved', {
-      userId,
-      symbol,
-      source: grossResolution.source,
-      reason: grossResolution.reason,
-      aiAmount: raw.amount ?? raw.amount_thb ?? null,
-      netAmount,
-      feeTotal,
-      resolvedAmount: grossResolution.amount,
-    });
-  }
+  // Log "ทุกครั้ง" ไม่ใช่เฉพาะตอนคำนวณเอง — Log เดิมยิงเฉพาะ source !== 'slip_gross'
+  // ซึ่งพอจะวินิจฉัยบั๊ค B ได้ก็จริง (เจอว่า netAmount=null ทุกใบ) แต่ทำให้ "ยืนยัน
+  // หลังแก้ว่าใช้เลขจากสลิปได้แล้วจริง" ไม่มีร่องรอยให้ดูเลย ต้องกลับมาแก้ Log อีกรอบ
+  // — 1 บรรทัด/การสแกน 1 ครั้ง (โควตา 50 ครั้ง/เดือน/คน) ไม่ใช่ปริมาณที่ต้องประหยัด
+  // ไม่มี PII/เลขบัญชี — เก็บเฉพาะตัวเลขที่จำเป็นต่อการตรวจสมการ
+  logger.info('slip ocr gross amount resolved', {
+    userId,
+    symbol,
+    source: grossResolution.source,
+    reason: grossResolution.reason,
+    aiAmount: raw.amount ?? raw.amount_thb ?? null,
+    netAmount,
+    feeTotal,
+    resolvedAmount: grossResolution.amount,
+  });
 
   // ⚠️ Log ทุกครั้งที่อ่านสลิป — ตอนสืบเคส BCPG ต้องดาวน์โหลดรูปจาก Storage มา Replay
   // ผ่าน Claude ใหม่เพียงเพื่อตอบว่า "AI ตอบ side อะไรมา" ซึ่งไม่ควรต้องทำอีก

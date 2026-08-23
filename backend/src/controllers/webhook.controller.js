@@ -1026,6 +1026,21 @@ async function routePostback(user, data) {
       if (slipToken && storageService.buildTransactionSlipPath(user.id, slipToken)) {
         commandParams.slipToken = slipToken;
       }
+      // ── มูลค่าหุ้นที่สลิประบุไว้ตรงๆ (บั๊ค B) ───────────────────────────────
+      // การ์ดแสดง "มูลค่าหุ้น" จากค่านี้ (106.44) ถ้าไม่พกมาด้วย ปลายทางจะคูณ
+      // qty × price กลับเป็น 106.32 = แสดงเลขหนึ่งแล้วบันทึกอีกเลขหนึ่ง
+      //
+      // ⚠️ ส่งต่อเฉพาะเมื่อมี qty + price คู่กันจริง (Branch แรกของ
+      // resolveQuantityAndPrice) — ห้ามให้ค่านี้ไปโผล่คู่กับ quantity ที่ไม่มีราคา
+      // เพราะจะไปเข้า Manual Quantity Fallback (Round 10-B) ที่คนละความหมายกัน
+      //
+      // Postback ผู้ใช้แก้ได้ → resolveAgreedAmount ฝั่ง Service ตรวจซ้ำเสมอว่ายอดนี้
+      // เข้าคู่กับ quantity × pricePerUnit จริง (ไม่เกิน 2%) ก่อนใช้ ค่ามั่วจึงไม่ลง Ledger
+      const grossParam = params.get('gross');
+      if (grossParam !== null && commandParams.quantity !== undefined) {
+        const gross = Number(grossParam);
+        if (Number.isFinite(gross) && gross > 0) commandParams.amountThb = gross;
+      }
 
       // Manual Quantity Fallback (Round 10-B) — สลิป Amount-only ของสินทรัพย์ที่ไม่ใช่
       // Crypto: ถ้ายืนยันตรงๆ แล้วระบบหาราคาตลาดไม่ได้ (ไม่มี Price Feed / SEC ไม่ config /

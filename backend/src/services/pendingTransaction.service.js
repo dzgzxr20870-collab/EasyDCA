@@ -30,6 +30,20 @@ function toCommitParams(pending) {
     type: pending.assetType ?? undefined,
     quantity: Number(pending.quantity),
     pricePerUnit: Number(pending.pricePerUnit),
+    // ⚠️ บั๊ค A (ยอดที่บันทึก ≠ ยอดที่ผู้ใช้กดยืนยัน): ต้องพก "ยอดที่ตกลงกันไว้" ตอน
+    // Preview ข้ามมาด้วย ไม่ใช่ส่งแค่ quantity + pricePerUnit แล้วปล่อยให้
+    // resolveQuantityAndPrice คูณกลับเป็นยอดใหม่ตอน Commit
+    //
+    // เคสจริงบน Production: "ซื้อ BTC 100" → Preview 100 บาท แต่บันทึกจริง 100.01
+    // เพราะ quantity ถูกปัดเหลือ 8 ตำแหน่ง (0.00003979) แล้วคูณราคา 2,513,380 กลับ
+    // ขึ้นมาได้ 100.0073… → ปัดเป็น 100.01 (เศษที่ปัดทิ้งตอนหาร ถูกคูณกลับขึ้นมา)
+    //
+    // ยอดที่บันทึกลง Ledger ต้องเท่ากับยอดที่ผู้ใช้เห็นตอนกดยืนยันเสมอ (มติ Founder)
+    // resolveAgreedAmount ฝั่ง transaction.service ยังตรวจว่ายอดนี้เข้าคู่กับ
+    // quantity × pricePerUnit จริงก่อนใช้เสมอ (ไม่ได้เชื่อค่าที่ส่งมา 100%)
+    ...(pending.amountThb !== null && pending.amountThb !== undefined
+      ? { amountThb: Number(pending.amountThb) }
+      : {}),
     // ⚠️ NULL ต้องรอดข้าม Preview→Confirm ไปเป็น NULL ใน transactions ด้วย (ห้ามบีบ
     // เป็น 0) — NULL = "สลิปไม่ระบุค่าธรรมเนียม" ส่วน 0 = "ยืนยันว่าไม่มี" คนละความหมาย
     // (Migration 041) เดิมบรรทัดนี้แปลง null → 0 ทำให้ข้อมูล "ไม่รู้" หายไปเงียบๆ

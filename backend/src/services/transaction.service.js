@@ -91,6 +91,58 @@ function deriveQuantityFromAmount(amountTotal, pricePerUnit) {
   return roundToEight(Number(amountTotal) / Number(pricePerUnit));
 }
 
+// ── "ยอดที่ตกลงกันไว้แล้ว" ต้องชนะการคำนวณใหม่เสมอ (บั๊ค A) ──────────────────
+//
+// ⚠️ อ่านก่อนแก้: นี่คือการแก้บั๊กจริงบน Production — ผู้ใช้พิมพ์ "ซื้อ BTC 100"
+// การ์ด Preview แสดง 100 บาท แต่รายการที่บันทึกจริงเป็น 100.01 บาท
+//
+// ต้นตอ: ตอน Preview ระบบหาร quantity = 100 / 2,513,380 แล้ว "ปัดเหลือ 8 ตำแหน่ง"
+// (= 0.00003979) เศษที่ถูกปัดทิ้งไปนั้น เมื่อคูณราคากลับขึ้นมาตอน Confirm
+// (0.00003979 × 2,513,380 = 100.0073…) จะโผล่กลับมาเป็น 0.01 บาท
+// ยิ่งราคาต่อหน่วยสูง เศษที่คูณกลับยิ่งใหญ่ (ขอบเขต = 0.5e-8 × ราคาต่อหน่วย)
+//
+// หลักการ (มติ Founder): ยอดที่บันทึกลง Ledger ต้องเท่ากับยอดที่ผู้ใช้เห็นตอนกด
+// ยืนยันเสมอ — ผู้ใช้ตกลงกับเลข 100 ระบบต้องบันทึก 100 ประเด็นไม่ใช่เงิน 1 สตางค์
+// แต่คือ "แอปการเงินที่แสดงเลขหนึ่งแล้วบันทึกอีกเลขหนึ่งทำลายความเชื่อใจ"
+//
+// จึงต้องให้ยอดที่ Snapshot ไว้ตอน Preview (pending_transactions.amount_thb) รอด
+// ข้ามมาถึงตอนบันทึกจริง แทนการคำนวณใหม่ — ดู pendingTransaction.toCommitParams
+//
+// ── ทำไมต้องมี Guard (ไม่เชื่อค่าที่ส่งมา 100%) ─────────────────────────────
+// นี่คือเส้นทางเงินที่เขียน Immutable Ledger ถ้ายอมรับ amountThb ที่ส่งมาโดยไม่ตรวจ
+// เลย ค่าที่เพี้ยน/ไม่เข้าคู่กับ quantity × pricePerUnit (เช่น Postback ที่ถูกแก้มา
+// หรือ Snapshot ที่ไม่ตรงกับ quantity ที่ส่งมาคู่กัน) จะลง Ledger ได้ทันที
+// จึงยอมรับเฉพาะยอดที่ "อยู่ในระยะที่อธิบายได้ด้วยการปัดเศษ" เท่านั้น มิฉะนั้น
+// Fallback กลับไปคำนวณเองเหมือนเดิม (Fail-safe = พฤติกรรมเดิม ไม่ใช่ค่าที่เชื่อไม่ได้)
+//
+// 2% = ค่าเดียวกับ SANITY_RATIO ใน slipOcr.service ที่ตอบคำถามเดียวกันเป๊ะ
+// ("ยอดนี้เข้าคู่กับ quantity × price ไหม") — กว้างพอรองรับทั้งเศษจากการปัด quantity
+// 8 ตำแหน่ง และเศษจากราคาต่อหน่วยบนสลิปที่ถูกปัดมาแสดง (EOSE: ราคาจริง 4.2548
+// แสดง 4.25 → ต่าง 0.11%) แต่แคบพอที่ยอดคนละตัวจะไม่รอด
+const AGREED_AMOUNT_MAX_DRIFT_RATIO = 0.02;
+
+function resolveAgreedAmount(agreedInput, computedAmount, context = {}) {
+  if (!isPresent(agreedInput)) return computedAmount;
+
+  const agreed = Number(agreedInput);
+  if (!Number.isFinite(agreed) || agreed <= 0) return computedAmount;
+
+  if (
+    computedAmount > 0 &&
+    Math.abs(agreed - computedAmount) / computedAmount > AGREED_AMOUNT_MAX_DRIFT_RATIO
+  ) {
+    // ห้ามเงียบ — บทเรียนบั๊ค A คือ "ยอดเพี้ยนโดยไม่มีร่องรอย" ใช้เวลาสืบนานมาก
+    console.warn(
+      `[transaction] agreed amount rejected (symbol=${context.symbol ?? 'unknown'}): ` +
+        `agreed=${agreed} computed=${computedAmount} — drift exceeds ` +
+        `${AGREED_AMOUNT_MAX_DRIFT_RATIO * 100}%; falling back to computed amount`
+    );
+    return computedAmount;
+  }
+
+  return roundToTwo(agreed);
+}
+
 // DATABASE.md § 7 — Field ประเภท DATE ควรอิงวันของผู้ใช้ (Asia/Bangkok)
 // ไม่ใช่ UTC เพื่อไม่ให้ธุรกรรมที่บันทึกช่วงดึกตกไปเป็นวันก่อนหน้า
 function todayInBangkok() {
@@ -120,6 +172,15 @@ async function resolveQuantityAndPrice(params, side = 'buy') {
     const quantity = Number(params.quantity);
     const pricePerUnitInput = Number(params.pricePerUnit);
 
+    // ยอดที่ผู้ใช้ตกลงไว้แล้ว (Snapshot จาก Preview) ชนะการคำนวณใหม่เสมอ — ถ้าไม่มี
+    // ส่งมา (เส้นทาง "พิมพ์จำนวนหน่วย + ราคาเอง" ซึ่งไม่เคยมียอดตกลงไว้ก่อน) ก็คำนวณ
+    // จาก quantity × pricePerUnit เหมือนเดิมทุกประการ ดู resolveAgreedAmount
+    const amountThb = resolveAgreedAmount(
+      params.amountThb,
+      roundToTwo(quantity * pricePerUnitInput),
+      { symbol: params.symbol }
+    );
+
     // ── ราคาต่อหน่วยเป็น USD (Round 10) — เก็บเป็น USD ตามจริง ไม่แปลงตอนบันทึก ──
     // amountThb/pricePerUnit ที่คืน = ค่าในหน่วย USD (ชื่อ Field คงเดิมเพื่อ Backward
     // Compat — ดู migration 012 Semantics) fx = ยอดเทียบบาทไว้ "แสดงผลเท่านั้น"
@@ -128,10 +189,10 @@ async function resolveQuantityAndPrice(params, side = 'buy') {
       return {
         quantity,
         pricePerUnit: pricePerUnitInput,
-        amountThb: roundToTwo(quantity * pricePerUnitInput),
+        amountThb,
         currency: 'USD',
         priceSource: 'user',
-        fx: await buildUsdFxDisplay(roundToTwo(quantity * pricePerUnitInput), pricePerUnitInput),
+        fx: await buildUsdFxDisplay(amountThb, pricePerUnitInput),
       };
     }
 
@@ -140,7 +201,7 @@ async function resolveQuantityAndPrice(params, side = 'buy') {
     const resolved = {
       quantity,
       pricePerUnit: pricePerUnitInput,
-      amountThb: roundToTwo(quantity * pricePerUnitInput),
+      amountThb,
       priceSource: 'user',
     };
 
@@ -533,9 +594,16 @@ async function validateSell(userId, params) {
       );
     }
 
+    // ⚠️ ตัด amountThb ที่อาจติดมากับ params ทิ้งเสมอ — "ขายทั้งหมด" คำนวณ quantity
+    // (ยอดคงเหลือ ณ ตอนนี้) และราคา (ราคาตลาด ณ ตอนนี้) ขึ้นมาใหม่ทั้งคู่ ยอดที่ตกลง
+    // ไว้ก่อนหน้าจึงไม่ใช่ยอดของคู่นี้ ถ้าปล่อยให้ไหลเข้า resolveAgreedAmount จะได้ยอด
+    // ที่ไม่ตรงกับ quantity × price ที่เพิ่งคำนวณ (ดู resolveAgreedAmount — บั๊ค A)
+    const { amountThb: agreedAmountNotApplicable, ...paramsWithoutAgreedAmount } = params;
+    void agreedAmountNotApplicable;
+
     const allAmounts = await resolveQuantityAndPrice(
       {
-        ...params,
+        ...paramsWithoutAgreedAmount,
         quantity: heldForAll,
         pricePerUnit: marketPrice,
         // ส่งต่อสกุลเงินของสินทรัพย์ให้ resolveQuantityAndPrice เก็บ USD ตามจริง

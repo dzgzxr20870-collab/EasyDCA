@@ -288,3 +288,88 @@ describe('buildOcrErrorMessage', () => {
     expect(JSON.stringify(flex.buildOcrErrorMessage(undefined))).toContain('อ่านสลิปไม่สำเร็จ');
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════
+// บั๊ค B — การ์ดสลิปต้องไม่แสดงตัวเลขที่ผิดข้อเท็จจริง + เลขที่แสดง = เลขที่บันทึก
+// ═══════════════════════════════════════════════════════════════════════
+describe('buildOcrPreviewMessage — บรรทัดยอดรวม (บั๊ค B)', () => {
+  // เคสจริง EOSE (สลิป Dime! 22 ส.ค. 2026)
+  const EOSE = {
+    symbol: 'EOSE',
+    side: 'buy',
+    quantity: 25.0164512,
+    pricePerUnit: 4.25,
+    amountThb: 106.44,
+    amountSource: 'slip_gross',
+    feeTotal: 0.27,
+    netAmount: null,
+    currency: 'USD',
+    date: '22/08/2026',
+    dateIso: '2026-08-22',
+    confidence: 'high',
+    remainingQuota: 47,
+    quotaLimit: 50,
+  };
+
+  function bodyText(msg) {
+    return JSON.stringify(msg.contents.body.contents);
+  }
+
+  test('สลิปไม่ระบุยอดสุทธิ → ห้ามใช้คำว่า "จ่ายจริง" กับตัวเลขที่คำนวณเอง', () => {
+    const text = bodyText(flex.buildOcrPreviewMessage(EOSE));
+
+    expect(text).toContain('รวมโดยประมาณ');
+    expect(text).not.toContain('รวมจ่ายจริง');
+    expect(text).toContain('ระบบคำนวณเอง');
+  });
+
+  test('สลิประบุยอดสุทธิ → ใช้ยอดจากสลิป และเรียกว่า "จ่ายจริง" ได้', () => {
+    const text = bodyText(flex.buildOcrPreviewMessage({ ...EOSE, netAmount: 106.72 }));
+
+    expect(text).toContain('รวมจ่ายจริง');
+    expect(text).toContain('106.72');
+    expect(text).not.toContain('รวมโดยประมาณ');
+  });
+
+  test('ฝั่งขายที่ไม่มียอดสุทธิ → ห้ามใช้คำว่า "รับจริง" เช่นกัน', () => {
+    const text = bodyText(flex.buildOcrPreviewMessage({ ...EOSE, side: 'sell' }));
+
+    expect(text).toContain('รวมโดยประมาณ');
+    expect(text).not.toContain('รวมรับจริง');
+  });
+
+  // ── เลขที่แสดงบนการ์ด ต้องเป็นเลขเดียวกับที่ปุ่มยืนยันพกไปบันทึก ──────────
+  test("amountSource='slip_gross' → ปุ่มยืนยันพก gross ไปด้วย (กันคูณกลับเป็น 106.32)", () => {
+    const confirm = footerDatas(flex.buildOcrPreviewMessage(EOSE)).find((d) =>
+      d.startsWith('action=ocr_confirm')
+    );
+
+    expect(confirm).toContain('gross=106.44');
+    expect(confirm).toContain('qty=25.0164512');
+    expect(confirm).toContain('price=4.25');
+  });
+
+  test("amountSource='computed' → ไม่พก gross (ยอดเท่ากับ qty × price อยู่แล้ว)", () => {
+    const confirm = footerDatas(
+      flex.buildOcrPreviewMessage({ ...EOSE, amountSource: 'computed', amountThb: 106.32 })
+    ).find((d) => d.startsWith('action=ocr_confirm'));
+
+    expect(confirm).not.toContain('gross=');
+  });
+
+  test('ปุ่ม "แก้ไข" ไม่พก gross (ไม่ใช่จังหวะที่บันทึกจริง)', () => {
+    const edit = footerDatas(flex.buildOcrPreviewMessage(EOSE)).find((d) =>
+      d.startsWith('action=ocr_edit')
+    );
+
+    expect(edit).not.toContain('gross=');
+  });
+
+  test('Postback ยังอยู่ในเพดาน 300 ตัวอักษรของ LINE', () => {
+    const datas = footerDatas(
+      flex.buildOcrPreviewMessage({ ...EOSE, slipToken: '1755851234567.jpg' })
+    );
+
+    datas.forEach((d) => expect(d.length).toBeLessThanOrEqual(300));
+  });
+});
