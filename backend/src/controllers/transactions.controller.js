@@ -446,18 +446,28 @@ async function createTransaction(req, res) {
     // ของ transaction.service (กฎการปัดเศษตัวเดียวกับที่ Service ใช้ทุกจุด
     // = roundToEight(amount / price)) ไม่คิดสูตรปัดเศษใหม่เอง
     //
-    // หมายเหตุ: Service จะคำนวณ amountThb กลับเป็น roundToTwo(quantity × price)
-    // ซึ่งอาจต่างจาก amountTotal ที่กรอกมาได้ในระดับเศษสตางค์ ถ้าราคาต่อหน่วยสูงมาก
-    // (ความคลาดเคลื่อนของ quantity ≤ 0.5e-8 × ราคา) — สำหรับหุ้นไทย/สินทรัพย์ที่ต้อง
-    // กรอกราคาเอง ราคาต่อหน่วยอยู่ระดับหลักพันบาท ผลคูณจึงต่ำกว่า 0.005 เสมอ
-    // (ปัดกลับได้ยอดเดิมเป๊ะ) — Response คืน amountTotal ที่ "บันทึกจริง" กลับไปให้
-    // Frontend แสดง เพื่อไม่ต้องเดาเองว่าตรงกับที่กรอกไหม
     const quantity = transactionService.deriveQuantityFromAmount(amountTotal, pricePerUnit);
     if (!(quantity > 0)) {
       return fail(res, 'AMOUNT_TOO_SMALL_FOR_PRICE', { amountTotal, pricePerUnit });
     }
     params.quantity = quantity;
     params.pricePerUnit = pricePerUnit;
+    // ── บั๊ค A ทางเข้าที่ 3: ยอดที่ผู้ใช้กรอกเองบนฟอร์มเว็บ ────────────────────
+    //
+    // ⚠️ Comment เดิมตรงนี้เคยเขียนยอมรับไว้เองว่า "Service จะคำนวณ amountThb กลับเป็น
+    // roundToTwo(quantity × price) ซึ่งอาจต่างจาก amountTotal ที่กรอกมาได้ในระดับ
+    // เศษสตางค์ ถ้าราคาต่อหน่วยสูงมาก" แล้วสรุปว่ารับได้เพราะ "หุ้นไทยราคาหลักพัน
+    // ผลคูณจึงต่ำกว่า 0.005 เสมอ" — ข้อสรุปนั้นผิด เพราะ Branch นี้ไม่ได้ให้บริการแค่
+    // หุ้นไทย: ผู้ใช้กรอกราคาเองได้ทุกสินทรัพย์ (ดู Guard ด้านบน — บังคับเฉพาะหุ้นไทย
+    // แต่ "อนุญาต" ทุกตัว) กรอก BTC ราคา 2,513,380 ด้วยเงิน 100 บาท ก็ได้ 100.01
+    // เหมือนเส้นทาง LINE เป๊ะ
+    //
+    // ยอดที่ผู้ใช้กรอกคือยอดที่เห็นบนหน้าจอตอนกดบันทึก จึงเป็น "ยอดที่ตกลงกันไว้"
+    // ตามนิยามเดียวกับ Snapshot ของ Preview→Confirm — ต้องบันทึกยอดนั้น ไม่ใช่คูณกลับ
+    // (มติ Founder: ยอดที่บันทึกลง Ledger ต้องเท่ากับยอดที่ผู้ใช้เห็นเสมอ)
+    //
+    // resolveAgreedAmount ฝั่ง Service ตรวจ 2% ให้อีกชั้นเหมือนทางเข้าอื่นทุกทาง
+    params.amountThb = amountTotal;
   } else {
     // ── เส้นทาง LINE #1: "จำนวนเงินรวม" — Service ดึงราคาตลาดเองแล้วหารจำนวนหน่วย
     // (amountThb = ยอดเงินในสกุลของ currency ตาม Semantics เดิมของ Service/DB

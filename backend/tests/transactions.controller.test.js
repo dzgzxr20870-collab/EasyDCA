@@ -956,3 +956,107 @@ describe('POST /transactions (side=sell) — currency ที่ถูกละ�
     expect(transactionRepository.create).not.toHaveBeenCalled();
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════
+// บั๊ค A ทางเข้าที่ 3 — ฟอร์มเว็บ "จำนวนเงิน + ราคาต่อหน่วยที่กรอกเอง"
+// ═══════════════════════════════════════════════════════════════════════
+// ทางเข้าเดียวกับบั๊ค A บนไลน์ คนละประตู: Controller หาร quantity จากยอดเงิน
+// (deriveQuantityFromAmount) แล้ว Service คูณกลับเป็นยอดใหม่ — เศษที่ถูกปัดทิ้ง
+// ตอนหาร quantity เหลือ 8 ตำแหน่ง โผล่กลับมาเป็นสตางค์เมื่อราคาต่อหน่วยสูง
+//
+// Comment เดิมในโค้ดอ้างว่า "หุ้นไทยราคาหลักพัน ผลคูณจึงต่ำกว่า 0.005 เสมอ" ซึ่ง
+// ผิด เพราะ Branch นี้เปิดให้กรอกราคาเองได้ "ทุกสินทรัพย์" ไม่ใช่แค่หุ้นไทย
+describe('POST /transactions — ยอดที่บันทึกต้องเท่ากับยอดที่กรอก (บั๊ค A ทางเข้าเว็บ)', () => {
+  // ราคาจริงจาก Production ตอนเกิดบั๊คบนไลน์ — ใช้ Fixture เดียวกันเพื่อพิสูจน์ว่า
+  // เป็นบั๊คตัวเดียวกันจริง
+  const BTC_PRICE = 2513380;
+
+  function ledgerCall() {
+    expect(transactionRepository.create).toHaveBeenCalledTimes(1);
+    return transactionRepository.create.mock.calls[0][0];
+  }
+
+  test('กรอก 100 บาท + ราคา 2,513,380 → บันทึก 100 ไม่ใช่ 100.01', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue({
+      id: 'asset-btc',
+      symbol: 'BTC',
+      type: 'crypto',
+    });
+    const res = mockRes();
+
+    await createTransaction(
+      mockReq({ symbol: 'BTC', side: 'buy', amountTotal: 100, pricePerUnit: BTC_PRICE }),
+      res
+    );
+
+    const written = ledgerCall();
+    // พิสูจน์ว่าเงื่อนไขของบั๊กมีอยู่จริง: quantity ถูกปัดเหลือ 8 ตำแหน่ง แล้วคูณกลับ
+    // ได้ 100.01 ไม่ใช่ 100
+    expect(written.quantity).toBe(0.00003979);
+    expect(Math.round(written.quantity * BTC_PRICE * 100) / 100).toBe(100.01);
+
+    // ── หัวใจของบั๊ค A ──
+    expect(written.amountThb).toBe(100);
+    // Response ที่ตอบกลับไปให้ Frontend แสดง ต้องเป็นยอดเดียวกับที่ลง Ledger
+    expect(jsonOf(res).transaction.amountTotal).toBe(100);
+  });
+
+  test('หุ้นไทยราคาหลักร้อย → ยอดเท่าเดิมเป๊ะเหมือนก่อนแก้ (ไม่ถดถอย)', async () => {
+    assetRepository.findByUserAndSymbol.mockResolvedValue({
+      id: 'asset-ptt',
+      symbol: 'PTT',
+      type: 'stock_th',
+    });
+    const res = mockRes();
+
+    await createTransaction(
+      mockReq({ symbol: 'PTT', side: 'buy', amountTotal: 1000, pricePerUnit: 34 }),
+      res
+    );
+
+    expect(ledgerCall().amountThb).toBe(1000);
+  });
+
+  test('USD: กรอกยอด USD + ราคา USD → บันทึกยอดที่กรอก (ไม่แปลง ไม่คูณกลับ)', async () => {
+    const res = mockRes();
+
+    await createTransaction(
+      mockReq({
+        symbol: 'AAPL',
+        side: 'buy',
+        amountTotal: 100,
+        pricePerUnit: 251.338,
+        currency: 'USD',
+      }),
+      res
+    );
+
+    const written = ledgerCall();
+    expect(written.currency).toBe('USD');
+    expect(written.amountThb).toBe(100);
+  });
+
+  // ── เส้นทางอื่นของ Controller ต้องไม่เปลี่ยนพฤติกรรม ──────────────────────
+  test('ไม่กรอกราคา (ใช้ราคาตลาด) → ยอดยังเท่ากับที่กรอกเหมือนเดิม', async () => {
+    const res = mockRes();
+
+    await createTransaction(mockReq({ symbol: 'AAPL', side: 'buy', amountTotal: 500 }), res);
+
+    expect(ledgerCall().amountThb).toBe(500);
+  });
+
+  test('ขายแบบระบุจำนวนหน่วย + ราคา → ยังคำนวณยอดจาก จำนวน × ราคา เหมือนเดิม', async () => {
+    transactionRepository.findAllByAsset.mockResolvedValue([
+      { type: 'buy', quantity: 10, currency: 'THB' },
+    ]);
+    const res = mockRes();
+
+    await createTransaction(
+      mockReq({ symbol: 'AAPL', side: 'sell', quantity: 2, pricePerUnit: 251.338 }),
+      res
+    );
+
+    // 2 × 251.338 = 502.676 → 502.68 (ไม่มียอดที่ตกลงไว้ก่อน จึงคำนวณเอง)
+    expect(ledgerCall().amountThb).toBe(502.68);
+  });
+});
