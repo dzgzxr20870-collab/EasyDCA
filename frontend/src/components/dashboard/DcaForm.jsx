@@ -142,8 +142,17 @@ function DcaForm({
   // '' = ไม่รู้ (ส่ง undefined ไป Backend → ลง DB เป็น NULL ไม่ใช่ 0)
   const [slipFeeInput, setSlipFeeInput] = useState('');
   // ยอดสุทธิตามสลิป — แสดงผลอย่างเดียว ไม่ถูกบันทึก (ใช้บอกผู้ใช้ว่ายอดที่จำได้
-  // ต่างจากมูลค่าหุ้นเพราะค่าธรรมเนียม)
+  // ต่างจากมูลค่าหุ้นเพราะค่าธรรมเนียม) · null = สลิปไม่ระบุ/AI อ่านไม่ได้
   const [slipNetAmount, setSlipNetAmount] = useState(null);
+  // ── มูลค่าหุ้นที่ Backend "พิสูจน์แล้วว่าเป็นเลขบนสลิปจริง" (บั๊ค B) ──────────
+  // เดิมฟอร์มคำนวณ quantity × price เองในเบราว์เซอร์เสมอ ทำให้ค่าที่ resolveGrossAmount
+  // ตรวจสอบมาแล้วถูกทิ้งทุกครั้ง — เคส EOSE สลิประบุ 106.44 แต่ฟอร์มโชว์ 106.32
+  // (ราคาต่อหน่วยบนสลิปถูกปัดมาแสดง 4.25 ทั้งที่จริงคือ 4.2548 พอคูณกลับจึงไม่ตรง)
+  //
+  // เก็บคู่กับ "ค่าที่ Prefill มาตอนแรก" เพื่อรู้ว่าผู้ใช้แก้ช่องจำนวน/ราคาไปหรือยัง —
+  // ถ้าแก้แล้ว ยอดจากสลิปใบนั้นไม่ใช่ยอดของตัวเลขคู่ใหม่อีกต่อไป ต้องกลับไปคำนวณเอง
+  const [slipGrossAmount, setSlipGrossAmount] = useState(null);
+  const [slipPrefilled, setSlipPrefilled] = useState(null);
 
   // Revoke Object URL ล่าสุด "ตอน Unmount เท่านั้น" (กัน Memory leak) — ใช้ ref กัน
   // ไม่ให้ revoke ทุกครั้งที่ URL เปลี่ยน (การเปลี่ยน/ลบ revoke เองอยู่แล้วในแต่ละ Handler)
@@ -171,6 +180,16 @@ function DcaForm({
   //                    ชนเพดาน 8 ครั้ง/นาทีอยู่บ่อยแล้ว — ปล่อยว่างให้ผู้ใช้กรอกเอง
   const priceRequired = !isSell && picked?.type === 'stock_th';
   const slipNumbersActive = !isSell && slipQuantityInput !== '' && slipPriceInput !== '';
+  // มูลค่าหุ้นที่สลิประบุและ Backend พิสูจน์แล้ว "และผู้ใช้ยังไม่ได้แก้ช่องจำนวน/ราคา"
+  // (บั๊ค B) — null = ไม่มีค่าที่เชื่อได้ ให้คำนวณ quantity × price เองตามเดิม
+  // ใช้ทั้งตอนแสดงผลและตอนส่งบันทึก เพื่อให้ "เลขที่แสดง = เลขที่บันทึก" เสมอ
+  const slipGrossUntouched =
+    slipGrossAmount !== null &&
+    slipPrefilled !== null &&
+    slipQuantityInput === slipPrefilled.quantity &&
+    slipPriceInput === slipPrefilled.pricePerUnit
+      ? slipGrossAmount
+      : null;
   const showPriceField = !isSell && !slipNumbersActive;
   // ชื่อเดิม — คงไว้เพื่อไม่ต้องแก้ทุกจุดที่อ้างถึงความหมาย "ต้องกรอกราคาเอง"
   const needsManualPrice = priceRequired;
@@ -309,6 +328,8 @@ function DcaForm({
     setSlipPriceInput('');
     setSlipFeeInput('');
     setSlipNetAmount(null);
+    setSlipGrossAmount(null);
+    setSlipPrefilled(null);
   }
 
   // ── บันทึกการขาย ──────────────────────────────────────────────────────────
@@ -411,11 +432,19 @@ function DcaForm({
       currency,
       date,
       ...(note.trim() ? { note: note.trim() } : {}),
-      // ใช้ตัวเลขจากสลิป → ส่ง quantity + pricePerUnit (ไม่ส่ง amountTotal เพราะ
-      // Backend คำนวณยอดรวมจากคู่นี้เอง การส่งยอดที่ปัดเศษแล้วมาด้วยไม่มีประโยชน์
-      // และเสี่ยงให้เข้าใจผิดว่ายอดนั้นเป็นตัวตั้ง)
+      // ใช้ตัวเลขจากสลิป → ส่ง quantity + pricePerUnit เป็นหลัก
+      //
+      // ⚠️ บั๊ค B: ส่ง amountTotal ไปด้วย "เฉพาะเมื่อสลิประบุมูลค่าหุ้นไว้ตรงๆ และ
+      // Backend พิสูจน์แล้ว" (slipGrossUntouched) — ไม่งั้น Backend จะคำนวณ
+      // quantity × pricePerUnit ขึ้นมาใหม่ แล้วบันทึก 106.32 ทั้งที่ฟอร์มแสดง 106.44
+      // ซึ่งขัดหลัก "ยอดที่บันทึกต้องเท่ากับยอดที่ผู้ใช้เห็นตอนกดบันทึก" (มติ Founder)
+      // เมื่อไม่มีค่าที่พิสูจน์ได้ = ไม่ส่ง = Backend คำนวณเองเหมือนเดิมทุกประการ
       ...(useSlipNumbers
-        ? { quantity: slipQty, pricePerUnit: slipPrice }
+        ? {
+            quantity: slipQty,
+            pricePerUnit: slipPrice,
+            ...(slipGrossUntouched !== null ? { amountTotal: slipGrossUntouched } : {}),
+          }
         : { amountTotal, ...(priceValue !== null ? { pricePerUnit: priceValue } : {}) }),
       // ค่าธรรมเนียม (Migration 041) — ส่งเฉพาะเมื่อรู้จริง ('' = ไม่รู้ → ไม่ส่ง Key
       // เลย เพื่อให้ Backend ลง NULL ไม่ใช่ 0) · ผู้ใช้กรอก 0 เอง = ยืนยันว่าไม่มี
@@ -525,6 +554,8 @@ function DcaForm({
       setSlipPriceInput('');
       setSlipFeeInput('');
       setSlipNetAmount(null);
+      setSlipGrossAmount(null);
+      setSlipPrefilled(null);
 
       // ⚠️ setSide เฉพาะตอนที่ "รู้ทิศทางจริง" เท่านั้น — side = null (อ่านไม่ออก/
       // สัญญาณขัดกัน) ต้องปล่อยฟอร์มไว้ตามที่ผู้ใช้เปิดมา ห้ามเดาให้เด็ดขาด
@@ -542,6 +573,13 @@ function DcaForm({
       // ค่าธรรมเนียม + ยอดสุทธิ (Migration 041) — ไม่ขึ้นกับทิศทาง เติมได้เสมอ
       if (prefill.feeTotal) setSlipFeeInput(prefill.feeTotal);
       if (prefill.netAmount) setSlipNetAmount(Number(prefill.netAmount));
+      // มูลค่าหุ้นที่ Backend พิสูจน์แล้วว่าเป็นเลขบนสลิปจริง (บั๊ค B) — มีเฉพาะตอนที่
+      // resolveGrossAmount ตอบ amountSource='slip_gross' เท่านั้น ถ้าเป็น 'computed'
+      // แปลว่าระบบก็คำนวณเองอยู่แล้ว ฟอร์มคำนวณเองต่อไปได้ ผลเท่ากันและตรงไปตรงมากว่า
+      if (prefill.slipGrossAmount !== null && prefill.buyQuantity && prefill.buyPricePerUnit) {
+        setSlipGrossAmount(Number(prefill.slipGrossAmount));
+        setSlipPrefilled({ quantity: prefill.buyQuantity, pricePerUnit: prefill.buyPricePerUnit });
+      }
 
       // ไฮไลต์ปุ่มซื้อ/ขายให้เห็นชัดว่า "ยังต้องเลือกเอง" (ข้อความเตือนอย่างเดียว
       // ผู้ใช้ที่กดเร็วๆ มักไม่ทันอ่าน — นี่คือช่องที่ทำให้บั๊ก BCPG หลุดมาได้)
@@ -940,17 +978,32 @@ function DcaForm({
             {(() => {
               const q = parseAmount(slipQuantityInput);
               const p = parseAmount(slipPriceInput);
-              const gross = q > 0 && p > 0 ? Math.round(q * p * 100) / 100 : null;
+              const computedGross = q > 0 && p > 0 ? Math.round(q * p * 100) / 100 : null;
               const fee = slipFeeInput.trim() === '' ? null : parseAmount(slipFeeInput);
               const fmt = (n) => n.toLocaleString('th-TH', { maximumFractionDigits: 8 });
 
-              if (gross === null) {
+              if (computedGross === null) {
                 return <p className="dh-form-note dh-slip-numbers-total">กรอกจำนวนหน่วยและราคาให้ครบเพื่อดูยอดรวม</p>;
               }
 
-              // ยอดรวมจ่ายจริง: ใช้ค่าจากสลิปถ้ามี (แม่นสุด) ไม่มีค่อยบวกเอง
-              const totalPaid =
-                slipNetAmount !== null ? slipNetAmount : fee !== null ? Math.round((gross + fee) * 100) / 100 : null;
+              // ── มูลค่าหุ้น: ใช้เลขที่สลิประบุเมื่อพิสูจน์แล้ว (บั๊ค B) ────────────
+              // เงื่อนไข: Backend ยืนยันว่าเป็นเลขบนสลิปจริง (slipGrossAmount ไม่ null)
+              // "และ" ผู้ใช้ยังไม่ได้แก้ช่องจำนวน/ราคา — ถ้าแก้แล้ว ยอดของสลิปใบนั้น
+              // ไม่ใช่ยอดของตัวเลขคู่ใหม่อีกต่อไป ต้องกลับไปคำนวณเองทันที
+              const grossFromSlip = slipGrossUntouched !== null;
+              const gross = grossFromSlip ? slipGrossUntouched : computedGross;
+
+              // ── ยอดรวม: ห้ามอ้างว่าเป็น "ยอดที่จ่ายจริง" ถ้าสลิปไม่ได้ระบุไว้ ──────
+              // ⚠️ บั๊ค B (เคสจริง EOSE): เดิมบรรทัดนี้เขียน "รวมจ่ายจริง 106.59" ทั้งที่
+              // ผู้ใช้จ่ายจริง 106.72 ตามสลิป — เพราะเมื่อ AI อ่านยอดสุทธิไม่ได้ ระบบบวก
+              // "มูลค่าหุ้น + ค่าธรรมเนียม" เองแล้วแปะป้ายว่าเป็นยอดจริง = ผิดข้อเท็จจริง
+              // มติ Founder: แสดงเลขผิดโดยไม่บอกว่าไม่แน่ใจ แย่กว่าไม่แสดงเลย
+              const netFromSlip = slipNetAmount !== null;
+              const totalPaid = netFromSlip
+                ? slipNetAmount
+                : fee !== null
+                  ? Math.round((gross + fee) * 100) / 100
+                  : null;
 
               return (
                 <div className="dh-slip-breakdown">
@@ -966,15 +1019,23 @@ function DcaForm({
                   )}
                   {totalPaid !== null && (
                     <div className="dh-slip-brk-row dh-slip-brk-total">
-                      <span>รวม{isSell ? 'รับจริง' : 'จ่ายจริง'}</span>
+                      <span>{netFromSlip ? `รวม${isSell ? 'รับจริง' : 'จ่ายจริง'}` : 'รวมโดยประมาณ'}</span>
                       <b>{fmt(totalPaid)} {currency}</b>
                     </div>
                   )}
                   <p className="dh-form-note" style={{ margin: '6px 0 0' }}>
-                    {fee !== null && fee > 0
-                      ? `ระบบบันทึก "มูลค่าหุ้น" เป็นต้นทุน — ต่างจากยอดที่${isSell ? 'รับ' : 'จ่าย'}เพราะค่าธรรมเนียม ไม่ใช่ระบบอ่านผิด`
-                      : 'ใช้ราคาจากสลิป ไม่ใช่ราคาตลาดวันนี้ (ล้างช่องจำนวนหน่วยหรือราคาเพื่อกลับไปใช้จำนวนเงินด้านบน)'}
+                    {totalPaid !== null && !netFromSlip
+                      ? `ยอดรวมนี้ระบบคำนวณเอง (มูลค่าหุ้น + ค่าธรรมเนียม) เพราะอ่านยอดสุทธิจากสลิปไม่ได้ — อาจต่างจากยอดที่${isSell ? 'รับ' : 'จ่าย'}จริงเล็กน้อย กรุณาเทียบกับสลิป`
+                      : fee !== null && fee > 0
+                        ? `ระบบบันทึก "มูลค่าหุ้น" เป็นต้นทุน — ต่างจากยอดที่${isSell ? 'รับ' : 'จ่าย'}เพราะค่าธรรมเนียม ไม่ใช่ระบบอ่านผิด`
+                        : 'ใช้ราคาจากสลิป ไม่ใช่ราคาตลาดวันนี้ (ล้างช่องจำนวนหน่วยหรือราคาเพื่อกลับไปใช้จำนวนเงินด้านบน)'}
                   </p>
+                  {grossFromSlip && (
+                    <p className="dh-form-note" style={{ margin: '4px 0 0' }}>
+                      * มูลค่าหุ้นใช้ตัวเลขที่สลิประบุไว้ตรงๆ (ไม่ใช่ จำนวน × ราคา ซึ่งได้{' '}
+                      {fmt(computedGross)} {currency} เพราะราคาต่อหน่วยบนสลิปถูกปัดเศษมาแสดง)
+                    </p>
+                  )}
                 </div>
               );
             })()}

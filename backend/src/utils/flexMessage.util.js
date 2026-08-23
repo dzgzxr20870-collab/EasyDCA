@@ -3284,6 +3284,25 @@ function ocrPostback(action, ocr, sideOverride = null) {
   // จะแก้ให้ชี้ไฟล์ของ User คนอื่นได้ ฝั่ง Handler จึงประกอบ path จาก user.id ที่
   // Authenticate แล้วเสมอ (ดู storage.service.buildTransactionSlipPath)
   if (action === 'ocr_confirm' && ocr.slipToken) p.set('slip', ocr.slipToken);
+  // ── มูลค่าหุ้นที่ "พิสูจน์แล้วว่าเป็นเลขบนสลิปจริง" (บั๊ค B) ────────────────
+  // ⚠️ ถ้าไม่พกไป การ์ดจะแสดง "มูลค่าหุ้น: 106.44" แต่ตอนกดยืนยันปลายทางได้แค่
+  // qty + price แล้วคูณกลับเป็น 106.32 → แสดงเลขหนึ่งบันทึกอีกเลขหนึ่ง (บั๊ค A ซ้ำรอย)
+  //
+  // ส่งเฉพาะเมื่อ resolveGrossAmount ยืนยันแล้วว่าเป็นเลขบนสลิป (amountSource ===
+  // 'slip_gross') — ถ้าเป็น 'computed' ยอดก็เท่ากับ qty × price อยู่แล้ว ไม่ต้องพก
+  // (ประหยัดโควตา 300 ตัวอักษรของ Postback ไว้ให้ Field ที่จำเป็นกว่า)
+  //
+  // กรณีสลิป Amount-only (ไม่มี qty/price) ยอดถูกพกไปทาง 'amt' อยู่แล้วด้านบน
+  if (
+    action === 'ocr_confirm' &&
+    ocr.amountSource === 'slip_gross' &&
+    ocr.quantity !== null &&
+    ocr.pricePerUnit !== null &&
+    ocr.amountThb !== null &&
+    ocr.amountThb !== undefined
+  ) {
+    p.set('gross', String(ocr.amountThb));
+  }
   return p.toString();
 }
 
@@ -3401,19 +3420,35 @@ function buildOcrPreviewMessage(ocr) {
           color: COLOR.textSecondary,
         })
       );
-      // ยอดรวมจ่ายจริง: ใช้ net จากสลิปถ้ามี (แม่นที่สุด) ไม่มีค่อยบวกเอง
-      const totalPaid =
-        ocr.netAmount !== null && ocr.netAmount !== undefined
-          ? ocr.netAmount
-          : Math.round((ocr.amountThb + ocr.feeTotal) * 100) / 100;
+      // ── บรรทัดยอดรวม: ห้ามอ้างว่าเป็น "ยอดที่จ่ายจริง" ถ้าสลิปไม่ได้ระบุไว้ ──────
+      //
+      // ⚠️ บั๊ค B (เคสจริง EOSE): เดิมบรรทัดนี้เขียนว่า "รวมจ่ายจริง: 106.59" ทั้งที่
+      // ผู้ใช้จ่ายจริง 106.72 ตามสลิป — เพราะเมื่อ AI อ่านยอดสุทธิไม่ได้ (netAmount
+      // = null) โค้ดจะบวก "มูลค่าหุ้น + ค่าธรรมเนียม" เองแล้วแปะป้ายว่าเป็นยอดจริง
+      // นี่คือข้อความที่ผิดข้อเท็จจริง ไม่ใช่แค่ตัวเลขคลาดเคลื่อน
+      //
+      // หลักที่ยึด (มติ Founder): แสดงเลขผิดโดยไม่บอกว่าไม่แน่ใจ แย่กว่าไม่แสดงเลย
+      //   - สลิประบุยอดสุทธิมา  → แสดงตามสลิป ป้าย "รวมจ่ายจริง/รับจริง" ได้เต็มปาก
+      //   - สลิปไม่ระบุ         → แสดงได้แต่ต้องกำกับว่า "คำนวณเอง" ไม่ใช่ยอดจากสลิป
+      const netFromSlip = ocr.netAmount !== null && ocr.netAmount !== undefined;
+      const totalPaid = netFromSlip
+        ? ocr.netAmount
+        : Math.round((ocr.amountThb + ocr.feeTotal) * 100) / 100;
       body.push(
-        textLine(`รวม${isBuy ? 'จ่ายจริง' : 'รับจริง'}: ${formatNumber(totalPaid)} ${unit}`, {
-          size: 'sm',
-          weight: 'bold',
-          color: COLOR.textPrimary,
-        }),
         textLine(
-          `* ระบบบันทึก "มูลค่าหุ้น" เป็นต้นทุน (${formatNumber(ocr.amountThb)} ${unit}) — ต่างจากยอดที่${isBuy ? 'จ่าย' : 'รับ'}เพราะค่าธรรมเนียม ไม่ใช่ระบบอ่านผิด`,
+          netFromSlip
+            ? `รวม${isBuy ? 'จ่ายจริง' : 'รับจริง'}: ${formatNumber(totalPaid)} ${unit}`
+            : `รวมโดยประมาณ: ${formatNumber(totalPaid)} ${unit}`,
+          {
+            size: 'sm',
+            weight: 'bold',
+            color: COLOR.textPrimary,
+          }
+        ),
+        textLine(
+          netFromSlip
+            ? `* ระบบบันทึก "มูลค่าหุ้น" เป็นต้นทุน (${formatNumber(ocr.amountThb)} ${unit}) — ต่างจากยอดที่${isBuy ? 'จ่าย' : 'รับ'}เพราะค่าธรรมเนียม ไม่ใช่ระบบอ่านผิด`
+            : `* ยอดรวมนี้ระบบคำนวณเอง (มูลค่าหุ้น + ค่าธรรมเนียม) เพราะอ่านยอดสุทธิจากสลิปไม่ได้ — อาจต่างจากยอดที่${isBuy ? 'จ่าย' : 'รับ'}จริงเล็กน้อย กรุณาเทียบกับสลิป`,
           { size: 'xs', color: COLOR.textSecondary, wrap: true }
         )
       );

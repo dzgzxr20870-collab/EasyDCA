@@ -231,3 +231,50 @@ describe('buyQuantity/buyPricePerUnit — ตัวเลขที่จะถ�
     expect(unknown.buyPricePerUnit).toBeNull();
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════
+// บั๊ค B — มูลค่าหุ้นที่สลิประบุ ต้องเดินทางถึงฟอร์ม (ไม่ให้ฟอร์มคูณเอง)
+// ═══════════════════════════════════════════════════════════════════════
+// เคสจริง EOSE: สลิประบุมูลค่าหุ้น 106.44 แต่ราคาต่อหน่วยถูกปัดมาแสดง 4.25
+// (จริง 4.2548) ฟอร์มที่คำนวณ quantity × price เองจึงได้ 106.32 ไม่ตรงสลิป
+describe('buildOcrPrefill — slipGrossAmount (บั๊ค B)', () => {
+  const EOSE = {
+    side: 'buy',
+    quantity: 25.0164512,
+    pricePerUnit: 4.25,
+    amountTotal: 106.44,
+    currency: 'USD',
+    feeTotal: 0.27,
+    netAmount: null,
+  };
+
+  it("amountSource='slip_gross' → พกมูลค่าหุ้นจากสลิปมาให้ฟอร์ม", () => {
+    const prefill = buildOcrPrefill({ ...EOSE, amountSource: 'slip_gross' });
+
+    expect(prefill.slipGrossAmount).toBe('106.44');
+    expect(prefill.buyQuantity).toBe('25.0164512');
+    expect(prefill.buyPricePerUnit).toBe('4.25');
+  });
+
+  it("amountSource='computed' → ไม่พกมา (Backend ก็คำนวณเอง ฟอร์มคำนวณต่อได้)", () => {
+    const prefill = buildOcrPrefill({ ...EOSE, amountSource: 'computed' });
+
+    expect(prefill.slipGrossAmount).toBeNull();
+  });
+
+  it('ไม่มี amountSource (Payload เก่า) → ไม่พกมา ไม่พัง', () => {
+    const prefill = buildOcrPrefill(EOSE);
+
+    expect(prefill.slipGrossAmount).toBeNull();
+  });
+
+  it('ทิศทางไม่ชัด → ไม่พกอะไรที่ผูกกับทิศทางเลย รวมถึงมูลค่าหุ้น', () => {
+    const prefill = buildOcrPrefill({ ...EOSE, side: null, amountSource: 'slip_gross' });
+
+    expect(prefill.buyQuantity).toBeNull();
+    expect(prefill.buyPricePerUnit).toBeNull();
+    // slipGrossAmount พกมาได้ (ไม่ผูกทิศทาง) แต่ DcaForm จะไม่ใช้เพราะไม่มี
+    // buyQuantity/buyPricePerUnit คู่กัน — Guard อยู่ที่ผู้เรียกตาม Pattern เดิม
+    expect(prefill.side).toBeNull();
+  });
+});

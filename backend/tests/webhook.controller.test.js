@@ -3242,3 +3242,63 @@ describe('handleEvent — บัญชีถูกล็อก (F7)', () => {
     expect(lastReplyText()).not.toContain('บัญชีถูกระงับ');
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════
+// บั๊ค B — ปุ่มยืนยันบนการ์ดสลิปต้องพก "มูลค่าหุ้นที่สลิประบุ" ไปบันทึกด้วย
+// ═══════════════════════════════════════════════════════════════════════
+// เคสจริง EOSE: การ์ดแสดง "มูลค่าหุ้น 106.44" (เลขบนสลิป) แต่ถ้า Postback พกมาแค่
+// qty + price ปลายทางจะคูณกลับเป็น 106.32 → แสดงเลขหนึ่งแล้วบันทึกอีกเลขหนึ่ง
+// (ราคาต่อหน่วยบนสลิปถูกปัดมาแสดง 4.25 ทั้งที่จริงคือ 4.2548)
+describe('handleEvent — Postback ocr_confirm พก gross (บั๊ค B)', () => {
+  const OCR_CONFIRM_BASE =
+    'action=ocr_confirm&sym=EOSE&side=buy&qty=25.0164512&price=4.25&cur=USD&fee=0.27';
+
+  beforeEach(() => {
+    pendingService.createPending.mockResolvedValue({
+      id: 'p-eose', commandType: 'buy', assetSymbol: 'EOSE',
+      quantity: 25.0164512, pricePerUnit: 4.25, amountThb: 106.44,
+      currency: 'USD', priceSource: 'user',
+    });
+  });
+
+  function paramsOf() {
+    return pendingService.createPending.mock.calls[0][1].params;
+  }
+
+  test('มี gross ใน Postback → ส่งต่อเป็น amountThb ให้ Service บันทึกยอดนั้น', async () => {
+    await handleEvent(postbackEvent(`${OCR_CONFIRM_BASE}&gross=106.44`));
+
+    expect(paramsOf()).toMatchObject({
+      symbol: 'EOSE',
+      quantity: 25.0164512,
+      pricePerUnit: 4.25,
+      amountThb: 106.44,
+    });
+  });
+
+  test('ไม่มี gross → ไม่ส่ง amountThb (Service คำนวณเองเหมือนเดิม)', async () => {
+    await handleEvent(postbackEvent(OCR_CONFIRM_BASE));
+
+    expect(paramsOf().amountThb).toBeUndefined();
+  });
+
+  test('gross ที่แก้มาให้ใช้ไม่ได้ (0 / ติดลบ / ไม่ใช่ตัวเลข) → ไม่ส่งต่อ', async () => {
+    for (const bad of ['0', '-5', 'abc', '']) {
+      pendingService.createPending.mockClear();
+      await handleEvent(postbackEvent(`${OCR_CONFIRM_BASE}&gross=${bad}`));
+      expect(paramsOf().amountThb).toBeUndefined();
+    }
+  });
+
+  // Manual Quantity Fallback (Round 10-B) ใช้เงื่อนไข "มี quantity + amountThb แต่ไม่มี
+  // pricePerUnit" — gross ต้องไม่ไปทำให้เส้นทางนั้นถูกกระตุ้นผิดจังหวะ
+  test('สลิป Amount-only (ไม่มี qty/price) → gross ไม่ถูกใช้ ไม่ชนกับ Manual Quantity Fallback', async () => {
+    await handleEvent(
+      postbackEvent('action=ocr_confirm&sym=EOSE&side=buy&amt=106.72&cur=USD&gross=106.44')
+    );
+
+    const params = paramsOf();
+    expect(params.amountThb).toBe(106.72);
+    expect(params.quantity).toBeUndefined();
+  });
+});

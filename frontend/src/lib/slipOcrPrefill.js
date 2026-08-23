@@ -59,6 +59,17 @@ export function buildOcrPrefill(slip) {
     feeTotal: inputValueOrNull(slip?.feeTotal),
     // ยอดสุทธิที่จ่าย/รับจริงตามสลิป — ใช้แสดงผลอย่างเดียว ไม่ถูกบันทึกลง Ledger
     netAmount: inputValueOrNull(slip?.netAmount),
+    // ── มูลค่าหุ้นที่ "พิสูจน์แล้วว่าเป็นเลขบนสลิปจริง" (บั๊ค B) ─────────────
+    // มีค่าเฉพาะเมื่อ Backend ตอบ amountSource === 'slip_gross' เท่านั้น = ผ่านการ
+    // ตรวจด้วยสมการค่าธรรมเนียมมาแล้ว (ดู slipOcr.service.resolveGrossAmount)
+    //
+    // ทำไมต้องพกมา: ราคาต่อหน่วยบนสลิปถูกปัดมาแสดง (EOSE จริง 4.2548 แสดง 4.25)
+    // ฟอร์มที่คำนวณ quantity × price เองจึงได้ 106.32 ไม่ใช่ 106.44 ที่สลิประบุ
+    //
+    // 'computed' → null โดยตั้งใจ: Backend ก็คำนวณเองอยู่แล้ว ปล่อยให้ฟอร์มคำนวณ
+    // ต่อไปตรงไปตรงมากว่า (ผลลัพธ์เท่ากัน และยังอัปเดตตามที่ผู้ใช้แก้ช่องได้ทันที)
+    slipGrossAmount:
+      slip?.amountSource === 'slip_gross' ? inputValueOrNull(slip?.amountTotal) : null,
   };
 
   // ── ทิศทางชัดเจน: Prefill ครบเหมือนเดิมทุกประการ (คุณค่าหลักของฟีเจอร์) ──

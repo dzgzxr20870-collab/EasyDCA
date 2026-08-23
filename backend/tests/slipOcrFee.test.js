@@ -233,3 +233,143 @@ describe('เคสที่ตัวเลขไม่น่าเชื่อ�
     expect(result.reason).toBe('ai_returned_net_derived_unreliable');
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════
+// บั๊ค B — สลิปไม่มี "ยอดสุทธิ" ให้ตรวจ (net_amount = null)
+// ═══════════════════════════════════════════════════════════════════════
+// หลักฐานจาก Production Log (22 ส.ค. 2026 — Railway service EasyDCA):
+//   ASTS 14:21:03  source="computed" reason="no_fee_or_net_to_verify"
+//                  aiAmount=1497.6  netAmount=null  feeTotal=2.4   → 1497.58
+//   EOSE 14:22:01  source="computed" reason="no_fee_or_net_to_verify"
+//                  aiAmount=106.44  netAmount=null  feeTotal=0.27  → 106.32
+//
+// AI อ่าน "มูลค่าหุ้น" และ "ค่าธรรมเนียม" ถูกทั้งคู่ แต่ตอบ net_amount = null
+// → resolveGrossAmount ตกไป Branch no_fee_or_net_to_verify ทันที (Rule 2 ไม่มีวันได้
+// ทำงานเพราะไม่มี net ให้เทียบ) แล้วคำนวณเอง ทำให้ยอดที่แสดง/บันทึกไม่ตรงสลิป
+describe('resolveGrossAmount — ไม่มี net ให้เทียบ แต่ยังพิสูจน์ได้ด้วยการปัดราคา (บั๊ค B)', () => {
+  // ค่าจริงจาก Production (ต่างจาก Fixture EOSE ด้านบนที่ปัด quantity มาแล้ว)
+  const EOSE_PROD = { quantity: 25.0164512, pricePerUnit: 4.25, slipGross: 106.44, fee: 0.27 };
+
+  it('EOSE — ใช้มูลค่าหุ้นที่สลิประบุ (106.44) ไม่ใช่ค่าคำนวณ (106.32)', () => {
+    const result = resolveGrossAmount({
+      side: 'buy',
+      aiAmount: EOSE_PROD.slipGross,
+      netAmount: null,
+      feeTotal: EOSE_PROD.fee,
+      quantity: EOSE_PROD.quantity,
+      pricePerUnit: EOSE_PROD.pricePerUnit,
+    });
+
+    expect(result.amount).toBe(106.44);
+    expect(result.source).toBe('slip_gross');
+    expect(result.reason).toBe('verified_against_price_rounding');
+  });
+
+  it('ASTS — ใช้มูลค่าหุ้นที่สลิประบุ (1497.60) ไม่ใช่ค่าคำนวณ (1497.58)', () => {
+    const result = resolveGrossAmount({
+      side: 'buy',
+      aiAmount: ASTS.slipGross,
+      netAmount: null,
+      feeTotal: 2.4,
+      quantity: ASTS.quantity,
+      pricePerUnit: ASTS.pricePerUnit,
+    });
+
+    expect(result.amount).toBe(1497.6);
+    expect(result.source).toBe('slip_gross');
+    expect(result.reason).toBe('verified_against_price_rounding');
+  });
+
+  // ── ช่องโหว่ BCPG ต้องยังปิดอยู่แม้ไม่มี net ─────────────────────────────
+  // Haiku หยิบ "ยอดสุทธิ" 68.89 มาใส่ช่องมูลค่าหุ้น ทั้งที่มูลค่าหุ้นจริงคือ 69.00
+  // ถ้าไม่มี net ให้เทียบ ยังจับได้เพราะ 68.89 = computed(69.00) − fee(0.11) พอดี
+  // (ลายเซ็นของ "เลขนี้คือยอดสุทธิ" ไม่ใช่มูลค่าหุ้น)
+  it('BCPG (ขาย) — ai = computed − fee พอดี → ไม่เชื่อ ai กลับไปคำนวณเอง', () => {
+    const result = resolveGrossAmount({
+      side: 'sell',
+      aiAmount: 68.89,
+      netAmount: null,
+      feeTotal: 0.11,
+      quantity: 10,
+      pricePerUnit: 6.9,
+    });
+
+    expect(result.amount).toBe(69);
+    expect(result.source).toBe('computed');
+    expect(result.reason).toBe('ai_returned_net_not_gross_no_net_field');
+  });
+
+  it('BCPG แบบซื้อ — ai = computed + fee พอดี → ไม่เชื่อ ai เช่นกัน', () => {
+    const result = resolveGrossAmount({
+      side: 'buy',
+      aiAmount: 69.11,
+      netAmount: null,
+      feeTotal: 0.11,
+      quantity: 10,
+      pricePerUnit: 6.9,
+    });
+
+    expect(result.amount).toBe(69);
+    expect(result.source).toBe('computed');
+    expect(result.reason).toBe('ai_returned_net_not_gross_no_net_field');
+  });
+
+  it('ai ห่างเกินกว่าที่การปัดราคาอธิบายได้ → ไม่เชื่อ ใช้ค่าคำนวณ', () => {
+    // ราคา 4.25 (2 ตำแหน่ง) × 25.0164512 หน่วย อธิบายความคลาดได้ ~0.135 เท่านั้น
+    const result = resolveGrossAmount({
+      side: 'buy',
+      aiAmount: 108.0,
+      netAmount: null,
+      feeTotal: 0.27,
+      quantity: EOSE_PROD.quantity,
+      pricePerUnit: EOSE_PROD.pricePerUnit,
+    });
+
+    expect(result.amount).toBe(106.32);
+    expect(result.source).toBe('computed');
+    expect(result.reason).toBe('ai_amount_beyond_price_rounding');
+  });
+
+  it('ราคาบนสลิปละเอียดครบ (ไม่ถูกปัด) → ช่องยอมรับแคบลงเอง', () => {
+    // ราคา 4.2548 (4 ตำแหน่ง) → อธิบายความคลาดได้แค่ ~0.011 เท่านั้น
+    const result = resolveGrossAmount({
+      side: 'buy',
+      aiAmount: 106.44,
+      netAmount: null,
+      feeTotal: 0.27,
+      quantity: EOSE_PROD.quantity,
+      pricePerUnit: 4.2548,
+    });
+
+    expect(result.source).toBe('slip_gross');
+    expect(result.amount).toBe(106.44);
+  });
+
+  it('สลิปไม่ระบุค่าธรรมเนียม → ตรวจอะไรไม่ได้ คงพฤติกรรมเดิม (คำนวณเอง)', () => {
+    const result = resolveGrossAmount({
+      side: 'buy',
+      aiAmount: 106.44,
+      netAmount: null,
+      feeTotal: null,
+      quantity: EOSE_PROD.quantity,
+      pricePerUnit: EOSE_PROD.pricePerUnit,
+    });
+
+    expect(result.source).toBe('computed');
+    expect(result.reason).toBe('no_fee_or_net_to_verify');
+  });
+
+  it('สลิป Amount-only (ไม่มีจำนวน/ราคา) → คงพฤติกรรมเดิม ai_fallback', () => {
+    const result = resolveGrossAmount({
+      side: 'buy',
+      aiAmount: 106.72,
+      netAmount: null,
+      feeTotal: 0.27,
+      quantity: null,
+      pricePerUnit: null,
+    });
+
+    expect(result.source).toBe('ai_fallback');
+    expect(result.reason).toBe('no_fee_or_net_to_verify');
+  });
+});

@@ -426,6 +426,19 @@ async function createTransaction(req, res) {
     // ตามที่ให้มาเลย ไม่แตะ Price Feed (เส้นทางเดียวกับที่ LINE ใช้อยู่แล้ว)
     params.quantity = buyQuantity;
     params.pricePerUnit = pricePerUnit;
+    // ── มูลค่าหุ้นที่สลิประบุไว้ตรงๆ (บั๊ค B) ────────────────────────────────
+    // ฟอร์มส่ง amountTotal มาคู่กับ quantity + pricePerUnit เฉพาะเมื่อ "สลิประบุ
+    // มูลค่าหุ้นไว้และผ่านการพิสูจน์แล้ว" (slipOcr.resolveGrossAmount → 'slip_gross')
+    // ซึ่งเป็นเลขที่ผู้ใช้เห็นบนหน้าจอตอนกดบันทึก — ต้องบันทึกยอดนั้น ไม่ใช่คูณใหม่
+    //
+    // เหตุผลที่ต้องมี: ราคาต่อหน่วยบนสลิปถูกปัดมาแสดง (EOSE จริง 4.2548 แสดง 4.25)
+    // quantity × pricePerUnit จึงได้ 106.32 ไม่ตรงกับ 106.44 ที่สลิประบุ
+    //
+    // resolveAgreedAmount ฝั่ง Service ยังตรวจว่ายอดนี้เข้าคู่กับ quantity × price
+    // จริงก่อนใช้เสมอ (ไม่เกิน 2%) — ค่าที่ Client แก้มามั่วจึงไม่หลุดลง Ledger
+    if (amountTotal !== null) {
+      params.amountThb = amountTotal;
+    }
   } else if (hasPrice) {
     // ── เส้นทาง LINE #2: "ผู้ใช้ระบุราคาเอง" (quantity + pricePerUnit) ───────
     // ฟอร์มเว็บส่ง "จำนวนเงินรวม" มาเสมอ (ไม่ใช่จำนวนหน่วย) จึงต้องแปลงเป็นจำนวน
