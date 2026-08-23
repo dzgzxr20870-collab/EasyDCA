@@ -27,7 +27,7 @@ import SidePanels from './SidePanels.jsx';
 import UndoConfirmModal from './UndoConfirmModal.jsx';
 import AssetPicker from './AssetPicker.jsx';
 import AssetAvatar from './AssetAvatar.jsx';
-import DcaForm from './DcaForm.jsx';
+import DcaForm, { ScanningMascot } from './DcaForm.jsx';
 import DcaPlansSection from './DcaPlansSection.jsx';
 import PortfolioDetailSection from './PortfolioDetailSection.jsx';
 
@@ -223,6 +223,16 @@ describe('Render smoke test (renderToStaticMarkup — no crash given realistic A
     expect(html).not.toContain('↩︎ ยกเลิก');
   });
 
+  // fix/undo-command-aliases: Title (Tooltip) ต้องบอกทั้ง 2 คำสั่งที่พิมพ์ได้จริง
+  // ใน LINE (ย้อนล่าสุด คำใหม่ + ยกเลิกล่าสุด คำเดิม — ทั้งคู่ Parse ได้เหมือนกัน)
+  test('RecentList — Title ปุ่ม Undo บอกครบทั้ง "ย้อนล่าสุด" และ "ยกเลิกล่าสุด" (คำสั่งที่ commandParser รับจริง)', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(RecentList, { recent: overviewFull.recent, assetTypeBySymbol, onRequestUndo: () => {} })
+    );
+    expect(html).toContain('ย้อนล่าสุด');
+    expect(html).toContain('ยกเลิกล่าสุด');
+  });
+
   // Label ของรายการ Reversal ในประวัติถาวรก็ต้องใช้คำเดียวกัน — จุดที่ผู้ใช้เห็น
   // ซ้ำๆ ทุกครั้งที่เปิดดูรายการ ไม่ใช่แค่ตอนกดปุ่ม
   test('RecentList — Note ของรายการ Reversal แสดง "ย้อนรายการ" ไม่ใช่ "ยกเลิกรายการ"', () => {
@@ -395,6 +405,52 @@ describe('Render smoke test (renderToStaticMarkup — no crash given realistic A
     ).not.toThrow();
   });
 
+  // ── มาสคอตระหว่างรอ AI อ่านสลิป (งานที่ใส่มาสคอตรอบ 2 — เฉพาะเว็บ) ─────────
+  // ScanningMascot เป็น Sub-component แยกรับ Prop ตรงๆ (ไม่ใช่ State ภายใน DcaForm)
+  // จึง Render scanning=true/false ตรงๆ ผ่าน renderToStaticMarkup ได้โดยไม่ต้อง
+  // จำลอง File Upload จริง (Repo นี้ไม่มี React Testing Library — ดู Comment หัวไฟล์)
+  describe('ScanningMascot — รูปมาสคอตต้องโผล่ตอน scanning=true และหายตอน false', () => {
+    test('scanning=true → มี Class visible + <img> พร้อม alt สื่อความหมาย (ไม่ใช่ alt="")', () => {
+      const html = renderToStaticMarkup(
+        React.createElement(ScanningMascot, { scanning: true, failed: false, onImgError: () => {} })
+      );
+      expect(html).toContain('dh-scan-mascot-visible');
+      expect(html).toContain('alt="กำลังอ่านสลิป"');
+    });
+
+    test('scanning=false → ไม่มี Class visible (แต่ <span> ยัง Render อยู่ — จองพื้นที่ไว้ กัน Layout กระโดด)', () => {
+      const html = renderToStaticMarkup(
+        React.createElement(ScanningMascot, { scanning: false, failed: false, onImgError: () => {} })
+      );
+      expect(html).not.toContain('dh-scan-mascot-visible');
+      expect(html).toContain('dh-scan-mascot'); // <span> ยังอยู่ใน DOM เสมอ
+      expect(html).toContain('<img'); // <img> ยังอยู่ (แค่ opacity:0 ผ่าน CSS ไม่ใช่ Unmount)
+    });
+
+    // รูปโหลดไม่ขึ้น (Supabase ล่ม/เน็ตช้า) ต้องไม่โผล่ Class visible แม้ scanning=true
+    // อยู่ — กันไอคอนรูปแตกค้างให้เห็น (ข้อความ "กำลังอ่านสลิป…" ในปุ่มข้างๆ ไม่ได้
+    // อยู่ใน Component นี้ จึงไม่กระทบ ยังโชว์ตามปกติเสมอไม่ว่า failed จะเป็นอะไร)
+    test('scanning=true แต่ failed=true (รูปโหลดพลาด) → ไม่มี Class visible', () => {
+      const html = renderToStaticMarkup(
+        React.createElement(ScanningMascot, { scanning: true, failed: true, onImgError: () => {} })
+      );
+      expect(html).not.toContain('dh-scan-mascot-visible');
+    });
+
+    test('ขนาดกล่องคงที่เท่ากันทุก State (Class dh-scan-mascot ฐานเหมือนกัน ไม่เปลี่ยน Layout)', () => {
+      const visible = renderToStaticMarkup(
+        React.createElement(ScanningMascot, { scanning: true, failed: false, onImgError: () => {} })
+      );
+      const hidden = renderToStaticMarkup(
+        React.createElement(ScanningMascot, { scanning: false, failed: false, onImgError: () => {} })
+      );
+      // ทั้งสอง State ต้องมี <span> กับ <img> จำนวนเท่ากัน (1 ตัว) — สิ่งที่ต่างกัน
+      // มีแค่ Class Suffix "-visible" เท่านั้น ไม่มี Element ถูกเพิ่ม/ลดออกจาก Flow
+      expect((visible.match(/<span/g) || []).length).toBe((hidden.match(/<span/g) || []).length);
+      expect((visible.match(/<img/g) || []).length).toBe((hidden.match(/<img/g) || []).length);
+    });
+  });
+
   // PortfolioDetailSection (S8 R3 รอบ 2) — Shape ตรงกับ GET /dashboard/portfolio,
   // /dashboard/profit/:symbol, /dashboard/history?limit=1000 (Endpoint เดิมของ
   // Dashboard.jsx ที่ย้าย Logic มา — คนละ Shape กับ overview ของ §15.4)
@@ -501,6 +557,23 @@ describe('Render smoke test (renderToStaticMarkup — no crash given realistic A
         })
       )
     ).not.toThrow();
+  });
+
+  // ── fix/undo-command-aliases: คำสั่งที่สอนในแท็บนี้ต้องตรงกับที่ commandParser
+  // รับจริง (ย้อนล่าสุด เพิ่งถูกเพิ่มเข้า UNDO_LAST คู่กับคำเดิม "ยกเลิกล่าสุด") ──
+  test('PortfolioDetailSection — แท็บวิธีใช้งาน สอนคำสั่ง "ย้อนล่าสุด" (คำใหม่ที่ตรงกับ Regex) พร้อมบอกว่า "ยกเลิกล่าสุด" ยังใช้ได้', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(PortfolioDetailSection, {
+        portfolio: LEGACY_PORTFOLIO,
+        profitBySymbol: LEGACY_PROFIT,
+        transactions: LEGACY_TRANSACTIONS,
+        loadError: null,
+        activeTab: 'howto',
+        onTabChange: () => {},
+      })
+    );
+    expect(html).toContain('ย้อนล่าสุด');
+    expect(html).toContain('ยกเลิกล่าสุด');
   });
 
   test('PortfolioDetailSection — พอร์ตว่างเปล่า (isEmpty)', () => {

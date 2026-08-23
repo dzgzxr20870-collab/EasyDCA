@@ -21,6 +21,17 @@ const AMOUNT_CHIPS = [500, 1000, 3000, 5000, 10000];
 const SLIP_ACCEPT_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 const SLIP_ACCEPT_ATTR = SLIP_ACCEPT_TYPES.join(',');
 const SLIP_MAX_BYTES = 10 * 1024 * 1024;
+// มาสคอต "อีซี่" ท่าคิด/ประมวลผล — อัปโหลดไว้แล้วพร้อมอีก 8 รูปตอน Wire เข้า Flex
+// Message ฝั่ง LINE (feature/mascot-flex-redesign) แต่ตอนนั้นไม่มีการ์ดไหนตรงกับ
+// สถานะ "กำลังประมวลผล/รอผล AI" (สถานะรออ่านสลิปฝั่ง LINE ตอบเป็นข้อความ Text
+// ธรรมดา ไม่ใช่ Flex) จึงยังไม่ได้ใช้ — ตรงนี้คือจุดแรกที่ตรงความหมาย: ระหว่าง
+// AI กำลังอ่านสลิปบนเว็บ (ocrScanning) ⚠️ ฝั่งเว็บเท่านั้น ห้ามพอร์ตไป LINE
+// (Founder ตัดสินใจแล้ว — LINE ตอบกลับได้ครั้งเดียวต่อ Event ถ้าจะโชว์ "กำลังอ่าน…"
+// ต้องเปลี่ยนไปใช้ pushMessage ที่มีโควตาจำกัด เสี่ยงผู้ใช้ไม่ได้รับผลอ่านสลิปเลย)
+// Bucket "flex-assets" Public เดียวกับ backend/src/utils/flexMessage.util.js —
+// รูปตกแต่ง UI ล้วน ไม่มี PII จึงไม่ต้อง Sign URL แบบสลิปธุรกรรม
+const OCR_SCANNING_MASCOT_URL =
+  'https://isukdqundjwpbknnvckf.supabase.co/storage/v1/object/public/flex-assets/02-processing-thinking.png';
 // USD Toggle เปิดเฉพาะ stock_us ตามที่ Mockup ทำจริง (t==="us" ? "THB⇄USD" : "THB")
 // และตาม Requirement งานที่ 2 ("สลับ THB⇄USD เฉพาะสินทรัพย์ที่รองรับ USD (หุ้น US)")
 // — Backend (API.md §15.2) เทคนิคแล้วรองรับ USD สำหรับ crypto ด้วย (Round 10) แต่
@@ -62,6 +73,26 @@ function fmtAmountInput(n) {
 //   prefillSignal (S8 R3 รอบ 3): { symbol, amountTotal, currency, nonce } | null —
 //     Parent ตั้งค่าใหม่ (Object ใหม่ทุกครั้ง) เมื่อกด "บันทึกเลย" บนการ์ดแผนที่ถึง
 //     รอบวันนี้ (SidePanels) เพื่อ Prefill ฟอร์มนี้ให้เอง
+
+// มาสคอตท่าคิด/ประมวลผลระหว่างรอ AI อ่านสลิป — แยกเป็น Sub-component รับ Prop ตรงๆ
+// (ไม่อ่าน State ของ DcaForm เอง) เพื่อให้ Test เรนเดอร์ scanning=true/false ได้ตรงๆ
+// ผ่าน renderToStaticMarkup โดยไม่ต้องจำลอง File Upload จริง (Repo นี้ไม่มี React
+// Testing Library — ดู Comment หัวไฟล์ dashboardComponents.render.test.js)
+//
+// <span> Render อยู่เสมอไม่ว่า scanning จะเป็นอะไร (สลับแค่ Class ผ่าน opacity/
+// animation) เพื่อ "จอง" ขนาดกล่องไว้คงที่ตลอด — Layout จะไม่กระโดดตอนโผล่/หาย
+// เพราะไม่มีการเพิ่ม/ลด Element ที่มีขนาดออกจาก Flow เลย (ดู .dh-scan-mascot ใน
+// DashboardHome.css) · alt สื่อความหมายจริง (ไม่ใช่ alt="") ให้ Screen Reader/
+// กรณีโหลดรูปไม่ขึ้นยังมีข้อความ · onError กัน Icon รูปแตกค้าง (Supabase ล่ม/เน็ตช้า
+// ไม่ทำให้พัง — ปุ่มข้าง ๆ ยังโชว์ "🤖 กำลังอ่านสลิป…" ตามปกติเสมอไม่ว่ากรณีนี้)
+function ScanningMascot({ scanning, failed, onImgError }) {
+  return (
+    <span className={`dh-scan-mascot${scanning && !failed ? ' dh-scan-mascot-visible' : ''}`}>
+      <img src={OCR_SCANNING_MASCOT_URL} alt="กำลังอ่านสลิป" onError={onImgError} />
+    </span>
+  );
+}
+
 function DcaForm({
   symbols,
   pickerOpenSignal,
@@ -124,6 +155,10 @@ function DcaForm({
   // ocrSlipToken: รูปที่ถูกอัปโหลดไว้แล้วตอนอ่าน (Premium เท่านั้น — ผู้ใช้ทดลองฟรี
   // ได้ null) ส่งไปกับ Payload ตอนยืนยันเพื่อให้ Backend แนบเข้ารายการที่เพิ่งสร้าง
   const [ocrScanning, setOcrScanning] = useState(false);
+  // true = รูปมาสคอตโหลดไม่สำเร็จ (Supabase ล่ม/เน็ตช้า) → ไม่วาด <img> ต่อ กัน
+  // ไอคอนรูปแตกโผล่ค้าง — ปุ่มยังโชว์ "🤖 กำลังอ่านสลิป…" ตามปกติเสมอไม่ว่ากรณีนี้
+  // (Reset กลับ false ทุกครั้งที่เริ่มสแกนใหม่ เผื่อเน็ตกลับมาใช้ได้รอบหน้า)
+  const [ocrMascotFailed, setOcrMascotFailed] = useState(false);
   const [ocrError, setOcrError] = useState(null);
   const [ocrUpgrade, setOcrUpgrade] = useState(false);
   const [ocrSlipToken, setOcrSlipToken] = useState(null);
@@ -506,6 +541,7 @@ function DcaForm({
     setOcrUpgrade(false);
     setOcrNotice(null);
     setFormError(null);
+    setOcrMascotFailed(false);
     setOcrScanning(true);
 
     try {
@@ -648,6 +684,11 @@ function DcaForm({
             />
             {ocrScanning ? '🤖 กำลังอ่านสลิป…' : '📷 อัปโหลดสลิปให้ AI อ่าน'}
           </label>
+          <ScanningMascot
+            scanning={ocrScanning}
+            failed={ocrMascotFailed}
+            onImgError={() => setOcrMascotFailed(true)}
+          />
         </div>
 
         {ocrError && (
@@ -1246,4 +1287,7 @@ function DcaForm({
   );
 }
 
+// Export แยกไว้ให้ Test เรนเดอร์ scanning=true/false ตรงๆ ได้ (ดู Comment ที่จุด
+// ประกาศ Component ด้านบน) — ไม่กระทบ Default Export ของ DcaForm เอง
+export { ScanningMascot };
 export default DcaForm;

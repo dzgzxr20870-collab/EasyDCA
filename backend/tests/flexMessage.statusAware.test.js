@@ -180,3 +180,14 @@ describe('ข้อ 6 — PRICE_FEED_NOT_IMPLEMENTED ต้องไม่อ้
     expect(text).not.toContain('PRICE_FEED_NOT_IMPLEMENTED');
   });
 });
+
+describe('ข้อ (fix/undo-command-aliases) — buildHelpMessage สอนคำสั่ง Undo ที่ตรงกับ Regex จริง', () => {
+  // buildHelpMessage() ไม่รับ Parameter — สอน "คำสั่งที่พิมพ์ตรงได้" ทั้งหมดไว้ที่เดียว
+  // (Expert Path) เดิมสอนแค่ "ยกเลิกล่าสุด" ทั้งที่การ์ดยืนยัน/ปุ่มเว็บพูดคำว่า "ย้อน"
+  // มาตั้งแต่ fix/misleading-messages (d89c2b6) — ต้องสอนคำที่ตรงกับที่ระบบพูดเอง
+  test('สอนคำว่า "ย้อนล่าสุด" (ตรงกับที่การ์ดยืนยันพูด) พร้อมระบุว่า "ยกเลิกล่าสุด" ยังใช้ได้', () => {
+    const text = JSON.stringify(flexMessage.buildHelpMessage());
+    expect(text).toContain('ย้อนล่าสุด');
+    expect(text).toContain('ยกเลิกล่าสุด');
+  });
+});

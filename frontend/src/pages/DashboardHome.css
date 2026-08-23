@@ -176,6 +176,24 @@ label.dh-fl .dh-fl-opt { color: var(--muted); font-weight: 500; }
 }
 .dh-scan-btn:hover { filter: brightness(1.05); }
 .dh-scan-btn-busy { opacity: .7; cursor: progress; }
+/* มาสคอต "อีซี่" ท่าคิด/ประมวลผล ระหว่างรอ AI อ่านสลิป — <span> อยู่ใน DOM เสมอ
+   ไม่ว่า ocrScanning จะเป็น true/false (สลับแค่ Class ผ่าน opacity/animation)
+   เพื่อ "จอง" ขนาดกล่องไว้คงที่ตลอด กันไม่ให้ Layout กระโดดตอนโผล่/หาย — ขนาด
+   44×29px คำนวณจากสัดส่วนจริงของรูปต้นฉบับ 1024×1536 (2:3) ผ่าน object-fit:
+   contain (ไม่ Crop ตัวละคร/เครื่องหมายคำถามที่เป็นจุดขายของท่านี้) */
+.dh-scan-mascot {
+  width: 29px; height: 44px; flex: none;
+  opacity: 0; transition: opacity .25s ease; pointer-events: none;
+}
+.dh-scan-mascot img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.dh-scan-mascot-visible { opacity: 1; animation: dh-mascot-float 2.6s ease-in-out infinite; }
+@keyframes dh-mascot-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dh-scan-mascot-visible { animation: none; }
+}
 .dh-ocr-notice { border-left: 3px solid var(--green); padding-left: 10px; }
 /* ตัวเลขจากสลิปที่จะถูกบันทึกจริง — เน้นให้เห็นชัดว่าคนละชุดกับ "จำนวนเงิน" ด้านบน
    (ผู้ใช้ต้องเห็นตัวเลขที่กำลังจะลง Ledger ก่อนกดบันทึก ไม่ใช่ค่าซ่อน) */
