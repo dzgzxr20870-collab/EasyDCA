@@ -6,19 +6,26 @@ function fmt(n) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// UndoConfirmModal — ยืนยันก่อนยกเลิกรายการล่าสุด (งานที่ 2)
+// UndoConfirmModal — ยืนยันก่อนย้อนรายการล่าสุด (งานที่ 2)
 // ═══════════════════════════════════════════════════════════════════════
 // เหตุผลที่ต้อง Confirm เสมอ (ตาม Requirement): POST /transactions/undo-last
-// ยกเลิก "รายการล่าสุดของ User" ไม่ใช่ลบ id เจาะจง — ถ้ามีรายการใหม่แทรกระหว่างทาง
-// (เปิดสองแท็บ / บันทึกผ่าน LINE คั่นกลาง) ตัวที่ถูกยกเลิกจริงอาจไม่ใช่ตัวที่การ์ด
+// ย้อน "รายการล่าสุดของ User" ไม่ใช่ลบ id เจาะจง — ถ้ามีรายการใหม่แทรกระหว่างทาง
+// (เปิดสองแท็บ / บันทึกผ่าน LINE คั่นกลาง) ตัวที่ถูกย้อนจริงอาจไม่ใช่ตัวที่การ์ด
 // นี้แสดง (target = ค่าที่ Preview ไว้ตอนกดปุ่ม ไม่ใช่การยิง Preview API แยก — ไม่มี
 // และไม่ควรมี Endpoint แบบนั้น) — เมื่อกดยืนยันแล้ว ให้ยึด Response จริงจาก Backend
 // เป็นความจริงเสมอ (onConfirm คืนผลลัพธ์จริงให้ Caller แสดงต่อ ไม่ใช่ Modal นี้เดา)
 //
+// ⚠️ ใช้คำว่า "ย้อน" ไม่ใช่ "ยกเลิก" ตลอดทั้งไฟล์นี้โดยตั้งใจ — รายการนี้บันทึกลง
+// Ledger ไปแล้วจริง (สร้าง Reversal หักล้าง ไม่ใช่ลบ) คนละสถานะกับ Pending ที่ยังไม่
+// เคยบันทึก (มติ Founder: ห้ามใช้คำเดียวกันสองความหมาย ผู้ใช้จะแยกไม่ออกว่าข้อมูล
+// ตัวเองอยู่สถานะไหน) — ปุ่มฝั่งปลอดภัย ("ปิด") เปลี่ยนจาก "ไม่ยกเลิก" เดิมด้วย
+// เพราะ "ไม่ยกเลิก" คู่กับหัวข้อ "ยืนยันยกเลิก" ตีความได้ 2 ทาง (ไม่ย้อนรายการ?
+// หรือไม่ปิดหน้าต่าง?) และเป็นปุ่มที่กดผิดแล้วข้อมูลเปลี่ยน
+//
 // props:
 //   target: { type:'buy'|'sell', symbol, amountTotal, currency, units?, pricePerUnit? } | null
 //   onConfirm(): Promise — เรียก POST /transactions/undo-last จริง (Caller เป็นคนยิง)
-//   onClose(): ปิด Modal (ยกเลิกการยกเลิก)
+//   onClose(): ปิด Modal (ไม่ย้อนรายการ)
 function UndoConfirmModal({ target, onConfirm, onClose }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -43,10 +50,10 @@ function UndoConfirmModal({ target, onConfirm, onClose }) {
     <div className="dh-modal-overlay" onClick={() => !loading && onClose()}>
       <div className="dh-modal" onClick={(e) => e.stopPropagation()}>
         <div className="dh-modal-header">
-          <h3>↩︎ ยืนยันยกเลิกรายการ</h3>
+          <h3>↩︎ ยืนยันย้อนรายการล่าสุด</h3>
         </div>
         <div className="dh-modal-body">
-          <p>คุณกำลังจะยกเลิก "รายการล่าสุด" ของคุณ:</p>
+          <p>คุณกำลังจะย้อน "รายการล่าสุด" ของคุณ:</p>
           <table className="dh-modal-summary">
             <tbody>
               <tr>
@@ -66,13 +73,13 @@ function UndoConfirmModal({ target, onConfirm, onClose }) {
             </tbody>
           </table>
           <p className="dh-modal-hint">
-            * ระบบจะยกเลิก "รายการล่าสุดของคุณจริงๆ" ณ เวลาที่กดยืนยัน — ถ้ามีรายการอื่นถูกบันทึก
+            * ระบบจะย้อน "รายการล่าสุดของคุณจริงๆ" ณ เวลาที่กดยืนยัน — ถ้ามีรายการอื่นถูกบันทึก
             แทรกเข้ามาก่อนหน้านี้ (เช่น ผ่าน LINE) ระบบจะแจ้งผลจริงให้ทราบหลังยืนยัน
           </p>
           {error && <p className="dh-modal-error">{error}</p>}
           <div className="dh-modal-actions">
             <button type="button" className="dh-btn-ghost" onClick={onClose} disabled={loading}>
-              ไม่ยกเลิก
+              ปิด
             </button>
             <button
               type="button"
@@ -80,7 +87,7 @@ function UndoConfirmModal({ target, onConfirm, onClose }) {
               onClick={handleConfirm}
               disabled={loading}
             >
-              {loading ? 'กำลังยกเลิก...' : 'ยืนยันยกเลิกรายการนี้'}
+              {loading ? 'กำลังย้อน...' : 'ยืนยันย้อนรายการนี้'}
             </button>
           </div>
         </div>

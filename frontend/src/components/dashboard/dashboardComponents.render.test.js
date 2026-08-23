@@ -273,6 +273,27 @@ describe('Render smoke test (renderToStaticMarkup — no crash given realistic A
     ).not.toThrow();
   });
 
+  // ── ข้อ 4 (fix/misleading-messages): ปุ่ม "ไม่ยกเลิก" ปฏิเสธซ้อนปฏิเสธ ──────
+  // หัวข้อ "ยืนยันยกเลิกรายการ" คู่กับปุ่ม "ไม่ยกเลิก" ตีความได้ 2 ทาง (ไม่ย้อน
+  // รายการ? หรือไม่ปิดหน้าต่าง?) และเป็นปุ่มฝั่งปลอดภัยที่กดผิดแล้วข้อมูลเปลี่ยน —
+  // เปลี่ยนเป็น "ปิด" (ไม่กำกวม) พร้อมปรับหัวข้อ/ปุ่มยืนยันให้ใช้คำว่า "ย้อน"
+  // สอดคล้องกับข้อ 2 (ห้ามใช้คำเดียวกับ "ยกเลิก" ของ Pending ที่ยังไม่บันทึก)
+  test('UndoConfirmModal — ปุ่มฝั่งปลอดภัยไม่กำกวมอีกต่อไป (ไม่มี "ไม่ยกเลิก")', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(UndoConfirmModal, {
+        target: { type: 'buy', symbol: 'AAPL', amountTotal: 1000, currency: 'THB' },
+        onConfirm: () => {},
+        onClose: () => {},
+      })
+    );
+
+    expect(html).not.toContain('ไม่ยกเลิก');
+    expect(html).toContain('ปิด');
+    expect(html).toContain('ยืนยันย้อนรายการนี้');
+    expect(html).toContain('ยืนยันย้อนรายการล่าสุด');
+    expect(html).not.toContain('ยืนยันยกเลิกรายการ');
+  });
+
   test('AssetPicker — ไม่มีค่าเลือก / มีค่าเลือกแล้ว', () => {
     expect(() =>
       renderToStaticMarkup(React.createElement(AssetPicker, { symbols: SYMBOLS, value: null, onChange: () => {} }))

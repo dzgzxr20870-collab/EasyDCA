@@ -211,6 +211,40 @@ describe('POST /payment/:id/notify', () => {
     const res = mockRes();
     await paymentController.notifyPayment({ user: { id: 'user-1' }, params: { id: 'pay-1' } }, res);
     expect(res.status).toHaveBeenCalledWith(409);
+    // ไม่มี status แนบมา → Response Shape เดิมเป๊ะ { error } ไม่มี details งอกออกมา
+    // (Regression กันพัง Contract เดิม)
+    expect(res.json).toHaveBeenCalledWith({ error: 'PAYMENT_NOT_PENDING' });
+  });
+
+  // ── ข้อ 3.2 (fix/misleading-messages): ส่ง status ต่อให้ Frontend เลือกข้อความ ──
+  // payment.service แนบ { paymentId, status } มากับ Error อยู่แล้ว (ดู
+  // notifyPaymentSubmitted/assertPaymentClaimableByUser) — handlePaymentError แค่
+  // ส่งต่อ ไม่มี Query/Logic ใหม่ ขอบเขตเฉพาะ Code นี้เท่านั้น (Code อื่นไม่แตะ)
+  test('PAYMENT_NOT_PENDING พร้อม status=approved → Response แนบ details.status ให้ Frontend', async () => {
+    paymentService.notifyPaymentSubmitted.mockRejectedValue(
+      new PaymentServiceError('PAYMENT_NOT_PENDING', 'already approved', {
+        paymentId: 'pay-1',
+        status: 'approved',
+      })
+    );
+    const res = mockRes();
+    await paymentController.notifyPayment({ user: { id: 'user-1' }, params: { id: 'pay-1' } }, res);
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith({
+      error: 'PAYMENT_NOT_PENDING',
+      details: { status: 'approved' },
+    });
+  });
+
+  test('Code อื่น (SLIP_NOT_ATTACHED) ไม่แนบ details แม้ err.details จะมีค่า (Scope จำกัดเฉพาะ PAYMENT_NOT_PENDING)', async () => {
+    paymentService.notifyPaymentSubmitted.mockRejectedValue(
+      new PaymentServiceError('SLIP_NOT_ATTACHED', 'no slip', { paymentId: 'pay-1' })
+    );
+    const res = mockRes();
+    await paymentController.notifyPayment({ user: { id: 'user-1' }, params: { id: 'pay-1' } }, res);
+
+    expect(res.json).toHaveBeenCalledWith({ error: 'SLIP_NOT_ATTACHED' });
   });
 
   // Lock-Until-Resolved (migration 016) — ยังไม่มีสลิปแนบมาก่อนกด "แจ้งชำระแล้ว"

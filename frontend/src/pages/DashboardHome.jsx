@@ -245,7 +245,9 @@ function DashboardHome() {
     try {
       const response = await apiPost('/api/v1/transactions/undo-last', {});
       setUndoTarget(null);
-      showToast(response.message ?? 'ยกเลิกรายการเรียบร้อยแล้ว');
+      // "ย้อน" ไม่ใช่ "ยกเลิก" — Backend ส่ง message มาเสมอ (Fallback นี้จึงแทบไม่ถูก
+      // ใช้จริง) แต่คงคำให้สอดคล้องกัน (มติ Founder: ห้ามใช้คำเดียวกับ Pending Cancel)
+      showToast(response.message ?? 'ย้อนรายการเรียบร้อยแล้ว');
       await refetchOverview();
     } catch (err) {
       throw new Error(undoErrorMessage(err.message));

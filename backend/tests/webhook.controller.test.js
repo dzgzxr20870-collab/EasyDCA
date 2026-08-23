@@ -406,6 +406,37 @@ describe('handleEvent — Postback (Confirm/Cancel/Edit)', () => {
     const reply = lastReplyText();
     expect(reply).toContain('ดำเนินการไปแล้ว');
   });
+
+  // ── ข้อ 3.1 (fix/misleading-messages): แยกข้อความตาม status จริง ──────────
+  // เดิม "ถูกดำเนินการไปแล้ว ไม่สามารถทำซ้ำได้" ตอบเหมือนกันหมดไม่ว่า resolve
+  // ไปแบบไหน — ผู้ใช้กดยืนยันซ้ำแล้วไม่รู้ว่าธุรกรรมเข้าพอร์ตหรือยัง ทั้งที่
+  // pendingTransaction.service แนบ { status } มากับ Error อยู่แล้ว (ดู confirmPending)
+  // Test นี้พิสูจน์ "การเดินสาย" จริงจาก confirmPending throw → replyWithError →
+  // buildErrorMessage (ต่างจาก flexMessage.statusAware.test.js ที่ Test แค่
+  // buildErrorMessage ตรงๆ โดยไม่ผ่าน handleEvent เลย)
+  test('กดยืนยันซ้ำ status=confirmed (บันทึกไปแล้วจริง) → บอกว่าบันทึกสำเร็จแล้ว', async () => {
+    const err = new Error('already confirmed');
+    err.code = 'PENDING_ALREADY_RESOLVED';
+    err.details = { pendingId: 'pending-1', status: 'confirmed' };
+    pendingService.confirmPending.mockRejectedValue(err);
+
+    await handleEvent(postbackEvent('action=confirm&pendingId=pending-1'));
+
+    const reply = lastReplyText();
+    expect(reply).toContain('บันทึกรายการนี้เรียบร้อยแล้ว');
+    expect(reply).not.toContain('ถูกดำเนินการไปแล้ว');
+  });
+
+  test('กดยืนยันซ้ำ status=cancelled (ถูกยกเลิกไปก่อนหน้านี้) → บอกว่าไม่ได้บันทึก', async () => {
+    const err = new Error('already cancelled');
+    err.code = 'PENDING_ALREADY_RESOLVED';
+    err.details = { pendingId: 'pending-1', status: 'cancelled' };
+    pendingService.confirmPending.mockRejectedValue(err);
+
+    await handleEvent(postbackEvent('action=confirm&pendingId=pending-1'));
+
+    expect(lastReplyText()).toContain('ไม่ได้บันทึกลงพอร์ต');
+  });
 });
 
 describe('handleEvent — PORTFOLIO', () => {
@@ -609,7 +640,10 @@ describe('handleEvent — PROFIT', () => {
     await handleEvent(textEvent('กำไร PTT'));
 
     const reply = lastReplyText();
-    expect(reply).toContain('เฉพาะบางสินทรัพย์');
+    // ⚠️ ข้อความเดิม "รองรับเฉพาะบางสินทรัพย์ (เช่น Crypto)" ผิดข้อเท็จจริง — หุ้นสหรัฐ
+    // ก็ดึงราคาอัตโนมัติได้เช่นกัน (ดู flexMessage.util.js § PRICE_FEED_NOT_IMPLEMENTED)
+    // ยืนยันแค่ว่าแปลเป็นไทยแล้วจริง ไม่โชว์ Error Code ดิบ ไม่ตรึงคำที่ตอนนี้เป็นเท็จ
+    expect(reply).toContain('ดึงราคาตลาด');
     expect(reply).not.toContain('PRICE_FEED_NOT_IMPLEMENTED');
   });
 });
@@ -1108,6 +1142,32 @@ describe('handleEvent — Payment Postback (request/notify)', () => {
     expect(reply).toContain('ถูกดำเนินการไปแล้ว');
     expect(reply).not.toContain('PAYMENT_NOT_PENDING');
     expect(lineService.pushMessage).not.toHaveBeenCalled();
+  });
+
+  // ── ข้อ 3.2 (fix/misleading-messages): แยกข้อความตาม payments.status จริง ──
+  // เดิม "ถูกดำเนินการไปแล้ว ไม่ต้องแจ้งซ้ำ" ตอบเหมือนกันหมดไม่ว่าอนุมัติหรือถูก
+  // ปฏิเสธ — ผู้ใช้ไม่รู้ว่าได้ Premium หรือยัง ทั้งที่ payment.service แนบ
+  // { status } มากับ Error อยู่แล้ว (notifyPaymentSubmitted)
+  test('notify_payment status=approved → บอกว่าอนุมัติแล้วจริง', async () => {
+    const err = new Error('already approved');
+    err.code = 'PAYMENT_NOT_PENDING';
+    err.details = { paymentId: 'pay-1', status: 'approved' };
+    paymentService.notifyPaymentSubmitted.mockRejectedValue(err);
+
+    await handleEvent(postbackEvent('action=notify_payment&paymentId=pay-1'));
+
+    expect(lastReplyText()).toContain('อนุมัติแล้ว');
+  });
+
+  test('notify_payment status=rejected → บอกว่าถูกปฏิเสธจริง ไม่ใช่ข้อความกลางๆ', async () => {
+    const err = new Error('already rejected');
+    err.code = 'PAYMENT_NOT_PENDING';
+    err.details = { paymentId: 'pay-1', status: 'rejected' };
+    paymentService.notifyPaymentSubmitted.mockRejectedValue(err);
+
+    await handleEvent(postbackEvent('action=notify_payment&paymentId=pay-1'));
+
+    expect(lastReplyText()).toContain('ถูกปฏิเสธ');
   });
 
   // Lock-Until-Resolved (migration 016) — กด "แจ้งชำระแล้ว" ก่อนส่งรูปสลิปมาเลย
