@@ -66,7 +66,12 @@ function RecentList({ recent, assetTypeBySymbol, onRequestUndo }) {
                 <button
                   type="button"
                   className="dh-undo-btn"
-                  title="ยกเลิกรายการล่าสุด (เหมือนคำสั่ง 'ยกเลิกล่าสุด' ใน LINE)"
+                  // fix/misleading-messages ข้อ 2/4: ปุ่มนี้เปิด UndoConfirmModal ที่ใช้
+                  // คำว่า "ย้อน" (รายการนี้บันทึกลง Ledger ไปแล้วจริง ไม่ใช่ Pending) —
+                  // Label ต้องสอดคล้องกัน ไม่งั้นหน้าจอขัดกันเอง (ปุ่มเขียนอย่าง Modal
+                  // เขียนอีกอย่าง) — คำสั่งที่พิมพ์ใน LINE ("ยกเลิกล่าสุด") ไม่แตะ เพราะ
+                  // ผูกกับ commandParser Regex ตรงๆ (ไม่ใช่ข้อความอธิบายผล)
+                  title="ย้อนรายการล่าสุด (เหมือนคำสั่ง 'ยกเลิกล่าสุด' ใน LINE)"
                   onClick={() =>
                     onRequestUndo({
                       type: tx.side,
@@ -76,7 +81,7 @@ function RecentList({ recent, assetTypeBySymbol, onRequestUndo }) {
                     })
                   }
                 >
-                  ↩︎ ยกเลิก
+                  ↩︎ ย้อน
                 </button>
               )}
               <span className="dh-tx-amt">

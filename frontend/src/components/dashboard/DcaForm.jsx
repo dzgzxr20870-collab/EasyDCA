@@ -56,7 +56,7 @@ function fmtAmountInput(n) {
 //   pickerOpenSignal: Counter ที่ Parent เพิ่มค่าเพื่อสั่งเปิด AssetPicker อัตโนมัติ
 //     (ปุ่มบันทึกกลาง Bottom Nav บนมือถือ — งานที่ 1)
 //   onRecorded(response): เรียกหลังบันทึกสำเร็จ (ให้ Parent Refetch overview)
-//   onRequestUndo(txSummary): เรียกเมื่อกด "ยกเลิกรายการนี้" บนการ์ดยืนยัน (เปิด
+//   onRequestUndo(txSummary): เรียกเมื่อกด "ย้อนรายการนี้" บนการ์ดยืนยัน (เปิด
 //     Confirm Modal ที่ Parent เป็นคนคุม เพื่อใช้ Modal เดียวกับปุ่ม Undo บน
 //     รายการล่าสุด — ไม่ทำ Modal ซ้ำสองที่)
 //   prefillSignal (S8 R3 รอบ 3): { symbol, amountTotal, currency, nonce } | null —
@@ -1233,7 +1233,10 @@ function DcaForm({
                   })
                 }
               >
-                ↩︎ ยกเลิกรายการนี้
+                {/* fix/misleading-messages ข้อ 2/4: รายการนี้บันทึกลง Ledger ไปแล้ว
+                    จริง (ปุ่มนี้เปิด UndoConfirmModal ที่ใช้คำว่า "ย้อน") — Label ต้อง
+                    สอดคล้องกัน ไม่งั้นหน้าจอขัดกันเอง */}
+                ↩︎ ย้อนรายการนี้
               </button>
             </div>
           </div>

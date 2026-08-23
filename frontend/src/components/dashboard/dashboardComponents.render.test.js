@@ -212,6 +212,28 @@ describe('Render smoke test (renderToStaticMarkup — no crash given realistic A
     ).not.toThrow();
   });
 
+  // ── ข้อ 2/4 (fix/misleading-messages): ปุ่มบนแถวต้องใช้คำเดียวกับ Modal ที่มันเปิด ──
+  // ปุ่มนี้เปิด UndoConfirmModal ที่แก้ให้ใช้คำว่า "ย้อน" แล้ว (รายการนี้บันทึกลง
+  // Ledger ไปแล้วจริง ไม่ใช่ Pending) — ถ้าปุ่มยังเขียน "ยกเลิก" หน้าจอจะขัดกันเอง
+  test('RecentList — ปุ่ม Undo แถวแรกใช้คำว่า "ย้อน" สอดคล้องกับ UndoConfirmModal', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(RecentList, { recent: overviewFull.recent, assetTypeBySymbol, onRequestUndo: () => {} })
+    );
+    expect(html).toContain('↩︎ ย้อน');
+    expect(html).not.toContain('↩︎ ยกเลิก');
+  });
+
+  // Label ของรายการ Reversal ในประวัติถาวรก็ต้องใช้คำเดียวกัน — จุดที่ผู้ใช้เห็น
+  // ซ้ำๆ ทุกครั้งที่เปิดดูรายการ ไม่ใช่แค่ตอนกดปุ่ม
+  test('RecentList — Note ของรายการ Reversal แสดง "ย้อนรายการ" ไม่ใช่ "ยกเลิกรายการ"', () => {
+    const reversalRecent = [{ ...overviewFull.recent[0], note: 'UNDO_OF:9f1c2e6a-1234-4bcd-9876-0a1b2c3d4e5f' }];
+    const html = renderToStaticMarkup(
+      React.createElement(RecentList, { recent: reversalRecent, assetTypeBySymbol, onRequestUndo: () => {} })
+    );
+    expect(html).toContain('ย้อนรายการ');
+    expect(html).not.toContain('ยกเลิกรายการ');
+  });
+
   test('InvestedChart — มีข้อมูล / ทุกเดือน count=0', () => {
     expect(() =>
       renderToStaticMarkup(React.createElement(InvestedChart, { monthlyInvested: overviewFull.monthlyInvested }))

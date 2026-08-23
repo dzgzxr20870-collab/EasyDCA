@@ -19,7 +19,16 @@ describe('isReversalNote', () => {
 
 describe('formatTransactionNote', () => {
   test('Reversal note → ข้อความอ่านง่าย ไม่โชว์ UUID ดิบ', () => {
-    expect(formatTransactionNote('UNDO_OF:9f1c2e6a-1234-4bcd-9876-0a1b2c3d4e5f')).toBe('↩︎ ยกเลิกรายการ');
+    expect(formatTransactionNote('UNDO_OF:9f1c2e6a-1234-4bcd-9876-0a1b2c3d4e5f')).toBe('↩︎ ย้อนรายการ');
+  });
+
+  // fix/misleading-messages ข้อ 2: รายการนี้บันทึกลง Ledger ไปแล้วจริง (ถูกย้อน
+  // ไม่ใช่ถูกยกเลิก) — ต้องใช้คำเดียวกับข้อความอื่นทั้งระบบ ไม่ใช่ "ยกเลิก" ที่
+  // สงวนไว้สำหรับ Pending ที่ไม่เคยบันทึก
+  test('ไม่ใช้คำว่า "ยกเลิก" กับรายการ Reversal อีกต่อไป', () => {
+    expect(formatTransactionNote('UNDO_OF:9f1c2e6a-1234-4bcd-9876-0a1b2c3d4e5f')).not.toContain(
+      'ยกเลิก'
+    );
   });
 
   test('Note ปกติ → แสดงตามที่พิมพ์จริงตรงๆ ไม่แก้ไข', () => {
