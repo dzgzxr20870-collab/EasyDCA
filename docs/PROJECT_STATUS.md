@@ -370,6 +370,72 @@ Production หลัง Deploy (หลักฐานแน่นที่สุ
   Stage 1 (เขียน Policy รอเริ่ม — ดูหัวข้อ Cross-User Isolation Audit ด้านบน) + F9
   ยังไม่มี Test เฉพาะครอบ Timeout Behavior (ดูรายละเอียดในหัวข้อ F9 ด้านบน)
 
+### Amount Consistency Fix (23 ส.ค. 2569) — ยอดที่แสดง ≠ ยอดที่บันทึก
+
+Deploy `main` `2c75941` (Merge Commit) · **ไม่มี Migration** · Post-mortem เต็ม:
+[`POSTMORTEM_AMOUNT_CONSISTENCY.md`](./POSTMORTEM_AMOUNT_CONSISTENCY.md)
+
+⚠️ **อ่านตามระดับหลักฐาน** เหมือน Offensive Review Round 2 ด้านบน — "Production
+Verification" ≠ "ยืนยันด้วย Test เท่านั้น" ห้ามอ่านปนกันว่าแน่นเท่ากัน
+
+**บั๊ค A — Preview 100 บาท แต่บันทึก 100.01 บาท (พบ 3 ทางเข้า)**
+- สถานะ: ปิดแล้ว
+- Fix: `pendingTransaction.toCommitParams` พก `amountThb` ที่ Snapshot ไว้ข้ามไปถึง
+  ตอนบันทึกจริง แทนการปล่อยให้ `resolveQuantityAndPrice` คูณ `quantity × pricePerUnit`
+  ขึ้นใหม่ (เศษที่ปัดทิ้งตอนหาร `quantity` เหลือ 8 ตำแหน่ง ถูกคูณราคากลับขึ้นมา) +
+  `resolveAgreedAmount` Guard 2% กันยอดที่ไม่เข้าคู่ลง Ledger — ครอบทั้ง LINE
+  Preview→Confirm, Postback สลิป และฟอร์มเว็บ Branch `hasPrice`
+- Commit: `1d2bf50` (LINE + Postback) · `cbb375a` (ฟอร์มเว็บ)
+- Evidence: **Production Verification 23 ส.ค. 2569** — Founder ทดสอบเอง 2 ทาง:
+  LINE `ซื้อ BTC 100` → บันทึก **100 บาท** (Railway Log `POST /api/v1/webhook`
+  03:36:30 Preview + 03:36:44 Confirm) · ฟอร์มเว็บกรอกจำนวนเงิน+ราคาเอง → **100.00**
+  (Log `POST /api/v1/transactions` 03:38:04) · `grep "agreed amount rejected"`
+  **ไม่พบเลย** ในหน้าต่าง Log 03:28:59–03:39:59 · Red-Green: ถอด Fix ออก → Test แดง
+  ด้วยเลขจริง (`Expected 100 / Received 100.01`) โดยเทสต์เดิมทั้งหมดเขียวตลอด
+- ⚠️ **ยังยืนยันด้วย Test เท่านั้น:** เส้นทาง Postback `gross` ทาง LINE และ `sellAll`
+  (ไม่มี `ocr_confirm` ในหน้าต่าง Log — สลิปถูกสแกนผ่านเว็บ)
+
+**บั๊ค B — การ์ด/ฟอร์มสลิปแสดง "รวมจ่ายจริง" ผิดข้อเท็จจริง**
+- สถานะ: ปิดแล้ว
+- Root Cause: AI อ่านมูลค่าหุ้น + ค่าธรรมเนียมถูกต้องทั้งคู่ แต่ตอบ `net_amount = null`
+  ทุกใบ (สลิป Dime! แสดงยอดรวมเป็นตัวเลขใหญ่บนสุด ไม่มีป้ายกำกับ) →
+  `resolveGrossAmount` หลุด Guard บรรทัดแรก Rule 2 ไม่เคยได้ทำงานเลย ·
+  ชั้นที่ 2: `DcaForm.jsx` คำนวณ `quantity × price` เองในเบราว์เซอร์ ไม่เคยอ่านค่าที่
+  Backend ส่งมา (แก้แต่ Backend อาการจะไม่หาย)
+- Fix: แก้ Prompt (คงโมเดล `claude-sonnet-5`) + ทางสำรอง Deterministic เมื่อไม่มี `net`
+  (VETO ลายเซ็น `ai ≈ computed ∓ fee` / ยอมรับเท่าที่ `priceRoundingDrift` อธิบายได้) +
+  บรรทัดยอดรวมเปลี่ยนเป็น "รวมโดยประมาณ" เมื่อสลิปไม่ระบุยอดสุทธิ + พา
+  มูลค่าหุ้นที่พิสูจน์แล้วไปถึง Ledger ทั้ง LINE (`gross` ใน Postback) และเว็บ
+- Commit: `a42c4a4`
+- Evidence: **Production Verification 23 ส.ค. 2569** — Railway Log 03:38:29:
+  `source="slip_gross" reason="verified_against_net_minus_fee" aiAmount=106.44`
+  **`netAmount=106.72`** `feeTotal=0.27 resolvedAmount=106.44` — เทียบกับก่อนแก้
+  (22 ส.ค. 14:22:01) ที่เป็น `source="computed" reason="no_fee_or_net_to_verify"`
+  **`netAmount=null`** `resolvedAmount=106.32` → **Prompt ใหม่ทำให้ AI อ่านยอดสุทธิได้
+  จริง** · Founder ยืนยันฟอร์มแสดงมูลค่าหุ้น **106.44** / รวมจ่ายจริง **106.72** ตรงสลิป
+- ⚠️ **ยังยืนยันด้วย Test เท่านั้น (สำคัญ — อย่าอ่านข้ามข้อนี้):** ทางสำรอง
+  `verified_against_price_rounding` **ไม่เคยทำงานบน Production เลยแม้แต่ครั้งเดียว**
+  เพราะ Prompt ใหม่ทำให้ Rule 2 เดิมทำงานแทน — Branch นี้จะได้ใช้ก็ต่อเมื่อเจอสลิปที่
+  AI อ่านยอดสุทธิไม่ได้อีกในอนาคต (ครอบด้วย Unit Test 8 เคส: EOSE/ASTS/BCPG ซื้อ+ขาย/
+  ขอบเขต/ไม่มีค่าธรรมเนียม/Amount-only) · การเขียน Ledger ด้วยยอด 106.44 จากสลิปก็ยัง
+  ไม่ได้ทดสอบจริง (Founder ตรวจถึงหน้าจอแล้วหยุด — Log ยืนยันว่าไม่มี
+  `POST /api/v1/transactions` หลัง 03:38:29)
+
+**Deploy Verification (ทั้ง 3 Service)**
+- `EasyDCA` (Web, Project `backend`) — Deployment `e7c1d6de` · SUCCESS
+- `easydca-worker` (Project `backend`) — Deployment `9f3fd1a0` · SUCCESS · `jobCount=16`
+- `frontend service` (**คนละ Railway Project**) — Deployment `156c9005` · SUCCESS
+- ทั้ง 3 ตัว `commitHash = 2c759419d5144c6774af4740321344512099d8b5` ตรงกัน
+- Evidence: `railway api` อ่าน `meta.commitHash` จริง · `railway ssh` ยืนยันโค้ดใหม่
+  อยู่บน Container จริงทั้ง Web และ Worker · ดาวน์โหลด Frontend Bundle จริงจาก
+  Production มาค้นข้อความใหม่ครบ 3 ตัว (Hash ต่างจาก Build ในเครื่องเพราะ Env Var
+  ถูก Bake ตอน Build — CSS Hash ตรงกันเป๊ะ) · `/health` 200 · ไม่มี Error Log
+
+**Test Coverage:** Backend 2,175 tests / 111 suites เขียว (+34) · Frontend 259 tests /
+15 files เขียว (+4) · Red-Green พิสูจน์จริงครบทั้ง 3 ก้อน
+
+---
+
 ### ⏳ ยังไม่ปิด (TODO ที่เหลือ)
 
 1. **จดโดเมน** — กำลังดำเนินการ (`easydca.co` ผ่าน Z.com, ~1,177 บาท/ปี
@@ -383,6 +449,14 @@ Production หลัง Deploy (หลักฐานแน่นที่สุ
    "ระบบข้อมูลกองทุนรวมยังไม่พร้อมใช้งาน" (`SEC_NOT_CONFIGURED`) จนกว่าจะสมัครจริง
 5. Social Link IG/TikTok — ยังเป็น Placeholder รอ Link จริง
 6. Real-time Chat Widget — ตกลงว่าทำหลัง Beta
+7. **กดบันทึกจริงจากสลิปสักใบ** เพื่อปิดช่องหลักฐานที่เหลือของ Amount Consistency Fix
+   (Ledger ต้องได้ 106.44 เท่ากับที่ฟอร์มแสดง) ตาม
+   [`RUNBOOK_SLIP_EVERYWHERE.md § 3.7 B5`](./RUNBOOK_SLIP_EVERYWHERE.md)
+8. **เฝ้า Log หา `verified_against_price_rounding`** — ทางสำรองของบั๊ค B ยังไม่เคย
+   ทำงานบน Production เจอเมื่อไหร่ให้บันทึกไว้ว่าสลิปแบบไหนทำให้ AI อ่าน `net_amount`
+   ไม่ได้ (`railway logs --service EasyDCA | grep "slip ocr gross amount resolved"`)
+9. **Audit หาจุดอื่นที่ "แสดงเลขหนึ่ง บันทึกอีกเลขหนึ่ง"** — รอบ 23 ส.ค. เจอ 3 ทางเข้า
+   จากการไล่โค้ดด้วยมือ ไม่ใช่จากเครื่องมือ จึงไม่มีหลักฐานว่าครบแล้ว
 7. Known Limitation (ไม่บล็อก): `portfolioSummary.service.js`'s
    `byCurrency` นับเฉพาะ Asset ที่ดึงราคาสำเร็จ
 8. **Cross-User Isolation — ปิดครบแล้ว (9 ส.ค. 2026), เหลือ RLS เป็นหนี้เชิง

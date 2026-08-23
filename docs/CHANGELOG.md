@@ -60,6 +60,75 @@
   - โหมดขายเลือกได้เฉพาะสินทรัพย์ที่ถืออยู่จริง + แสดงยอดคงเหลือ + ปุ่ม "ขายทั้งหมด"
     (ส่ง `sellAll` ให้ Backend หายอด+ราคาตลาดเอง จึงไม่เหลือเศษค้างในพอร์ต)
 ### Fixed
+- **ยอดเงินที่แสดง ≠ ยอดเงินที่บันทึกลง Ledger (2 บั๊คแยกกัน · บั๊ค A พบ 3 ทางเข้า)** — Deploy `2c75941`
+  (23 ส.ค. 2569) · **ไม่มี Migration** · Post-mortem เต็ม:
+  [`POSTMORTEM_AMOUNT_CONSISTENCY.md`](./POSTMORTEM_AMOUNT_CONSISTENCY.md)
+  - **บั๊ค A — Preview 100 บาท แต่บันทึก 100.01 บาท** (เคสจริง `ซื้อ BTC 100`,
+    `quantity=0.00003979` × `pricePerUnit=2,513,380`)
+    - Root Cause: `pendingTransaction.toCommitParams` ส่งต่อแค่ `quantity` +
+      `pricePerUnit` ไม่ส่ง `amountThb` ที่ Snapshot ไว้ →
+      `transaction.service.resolveQuantityAndPrice` เข้า Branch แรกแล้ว **คำนวณยอด
+      ขึ้นใหม่** เศษที่ถูกปัดทิ้งตอนหาร `quantity` เหลือ 8 ตำแหน่ง
+      (`NUMERIC(20,8)`) จึงถูกคูณราคากลับขึ้นมาเป็น 1 สตางค์
+      (ขอบเขตความคลาดเคลื่อน = `0.5e-8 × pricePerUnit` — ยิ่งราคาสูงยิ่งชัด)
+    - พบ **3 ทางเข้าที่มีกลไกเดียวกันเป๊ะ**: LINE Preview→Confirm ·
+      Postback สลิป (`ocr_confirm`) · ฟอร์มเว็บ Branch `hasPrice`
+      (`transactions.controller`) — ทางเข้าที่ 3 มี Comment ในโค้ดยอมรับความ
+      คลาดเคลื่อนไว้เองแล้วสรุปว่ารับได้เพราะ "หุ้นไทยราคาหลักพัน" ซึ่งผิด เพราะ
+      Branch นั้นเปิดให้กรอกราคาเองได้ทุกสินทรัพย์
+    - Fix: พก `amountThb` ที่ตกลงไว้ข้าม Preview→Confirm ทุกทาง + `resolveAgreedAmount`
+      Guard 2% (ค่าเดียวกับ `SANITY_RATIO` ของ `slipOcr`) กันยอดที่ไม่เข้าคู่กับ
+      `quantity × price` ลง Ledger พร้อม Log ทุกครั้งที่ปฏิเสธ · **ยังคำนวณจาก
+      `quantity × pricePerUnit` เหมือนเดิมทุกประการเมื่อไม่มียอดที่ตกลงไว้ก่อน**
+      (เส้นทางพิมพ์จำนวนหน่วย+ราคาเอง) · `sellAll` ตัด `amountThb` ที่อาจติดมาทิ้งเสมอ
+    - Commit `1d2bf50` (LINE + Postback) · `cbb375a` (ฟอร์มเว็บ)
+  - **บั๊ค B — การ์ด/ฟอร์มสลิปแสดง "รวมจ่ายจริง" ผิดข้อเท็จจริง** (สลิป Dime! EOSE:
+    ระบบแสดง 106.59 ทั้งที่ผู้ใช้จ่ายจริง 106.72 · มูลค่าหุ้น 106.32 ทั้งที่สลิประบุ 106.44)
+    - Root Cause: AI อ่าน **มูลค่าหุ้นและค่าธรรมเนียมถูกต้องทั้งคู่ แต่ตอบ
+      `net_amount = null`** ทุกใบ (ยืนยันจาก Railway Log จริง 22 ส.ค. 2569 —
+      `reason="no_fee_or_net_to_verify" aiAmount=106.44 netAmount=null feeTotal=0.27`)
+      → `slipOcr.resolveGrossAmount` หลุด Guard บรรทัดแรกทันที Rule 2 ที่ควรจับเคสนี้
+      **ไม่เคยมีโอกาสทำงานเลย** · สาเหตุที่อ่านไม่ได้: Prompt ยกตัวอย่างป้ายกำกับแบบ
+      Settrade แต่สลิป Dime! แสดงยอดรวมเป็นตัวเลขใหญ่บนสุด **ไม่มีป้ายกำกับ**
+    - Root Cause ชั้นที่ 2: `DcaForm.jsx` คำนวณ `quantity × price` เองในเบราว์เซอร์
+      **ไม่เคยอ่านค่าที่ Backend ส่งมาเลย** (บังเอิญได้เลขเดียวกันจึงแยกไม่ออกจากหน้าจอ)
+      — แก้แต่ Backend อาการจะไม่หายเลย
+    - Fix 1 (Prompt): อธิบายว่ายอดรวมของแอปหุ้นต่างประเทศอยู่ตรงไหนบนสลิป
+      **คงโมเดล `claude-sonnet-5` เดิม** · ย้ำกฎ "ห้ามบวก/ลบ `amount` กับค่าธรรมเนียมเอง"
+      ให้เข้มขึ้น — ถ้า AI คำนวณ `net` เอง สมการตรวจสอบจะกลายเป็นวงกลมและ**ช่องโหว่
+      BCPG จะเปิดกลับทันที**
+    - Fix 2 (ทางสำรอง Deterministic เมื่อไม่มี `net`): แยก "AI หยิบยอดสุทธิมาผิดช่อง"
+      (`ai ≈ computed ∓ fee` พอดี → VETO) ออกจาก "ai คือมูลค่าหุ้นจริง" (ต่างจาก
+      `computed` เท่าที่การปัดราคาต่อหน่วยอธิบายได้ → ยอมรับ) ด้วย
+      `priceRoundingDrift` + เพดาน `SANITY_RATIO` 2% ซ้อนอีกชั้น — ตรวจกับเคสจริงครบ
+      ทั้ง EOSE · ASTS · BCPG (ช่องโหว่ BCPG ยังปิดอยู่แม้ไม่มี `net`)
+    - Fix 3 (ห้ามโกหก): สลิประบุยอดสุทธิ → แสดงตามสลิป ป้าย "รวมจ่ายจริง/รับจริง" ·
+      สลิปไม่ระบุ → เปลี่ยนป้ายเป็น **"รวมโดยประมาณ"** + กำกับว่าระบบคำนวณเอง
+      (มติ Founder: แสดงเลขผิดโดยไม่บอกว่าไม่แน่ใจ แย่กว่าไม่แสดงเลย)
+    - Fix 4 (เลขที่แสดง = เลขที่บันทึก): Postback ปุ่มยืนยันพก `gross` เมื่อ
+      `amountSource='slip_gross'` · ฟอร์มเว็บส่ง `amountTotal` คู่กับ
+      `quantity + pricePerUnit` ตราบใดที่ผู้ใช้ยังไม่แก้ช่อง — ทั้งสองทางผ่าน
+      `resolveAgreedAmount` Guard 2% เสมอ
+    - Log `slip ocr gross amount resolved` เปลี่ยนเป็นยิง**ทุกครั้ง**ที่อ่านสลิป
+      (เดิมยิงเฉพาะตอนคำนวณเอง จึงยืนยันผลหลังแก้ไม่ได้) — ไม่มี PII/เลขบัญชี
+    - Commit `a42c4a4`
+  - **Evidence (Production Verification 23 ส.ค. 2569):** Railway Log 03:38:29 —
+    `source="slip_gross" reason="verified_against_net_minus_fee" aiAmount=106.44
+    netAmount=106.72 feeTotal=0.27 resolvedAmount=106.44` (**`netAmount` เปลี่ยนจาก
+    `null` เป็น `106.72` = Prompt ใหม่ได้ผลจริง**) · Founder ทดสอบเองครบ: LINE
+    `ซื้อ BTC 100` → 100 บาท · ฟอร์มเว็บกรอกเอง → 100.00 · สลิป EOSE → มูลค่าหุ้น
+    106.44 / รวมจ่ายจริง 106.72 ตรงสลิป · `grep "agreed amount rejected"` ไม่พบเลย ·
+    Commit ตรงกันทั้ง 3 Service (Web/Worker/Frontend ซึ่งอยู่คนละ Railway Project) ·
+    `jobCount=16` · `/health` 200 · ไม่มี Error Log
+  - ⚠️ **ที่ยังยืนยันด้วย Test เท่านั้น (ไม่ได้ยิง Production):** ทางสำรอง
+    `verified_against_price_rounding` **ไม่เคยทำงานบน Production เลยแม้แต่ครั้งเดียว**
+    — Prompt ใหม่ทำให้ Rule 2 เดิมทำงานแทน · การเขียน Ledger ด้วยยอด 106.44 จากสลิป
+    (Founder ตรวจถึงหน้าจอแล้วหยุด ไม่ได้กดบันทึก — Log ยืนยันว่าไม่มี
+    `POST /api/v1/transactions` หลัง 03:38:29) · Postback `gross` ทาง LINE · `sellAll`
+  - Test: Backend **2,175 tests / 111 suites เขียว** (+34 เคสใหม่) · Frontend
+    **259 tests / 15 files เขียว** (+4 เคสใหม่) · **Red-Green พิสูจน์จริงทั้ง 3 ก้อน**
+    (ถอด Fix ออกแล้วแดงด้วยเลขจริงจาก Production: 100.01 · 106.32 · 1497.58 โดยเทสต์
+    เดิมทั้งหมดเขียวตลอดช่วงที่ใส่บั๊คกลับ)
 - **ซื้อหุ้นสหรัฐฯ ที่ไม่อยู่ใน Whitelist (เช่น SPCX) ขึ้น Error กองทุนรวมผิดฝาผิดตัว**
   — ผู้ใช้อัปโหลดสลิปซื้อ SPCX (NASDAQ, ผ่านโบรกเกอร์ Dime!) จริงบน Production, OCR
   อ่านตัวเลขถูกครบ แต่กด "ยืนยันบันทึก" แล้วได้ข้อความ "ระบบข้อมูลกองทุนรวมยังไม่พร้อม
