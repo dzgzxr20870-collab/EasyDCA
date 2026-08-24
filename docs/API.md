@@ -528,6 +528,7 @@ Premium)
 | Method | Path | Auth | Plan | คำอธิบาย |
 |---|---|---|---|---|
 | GET | `/api/v1/portfolio/summary` | ✅ | Free | สรุปภาพรวมพอร์ตทั้งหมด: Total Value, Total Invested, P&L, ROI, Allocation รายสินทรัพย์ (SRS.md § 3.2 [1]) |
+| GET | `/api/v1/portfolio/allocation?groupBy=broker\|sector\|assetType&portfolioId=` | ✅ | **Free** | **✅ ทำแล้ว (Stage 8)** — สัดส่วนพอร์ตพร้อมใช้กับกราฟโดนัท · `groupBy` Default = `assetType` · ค่าที่ไม่รองรับ → `400 VALIDATION_ERROR` (ไม่เงียบๆ ใช้ Default) · ดูรายละเอียดด้านล่าง |
 | GET | `/api/v1/portfolio/snapshots?range=1y` | ✅ | Free | ดึง `portfolio_snapshots` รายวันสำหรับกราฟ Value vs Invested — `range` รองรับ `7d` / `30d` / `90d` / `1y` / `all` (SRS.md § 3.2 [2]) |
 | GET | `/api/v1/portfolios` | ✅ | **Free** | **✅ ทำแล้ว (Stage 8)** — List พอร์ตทั้งหมดของ User พร้อมธง `canWrite` ต่อพอร์ต |
 | POST | `/api/v1/portfolios` | ✅ | **Premium** | **✅ ทำแล้ว (Stage 8)** — สร้างพอร์ตใหม่ Body `{ name, type }` · Free = 1 พอร์ต → `403 PORTFOLIO_LIMIT_REACHED` · Premium ชน Sanity Cap 50 → `409 PORTFOLIO_CAP_REACHED` |
@@ -603,6 +604,64 @@ Premium)
 | `PORTFOLIO_CAP_REACHED` | 409 | Premium ชน Sanity Cap 50 พอร์ต |
 | `CANNOT_DELETE_DEFAULT_PORTFOLIO` | 409 | ลบพอร์ต `isDefault` |
 | `PORTFOLIO_HAS_CONFLICTING_ASSETS` | 409 | ย้ายสินทรัพย์เข้าพอร์ต Default แล้วจะชน UNIQUE ของ migration 046 |
+
+#### `GET /api/v1/portfolio/allocation` — สัดส่วนพอร์ตสำหรับกราฟโดนัท (Stage 8)
+
+**Query**
+
+| Param | บังคับ | หมายเหตุ |
+|---|---|---|
+| `groupBy` | — | `broker` / `sector` / `assetType` · Default `assetType` · ค่าอื่น → `400 VALIDATION_ERROR` |
+| `portfolioId` | — | กรองเฉพาะสินทรัพย์ในพอร์ตนั้น · ไม่ส่ง = ทั้งพอร์ตรวมกัน · ผิดรูป → `404` |
+
+**Response `200`**
+```json
+{
+  "groupBy": "broker",
+  "portfolioId": null,
+  "totalValueThb": 152340.50,
+  "groups": [
+    { "key": "uuid-ของโบรก", "label": "Bitkub", "valueThb": 91404.30, "percent": 60.0,
+      "valueByCurrency": { "THB": 91404.30, "USD": 0 },
+      "assetCount": 3, "priceUnavailableCount": 0 },
+    { "key": null, "label": "ไม่ระบุ", "valueThb": 60936.20, "percent": 40.0,
+      "valueByCurrency": { "THB": 60936.20, "USD": 0 },
+      "assetCount": 2, "priceUnavailableCount": 1 }
+  ],
+  "isEmpty": false,
+  "fxRate": 35, "fxAsOf": "2026-08-24", "fxStale": false,
+  "fxUnavailableForUsd": false
+}
+```
+
+> **⚠️ กฎบังคับของ Endpoint นี้ (Design Doc § 4.3 + กฎยืนข้อ 1):**
+> `totalValueThb` **มาจาก `portfolio.service` + `portfolioSummary.priceHoldings`
+> ตัวเดิมที่ `/portfolio/summary` และหน้า Dashboard ใช้อยู่** — ห้ามเขียนสูตรรวม
+> มูลค่าใหม่ในไฟล์ allocation เด็ดขาด ไม่งั้นวันหนึ่งเลขบนการ์ดสรุปกับเลขบน
+> กราฟโดนัทจะไม่ตรงกันแล้วหาสาเหตุไม่เจอ (เพราะทั้งคู่ "ดูถูก" ทั้งคู่)
+
+| Field | หมายเหตุ |
+|---|---|
+| `key` | `uuid` ของโบรก / ชื่อ sector ที่ Normalize แล้ว / `assets.type` · **`null` = กลุ่ม "ไม่ระบุ"** |
+| `label` | ชื่อที่เอาไปแสดงได้เลย · sector คงรูปแบบตัวพิมพ์ที่ผู้ใช้พิมพ์ (`SET50` ไม่กลายเป็น `Set50`) |
+| `percent` | รวมกันได้ 100 เสมอ · ยอดรวมเป็น 0 → ทุกกลุ่มเป็น 0 (ไม่ใช่ `NaN`) |
+| `priceUnavailableCount` | จำนวนสินทรัพย์ในกลุ่มที่ **ตีมูลค่าที่ต้นทุน** เพราะไม่มีราคาสด — Frontend ต้องติดหมายเหตุได้ว่าตัวเลขกลุ่มนี้ไม่ใช่มูลค่าตลาดทั้งหมด |
+
+> **⚠️ สินทรัพย์ที่ไม่มีราคาสด (หุ้นไทย / NAV ล่ม) → ตีมูลค่า "ที่ต้นทุน" ไม่ใช่ข้ามทิ้ง**
+> ต่างจากการ์ด "กำไร/ขาดทุน" ที่ต้องข้ามแล้วนับ `excludedCount` โดยเจตนา —
+> ถ้าข้ามที่นี่ด้วย หุ้นไทยจะหายไปจากกราฟโดนัททั้งที่ผู้ใช้ถืออยู่จริง และผลรวม
+> สัดส่วนจะไม่เท่ามูลค่าพอร์ตที่แสดงบนการ์ด
+>
+> **⚠️ กลุ่ม `key: null` ("ไม่ระบุ") ต้องแสดงเสมอ ห้ามซ่อน** — ข้อมูลเดิม 100%
+> มี `broker_id`/`sector` เป็น `NULL` ถ้าซ่อน ยอดรวมกราฟจะไม่เท่ามูลค่าพอร์ตจริง
+>
+> **⚠️ `sector` จัดกลุ่มแบบ case-insensitive** (trim + ยุบช่องว่างซ้ำ + เทียบตัวพิมพ์เล็ก)
+> กัน `Tech` / `tech` / `Tech ` กลายเป็น 3 กลุ่ม · **แต่ `label` คงรูปแบบที่ผู้ใช้พิมพ์**
+> · `broker` ไม่ต้อง Normalize เพราะตาราง `brokers` มี UNIQUE แบบ case-insensitive
+> อยู่แล้วตั้งแต่ migration 042
+>
+> **⚠️ `fxUnavailableForUsd: true` = ห้ามรวมยอดข้ามสกุล** — Frontend ต้องเตือน
+> ไม่ใช่แสดงยอดที่ขาดส่วน USD ไปเงียบๆ
 
 ### 14.3 Transactions
 

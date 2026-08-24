@@ -1,4 +1,5 @@
 const portfoliosService = require('../services/portfolios.service');
+const allocationService = require('../services/allocation.service');
 
 // ═══════════════════════════════════════════════════════════════════════════
 // portfolios.controller — /api/v1/portfolios (Stage 8)
@@ -33,6 +34,9 @@ const WEB_ERROR_MESSAGES = {
   DEFAULT_PORTFOLIO_CONFLICT: 'เกิดข้อผิดพลาดภายในระบบ กรุณาลองใหม่อีกครั้ง',
   INTERNAL_ERROR: 'เกิดข้อผิดพลาดภายในระบบ กรุณาลองใหม่อีกครั้ง',
 };
+
+// groupBy ที่ไม่รองรับ ใช้ข้อความของตัวเองเพราะ VALIDATION_ERROR กลางพูดถึงชื่อ/ประเภทพอร์ต
+const ALLOCATION_VALIDATION_MESSAGE = `groupBy ต้องเป็นค่าใดค่าหนึ่งใน: ${allocationService.GROUP_BY_OPTIONS.join(' / ')}`;
 
 const ERROR_STATUS = {
   VALIDATION_ERROR: 400,
@@ -178,7 +182,46 @@ async function deletePortfolio(req, res) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// GET /api/v1/portfolio/allocation — สัดส่วนพอร์ตตามมิติที่เลือก (Free)
+// ═══════════════════════════════════════════════════════════════════════════
+// Query: ?groupBy=broker|sector|assetType&portfolioId=<uuid>
+//
+// ⚠️ Free ทั้งหมดโดยเจตนา — นี่คือ "การดูพอร์ตของตัวเอง" ไม่ใช่ฟีเจอร์ Multi-portfolio
+// (เหตุผลเดียวกับที่ GET /portfolios เป็น Free)
+//
+// ⚠️ portfolioId ที่ส่งมาไม่ต้อง assertOwned เพราะ allocation.service กรองจาก
+// holdings ที่ getPortfolioSummary คืนมา ซึ่ง Scope ด้วย userId อยู่แล้ว —
+// ส่ง portfolioId ของผู้ใช้คนอื่นมาจะได้ผลลัพธ์ว่าง ไม่ใช่ข้อมูลของเขา
+// (ยืนยันด้วยเทสต์ใน portfolioAllocation.integration.test.js)
+async function getAllocation(req, res) {
+  const groupBy = req.query.groupBy ?? 'assetType';
+  const rawPortfolioId = req.query.portfolioId;
+
+  if (rawPortfolioId !== undefined && !UUID_RE.test(rawPortfolioId)) {
+    return fail(res, 'PORTFOLIO_NOT_FOUND', { portfolioId: rawPortfolioId });
+  }
+
+  try {
+    const allocation = await allocationService.getAllocation(req.user.id, {
+      groupBy,
+      portfolioId: rawPortfolioId ?? null,
+    });
+    return res.status(200).json(allocation);
+  } catch (err) {
+    if (err instanceof allocationService.AllocationServiceError) {
+      return res.status(400).json({
+        error: err.code,
+        message: ALLOCATION_VALIDATION_MESSAGE,
+        ...(err.details && Object.keys(err.details).length > 0 ? { details: err.details } : {}),
+      });
+    }
+    return failFromServiceError(res, err, 'getAllocation');
+  }
+}
+
 module.exports = {
+  getAllocation,
   listPortfolios,
   getPortfolio,
   createPortfolio,

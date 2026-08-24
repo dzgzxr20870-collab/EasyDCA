@@ -132,6 +132,10 @@ async function getPortfolioSummary(userId) {
       // มูลค่ารวมรายคืนจะขาด BTC ไปทั้งก้อนโดยไม่มี Error ให้เห็น)
       assetId: asset.id,
       brokerId: asset.brokerId ?? null,
+      // Stage 8 — มิติที่ Allocation Endpoint ใช้จัดกลุ่ม (null = "ไม่ระบุ")
+      // Additive ล้วน: Consumer เดิมที่ไม่ได้อ่าน 2 Field นี้ไม่กระทบเลย
+      sector: asset.sector ?? null,
+      portfolioId: asset.portfolioId ?? null,
       // กองทุนรวม (Round 7) — พา proj_id/fund_class_name ไปให้ portfolioSummary ดึง NAV
       // ตรง Class (null สำหรับสินทรัพย์อื่น) ไม่กระทบ Consumer เดิมที่ไม่ได้อ่าน Field นี้
       projId: asset.projId ?? null,

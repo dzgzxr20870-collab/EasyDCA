@@ -4,6 +4,44 @@
 
 ## [Unreleased]
 ### Added
+- **Multi-Portfolio / Broker / Sector / Dividend — Stage 8 (2/3): Allocation**
+  (Branch `feat/dashboard-production-wire` — ยัง**ไม่ได้ Push/Merge/Deploy**)
+  - **`GET /api/v1/portfolio/allocation?groupBy=broker|sector|assetType&portfolioId=`**
+    (Free) — ข้อมูลที่หน้า Demo Portfolio ต้องใช้จริงสำหรับกราฟโดนัท
+    · ไฟล์ใหม่: `services/allocation.service.js` · `routes/portfolio.routes.js`
+    (เอกพจน์ แยกจาก `/portfolios` พหูพจน์ ตามที่ API.md § 14.2 วางไว้ตั้งแต่ Phase 0:
+    `/portfolio` = อ่านภาพรวม Free · `/portfolios` = CRUD ที่ POST/PATCH/DELETE เป็น Premium)
+  - **⭐ Reuse สูตรเดิมทั้งหมด ไม่มีสูตรเงินใหม่แม้สูตรเดียว** (Design Doc § 4.3 +
+    กฎยืนข้อ 1): `portfolio.service.getPortfolioSummary` (ต้นทุน Moving Average) +
+    `portfolioSummary.priceHoldings` (ราคาตลาด) + `fxRate.service` — ตัวเดียวกับที่
+    `/portfolio/summary` และหน้า Dashboard ใช้อยู่ · ถ้าเขียนสูตรใหม่ วันหนึ่งเลข
+    บนการ์ดสรุปกับเลขบนกราฟโดนัทจะไม่ตรงกันแล้วหาสาเหตุไม่เจอ
+  - **⚠️ ไม่มีราคาสด → ตีมูลค่า "ที่ต้นทุน" ไม่ใช่ข้ามทิ้ง** (คัดกติกามาจาก
+    `dashboardOverview.buildAllocation` เป๊ะ) — ต่างจากการ์ดกำไร/ขาดทุนที่ต้องข้าม
+    แล้วนับ `excludedCount` โดยเจตนา: ถ้าข้ามที่นี่ด้วย **หุ้นไทยจะหายจากกราฟโดนัท
+    ทั้งที่ผู้ใช้ถืออยู่จริง** และผลรวมสัดส่วนจะไม่เท่ามูลค่าพอร์ตบนการ์ด ·
+    ส่ง `priceUnavailableCount` รายกลุ่มขึ้นไปให้ Frontend ติดหมายเหตุได้
+  - **⚠️ กลุ่ม "ไม่ระบุ" (`key: null`) ต้องแสดงเสมอ ห้ามซ่อน** — ข้อมูลเดิม 100%
+    มี `broker_id`/`sector` เป็น NULL ถ้าซ่อน ยอดรวมกราฟจะไม่เท่ามูลค่าพอร์ตจริง
+    (ระบุไว้ใน `DATABASE.md` ของทั้ง 2 คอลัมน์อยู่แล้ว)
+  - **`sector` จัดกลุ่มแบบ case-insensitive** (trim + ยุบช่องว่างซ้ำ + ตัวพิมพ์เล็ก)
+    กัน `Tech`/`tech`/`Tech ` เป็น 3 กลุ่ม · **แต่ `label` คงรูปแบบที่ผู้ใช้พิมพ์**
+    (`SET50` ไม่กลายเป็น `Set50` — บทเรียนตรงจาก Stage 2 ที่ตัด Title Case ออก)
+    · `broker` ไม่ต้อง Normalize เพราะ `brokers` มี UNIQUE case-insensitive ตั้งแต่
+    migration 042 แล้ว จัดกลุ่มด้วย `broker_id` ตรงๆ ถูกต้องอยู่แล้ว
+  - `percent` รวมกันได้ 100 เสมอ · ยอดรวม 0 → คืน 0 ไม่ใช่ `NaN` ที่ทำกราฟพัง
+  - `fxUnavailableForUsd` ส่งขึ้นไปด้วย (**ห้ามรวมยอดข้ามสกุลเมื่อดึงเรตไม่ได้**)
+    · พอร์ต THB ล้วน**ไม่ยิง FX เลย** · ไม่จัดกลุ่มตามโบรก**ไม่ยิง Query หาชื่อโบรก**
+  - Cross-User: `portfolioId` ของผู้ใช้คนอื่นได้ผลลัพธ์ **ว่าง** ไม่ใช่ข้อมูลของเขา
+    (กรองจาก holdings ที่ `getPortfolioSummary` Scope ด้วย `userId` มาแล้ว)
+  - เพิ่ม `sector` + `portfolioId` เข้า `holding` ของ `portfolio.service` (Additive ล้วน
+    Consumer เดิมที่ไม่ได้อ่าน 2 Field นี้ไม่กระทบเลย)
+  - **Red-Green จริง 3 ชุด** (ถอด Fix → แดง → ใส่กลับ → เขียว):
+    ถอดการตีมูลค่าที่ต้นทุน (ข้ามทิ้งแทน) **แดง 1/25** · ถอด Normalize ของ sector
+    **แดง 3/25** · ซ่อนกลุ่ม "ไม่ระบุ" **แดง 2/25**
+  - Test ทั้งชุด **127 suites / 2,539 → 128 suites / 2,564 เขียวทั้งหมด**
+  - **ยังไม่ได้ทำ:** Assets ขยาย (§ 4.4) · Production Verification ทั้งหมด
+
 - **Multi-Portfolio / Broker / Sector / Dividend — Stage 8 (1/3): Endpoint พอร์ต**
   (Branch `feat/dashboard-production-wire` — ยัง**ไม่ได้ Push/Merge/Deploy**
   · Migration **ยังไม่ได้ Apply บน Supabase**)
