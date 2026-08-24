@@ -1,7 +1,7 @@
 # Handoff — Dashboard ใหม่ + Multi-Portfolio/Broker/Sector/Dividend
 
 > เอกสารนี้สำหรับ **ส่งต่อให้แชทใหม่** ที่ไม่มีบริบทเดิม อ่านไฟล์นี้จบแล้วต้องทำงานต่อได้ทันที
-> อัปเดตล่าสุด: 24 ส.ค. 2569 (รอบที่ 2 — ปิด Stage 5 + Stage 6b)
+> อัปเดตล่าสุด: 24 ส.ค. 2569 (รอบที่ 3 — ปิด Stage 5 + 6b + **Stage 8 ครบทั้ง 3 กลุ่ม**)
 
 ---
 
@@ -64,16 +64,40 @@ Branch `demo/multipage-ux-redesign` (3 commits: `d503467`, `b5c4640`, `65dfb44`)
 | `38aa28a` | 6a | refactor สูตรเงินเป็น exhaustive switch (ยังไม่เปิด dividend) |
 | `cd6bcf0` | — | อัปเดต DATABASE/CHANGELOG/DECISIONS_LOG |
 | `f2b2dbf` | 5 | migration 046 — ถือ Symbol เดียวกันได้หลายโบรก + `assetResolution.service` |
-| *(รอบนี้)* | 6b | migration 047 — เปิด `dividend` + `POST /transactions/dividend` |
+| `a9f8f3d` | 6b | migration 047 — เปิด `dividend` + `POST /transactions/dividend` |
+| `9190b4b` | 6b-fix | บังคับกรอก `quantity` ของปันผล (มติ Founder 24 ส.ค.) |
+| `2e9123c` | 8 (1/3) | `/api/v1/portfolios` ครบ 5 Endpoint + Entitlement ของพอร์ต |
+| `7b26712` | 8 (2/3) | `GET /portfolio/allocation` สัดส่วนพอร์ตสำหรับกราฟโดนัท |
+| `75b8fc5` | 8 (3/3) | `GET /assets` + `PATCH /assets/{id}` ป้ายกำกับสินทรัพย์ |
 
-**Test:** ก่อนเริ่มงาน 116 suites / 2,264 tests → หลัง Stage 6a **118 suites / 2,381 tests เขียวหมด**
+**Test:** ก่อนเริ่มทั้งหมด 116 suites / 2,264 → **ตอนนี้ 129 suites / 2,596 เขียวทั้งหมด**
+**ESLint:** 0 error (14 warnings ที่ค้างมาแต่เดิม) · `npm run build` ฝั่ง Frontend ผ่าน
 
 ### ✅ Stage 5 ปิดแล้ว (commit `f2b2dbf`) — ไม่มีงานค้างในเครื่องอีก
 
 migration 046 + `assetResolution.service.js` + แก้ 5 จุดบนเส้นทางเงินที่เคยใช้
 `.maybeSingle()` (จะ error ทันทีเมื่อ symbol มี 2 แถว) · เพดาน Free นับ distinct symbol แล้ว
 
-### ✅ Stage 6b ปิดแล้ว (รอบนี้) — เปิด `dividend` จริง
+### ✅ Stage 8 ปิดแล้วครบทั้ง 3 กลุ่ม (รอบที่ 3)
+
+| กลุ่ม | Endpoint | Commit |
+|---|---|---|
+| Portfolios | `GET/POST /portfolios` · `GET/PATCH/DELETE /portfolios/{id}` | `2e9123c` |
+| Allocation | `GET /portfolio/allocation?groupBy=broker\|sector\|assetType` | `7b26712` |
+| Assets | `GET /assets` · `PATCH /assets/{id}` | `75b8fc5` |
+| Brokers | มีอยู่แล้วตั้งแต่ Stage 1 — **ไม่ต้องทำซ้ำ** | `a3bc2e5` |
+
+**⚠️ แก้ Spec ที่ผิดใน `API.md` รวม 4 จุด (ของเดิมผิด ไม่ใช่เปลี่ยนใจ):**
+1. `GET /portfolios` Premium → **Free** (ถ้าคืน 403 หน้า Dashboard ของ Free พังทันที
+   เพราะหลัง migration 044 ทุกคนมีพอร์ต Default ที่ UI ต้องใช้ render)
+2. `DELETE /portfolios/{id}` **ห้ามพึ่ง FK `ON DELETE SET NULL`** — จะทำ Invariant
+   ของ migration 044/045 พัง ต้องย้ายสินทรัพย์เข้าพอร์ต Default ก่อนแล้วค่อยลบ
+3. `PATCH /assets/{id}` **ถอด `isActive` ออก** — เป็นตัวนับเพดาน Free Plan ที่ต้อง
+   ผ่าน RPC ที่ Lock ไว้เท่านั้น
+4. § 14.4 เขียนว่า Assets เป็นการ "ขยายของเดิม" แต่ **ของเดิมไม่มีอยู่จริง**
+   (`assets.routes` มีแค่ `GET /symbols`) ต้องสร้างทั้ง 2 Endpoint ใหม่
+
+### ✅ Stage 6b ปิดแล้ว (รอบที่ 2) — เปิด `dividend` จริง
 
 - `migrations/047_add_dividend_transaction_type.sql` — CHECK รับ 4 ค่า **และ**
   แก้ `create_transaction_locked()` ที่ยังนับยอดคงเหลือแบบ Binary อยู่ (จุดนี้ Stage 6a
@@ -82,8 +106,16 @@ migration 046 + `assetResolution.service.js` + แก้ 5 จุดบนเส
 - **เจอจุดที่ 8 ของ Design Doc § 2**: `flexMessage.util.buildUndoMessage` ยังเป็น Binary
   → ย้อนปันผลแล้วการ์ดเขียนว่า "รายการขาย" (แก้แล้ว)
 - ⚠️ **Design Doc § 4.5 ไม่ครบ**: `quantity`/`price_per_unit` มี CHECK > 0 อยู่ ทั้งที่
-  Doc ระบุ `quantity?` optional — เลือกเก็บ "จำนวนหน่วยที่ถือ ณ วันนั้น" + "DPS"
+  Doc ระบุ `quantity?` optional — เลือกเก็บจำนวนหน่วยที่ได้ปันผล + DPS
   แทนการผ่อน CHECK (เหตุผลเต็มอยู่หัวไฟล์ migration 047 + DATABASE.md)
+- ⚠️ **`quantity` เป็นค่า "บังคับกรอก" (มติ Founder 24 ส.ค. — commit `9190b4b`)**
+  รอบแรกทำเป็น optional (ไม่ส่ง = เติมยอดถือ ณ วันนั้นให้เอง) เพราะเขียนก่อนมติมาถึง
+  · การเติมให้เอง = **Silent Default ขัดกฎยืนข้อ 11** — จำนวนหน่วยที่ระบบรู้กับที่
+  ได้ปันผลจริงไม่จำเป็นต้องเท่ากัน (ปันผลจ่ายตามยอด ณ วัน XD ซึ่งมักคนละวันกับ
+  วันเงินเข้า และผู้ใช้จำนวนมากเพิ่งเริ่มบันทึกกลางทาง) และค่านี้ไหลต่อไปเป็น DPS
+  ที่ผู้ใช้เอาไปเทียบข้ามงวดจริง
+  · ⚠️ **`heldQuantityAsOf` ยังอยู่ครบ** ในฐานะด่าน `NOTHING_TO_RECEIVE_DIVIDEND`
+  ซึ่งตรวจจาก **ยอดถือจริง ณ `date`** ไม่ใช่จาก `quantity` ที่ผู้ใช้กรอก
 - Test: 122 suites / 2,427 → **125 suites / 2,484 เขียวทั้งหมด** · Red-Green 5 ชุด
 
 ### Migration ยังไม่ได้ Apply บน Supabase เลยแม้แต่ตัวเดียว
@@ -193,11 +225,27 @@ UNIQUE NULLS NOT DISTINCT (user_id, symbol, portfolio_id, broker_id)
 `transaction.service` (validateBuy/validateSell) · `webhook.controller` ฝั่ง LINE ·
 `bulkImport.service` · `profit.service`
 
-### ~~Stage 6b~~ ✅ ปิดแล้ว (รอบนี้) — Migration 047 เปิด `dividend` CHECK constraint
-### Stage 8 — Endpoint ใหม่ทั้งหมดตาม Design Doc
-- ⚠️ **แก้ Spec `docs/API.md § 14.2`**: เขียน `GET /portfolios` เป็น Premium
-  → **ต้องเป็น Free** เพราะหลัง backfill ทุกคนจะมีพอร์ต Default ถ้าคืน 403
-  หน้า Dashboard ของ Free พังทันที (ตัวคุมสิทธิ์จริงคือ `POST`)
+### ~~Stage 6b~~ ✅ ปิดแล้ว (รอบที่ 2) — Migration 047 เปิด `dividend` CHECK constraint
+### ~~Stage 8~~ ✅ ปิดแล้วครบทั้ง 3 กลุ่ม (รอบที่ 3) — `2e9123c` · `7b26712` · `75b8fc5`
+แก้ Spec ที่ผิดใน `API.md` ไปแล้ว 4 จุด (ดูรายละเอียดที่ § 2)
+
+**สิ่งที่ Stage 9 ต้องรู้ก่อนต่อ UI — Endpoint ที่พร้อมใช้แล้ว:**
+
+| Endpoint | Plan | คืนอะไรที่ UI ต้องใช้ |
+|---|---|---|
+| `GET /api/v1/portfolios` | Free | `portfolios[].canWrite` ← **ใช้ธงนี้ Disable ปุ่มบันทึก ห้ามเดาเองจาก plan** |
+| `POST /api/v1/portfolios` | Premium | `403 PORTFOLIO_LIMIT_REACHED` (Free) / `409 PORTFOLIO_CAP_REACHED` (ชน 50) |
+| `DELETE /api/v1/portfolios/{id}` | Premium | `movedAssetCount` — บอกผู้ใช้ว่าสินทรัพย์ถูกย้ายไปพอร์ต Default กี่รายการ |
+| `GET /api/v1/portfolio/allocation` | Free | `groups[]` พร้อม `percent` (รวม 100 เสมอ) + `priceUnavailableCount` + `fxUnavailableForUsd` |
+| `GET /api/v1/assets` | Free | Filter `brokerId` / `sector` / `portfolioId` (`none` = ไม่ระบุ) |
+| `PATCH /api/v1/assets/{id}` | Free | แก้ `brokerId` / `sector` / `portfolioId` เท่านั้น |
+| `POST /api/v1/transactions/dividend` | Free | `quantity` **บังคับกรอก** — ฟอร์มต้องมีช่องนี้และห้ามปล่อยว่าง |
+
+**ธงที่ UI ต้องมีที่รองรับ (Demo ไม่มี — ห้ามตกหล่น):**
+`canWrite` · `priceUnavailableCount` · `fxStale` · `fxUnavailableForUsd` ·
+`excludedCount` · `isEmpty` · `movedAssetCount`
+> `API.md` ระบุชัดว่า **ห้ามรวมยอดข้ามสกุลเงินเมื่อ `fxUnavailableForUsd = true`**
+
 ### Stage 9 (ยังไม่เริ่ม) — ต่อ Frontend เข้ากับ API จริง
 - Port UI จาก `demo/*` มาใส่บน `main` ทีละไฟล์ (ห้าม merge branch)
 - ทำเป็น Route คู่ขนาน/Feature Flag ก่อน **ห้ามลบ Dashboard เดิม** เพื่อให้ Rollback ง่าย
