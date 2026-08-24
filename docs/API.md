@@ -529,11 +529,80 @@ Premium)
 |---|---|---|---|---|
 | GET | `/api/v1/portfolio/summary` | ✅ | Free | สรุปภาพรวมพอร์ตทั้งหมด: Total Value, Total Invested, P&L, ROI, Allocation รายสินทรัพย์ (SRS.md § 3.2 [1]) |
 | GET | `/api/v1/portfolio/snapshots?range=1y` | ✅ | Free | ดึง `portfolio_snapshots` รายวันสำหรับกราฟ Value vs Invested — `range` รองรับ `7d` / `30d` / `90d` / `1y` / `all` (SRS.md § 3.2 [2]) |
-| GET | `/api/v1/portfolios` | ✅ | Premium | List พอร์ตย่อยทั้งหมดของ User (Multiple Portfolio) |
-| POST | `/api/v1/portfolios` | ✅ | Premium | สร้างพอร์ตย่อยใหม่ — Body: `{ name, type }` |
-| GET | `/api/v1/portfolios/{id}` | ✅ | Premium | ดูรายละเอียดพอร์ตย่อย 1 พอร์ต |
-| PATCH | `/api/v1/portfolios/{id}` | ✅ | Premium | แก้ไขชื่อ/ประเภทพอร์ต |
-| DELETE | `/api/v1/portfolios/{id}` | ✅ | Premium | ลบพอร์ตย่อย — Asset ที่อยู่ในพอร์ตนี้ย้ายเป็น "ไม่มีพอร์ต" (`portfolio_id = NULL`) ตาม FK Cascade Policy `SET NULL` ([DATABASE.md § 9](./DATABASE.md)) |
+| GET | `/api/v1/portfolios` | ✅ | **Free** | **✅ ทำแล้ว (Stage 8)** — List พอร์ตทั้งหมดของ User พร้อมธง `canWrite` ต่อพอร์ต |
+| POST | `/api/v1/portfolios` | ✅ | **Premium** | **✅ ทำแล้ว (Stage 8)** — สร้างพอร์ตใหม่ Body `{ name, type }` · Free = 1 พอร์ต → `403 PORTFOLIO_LIMIT_REACHED` · Premium ชน Sanity Cap 50 → `409 PORTFOLIO_CAP_REACHED` |
+| GET | `/api/v1/portfolios/{id}` | ✅ | **Free** | **✅ ทำแล้ว (Stage 8)** — ดูรายละเอียดพอร์ตเดียว |
+| PATCH | `/api/v1/portfolios/{id}` | ✅ | **Premium** | **✅ ทำแล้ว (Stage 8)** — แก้ `name` / `type` |
+| DELETE | `/api/v1/portfolios/{id}` | ✅ | **Premium** | **✅ ทำแล้ว (Stage 8)** — ลบพอร์ต · **สินทรัพย์ข้างในถูกย้ายเข้าพอร์ต Default ไม่ได้กลายเป็น `portfolio_id = NULL`** (ดูกล่องเตือนด้านล่าง) · ห้ามลบพอร์ต Default → `409 CANNOT_DELETE_DEFAULT_PORTFOLIO` |
+
+> ### ⚠️ แก้ Spec เดิม 2 จุด (Stage 8 — ของเดิมผิด ไม่ใช่แค่เปลี่ยนใจ)
+>
+> **(1) `GET` เปลี่ยนจาก Premium → Free**
+> ตารางนี้เดิมเขียน `GET` ทั้งสองตัวเป็น Premium ซึ่งใช้ไม่ได้จริงหลัง
+> **migration 044**: Backfill สร้างพอร์ต Default ให้ผู้ใช้ **ทุกคนรวม Free** และ
+> Invariant ใหม่บังคับว่า "สินทรัพย์ทุกแถวสังกัดพอร์ตเสมอ" → หน้า Dashboard ต้อง
+> อ่านพอร์ตมา render ตั้งแต่โหลดหน้าแรก ถ้า `GET` คืน `403` ให้ Free
+> **หน้า Dashboard ของผู้ใช้ Free จะพังทันที**
+> ตัวคุมสิทธิ์ Multiple Portfolio ที่แท้จริงคือ **`POST`** (Free สร้างพอร์ตที่ 2 ไม่ได้)
+> ไม่ใช่ `GET` — ซึ่งตรงกับ `AI_CONTEXT.md` บรรทัด 95 (`Multiple Portfolio: Free ❌`)
+> ที่พูดถึง "การมีหลายพอร์ต" ไม่ได้พูดถึง "การเห็นพอร์ตของตัวเอง"
+>
+> **(2) `DELETE` ไม่ปล่อยให้ `portfolio_id` กลายเป็น `NULL`**
+> ตารางนี้เดิมเขียนว่าอาศัย FK `ON DELETE SET NULL` — **ห้ามทำแบบนั้นแล้ว**
+> เพราะจะทำ Invariant ของ migration 044/045 พังทันที ("สินทรัพย์ทุกแถวสังกัด
+> พอร์ตเสมอ") แล้ว migration 045 ที่ใช้เป็น Health Check จะ `RAISE EXCEPTION`
+> · Service จึง **ย้ายสินทรัพย์เข้าพอร์ต Default ก่อน แล้วค่อยลบแถวพอร์ต**
+> (ประวัติธุรกรรมและต้นทุนเฉลี่ยไม่เปลี่ยนเลย เพราะ `transactions` ผูกกับ
+> `asset_id` ไม่ใช่ `portfolio_id`)
+>
+> ⚠️ ถ้าการย้ายจะชน `UNIQUE NULLS NOT DISTINCT (user_id, symbol, portfolio_id,
+> broker_id)` (migration 046) — เช่นทั้งสองพอร์ตมี `BTC` ที่โบรกเดียวกัน — จะ
+> **ปฏิเสธด้วย `409 PORTFOLIO_HAS_CONFLICTING_ASSETS` พร้อมรายการที่ชน** และ
+> ไม่ลบอะไรเลย เพราะการรวมสองแถวเข้าด้วยกัน**กระทบต้นทุนเฉลี่ย = แตะเงินจริง**
+> ระบบจึงไม่ทำให้อัตโนมัติ (เคสเดียวกับที่ migration 044 STEP 6 ดักไว้)
+
+**Response `200` ของ `GET /api/v1/portfolios`**
+```json
+{
+  "portfolios": [
+    {
+      "id": "aaaaaaaa-1111-4111-8111-111111111111",
+      "name": "พอร์ตของฉัน",
+      "type": "custom",
+      "isDefault": true,
+      "canWrite": true,
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-01-01T00:00:00.000Z"
+    }
+  ]
+}
+```
+
+| Field | หมายเหตุ |
+|---|---|
+| `type` | `crypto` / `stock_th` / `stock_us` / `etf` / `fund` / `custom` — **ไม่มี `mixed`** (Design Doc เคยเขียนผิด ดู CHANGELOG Stage 3) |
+| `isDefault` | พอร์ตเริ่มต้นที่ Backfill สร้างให้ · มีได้ **1 อันต่อ user เป๊ะ** (Partial Unique Index) · ลบไม่ได้ |
+| `canWrite` | **บันทึกสินทรัพย์/รายการใหม่เข้าพอร์ตนี้ได้ไหม ณ ตอนนี้** — Frontend ต้องใช้ธงนี้ตัดสินว่าจะ Disable ปุ่มบันทึกไหม **ห้ามเดาเองจาก `plan`** |
+
+> **`canWrite` มาจากไหน (มติ Founder § 8.1 ก — "อ่านได้ เขียนไม่ได้"):**
+> ผู้ใช้ที่เคยเป็น Premium แล้วสร้างไว้ 3 พอร์ต พอหมดอายุ **ห้ามลบข้อมูลเด็ดขาด**
+> — พอร์ตส่วนเกินยังเปิดดูย้อนหลังได้ปกติ (`GET` คืนครบทุกพอร์ต) แต่เขียนเพิ่ม
+> ไม่ได้ (`canWrite: false` → เขียนจริงจะได้ `403 PORTFOLIO_READ_ONLY`)
+> · "พอร์ตไหนคือส่วนเกิน" **Deterministic** เสมอ: เรียงตาม `created_at`
+> (Tie-break ด้วย `id`) **พอร์ตแรกสุด = ยังเขียนได้** · ค่านี้คำนวณสดทุกครั้ง
+> ไม่เก็บลง DB → **ต่ออายุแล้วกลับมาเขียนได้ทันที** ไม่ต้องรอ Job ไปไล่อัปเดต
+
+**Error ของกลุ่มนี้**
+
+| Code | HTTP | เมื่อไหร่ |
+|---|---|---|
+| `VALIDATION_ERROR` | 400 | ชื่อว่าง / ยาวเกิน 60 / `type` ไม่อยู่ในรายการ |
+| `PORTFOLIO_NOT_FOUND` | 404 | ไม่มีจริง **หรือเป็นของผู้ใช้คนอื่น** (แยกไม่ออกโดยเจตนา — ห้ามยืนยันการมีอยู่ของ resource ผู้ใช้รายอื่น) |
+| `PORTFOLIO_LIMIT_REACHED` | 403 | Free พยายามสร้างพอร์ตที่ 2 |
+| `PORTFOLIO_READ_ONLY` | 403 | เขียนลงพอร์ตส่วนเกินหลัง Premium หมดอายุ |
+| `PORTFOLIO_CAP_REACHED` | 409 | Premium ชน Sanity Cap 50 พอร์ต |
+| `CANNOT_DELETE_DEFAULT_PORTFOLIO` | 409 | ลบพอร์ต `isDefault` |
+| `PORTFOLIO_HAS_CONFLICTING_ASSETS` | 409 | ย้ายสินทรัพย์เข้าพอร์ต Default แล้วจะชน UNIQUE ของ migration 046 |
 
 ### 14.3 Transactions
 

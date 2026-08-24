@@ -291,9 +291,58 @@ async function findActiveSymbolsByUser(userId) {
   return [...new Set((data ?? []).map((row) => row.symbol))];
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// findByPortfolio — สินทรัพย์ทุกแถวที่สังกัดพอร์ตหนึ่ง (Stage 8)
+// ═══════════════════════════════════════════════════════════════════════════
+// ใช้ตอนลบพอร์ต เพื่อย้ายสินทรัพย์เข้าพอร์ต Default ก่อน (ห้ามปล่อยให้ FK
+// ON DELETE SET NULL ทำงาน — จะทำ Invariant ของ migration 044/045 พัง)
+//
+// ⚠️ คืน "ทุกแถวรวมที่ is_active = false" โดยเจตนา — สินทรัพย์ที่ขายหมดแล้วก็ยัง
+// ต้องมีพอร์ตสังกัด (Invariant พูดถึงทุกแถว ไม่ได้ยกเว้นแถวที่ปิดไปแล้ว)
+async function findByPortfolio(userId, portfolioId) {
+  const { data, error } = await queryForUser('assets', userId, (q) =>
+    q.select('*').eq('portfolio_id', portfolioId)
+  );
+
+  if (error) {
+    throw new Error(`Failed to find assets by portfolio: ${error.message}`);
+  }
+
+  return (data ?? []).map(toAsset);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// reassignPortfolio — ย้ายสินทรัพย์ทั้งพอร์ตไปอีกพอร์ต (Stage 8)
+// ═══════════════════════════════════════════════════════════════════════════
+// ⚠️ Caller **ต้องตรวจการชน UNIQUE ก่อนเรียกเสมอ** — UNIQUE NULLS NOT DISTINCT
+// (user_id, symbol, portfolio_id, broker_id) ของ migration 046 ทำให้การย้าย
+// BTC@Bitkub เข้าพอร์ตที่มี BTC@Bitkub อยู่แล้วล้มทั้งคำสั่ง (นี่คือเคสเดียวกับที่
+// migration 044 STEP 6 ดักไว้) — การรวมสองแถวเข้าด้วยกันกระทบต้นทุนเฉลี่ย
+// = แตะเงินจริง **ห้ามทำอัตโนมัติ** ต้องให้ผู้ใช้/Founder ตัดสิน
+//
+// ไม่แตะ transactions แม้แถวเดียว — ธุรกรรมผูกกับ asset_id ไม่ใช่ portfolio_id
+// ประวัติและต้นทุนเฉลี่ยจึงเท่าเดิมเป๊ะหลังย้าย
+async function reassignPortfolio(userId, fromPortfolioId, toPortfolioId) {
+  const { data, error } = await queryForUser('assets', userId, (q) =>
+    q
+      .update({ portfolio_id: toPortfolioId, updated_at: new Date().toISOString() })
+      .eq('portfolio_id', fromPortfolioId)
+      .select('id')
+  );
+
+  if (error) {
+    throw new Error(`Failed to reassign assets to another portfolio: ${error.message}`);
+  }
+
+  const rows = Array.isArray(data) ? data : [data].filter(Boolean);
+  return rows.length;
+}
+
 module.exports = {
   AssetWriteError,
   findAllByUserAndSymbol,
+  findByPortfolio,
+  reassignPortfolio,
   create,
   findActiveByUser,
   findByIds,

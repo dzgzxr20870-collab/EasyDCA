@@ -1,0 +1,309 @@
+const portfolioRepository = require('../repositories/portfolio.repository');
+const assetRepository = require('../repositories/asset.repository');
+const entitlement = require('./entitlement.service');
+
+// ═══════════════════════════════════════════════════════════════════════════
+// portfolios.service — CRUD ของพอร์ต + กติกาสิทธิ์ (Stage 8)
+// ═══════════════════════════════════════════════════════════════════════════
+// Spec: docs/API.md § 14.2 · Design Doc § 4.1
+//
+// ⚠️ ชื่อไฟล์เป็น portfolios.service (พหูพจน์) โดยเจตนา เพื่อไม่ให้สับสนกับ
+// portfolio.service.js (เอกพจน์) ที่มีอยู่แล้วและทำคนละเรื่องกันสิ้นเชิง —
+// ตัวนั้นคือ "สูตรคำนวณมูลค่า/ต้นทุนพอร์ต" (แตะเงิน) ส่วนไฟล์นี้คือ "CRUD ของ
+// กล่องจัดหมวด" (ไม่แตะเงินเลย) การรวมสองเรื่องนี้ไว้ไฟล์เดียวจะทำให้ไฟล์ที่
+// อยู่ในหมวดเสี่ยงสูงสุด (AI_WORK_POLICY § 4.1) บวมด้วยโค้ดที่ไม่เกี่ยวกับเงิน
+//
+// ── กติกาสิทธิ์ (มติ Founder 23 ส.ค. 2569 § 8.1 — ห้ามเปลี่ยนเอง) ────────────
+//   • Free = 1 พอร์ตเท่านั้น · Premium = Sanity Cap 50
+//   • Premium หมดอายุแต่มีหลายพอร์ต = **"อ่านได้ เขียนไม่ได้"** ห้ามลบข้อมูล
+//     พอร์ตส่วนเกินเปิดดูย้อนหลังได้ปกติ ต่ออายุแล้วกลับมาเขียนได้ทันที
+//   • "พอร์ตไหนคือส่วนเกิน" ต้อง Deterministic — เรียงตาม created_at
+//     พอร์ตแรกสุด = ยังเขียนได้ (ดู entitlement.getWritablePortfolioIds)
+//
+// ── ⚠️ GET เป็น Free ไม่ใช่ Premium ────────────────────────────────────────
+// API.md § 14.2 เดิมเขียน GET เป็น Premium ซึ่ง **ผิด** หลัง migration 044:
+// ผู้ใช้ทุกคนรวม Free มีพอร์ต Default แล้ว ถ้า GET คืน 403 หน้า Dashboard ของ
+// Free จะพังทันทีตั้งแต่โหลดหน้าแรก — ตัวคุมสิทธิ์ที่แท้จริงคือ POST (สร้างพอร์ต
+// ที่ 2 ไม่ได้) ไม่ใช่ GET · แก้ Spec ใน API.md แล้วใน Stage 8
+
+class PortfolioServiceError extends Error {
+  constructor(code, message, details = {}) {
+    super(message);
+    this.name = 'PortfolioServiceError';
+    this.code = code;
+    this.details = details;
+  }
+}
+
+const PORTFOLIO_NAME_MAX_LENGTH = 60;
+
+// ต้องตรงกับ CHECK ของ portfolios.type เป๊ะ (docs/DATABASE.md)
+// ⚠️ 'mixed' **ไม่มีจริง** — Design Doc เคยเขียนผิดไว้ และ migration 044 แก้เป็น
+// 'custom' แล้ว (ดู CHANGELOG Stage 3) ห้ามเติมกลับเข้ามา
+const PORTFOLIO_TYPES = Object.freeze([
+  'crypto',
+  'stock_th',
+  'stock_us',
+  'etf',
+  'fund',
+  'custom',
+]);
+
+// Normalize ชื่อพอร์ตแบบเดียวกับโบรก: trim หัวท้าย + ยุบช่องว่างซ้ำ
+// (เก็บรูปแบบตัวพิมพ์ตามที่ผู้ใช้พิมพ์ ไม่บังคับเป็นตัวพิมพ์เล็ก — มติ Founder § 8.2)
+function normalizeName(raw) {
+  if (typeof raw !== 'string') return null;
+  const cleaned = raw.trim().replace(/\s+/g, ' ');
+  if (cleaned === '' || cleaned.length > PORTFOLIO_NAME_MAX_LENGTH) return null;
+  return cleaned;
+}
+
+function assertValidType(type) {
+  if (!PORTFOLIO_TYPES.includes(type)) {
+    throw new PortfolioServiceError('VALIDATION_ERROR', `Invalid portfolio type: ${type}`, {
+      field: 'type',
+      allowed: PORTFOLIO_TYPES,
+    });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// listPortfolios — พอร์ตทั้งหมด + ธง canWrite ต่อพอร์ต (Free)
+// ═══════════════════════════════════════════════════════════════════════════
+// canWrite ถูกคำนวณสดทุกครั้งจาก plan ปัจจุบัน ไม่เก็บลง DB โดยเจตนา —
+// ต่ออายุ Premium แล้วต้องกลับมาเขียนได้ "ทันที" โดยไม่ต้องมี Job ไปไล่อัปเดตแถว
+// (ถ้าเก็บลง DB จะมีช่วงเวลาที่ข้อมูลไม่ตรงกับสิทธิ์จริง ซึ่งดีบั๊กยากมาก)
+async function listPortfolios(userId, userRecord) {
+  const portfolios = await portfolioRepository.findAllByUser(userId);
+  const writable = entitlement.getWritablePortfolioIds(userRecord, portfolios);
+
+  return portfolios.map((p) => ({ ...p, canWrite: writable.has(p.id) }));
+}
+
+// หาพอร์ตเดียว + ธง canWrite — 404 ถ้าไม่ใช่ของ user (ห้ามแยก 403/404 ให้เห็น)
+async function getPortfolio(userId, portfolioId, userRecord) {
+  const portfolio = await portfolioRepository.findByIdForUser(portfolioId, userId);
+  if (!portfolio) {
+    throw new PortfolioServiceError('PORTFOLIO_NOT_FOUND', `Portfolio ${portfolioId} not found`, {
+      portfolioId,
+    });
+  }
+
+  const all = await portfolioRepository.findAllByUser(userId);
+  const writable = entitlement.getWritablePortfolioIds(userRecord, all);
+
+  return { ...portfolio, canWrite: writable.has(portfolio.id) };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// assertCanWriteToPortfolio — ด่านกลางสำหรับ "เขียนอะไรลงพอร์ตนี้ได้ไหม"
+// ═══════════════════════════════════════════════════════════════════════════
+// ใช้จากทุกจุดที่จะบันทึกสินทรัพย์/ธุรกรรมเข้าพอร์ตที่ระบุ — รวมไว้ที่เดียวเพื่อ
+// ไม่ให้กติกา "อ่านได้ เขียนไม่ได้" ถูกเขียนซ้ำด้วยกฎที่ต่างกันในแต่ละ Endpoint
+//
+// ⚠️ ทำสองหน้าที่พร้อมกันโดยเจตนา: (1) ยืนยันความเป็นเจ้าของ (2) ตรวจสิทธิ์เขียน
+// เพราะถ้าแยกกัน Caller มีโอกาสเรียกแค่ข้อใดข้อหนึ่งแล้วคิดว่าครบ
+async function assertCanWriteToPortfolio(userId, portfolioId, userRecord) {
+  if (portfolioId === null || portfolioId === undefined) return null;
+
+  const portfolio = await portfolioRepository.findByIdForUser(portfolioId, userId);
+  if (!portfolio) {
+    throw new PortfolioServiceError('PORTFOLIO_NOT_FOUND', `Portfolio ${portfolioId} not found`, {
+      portfolioId,
+    });
+  }
+
+  const all = await portfolioRepository.findAllByUser(userId);
+  const writable = entitlement.getWritablePortfolioIds(userRecord, all);
+
+  if (!writable.has(portfolio.id)) {
+    throw new PortfolioServiceError(
+      'PORTFOLIO_READ_ONLY',
+      `Portfolio ${portfolioId} is read-only under the current plan`,
+      {
+        portfolioId,
+        limit: entitlement.getActivePortfolioLimit(userRecord),
+      }
+    );
+  }
+
+  return portfolio;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// createPortfolio — Premium เท่านั้น (ตัวคุมสิทธิ์จริงของ Multi-portfolio)
+// ═══════════════════════════════════════════════════════════════════════════
+// Free มีพอร์ต Default อยู่แล้ว 1 อันจาก Backfill → นับได้ 1 ซึ่งชนเพดานพอดี
+// จึงถูกปฏิเสธที่นี่เสมอโดยไม่ต้องมี Branch "ถ้าเป็น Free" แยกต่างหาก
+async function createPortfolio(userId, params, userRecord) {
+  const name = normalizeName(params.name);
+  if (name === null) {
+    throw new PortfolioServiceError('VALIDATION_ERROR', 'Invalid portfolio name', {
+      field: 'name',
+      maxLength: PORTFOLIO_NAME_MAX_LENGTH,
+    });
+  }
+  assertValidType(params.type);
+
+  const limit = entitlement.getActivePortfolioLimit(userRecord);
+  const current = await portfolioRepository.countByUser(userId);
+
+  if (current >= limit) {
+    // แยก Error Code ตามสาเหตุจริง เพื่อให้ข้อความที่ผู้ใช้เห็นตรงกับสิ่งที่ทำได้:
+    // Free ต้องเห็น "อัปเกรดสิ" ส่วน Premium ที่ชน Cap 50 ต้องเห็น "เยอะเกินไปแล้ว"
+    // (ถ้าใช้ Code เดียวกัน Premium จะโดนชวนอัปเกรดทั้งที่จ่ายเงินอยู่แล้ว)
+    const isPremium = entitlement.isPremiumActive(userRecord);
+    throw new PortfolioServiceError(
+      isPremium ? 'PORTFOLIO_CAP_REACHED' : 'PORTFOLIO_LIMIT_REACHED',
+      `Portfolio limit reached (${current}/${limit})`,
+      { limit, current }
+    );
+  }
+
+  try {
+    return await portfolioRepository.create(userId, { name, type: params.type });
+  } catch (err) {
+    if (err instanceof portfolioRepository.PortfolioWriteError) {
+      throw new PortfolioServiceError(err.code, err.message, err.details);
+    }
+    throw err;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// updatePortfolio — แก้ชื่อ/ประเภท (ต้องเป็นพอร์ตที่เขียนได้)
+// ═══════════════════════════════════════════════════════════════════════════
+// ⚠️ พอร์ต Default แก้ชื่อ/ประเภทได้ปกติ — ที่ห้ามคือ "ลบ" เท่านั้น
+// (Invariant บอกว่าต้องมี Default หนึ่งอันเป๊ะ ไม่ได้บอกว่าห้ามเปลี่ยนชื่อ)
+async function updatePortfolio(userId, portfolioId, patch, userRecord) {
+  await assertCanWriteToPortfolio(userId, portfolioId, userRecord);
+
+  const update = {};
+  if (patch.name !== undefined) {
+    const name = normalizeName(patch.name);
+    if (name === null) {
+      throw new PortfolioServiceError('VALIDATION_ERROR', 'Invalid portfolio name', {
+        field: 'name',
+        maxLength: PORTFOLIO_NAME_MAX_LENGTH,
+      });
+    }
+    update.name = name;
+  }
+  if (patch.type !== undefined) {
+    assertValidType(patch.type);
+    update.type = patch.type;
+  }
+
+  if (Object.keys(update).length === 0) {
+    throw new PortfolioServiceError('VALIDATION_ERROR', 'Nothing to update', {
+      allowed: ['name', 'type'],
+    });
+  }
+
+  try {
+    const updated = await portfolioRepository.updateByIdForUser(portfolioId, userId, update);
+    if (!updated) {
+      throw new PortfolioServiceError('PORTFOLIO_NOT_FOUND', `Portfolio ${portfolioId} not found`, {
+        portfolioId,
+      });
+    }
+    return updated;
+  } catch (err) {
+    if (err instanceof portfolioRepository.PortfolioWriteError) {
+      throw new PortfolioServiceError(err.code, err.message, err.details);
+    }
+    throw err;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// deletePortfolio — ลบ "กล่อง" ไม่ใช่ลบสินทรัพย์/ธุรกรรม
+// ═══════════════════════════════════════════════════════════════════════════
+// ลำดับบังคับ (ห้ามสลับ):
+//   1) ห้ามลบพอร์ต Default        → 409 CANNOT_DELETE_DEFAULT_PORTFOLIO
+//   2) ตรวจว่าย้ายสินทรัพย์เข้า Default แล้วจะชน UNIQUE ไหม → 409 ถ้าชน
+//   3) ย้ายสินทรัพย์เข้าพอร์ต Default
+//   4) ค่อยลบแถวพอร์ต
+//
+// ⚠️ ข้อ 3 สำคัญมากและ **ห้ามข้ามไปพึ่ง ON DELETE SET NULL ของ FK**:
+// ถ้าปล่อยให้ FK ทำงาน สินทรัพย์จะกลายเป็น portfolio_id = NULL ซึ่งทำ Invariant
+// ของ migration 044/045 พังทันที ("สินทรัพย์ทุกแถวสังกัดพอร์ตเสมอ") แล้ว
+// migration 045 ที่ใช้เป็น Health Check จะ RAISE EXCEPTION
+//
+// ⚠️ ข้อ 2 คือเคสเดียวกับที่ migration 044 STEP 6 ดักไว้เป๊ะ: ถ้าพอร์ตที่จะลบมี
+// BTC@Bitkub และพอร์ต Default ก็มี BTC@Bitkub อยู่แล้ว การย้ายจะชน
+// UNIQUE NULLS NOT DISTINCT (user_id, symbol, portfolio_id, broker_id) —
+// **การรวมสองแถวเข้าด้วยกันกระทบต้นทุนเฉลี่ย = แตะเงินจริง ห้ามทำอัตโนมัติ**
+// ต้องปฏิเสธพร้อมบอกว่าตัวไหนชน ให้ผู้ใช้จัดการเองก่อน
+async function deletePortfolio(userId, portfolioId, userRecord) {
+  const portfolio = await assertCanWriteToPortfolio(userId, portfolioId, userRecord);
+
+  if (portfolio.isDefault) {
+    throw new PortfolioServiceError(
+      'CANNOT_DELETE_DEFAULT_PORTFOLIO',
+      'The default portfolio cannot be deleted',
+      { portfolioId }
+    );
+  }
+
+  const defaultPortfolio = await portfolioRepository.findDefaultByUser(userId);
+  if (!defaultPortfolio) {
+    // Invariant พัง — ไม่ใช่ความผิดของผู้ใช้ และเดินต่อไม่ได้อย่างปลอดภัย
+    // (ไม่มีที่ให้ย้ายสินทรัพย์ไป) ต้องดังให้รู้ ไม่ใช่ลบทิ้งแล้วปล่อยเป็น NULL
+    throw new PortfolioServiceError(
+      'DEFAULT_PORTFOLIO_MISSING',
+      'User has no default portfolio (migration 044/045 invariant is broken)',
+      { userId }
+    );
+  }
+
+  const moving = await assetRepository.findByPortfolio(userId, portfolioId);
+
+  if (moving.length > 0) {
+    const existing = await assetRepository.findByPortfolio(userId, defaultPortfolio.id);
+    // เทียบด้วยกุญแจชุดเดียวกับ UNIQUE ของ migration 046 เป๊ะ (symbol + broker)
+    // broker_id ที่เป็น NULL ถือว่าเท่ากันตาม NULLS NOT DISTINCT → ใช้ '∅' แทน
+    const keyOf = (a) => `${a.symbol} ${a.brokerId ?? '∅'}`;
+    const taken = new Set(existing.map(keyOf));
+    const conflicts = moving.filter((a) => taken.has(keyOf(a)));
+
+    if (conflicts.length > 0) {
+      throw new PortfolioServiceError(
+        'PORTFOLIO_HAS_CONFLICTING_ASSETS',
+        'Moving these assets into the default portfolio would violate the unique constraint',
+        {
+          portfolioId,
+          targetPortfolioId: defaultPortfolio.id,
+          conflicts: conflicts.map((a) => ({
+            assetId: a.id,
+            symbol: a.symbol,
+            brokerId: a.brokerId ?? null,
+          })),
+        }
+      );
+    }
+
+    await assetRepository.reassignPortfolio(userId, portfolioId, defaultPortfolio.id);
+  }
+
+  const deleted = await portfolioRepository.deleteByIdForUser(portfolioId, userId);
+  if (deleted === 0) {
+    throw new PortfolioServiceError('PORTFOLIO_NOT_FOUND', `Portfolio ${portfolioId} not found`, {
+      portfolioId,
+    });
+  }
+
+  return { deletedId: portfolioId, movedAssetCount: moving.length, movedTo: defaultPortfolio.id };
+}
+
+module.exports = {
+  PortfolioServiceError,
+  PORTFOLIO_NAME_MAX_LENGTH,
+  PORTFOLIO_TYPES,
+  listPortfolios,
+  getPortfolio,
+  assertCanWriteToPortfolio,
+  createPortfolio,
+  updatePortfolio,
+  deletePortfolio,
+};

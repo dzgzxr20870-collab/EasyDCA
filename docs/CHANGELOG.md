@@ -4,6 +4,60 @@
 
 ## [Unreleased]
 ### Added
+- **Multi-Portfolio / Broker / Sector / Dividend — Stage 8 (1/3): Endpoint พอร์ต**
+  (Branch `feat/dashboard-production-wire` — ยัง**ไม่ได้ Push/Merge/Deploy**
+  · Migration **ยังไม่ได้ Apply บน Supabase**)
+  - **`/api/v1/portfolios` ครบ 5 Endpoint** — ทำ `API.md § 14.2` ที่มี Spec ค้าง
+    ไว้ตั้งแต่ Phase 0 ให้เป็นจริง (`portfolios` มีตารางมาตั้งแต่ Base Schema แต่
+    **ไม่เคยมี Repository/Endpoint จริง** จนถึงตอนนี้)
+    · ไฟล์ใหม่: `repositories/portfolio.repository.js` · `services/portfolios.service.js`
+    · `controllers/portfolios.controller.js` · `routes/portfolios.routes.js`
+  - **⚠️ แก้ Spec เดิมของ `API.md § 14.2` สองจุด (ของเดิมผิด ไม่ใช่เปลี่ยนใจ):**
+    **(1) `GET` Premium → Free** — หลัง migration 044 ผู้ใช้ทุกคนรวม Free มีพอร์ต
+    Default แล้ว และ Invariant บังคับว่าสินทรัพย์ทุกแถวสังกัดพอร์ต → หน้า Dashboard
+    ต้องอ่านพอร์ตมา render ตั้งแต่โหลดหน้าแรก ถ้าคืน 403 **หน้า Dashboard ของ Free
+    พังทันที** · ตัวคุมสิทธิ์จริงคือ `POST` ซึ่งตรงกับ `AI_CONTEXT.md` บรรทัด 95 ที่
+    พูดถึง "การมีหลายพอร์ต" ไม่ได้พูดถึง "การเห็นพอร์ตของตัวเอง"
+    **(2) `DELETE` ห้ามพึ่ง FK `ON DELETE SET NULL`** — Spec เดิมเขียนว่าสินทรัพย์
+    จะกลายเป็น `portfolio_id = NULL` ซึ่ง**ทำ Invariant ของ migration 044/045 พัง
+    ทันที** แล้ว migration 045 ที่ใช้เป็น Health Check จะ RAISE EXCEPTION ·
+    เปลี่ยนเป็น **ย้ายสินทรัพย์เข้าพอร์ต Default ก่อน แล้วค่อยลบแถวพอร์ต**
+    (ประวัติ/ต้นทุนไม่เปลี่ยนเลย เพราะ `transactions` ผูกกับ `asset_id`)
+  - **⚠️ กันเคสที่ migration 044 STEP 6 ดักไว้ ซ้ำอีกชั้นที่ Application:** ถ้าย้าย
+    สินทรัพย์เข้าพอร์ต Default แล้วจะชน `UNIQUE NULLS NOT DISTINCT (user_id,
+    symbol, portfolio_id, broker_id)` (migration 046) → ปฏิเสธด้วย
+    `409 PORTFOLIO_HAS_CONFLICTING_ASSETS` **พร้อมรายการที่ชน และไม่ลบอะไรเลย**
+    เพราะการรวมสองแถวเข้าด้วยกันกระทบต้นทุนเฉลี่ย = **แตะเงินจริง ห้ามทำอัตโนมัติ**
+    · เทียบ `broker_id` ที่เป็น NULL ว่า "เท่ากัน" ให้ตรงกับ NULLS NOT DISTINCT
+  - **Entitlement ใหม่ 2 ตัวใน `entitlement.service`** (แหล่งตัดสินสิทธิ์เดียวเหมือนเดิม)
+    · `getActivePortfolioLimit()` — Free 1 / Premium 50 (Sanity Cap กัน abuse
+    ไม่ใช่ Monetization Cap) · **ไม่มีวันคืน `null`** ต่างจาก `getActiveAssetLimit`
+    เพราะแม้แต่ Premium ก็มีเพดาน → Caller ไม่ต้องมี Branch "null = ไม่จำกัด"
+    · `getWritablePortfolioIds()` — กติกา **"อ่านได้ เขียนไม่ได้"** ตอน Premium
+    หมดอายุ (มติ Founder § 8.1 ก) · **ห้ามลบข้อมูลเด็ดขาด** พอร์ตส่วนเกินยังเปิดดู
+    ย้อนหลังได้ครบ · คำนวณสดทุกครั้ง ไม่เก็บลง DB → ต่ออายุแล้วเขียนได้ทันที
+  - **⚠️ Tie-break ด้วย `id` เมื่อ `created_at` เท่ากัน — จำเป็นจริง ไม่ใช่กันเหนียว:**
+    migration 044 Backfill สร้างพอร์ตให้ผู้ใช้ทุกคนใน Transaction เดียว ซึ่ง `now()`
+    ของ Postgres **คงที่ทั้ง Transaction** → พอร์ตที่เกิดพร้อมกันมี `created_at`
+    เท่ากันทุกตัวอักษร ถ้าไม่ Tie-break ลำดับจะขึ้นกับ Physical Row Order ที่เปลี่ยน
+    ได้หลัง VACUUM/UPDATE = ผู้ใช้เจอ "บางครั้งบันทึกได้ บางครั้งไม่ได้" กับพอร์ตเดิม
+  - แยก Error Code ของ Free (`PORTFOLIO_LIMIT_REACHED` 403) ออกจาก Premium ที่ชน
+    Cap (`PORTFOLIO_CAP_REACHED` 409) — ถ้าใช้ Code เดียวกัน Premium ที่จ่ายเงิน
+    อยู่แล้วจะโดนชวนอัปเกรด
+  - Cross-User: ทุก Query ผ่าน `queryForUser('portfolios', ...)` · พอร์ตของคนอื่น
+    ตอบ **404 ไม่ใช่ 403** (ห้ามยืนยันการมีอยู่ของ resource ผู้ใช้รายอื่น) ·
+    `id` ผิดรูปตอบ 404 ไม่ใช่ 500 (กัน Postgres 22P02)
+  - **Red-Green จริง 4 ชุด** (ถอด Fix → แดง → ใส่กลับ → เขียว):
+    ถอด Tie-break ด้วย id **แดง 2/46** · ให้ `deletePortfolio` พึ่ง FK SET NULL
+    **แดง 3/33** · Gate `GET` ด้วย Premium ตาม Spec เดิม **แดง 6/33** ·
+    ถอดการตรวจชน UNIQUE ก่อนย้าย **แดง 2/33**
+  - Test ทั้งชุด **125 suites / 2,493 → 127 suites / 2,539 เขียวทั้งหมด**
+  - เก็บกวาดระหว่างทาง: แก้ `eqeqeq` ที่ค้างใน `entitlement.service.js`
+    (`!= null` → `!== null && !== undefined` พฤติกรรมเหมือนเดิมเป๊ะ) →
+    **ESLint ทั้ง Repo เหลือ 0 error** (จากเดิม 1)
+  - **ยังไม่ได้ทำ:** Allocation Endpoint (§ 4.3) · Assets ขยาย (§ 4.4) ·
+    Production Verification ทั้งหมด
+
 - **Multi-Portfolio / Broker / Sector / Dividend — Stage 6b: เปิด `dividend` จริง**
   (Branch `feat/dashboard-production-wire` — ยัง**ไม่ได้ Push/Merge/Deploy**
   · Migration **ยังไม่ได้ Apply บน Supabase**)
