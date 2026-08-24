@@ -113,10 +113,12 @@ describe('calculateTotalDividend — ยอดปันผลสะสม', () =
 
 // ═══════════════════════════════════════════════════════════════════════════
 describe('recordDividend — บันทึกลง Ledger', () => {
-  test('เขียนแถว type=dividend พร้อม quantity = ยอดถือ ณ วันนั้น และ DPS ที่คำนวณได้', async () => {
+  test('เขียนแถว type=dividend พร้อม quantity ที่ผู้ใช้กรอก และ DPS ที่คำนวณได้', async () => {
     const result = await recordDividend(USER_ID, {
       assetId: ASSET_ID,
       amountThb: 250,
+      // quantity บังคับกรอกเสมอ (มติ Founder 24 ส.ค. 2569) — ตรงกับยอดถือจริงในเคสนี้
+      quantity: 100,
       date: '2026-02-01',
     });
 
@@ -147,7 +149,7 @@ describe('recordDividend — บันทึกลง Ledger', () => {
   });
 
   test('ไม่ระบุวันที่ → ใช้วันนี้ตาม Asia/Bangkok (ไม่ใช่ undefined)', async () => {
-    await recordDividend(USER_ID, { assetId: ASSET_ID, amountThb: 100 });
+    await recordDividend(USER_ID, { assetId: ASSET_ID, amountThb: 100, quantity: 100 });
 
     const call = transactionRepository.create.mock.calls[0][0];
     expect(call.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
@@ -158,7 +160,7 @@ describe('recordDividend — บันทึกลง Ledger', () => {
       { id: 'tx-1', type: 'buy', quantity: 10, amountThb: 1000, pricePerUnit: 100, date: '2026-01-01', currency: 'USD' },
     ]);
 
-    await recordDividend(USER_ID, { assetId: ASSET_ID, amountThb: 5, date: '2026-02-01' });
+    await recordDividend(USER_ID, { assetId: ASSET_ID, amountThb: 5, quantity: 10, date: '2026-02-01' });
 
     expect(transactionRepository.create).toHaveBeenCalledWith(
       expect.objectContaining({ currency: 'USD' })
@@ -170,7 +172,12 @@ describe('recordDividend — บันทึกลง Ledger', () => {
       { id: 'tx-1', type: 'buy', quantity: 1000000000, amountThb: 1000, pricePerUnit: 0.000001, date: '2026-01-01' },
     ]);
 
-    await recordDividend(USER_ID, { assetId: ASSET_ID, amountThb: 0.01, date: '2026-02-01' });
+    await recordDividend(USER_ID, {
+      assetId: ASSET_ID,
+      amountThb: 0.01,
+      quantity: 1000000000,
+      date: '2026-02-01',
+    });
 
     const call = transactionRepository.create.mock.calls[0][0];
     expect(call.pricePerUnit).toBeGreaterThan(0);
@@ -183,7 +190,7 @@ describe('recordDividend — ไม่ถือสินทรัพย์ ณ �
     transactionRepository.findAllByAsset.mockResolvedValue(HISTORY_BOUGHT_THEN_SOLD);
 
     await expect(
-      recordDividend(USER_ID, { assetId: ASSET_ID, amountThb: 250, date: '2026-03-25' })
+      recordDividend(USER_ID, { assetId: ASSET_ID, amountThb: 250, quantity: 100, date: '2026-03-25' })
     ).rejects.toMatchObject({ code: 'NOTHING_TO_RECEIVE_DIVIDEND' });
 
     expect(transactionRepository.create).not.toHaveBeenCalled();
@@ -203,7 +210,7 @@ describe('recordDividend — ไม่ถือสินทรัพย์ ณ �
     transactionRepository.findAllByAsset.mockResolvedValue([]);
 
     await expect(
-      recordDividend(USER_ID, { assetId: ASSET_ID, amountThb: 250, date: '2026-02-01' })
+      recordDividend(USER_ID, { assetId: ASSET_ID, amountThb: 250, quantity: 100, date: '2026-02-01' })
     ).rejects.toMatchObject({ code: 'NOTHING_TO_RECEIVE_DIVIDEND' });
   });
 });
@@ -215,14 +222,14 @@ describe('recordDividend — Cross-User Isolation (กฎเหล็กข้�
     assetRepository.findByIds.mockResolvedValue([]);
 
     await expect(
-      recordDividend(OTHER_USER_ID, { assetId: ASSET_ID, amountThb: 250 })
+      recordDividend(OTHER_USER_ID, { assetId: ASSET_ID, amountThb: 250, quantity: 100 })
     ).rejects.toMatchObject({ code: 'ASSET_NOT_FOUND' });
 
     expect(transactionRepository.create).not.toHaveBeenCalled();
   });
 
   test('ต้องยืนยันเจ้าของผ่าน findByIds ที่ผูก userId เสมอ (ไม่ใช่ Query ดิบ)', async () => {
-    await recordDividend(USER_ID, { assetId: ASSET_ID, amountThb: 100 });
+    await recordDividend(USER_ID, { assetId: ASSET_ID, amountThb: 100, quantity: 100 });
 
     expect(assetRepository.findByIds).toHaveBeenCalledWith([ASSET_ID], USER_ID);
   });
@@ -235,14 +242,33 @@ describe('recordDividend — Validation', () => {
     ['ศูนย์', 0],
     ['ไม่ใช่ตัวเลข', 'abc'],
   ])('amountThb %s → VALIDATION_ERROR', async (_label, amountThb) => {
-    await expect(recordDividend(USER_ID, { assetId: ASSET_ID, amountThb })).rejects.toBeInstanceOf(
-      DividendServiceError
-    );
+    await expect(
+      recordDividend(USER_ID, { assetId: ASSET_ID, amountThb, quantity: 100 })
+    ).rejects.toBeInstanceOf(DividendServiceError);
   });
 
   test('quantity ที่ส่งมาเป็น 0 → VALIDATION_ERROR (ไม่ใช่เงียบๆ เติมยอดถือให้)', async () => {
     await expect(
       recordDividend(USER_ID, { assetId: ASSET_ID, amountThb: 100, quantity: 0 })
     ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+  });
+
+  // ⭐ มติ Founder 24 ส.ค. 2569 — quantity เป็นค่าบังคับ ห้ามเติมให้เองเมื่อไม่ส่งมา
+  // (กฎยืนข้อ 11: Silent Default เป็น Anti-pattern เสมอ) เดิม Service Fallback เป็น
+  // ยอดถือ ณ วันนั้นให้ = เขียนตัวเลขที่ผู้ใช้ไม่เคยยืนยันลง Ledger ถาวร แล้วไหลต่อ
+  // ไปเป็น DPS ที่ผู้ใช้เอาไปเทียบข้ามงวดจริง
+  //
+  // Red-Green: ถอด `throw` ที่บังคับ quantity ออก (กลับไป Fallback เป็น heldAtDate)
+  // → 3 เคสนี้แดงทันที
+  test.each([
+    ['ไม่ส่ง Key มาเลย', undefined],
+    ['ส่ง null', null],
+    ["ส่งสตริงว่าง", ''],
+  ])('⚠️ quantity %s → VALIDATION_ERROR และห้ามแตะ Ledger เลย', async (_label, quantity) => {
+    await expect(
+      recordDividend(USER_ID, { assetId: ASSET_ID, amountThb: 100, quantity })
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', details: { field: 'quantity' } });
+
+    expect(transactionRepository.create).not.toHaveBeenCalled();
   });
 });

@@ -545,7 +545,7 @@ Premium)
 | GET | `/api/v1/transactions` | ✅ | Free | List ธุรกรรมของ User — รองรับ Pagination (Section 8) และ Sort/Filter (Section 9): Sort ได้ที่ `date`, `amountThb`, `createdAt`; Filter ได้ที่ `type`, `assetId`, `portfolioId`, `dateFrom`, `dateTo` |
 | GET | `/api/v1/transactions/{id}` | ✅ | Free | รายละเอียดธุรกรรม 1 รายการ |
 | POST | `/api/v1/transactions` | ✅ | Free | **✅ ทำแล้ว (S8 R1a)** — บันทึกรายการซื้อ (DCA) จากฟอร์มเว็บ ผ่าน `transaction.service` ตัวเดียวกับ LINE **สัญญาจริงดู [Section 15](#15-s8-r1a--web-dca-endpoints-สัญญาจริง)** (Body จริงคือ `{ symbol, amountTotal, currency, date?, note?, pricePerUnit? }` — **ไม่ใช่** Body ที่เอกสารรุ่นก่อนร่างไว้) |
-| POST | `/api/v1/transactions/dividend` | ✅ | Free | **✅ ทำแล้ว (Stage 6b — migration 047)** — บันทึกเงินปันผลรับ Body `{ assetId, amountThb, date?, quantity?, note? }` · แยก Endpoint ออกจาก `POST /transactions` โดยตั้งใจ (Payload ต่างกันเชิงความหมายทั้งชุด) · **ไม่กระทบยอดถือ/ต้นทุน/realizedPnL เลย** ดู Section 15.10 |
+| POST | `/api/v1/transactions/dividend` | ✅ | Free | **✅ ทำแล้ว (Stage 6b — migration 047)** — บันทึกเงินปันผลรับ Body `{ assetId, amountThb, quantity, date?, note? }` · แยก Endpoint ออกจาก `POST /transactions` โดยตั้งใจ (Payload ต่างกันเชิงความหมายทั้งชุด) · **ไม่กระทบยอดถือ/ต้นทุน/realizedPnL เลย** ดู Section 15.10 |
 | POST | `/api/v1/transactions/undo-last` | ✅ | Free | **✅ ทำแล้ว (S8 R1a)** — ยกเลิก "รายการล่าสุดของตัวเอง" ด้วย Reversal Pattern (Immutable Ledger — [DATABASE.md § 8](./DATABASE.md)) ดู [Section 15](#15-s8-r1a--web-dca-endpoints-สัญญาจริง) |
 | POST | `/api/v1/transactions/{id}/reverse` | — | — | 🚧 **ยังไม่ได้ทำ (ร่างไว้เฉยๆ)** — S8 R1a เลือกทำ `POST /transactions/undo-last` แทน เพื่อให้ Semantics ตรงกับคำสั่ง "ยกเลิก" ของ LINE เป๊ะ (ย้อนได้เฉพาะรายการล่าสุด ผ่าน `undoTransaction.service` ตัวเดียวกัน) — การรับ `{id}` อิสระจะเปิดให้ย้อนรายการเก่ากลางประวัติได้ ซึ่งทำให้ Moving Average Cost Basis เพี้ยนและไม่มีใน LINE |
 
@@ -1278,7 +1278,7 @@ Stage 6b (migration 047) — **Free ทุกแพ็กเกจ** (มติ 
 | `assetId` | ✅ | UUID ของสินทรัพย์ **ที่เป็นของตัวเองเท่านั้น** (ยืนยันเจ้าของผ่าน `queryForUser` — FK ตรวจได้แค่ "มีอยู่จริง" ไม่ได้ตรวจ "ของใคร") |
 | `amountThb` | ✅ | เงินปันผลรวมที่ได้รับจริง (> 0) — สกุลตามสินทรัพย์ (USD ก็เก็บเป็น USD) |
 | `date` | — | `YYYY-MM-DD` · ไม่ส่ง = วันนี้ตาม Asia/Bangkok · **ห้ามเป็นวันอนาคต** |
-| `quantity` | — | จำนวนหน่วยที่ได้ปันผลนี้ · ไม่ส่ง = **ยอดถือ ณ `date`** (ไม่ใช่ยอดวันนี้) |
+| `quantity` | ✅ | จำนวนหน่วยที่ได้ปันผลนี้ (> 0) — **บังคับกรอกเสมอ ระบบไม่เติมให้** (มติ Founder 24 ส.ค. 2569): จำนวนหน่วยที่ระบบรู้กับที่ได้ปันผลจริงไม่จำเป็นต้องเท่ากัน (ปันผลจ่ายตามยอด ณ วัน XD ซึ่งมักคนละวันกับวันเงินเข้า และผู้ใช้จำนวนมากเพิ่งเริ่มบันทึกกลางทาง ระบบจึงเห็นประวัติไม่ครบ) การเติมให้เองคือ Silent Default ที่จะไหลต่อไปเป็น `dividendPerUnit` ซึ่งผู้ใช้เอาไปเทียบข้ามงวดจริง |
 | `note` | — | ≤ 500 ตัวอักษร · **ห้ามขึ้นต้นด้วย `UNDO_OF:`** (จะปลอมเป็นรายการย้อนได้) |
 
 **Response `201`**

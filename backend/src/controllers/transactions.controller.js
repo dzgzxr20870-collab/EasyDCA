@@ -735,11 +735,14 @@ async function createDividend(req, res) {
     return fail(res, 'VALIDATION_ERROR', { field: 'amountThb' });
   }
 
-  // ── 3) จำนวนหน่วยที่ได้ปันผล (Optional — Service เติมจากยอดถือ ณ วันนั้นให้) ──
-  const hasQuantity =
-    body.quantity !== undefined && body.quantity !== null && body.quantity !== '';
-  const quantity = hasQuantity ? toPositiveNumber(body.quantity) : null;
-  if (hasQuantity && quantity === null) {
+  // ── 3) จำนวนหน่วยที่ได้ปันผล (**บังคับ** — มติ Founder 24 ส.ค. 2569) ─────────
+  // เดิมเป็น Optional แล้วให้ Service เติมยอดถือ ณ วันนั้นให้ = Silent Default ซึ่ง
+  // ขัดกฎยืนข้อ 11 (เหตุผลเต็มอยู่ใน services/dividend.service.js บล็อกเดียวกัน)
+  //
+  // toPositiveNumber ปฏิเสธ 0 / '' / null / Array / NaN ให้อยู่แล้ว จึงครอบทั้ง
+  // "ไม่ส่งมาเลย" และ "ส่งมาแต่ใช้ไม่ได้" ด้วยเงื่อนไขเดียว
+  const quantity = toPositiveNumber(body.quantity);
+  if (quantity === null) {
     return fail(res, 'VALIDATION_ERROR', { field: 'quantity' });
   }
 
@@ -793,7 +796,7 @@ async function createDividend(req, res) {
         symbol: result.symbol,
         amountTotal: Number(result.transaction.amountThb),
         // จำนวนหน่วยที่ได้ปันผล + ปันผลต่อหน่วย (DPS) — ส่งกลับให้ Frontend ยืนยัน
-        // กับผู้ใช้ได้ว่าระบบเข้าใจตรงกัน โดยเฉพาะเคสที่ไม่ได้กรอก quantity มาเอง
+        // กับผู้ใช้ได้ว่าระบบเข้าใจตรงกัน (DPS เป็นค่าที่ระบบคำนวณให้ ไม่ใช่ค่าที่กรอก)
         units: Number(result.transaction.quantity),
         dividendPerUnit: result.dividendPerUnit,
         currency: result.transaction.currency,

@@ -64,7 +64,7 @@ beforeEach(() => {
 describe('POST /transactions/dividend — เส้นทางสำเร็จ', () => {
   test('บันทึกได้ → 201 พร้อมยอดถือที่ไม่เปลี่ยนแปลง', async () => {
     const res = mockRes();
-    await createDividend(mockReq({ assetId: ASSET_ID, amountThb: 250, date: '2026-02-01' }), res);
+    await createDividend(mockReq({ assetId: ASSET_ID, amountThb: 250, quantity: 100, date: '2026-02-01' }), res);
 
     expect(statusOf(res)).toBe(201);
     const body = jsonOf(res);
@@ -83,7 +83,7 @@ describe('POST /transactions/dividend — เส้นทางสำเร็�
   test('Free Plan บันทึกได้ ไม่มี Premium Gate (มติ Founder Q4.5)', async () => {
     const res = mockRes();
     await createDividend(
-      mockReq({ assetId: ASSET_ID, amountThb: 100 }, { id: USER_ID, plan: 'free', planExpiresAt: null }),
+      mockReq({ assetId: ASSET_ID, amountThb: 100, quantity: 100 }, { id: USER_ID, plan: 'free', planExpiresAt: null }),
       res
     );
 
@@ -91,7 +91,7 @@ describe('POST /transactions/dividend — เส้นทางสำเร็�
   });
 
   test('source ต้องเป็น "web" (มาจากฟอร์มเว็บ ไม่ใช่ LINE)', async () => {
-    await createDividend(mockReq({ assetId: ASSET_ID, amountThb: 100 }), mockRes());
+    await createDividend(mockReq({ assetId: ASSET_ID, amountThb: 100, quantity: 100 }), mockRes());
 
     expect(transactionRepository.create).toHaveBeenCalledWith(
       expect.objectContaining({ source: 'web', type: 'dividend' })
@@ -107,7 +107,7 @@ describe('POST /transactions/dividend — Validation ของ assetId/amountThb
     ['เป็นตัวเลข', { assetId: 12345 }],
   ])('assetId %s → 400 VALIDATION_ERROR (ไม่ใช่ 500)', async (_label, patch) => {
     const res = mockRes();
-    await createDividend(mockReq({ amountThb: 100, ...patch }), res);
+    await createDividend(mockReq({ amountThb: 100, quantity: 100, ...patch }), res);
 
     expect(statusOf(res)).toBe(400);
     expect(jsonOf(res).error).toBe('VALIDATION_ERROR');
@@ -121,9 +121,31 @@ describe('POST /transactions/dividend — Validation ของ assetId/amountThb
     ['ไม่ส่งมา', undefined],
   ])('amountThb %s → 400', async (_label, amountThb) => {
     const res = mockRes();
-    await createDividend(mockReq({ assetId: ASSET_ID, amountThb }), res);
+    await createDividend(mockReq({ assetId: ASSET_ID, amountThb, quantity: 100 }), res);
 
     expect(statusOf(res)).toBe(400);
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
+
+  // ⭐ มติ Founder 24 ส.ค. 2569 — quantity เป็นค่าบังคับ (เดิม Optional แล้ว Service
+  // เติมยอดถือ ณ วันนั้นให้เอง = Silent Default ซึ่งขัดกฎยืนข้อ 11)
+  //
+  // Red-Green: ถอด `if (quantity === null) return fail(...)` ที่ Controller ออก
+  // (กลับไปเป็น hasQuantity ? ... : null) → เคสพวกนี้แดงทันที
+  test.each([
+    ['ไม่ส่งมาเลย', undefined],
+    ['null', null],
+    ['สตริงว่าง', ''],
+    ['ศูนย์', 0],
+    ['ติดลบ', -10],
+    ['ไม่ใช่ตัวเลข', 'abc'],
+  ])('⚠️ quantity %s → 400 VALIDATION_ERROR { field: "quantity" } และไม่แตะ Ledger', async (_label, quantity) => {
+    const res = mockRes();
+    await createDividend(mockReq({ assetId: ASSET_ID, amountThb: 100, quantity }), res);
+
+    expect(statusOf(res)).toBe(400);
+    expect(jsonOf(res).error).toBe('VALIDATION_ERROR');
+    expect(jsonOf(res).details).toMatchObject({ field: 'quantity' });
     expect(transactionRepository.create).not.toHaveBeenCalled();
   });
 });
@@ -135,7 +157,7 @@ describe('POST /transactions/dividend — วันที่', () => {
     const future = `${Number(today.slice(0, 4)) + 1}${today.slice(4)}`;
 
     const res = mockRes();
-    await createDividend(mockReq({ assetId: ASSET_ID, amountThb: 100, date: future }), res);
+    await createDividend(mockReq({ assetId: ASSET_ID, amountThb: 100, quantity: 100, date: future }), res);
 
     expect(statusOf(res)).toBe(400);
     expect(jsonOf(res).error).toBe('DATE_IN_FUTURE');
@@ -144,7 +166,7 @@ describe('POST /transactions/dividend — วันที่', () => {
 
   test('วันที่ไม่มีอยู่จริง (2026-02-31) → 400 VALIDATION_ERROR', async () => {
     const res = mockRes();
-    await createDividend(mockReq({ assetId: ASSET_ID, amountThb: 100, date: '2026-02-31' }), res);
+    await createDividend(mockReq({ assetId: ASSET_ID, amountThb: 100, quantity: 100, date: '2026-02-31' }), res);
 
     expect(statusOf(res)).toBe(400);
     expect(jsonOf(res).error).toBe('VALIDATION_ERROR');
@@ -162,7 +184,7 @@ describe('POST /transactions/dividend — note ที่สงวนไว้ (�
     ['มีช่องว่างนำหน้า', '  UNDO_OF:abc'],
   ])('note %s → 400 NOTE_RESERVED_PREFIX', async (_label, note) => {
     const res = mockRes();
-    await createDividend(mockReq({ assetId: ASSET_ID, amountThb: 100, note }), res);
+    await createDividend(mockReq({ assetId: ASSET_ID, amountThb: 100, quantity: 100, note }), res);
 
     expect(statusOf(res)).toBe(400);
     expect(jsonOf(res).error).toBe('NOTE_RESERVED_PREFIX');
@@ -170,7 +192,7 @@ describe('POST /transactions/dividend — note ที่สงวนไว้ (�
   });
 
   test('note ปกติ → บันทึกแบบ trim แล้ว', async () => {
-    await createDividend(mockReq({ assetId: ASSET_ID, amountThb: 100, note: '  ปันผลงวด 2/2569  ' }), mockRes());
+    await createDividend(mockReq({ assetId: ASSET_ID, amountThb: 100, quantity: 100, note: '  ปันผลงวด 2/2569  ' }), mockRes());
 
     expect(transactionRepository.create).toHaveBeenCalledWith(
       expect.objectContaining({ note: 'ปันผลงวด 2/2569' })
@@ -184,7 +206,7 @@ describe('POST /transactions/dividend — Error จาก Service ถูก Map 
     transactionRepository.findAllByAsset.mockResolvedValue([]);
 
     const res = mockRes();
-    await createDividend(mockReq({ assetId: ASSET_ID, amountThb: 100 }), res);
+    await createDividend(mockReq({ assetId: ASSET_ID, amountThb: 100, quantity: 100 }), res);
 
     expect(statusOf(res)).toBe(403);
     expect(jsonOf(res).error).toBe('NOTHING_TO_RECEIVE_DIVIDEND');
@@ -196,7 +218,7 @@ describe('POST /transactions/dividend — Error จาก Service ถูก Map 
     assetRepository.findByIds.mockResolvedValue([]);
 
     const res = mockRes();
-    await createDividend(mockReq({ assetId: ASSET_ID, amountThb: 100 }), res);
+    await createDividend(mockReq({ assetId: ASSET_ID, amountThb: 100, quantity: 100 }), res);
 
     expect(jsonOf(res).error).toBe('ASSET_NOT_FOUND');
     expect(transactionRepository.create).not.toHaveBeenCalled();
@@ -206,7 +228,7 @@ describe('POST /transactions/dividend — Error จาก Service ถูก Map 
     transactionRepository.create.mockRejectedValue(new Error('boom: connection reset'));
 
     const res = mockRes();
-    await createDividend(mockReq({ assetId: ASSET_ID, amountThb: 100 }), res);
+    await createDividend(mockReq({ assetId: ASSET_ID, amountThb: 100, quantity: 100 }), res);
 
     expect(statusOf(res)).toBe(500);
     expect(JSON.stringify(jsonOf(res))).not.toContain('connection reset');

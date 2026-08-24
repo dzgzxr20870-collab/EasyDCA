@@ -85,7 +85,8 @@ function calculateTotalDividend(transactions) {
 // ═══════════════════════════════════════════════════════════════════════════
 // recordDividend — บันทึกเงินปันผลรับ 1 รายการ
 // ═══════════════════════════════════════════════════════════════════════════
-// params: { assetId, amountThb, date?, quantity?, note? }
+// params: { assetId, amountThb, quantity, date?, note? }
+//   quantity = **บังคับ** (มติ Founder 24 ส.ค. 2569 — ดูเหตุผลที่บล็อกคำนวณด้านล่าง)
 //
 // อาจ throw: ASSET_NOT_FOUND (404) · VALIDATION_ERROR (400) ·
 //            NOTHING_TO_RECEIVE_DIVIDEND (403)
@@ -117,27 +118,42 @@ async function recordDividend(userId, params, options = {}) {
 
   const date = params.date ?? todayInBangkok();
 
-  // ── จำนวนหน่วยที่ได้ปันผลนี้ ────────────────────────────────────────────────
-  // ผู้ใช้กรอกเองได้ (เช่นปันผลจ่ายตามจำนวนหน่วย ณ วัน XD ซึ่งอาจไม่ตรงกับที่ระบบรู้
-  // เพราะผู้ใช้เพิ่งเริ่มบันทึกกลางทาง) — ไม่กรอก = ใช้ยอดถือ ณ วันที่ระบุ
   const history = await transactionRepository.findAllByAsset(asset.id, userId);
   const heldAtDate = heldQuantityAsOf(history, date);
 
-  let quantity;
+  // ── จำนวนหน่วยที่ได้ปันผลนี้ — **บังคับกรอกเสมอ** ───────────────────────────
+  // ⚠️ ห้ามเติมค่าให้เองเมื่อผู้ใช้ไม่ส่งมาเด็ดขาด (เดิมเคย Fallback เป็นยอดถือ
+  // ณ วันนั้น — ถูกถอดออกตามมติ Founder 24 ส.ค. 2569)
+  //
+  // เหตุผล — **กฎยืนข้อ 11: Silent Default เป็น Anti-pattern เสมอ**
+  // จำนวนหน่วยที่ "ระบบรู้" กับที่ "ได้ปันผลจริง" ไม่จำเป็นต้องเท่ากันเลย:
+  // ปันผลจ่ายตามจำนวนหน่วย ณ วัน XD ซึ่งมักเป็นคนละวันกับวันที่เงินเข้า และผู้ใช้
+  // จำนวนมากเพิ่งเริ่มบันทึกกลางทาง (ระบบจึงเห็นประวัติไม่ครบ) การเดาแทนผู้ใช้
+  // ที่นี่ = เขียนตัวเลขที่ผู้ใช้ไม่เคยยืนยันลง Ledger ถาวร แล้วมันจะไหลต่อไปเป็น
+  // DPS (price_per_unit) ที่ผู้ใช้เอาไปเทียบข้ามงวดจริง — ผิดแบบเงียบสนิท
+  //
+  // ⚠️ ห้าม "ปรับปรุง" กลับไปเป็น Optional เพราะคิดว่าสะดวกกว่า — ความสะดวก
+  // ตรงนี้แลกมาด้วยตัวเลขเงินที่ไม่มีใครยืนยัน
   if (params.quantity === undefined || params.quantity === null || params.quantity === '') {
-    quantity = heldAtDate;
-  } else {
-    quantity = Number(params.quantity);
-    if (!Number.isFinite(quantity) || quantity <= 0) {
-      throw new DividendServiceError('VALIDATION_ERROR', 'quantity must be a positive number', {
-        field: 'quantity',
-      });
-    }
+    throw new DividendServiceError('VALIDATION_ERROR', 'quantity is required', {
+      field: 'quantity',
+    });
+  }
+  const quantity = Number(params.quantity);
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    throw new DividendServiceError('VALIDATION_ERROR', 'quantity must be a positive number', {
+      field: 'quantity',
+    });
   }
 
   // ── ไม่ได้ถือสินทรัพย์นี้ ณ วันที่ระบุ → ปฏิเสธ (Design Doc § 4.5) ───────────
-  // เช็คจาก heldAtDate เสมอ ไม่ใช่จาก quantity ที่ผู้ใช้กรอก — ไม่งั้นผู้ใช้กรอก
-  // quantity มาเองก็จะข้ามด่านนี้ได้ทุกครั้ง (บันทึกปันผลของหุ้นที่ไม่เคยถือ)
+  // ⚠️ เช็คจาก heldAtDate เสมอ **ไม่ใช่จาก quantity ที่ผู้ใช้กรอก** — ไม่งั้นผู้ใช้
+  // กรอก quantity มาเองก็จะข้ามด่านนี้ได้ทุกครั้ง (บันทึกปันผลของหุ้นที่ไม่เคยถือ)
+  //
+  // ⚠️ ยิ่งบังคับกรอก quantity แล้ว ด่านนี้ยิ่งห้ามหายไป — heldQuantityAsOf คือ
+  // "ของจริงที่ระบบยืนยันได้" ส่วน quantity คือ "สิ่งที่ผู้ใช้อ้าง" คนละบทบาทกัน
+  // และต้องคิด ณ วันที่ได้ปันผล ไม่ใช่วันนี้ เพราะบันทึกย้อนหลังคือ Use Case ปกติ
+  // (ได้ปันผล 10 มี.ค. → ขายหมด 20 มี.ค. → มาบันทึก 25 มี.ค. ต้องทำได้)
   if (heldAtDate <= 0) {
     throw new DividendServiceError(
       'NOTHING_TO_RECEIVE_DIVIDEND',
