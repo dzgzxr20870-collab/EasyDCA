@@ -4,6 +4,61 @@
 
 ## [Unreleased]
 ### Added
+- **Multi-Portfolio / Broker / Sector / Dividend — Stage 6b: เปิด `dividend` จริง**
+  (Branch `feat/dashboard-production-wire` — ยัง**ไม่ได้ Push/Merge/Deploy**
+  · Migration **ยังไม่ได้ Apply บน Supabase**)
+  - **migration 047 — CHECK ของ `transactions.type` รับ 4 ค่าแล้ว**
+    (`buy`/`sell`/`dividend`/`dividend_reversal`) · ไม่แตะข้อมูลเดิมแม้แถวเดียว
+    "ผ่อน" ข้อจำกัดอย่างเดียว → แถวเดิมผ่าน CHECK ใหม่ครบ 100% โดยอัตโนมัติ
+    · **และแก้ `create_transaction_locked()` ซึ่งเป็น "Stage 6a ฉบับ SQL ที่ยังค้างอยู่"**:
+    RPC ยังนับยอดคงเหลือแบบ Binary (`CASE WHEN type='buy' THEN q ELSE -q END`)
+    มาตั้งแต่ migration 034 → ถ้าเปิด CHECK โดยไม่แก้จุดนี้ ยอดคงเหลือที่ DB ใช้ตัดสิน
+    "ขายเกินไหม" จะน้อยกว่าความจริงเท่ากับ quantity ของทุกแถวปันผลรวมกัน (ผู้ใช้จะขาย
+    หุ้นที่ถืออยู่จริงไม่ได้ ได้ INSUFFICIENT_QUANTITY ทั้งที่ยอดยังเหลือ) และเพราะ RPC
+    เป็นทางเข้า Ledger ทางเดียวของทั้งระบบ ความผิดนี้จะกระทบทุกช่องทางพร้อมกัน
+    · เพิ่ม Guard `UNKNOWN_TRANSACTION_TYPE` เป็นคู่ขนานของ `default: throw` ฝั่ง JS
+  - **`POST /api/v1/transactions/dividend`** (Free ทุกแพ็กเกจ ตามมติ Founder Q4.5)
+    + `services/dividend.service.js` ใหม่ · แยก Endpoint ออกจาก `POST /transactions`
+    ตาม Design Doc § 4.5 (Payload ต่างกันเชิงความหมายทั้งชุด)
+  - **⚠️ จุดที่ Design Doc § 4.5 เขียนไว้ไม่ครบ (เจอตอน Implement):** Schema บังคับ
+    `quantity > 0` **และ** `price_per_unit > 0` กับทุกแถว แต่ Design Doc ระบุ Body ว่า
+    `quantity?` optional และไม่มี `pricePerUnit` เลย → แปลตรงตัวแล้วแถวปันผลจะถูก DB
+    ปฏิเสธทุกแถว · **เลือกไม่ผ่อน CHECK** (เหตุผลเดียวกับที่ Design Doc § 5.3 ให้ไว้เอง
+    ตอนอธิบายว่าทำไมไม่ใช้ amount ติดลบ — ผ่อนเกราะเพื่อ type เดียว = เปิดช่องให้บั๊ก
+    ของ buy/sell ทะลุถึง DB ด้วย) แต่เก็บค่าที่ **มีความหมายจริง** แทน: `quantity` =
+    จำนวนหน่วยที่ถือ ณ วันที่ได้ปันผล · `price_per_unit` = **เงินปันผลต่อหน่วย (DPS)**
+    ซึ่งเป็นตัวเลขที่นักลงทุนใช้จริง ไม่ใช่ค่าขยะเพื่อให้ผ่าน Constraint
+  - **ยอดถือคิด ณ "วันที่ได้ปันผล" ไม่ใช่วันนี้** — ถ้าใช้ยอดวันนี้ ผู้ใช้ที่ได้ปันผล
+    วันที่ 10 แล้วขายหมดวันที่ 20 จะบันทึกย้อนหลังวันที่ 25 ไม่ได้เลย ทั้งที่การบันทึก
+    ย้อนหลังคือ Use Case ปกติ (ปันผลเข้าบัญชีก่อนคนจะมานั่งบันทึกเสมอ)
+  - **⭐ เจอ "จุดที่ 8" ที่ทั้ง Design Doc และ Stage 6a มองข้าม:**
+    `flexMessage.util.buildUndoMessage` เขียน `result.originalType === 'buy'` แล้ว
+    `wasBuy ? 'ซื้อ' : 'ขาย'` — กด "ย้อนล่าสุด" บนรายการปันผลจะได้การ์ดที่เขียนว่า
+    "ก่อนบันทึกรายการ**ขาย**นี้" · และข้อความยังผิดข้อเท็จจริงซ้ำอีกชั้นเพราะบอกว่า
+    "ยอดในพอร์ตกลับไปเป็นเหมือนเดิม" ทั้งที่ปันผลไม่เคยทำให้ยอดขยับเลย (ชวนให้เข้าใจ
+    ว่าเมื่อกี้ยอดเคยหาย) · แก้เป็นถาม `thaiLabel()` + แยกข้อความของปันผลออกมาว่าสิ่งที่
+    กลับไปเป็นเหมือนเดิมคือ **ยอดเงินปันผลสะสม** และซ่อนบรรทัด "จำนวน:" (quantity ของ
+    แถวปันผลคือบริบท ไม่ใช่จำนวนที่ถูกหักออกจากพอร์ต)
+  - Cross-User: `assetId` จาก Body ผ่าน `assetRepository.findByIds` ที่บังคับ
+    `queryForUser` เสมอ + RPC ตรวจซ้ำใต้ Lock (migration 036) — สองชั้นโดยตั้งใจ
+  - `note` ของ Endpoint ใหม่กัน Prefix `UNDO_OF:` เหมือน `POST /transactions` เป๊ะ
+    (ไม่งั้นช่องโหว่ "ปลอมรายการเป็น Reversal" ที่ปิดไปแล้วจะเปิดกลับมาทางนี้แทน)
+  - **ต่างจาก Design Doc § 4.5 อีกจุดโดยตั้งใจ:** `ASSET_NOT_FOUND` ตอบ **400**
+    ไม่ใช่ 404 — `ERROR_STATUS` เป็นตารางกลางที่ใช้ร่วมกับฝั่งขายซึ่งเป็น 400 มาแต่ต้น
+    ความสม่ำเสมอของ API สำคัญกว่าตัวเลขที่ร่างไว้ก่อนเห็นโค้ดจริง
+  - **Red-Green จริง 5 ชุด** (ถอด Fix → แดง → ใส่กลับ → เขียว):
+    `reversalTypeFor('dividend')` → `'buy'` แดง 2/16 · ถอด fix จุดที่ 8 ของ
+    `buildUndoMessage` แดง 5/16 · ถอดการกรองวันที่ของ `heldQuantityAsOf` แดง 2/22 ·
+    ถอด `NOTHING_TO_RECEIVE_DIVIDEND` แดง 4/41 · ถอด `NOTE_RESERVED_PREFIX` แดง 3/19
+  - Test ทั้งชุด **122 suites / 2,427 → 125 suites / 2,484 เขียวทั้งหมด**
+    (ส่วนต่าง = ไฟล์เทสต์ใหม่ 3 ไฟล์พอดี **ไม่มีเทสต์เดิมตัวใดเปลี่ยนผล** → ยืนยันว่า
+    การแก้ `buildUndoMessage` ไม่กระทบการ์ดของ buy/sell แม้แต่ตัวอักษรเดียว)
+  - **ยังไม่ได้ทำ:** Red-Green ระดับ SQL ของ CHECK/RPC (เครื่องนี้ไม่มี Docker/psql —
+    Script อยู่ท้าย migration 047 รอ Founder รันบน Supabase Branch) · Production
+    Verification ทั้งหมด · UI ฝั่ง Frontend (อยู่ใน Stage 9)
+  - **TODO รอบหน้า:** ปันผลเป็น **หุ้น** (Stock Dividend) — เลื่อนตามมติ Founder Q4.4
+    จะเป็น type ที่ 5 แยกต่างหาก (`heldQuantitySign` ต้องเป็น +qty ไม่ใช่ 0)
+
 - **Multi-Portfolio / Broker / Sector / Dividend — Stage 5: ถือ Symbol เดียวกันได้หลายโบรก**
   (Branch `feat/dashboard-production-wire` — ยัง**ไม่ได้ Push/Merge/Deploy**
   รออนุมัติ · Migration **ยังไม่ได้ Apply บน Supabase**)

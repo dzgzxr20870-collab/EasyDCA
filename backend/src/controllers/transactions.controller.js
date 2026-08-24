@@ -4,6 +4,9 @@ const symbolRegistry = require('../services/symbolRegistry.service');
 // Stage 5 (migration 046) — assertOwnedBrokerId: ด่านบังคับก่อนเอา brokerId จาก
 // Request Body ไปใช้ (FK ตรวจแค่ว่ามีอยู่จริง ไม่ได้ตรวจว่าเป็นของใคร)
 const brokerService = require('../services/broker.service');
+// Stage 6b (migration 047) — บันทึกเงินปันผลรับ แยก Service ออกจาก transaction.service
+// โดยตั้งใจ (Design Doc § 4.5) เพราะ Payload/กฎการคำนวณต่างกันเชิงความหมายทั้งชุด
+const dividendService = require('../services/dividend.service');
 const dcaStatsService = require('../services/dcaStats.service');
 const transactionRepository = require('../repositories/transaction.repository');
 const entitlementService = require('../services/entitlement.service');
@@ -85,6 +88,12 @@ const WEB_ERROR_MESSAGES = {
     'คุณถือสินทรัพย์นี้อยู่มากกว่า 1 โบรก/Exchange กรุณาเลือกก่อนว่าจะบันทึกรายการนี้ที่ไหน',
   BROKER_NOT_FOUND: 'ไม่พบโบรก/Exchange ที่เลือก (อาจถูกลบไปแล้ว) กรุณาเลือกใหม่อีกครั้ง',
   NOTHING_TO_SELL: 'สินทรัพย์นี้ขายออกไปหมดแล้ว ไม่มียอดคงเหลือให้ขาย',
+  // ── Stage 6b (dividend) ────────────────────────────────────────────────────
+  // ข้อความต้องบอก "วันที่" ที่ระบบใช้ตัดสินด้วย เพราะกรณีที่พบบ่อยที่สุดคือผู้ใช้
+  // บันทึกย้อนหลังแล้วใส่วันผิด (ไม่ใช่ "ไม่เคยถือหุ้นตัวนี้") — ถ้าบอกแค่ "ไม่ได้ถือ"
+  // ผู้ใช้จะไม่รู้ว่าต้องไปแก้ช่องวันที่
+  NOTHING_TO_RECEIVE_DIVIDEND:
+    'คุณยังไม่มีสินทรัพย์นี้ในพอร์ต ณ วันที่ระบุ จึงบันทึกเงินปันผลไม่ได้ กรุณาตรวจสอบวันที่ หรือบันทึกรายการซื้อก่อน',
   INSUFFICIENT_QUANTITY: 'ขายเกินจำนวนที่ถืออยู่จริง กรุณาตรวจสอบยอดคงเหลือแล้วลองใหม่',
   SELL_PRICE_REQUIRED: 'กรุณากรอก "ราคาที่ขายได้ต่อหน่วย" ด้วย (หรือกดปุ่ม "ขายทั้งหมด" เพื่อใช้ราคาตลาด)',
   ASSET_LIMIT_REACHED:
@@ -161,6 +170,16 @@ const ERROR_STATUS = {
   AMBIGUOUS_ASSET_BROKER: 409,
   BROKER_NOT_FOUND: 404,
   NOTHING_TO_SELL: 400,
+  // ── Stage 6b (dividend) ────────────────────────────────────────────────────
+  // "ไม่ได้ถือสินทรัพย์นี้อยู่ ณ วันที่ระบุ" = สิทธิ์ในการบันทึกรายการนี้ไม่มีจริง
+  // ตามสถานะ Ledger ไม่ใช่ Input ผิดรูป → 403 ตาม Design Doc § 4.5
+  //
+  // ⚠️ Design Doc § 4.5 ระบุ ASSET_NOT_FOUND ของ dividend เป็น 404 — จงใจ "ไม่ทำตาม"
+  // เพราะ ERROR_STATUS เป็นตารางกลางที่ใช้ร่วมกับฝั่งขายซึ่ง Map ตัวนี้เป็น 400 มา
+  // ตั้งแต่ต้น (Business Rule ที่ผู้ใช้แก้เองได้ = 400 ตาม API.md § 5-6) การให้ Code
+  // เดียวกันตอบคนละ Status ตาม Endpoint จะทำให้ Frontend ต้องจำข้อยกเว้นรายเส้นทาง
+  // — ความสม่ำเสมอของ API สำคัญกว่าตัวเลขที่ Design Doc ร่างไว้ก่อนเห็นโค้ดจริง
+  NOTHING_TO_RECEIVE_DIVIDEND: 403,
   INSUFFICIENT_QUANTITY: 400,
   SELL_PRICE_REQUIRED: 400,
   NO_TRANSACTION_TO_UNDO: 400,
@@ -682,6 +701,119 @@ async function undoLast(req, res) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// POST /api/v1/transactions/dividend — บันทึกเงินปันผลรับ (Stage 6b / migration 047)
+// ═══════════════════════════════════════════════════════════════════════════
+// Body: { assetId, amountThb, date?, quantity?, note? }
+//
+// ── ทำไมเป็น Endpoint แยก ไม่ใช่ side='dividend' ของ POST /transactions ────────
+// Design Doc § 4.5: Payload ต่างกันเชิงความหมายจนแทบไม่มีอะไรร่วมกันเลย —
+// dividend ระบุสินทรัพย์ด้วย assetId ตรงๆ (ไม่ใช่ symbol+broker เพราะผู้ใช้เลือก
+// จากรายการในพอร์ตที่มีอยู่แล้ว จึงไม่มีทางกำกวมและไม่ต้องสร้าง Asset ใหม่),
+// ไม่มีทิศทาง, ไม่มีราคาที่ผู้ใช้กรอก, ไม่แตะ Price Feed / Registry / Asset Limit เลย
+// ถ้ายัดรวมกัน Validation ของ Endpoint เดิม (ยาว ~200 บรรทัด) จะกลายเป็น if-else
+// ตาม type ทุกขั้น ซึ่งเป็นจุดที่พลาดง่ายที่สุดบนเส้นทางเงิน
+//
+// ── Plan: Free (มติ Founder Q4.5) ────────────────────────────────────────────
+// จงใจ "ไม่มี" Premium Gate ที่นี่ — การบันทึกธุรกรรมพื้นฐานเป็นสิทธิ์ของทุกแพ็กเกจ
+// และไม่กระทบเพดานจำนวนสินทรัพย์ด้วย (ปันผลไม่ได้สร้าง Asset ใหม่)
+async function createDividend(req, res) {
+  const body = req.body ?? {};
+
+  // ── 1) assetId ─────────────────────────────────────────────────────────────
+  // ตรวจรูปแบบ UUID ก่อนส่งเข้า Repository — id ผิดรูปทำ Postgres throw 22P02
+  // แล้วตกไป 500 ทั้งที่ความหมายจริงคือ "ไม่พบสินทรัพย์" (Pattern เดียวกับ
+  // uploadTransactionSlip) · การยืนยัน "เป็นของ user คนนี้จริงไหม" อยู่ที่ Service
+  // ผ่าน queryForUser ไม่ใช่ที่นี่
+  if (typeof body.assetId !== 'string' || !UUID_RE.test(body.assetId)) {
+    return fail(res, 'VALIDATION_ERROR', { field: 'assetId' });
+  }
+
+  // ── 2) จำนวนเงินปันผลที่ได้รับจริง ─────────────────────────────────────────
+  const amountThb = toPositiveNumber(body.amountThb);
+  if (amountThb === null) {
+    return fail(res, 'VALIDATION_ERROR', { field: 'amountThb' });
+  }
+
+  // ── 3) จำนวนหน่วยที่ได้ปันผล (Optional — Service เติมจากยอดถือ ณ วันนั้นให้) ──
+  const hasQuantity =
+    body.quantity !== undefined && body.quantity !== null && body.quantity !== '';
+  const quantity = hasQuantity ? toPositiveNumber(body.quantity) : null;
+  if (hasQuantity && quantity === null) {
+    return fail(res, 'VALIDATION_ERROR', { field: 'quantity' });
+  }
+
+  // ── 4) วันที่ได้รับปันผล (ไม่ส่ง = วันนี้ตาม Asia/Bangkok) ──────────────────
+  // ⚠️ "วันอนาคต" ต้องกันเหมือน POST /transactions เป๊ะ — ปันผลที่ยังไม่เกิดขึ้นจริง
+  // ไม่ควรเข้า Ledger (และจะทำให้ heldQuantityAsOf นับธุรกรรมที่ยังไม่มีด้วย)
+  let date;
+  if (body.date !== undefined && body.date !== null && body.date !== '') {
+    if (!isValidIsoDate(body.date)) {
+      return fail(res, 'VALIDATION_ERROR', { field: 'date' });
+    }
+    if (body.date > transactionService.todayInBangkok()) {
+      return fail(res, 'DATE_IN_FUTURE', {
+        date: body.date,
+        today: transactionService.todayInBangkok(),
+      });
+    }
+    date = body.date;
+  }
+
+  // ── 5) หมายเหตุ ────────────────────────────────────────────────────────────
+  // ⚠️ ต้องกัน Prefix 'UNDO_OF:' เหมือน createTransaction ทุกประการ — ถ้าลืมกันที่นี่
+  // ช่องโหว่ "ปลอมรายการเป็น Reversal" ที่ปิดไปแล้วฝั่งซื้อ/ขาย จะเปิดกลับมาทาง
+  // Endpoint ใหม่นี้แทน (แถวปันผลที่ note ขึ้นต้น UNDO_OF: จะถูก isReversal() นับเป็น
+  // รายการย้อน → ปุ่ม "ย้อนล่าสุด" ตอบ ALREADY_UNDONE ผิดๆ และรายการหายจากสถิติ)
+  let note;
+  if (body.note !== undefined && body.note !== null && body.note !== '') {
+    if (typeof body.note !== 'string') {
+      return fail(res, 'VALIDATION_ERROR', { field: 'note' });
+    }
+    if (body.note.length > MAX_NOTE_LENGTH) {
+      return fail(res, 'VALIDATION_ERROR', { field: 'note', maxLength: MAX_NOTE_LENGTH });
+    }
+    if (body.note.trim().toUpperCase().startsWith(`${undoTransactionService.UNDO_MARKER}:`)) {
+      return fail(res, 'NOTE_RESERVED_PREFIX', { field: 'note' });
+    }
+    note = body.note.trim() === '' ? undefined : body.note.trim();
+  }
+
+  try {
+    const result = await dividendService.recordDividend(
+      req.user.id,
+      { assetId: body.assetId, amountThb, quantity, date, note },
+      { source: 'web' }
+    );
+
+    return res.status(201).json({
+      transaction: {
+        transactionId: result.transaction.id,
+        type: result.transaction.type,
+        symbol: result.symbol,
+        amountTotal: Number(result.transaction.amountThb),
+        // จำนวนหน่วยที่ได้ปันผล + ปันผลต่อหน่วย (DPS) — ส่งกลับให้ Frontend ยืนยัน
+        // กับผู้ใช้ได้ว่าระบบเข้าใจตรงกัน โดยเฉพาะเคสที่ไม่ได้กรอก quantity มาเอง
+        units: Number(result.transaction.quantity),
+        dividendPerUnit: result.dividendPerUnit,
+        currency: result.transaction.currency,
+        date: result.transaction.date,
+      },
+      // ⭐ ยอดถือต้องเท่าเดิมเป๊ะหลังบันทึกปันผล (Design Doc § 5.3) — ส่งค่าที่ DB
+      // คำนวณใต้ Lock จริงกลับไป ให้ Frontend เอาไปแสดง/เทียบได้โดยไม่ต้องเดา
+      heldQuantity: result.heldQuantity,
+      message: `บันทึกเงินปันผล ${result.symbol} เรียบร้อยแล้ว (ยอดถือในพอร์ตไม่เปลี่ยนแปลง)`,
+    });
+  } catch (err) {
+    if (err instanceof dividendService.DividendServiceError) {
+      return fail(res, err.code, err.details ?? {});
+    }
+
+    console.error(`[transactions] createDividend failed: ${err.message}`);
+    return fail(res, 'INTERNAL_ERROR');
+  }
+}
+
 // POST /api/v1/transactions/:id/slip — แนบรูปสลิป "เป็นหลักฐาน" ให้รายการที่บันทึกแล้ว
 // (Premium เท่านั้น) — เก็บรูปเฉยๆ ไม่มี AI อ่าน/ไม่ Auto-fill ใดๆ (คนละเรื่องกับ
 // AI Slip OCR ทาง LINE ที่ตีความตัวเลขจากรูป) ผู้ใช้กรอกเงิน/สินทรัพย์/วันที่เองครบแล้ว
@@ -879,4 +1011,10 @@ async function scanSlipWithAi(req, res) {
   }
 }
 
-module.exports = { createTransaction, undoLast, uploadTransactionSlip, scanSlipWithAi };
+module.exports = {
+  createTransaction,
+  createDividend,
+  undoLast,
+  uploadTransactionSlip,
+  scanSlipWithAi,
+};

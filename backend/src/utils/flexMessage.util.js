@@ -943,9 +943,28 @@ function buildEditHintMessage() {
 // ไม่ใช่อธิบายกลไกทางบัญชี ("สร้างรายการตรงข้ามเพื่อชดเชย") ขึ้นก่อน — Founder เอง
 // ยังสะดุดตอนเห็นข้อความกลไกเป็นบรรทัดแรกครั้งแรก คำอธิบายกลไก (ประวัติยังเก็บไว้ครบ)
 // ยังคงอยู่ แต่ย้ายไปเป็นหมายเหตุตัวเล็กท้ายการ์ดแทน
+// ⚠️ Stage 6b — จุดนี้คือ "จุดที่ 8" ของ Design Doc § 2 ที่ทั้ง Design Doc และ Stage 6a
+// มองข้ามไป (ตารางใน Design Doc ระบุไว้ 6 จุด · Stage 6a เจอเพิ่มจุดที่ 7 ที่
+// undoTransaction.service:121 · เหลือจุดนี้ที่ยังเป็น Binary อยู่)
+//
+// เดิม: `const wasBuy = result.originalType === 'buy'` แล้ว `wasBuy ? 'ซื้อ' : 'ขาย'`
+// = ทุก type ที่ไม่ใช่ buy กลายเป็น "ขาย" → กด "ย้อนล่าสุด" บนรายการปันผลจะได้การ์ด
+// ที่เขียนว่า "...ก่อนบันทึกรายการ**ขาย**นี้" ทั้งที่ผู้ใช้เพิ่งย้อนรายการปันผล
+//
+// ── และข้อความเดิมยังผิดข้อเท็จจริงสำหรับ dividend อีกชั้นหนึ่ง ────────────────
+// "ยอด X ในพอร์ตกลับไปเป็นเหมือนก่อนบันทึก..." เป็นจริงเฉพาะ buy/sell ที่เปลี่ยน
+// จำนวนที่ถือ — ปันผลไม่เคยเปลี่ยนจำนวนที่ถือตั้งแต่แรก (heldQuantitySign = 0)
+// การบอกว่า "ยอดกลับไปเป็นเหมือนเดิม" จึงชวนให้เข้าใจผิดว่าเมื่อกี้ยอดเคยขยับ
+// (ขัดกฎยืน "ห้ามข้อความในระบบผิดข้อเท็จจริง/กำกวม" — ชุดเดียวกับ commit 07b34a3)
+// สิ่งที่กลับไปเป็นเหมือนเดิมจริงๆ สำหรับปันผลคือ "ยอดเงินปันผลสะสม"
+//
+// บรรทัด "จำนวน:" ก็ถูกซ่อนสำหรับปันผล — quantity ของแถวปันผลคือ "จำนวนหน่วยที่ได้
+// ปันผลนี้" (บริบท) ไม่ใช่จำนวนที่ถูกย้อนออกจากพอร์ต การโชว์เลขนั้นบนการ์ด "ย้อน
+// รายการ" จะอ่านเป็น "ถูกหักออกจากพอร์ตเท่านี้" ทันที ซึ่งไม่จริงเลย
 function buildUndoMessage(result) {
-  const wasBuy = result.originalType === 'buy';
-  const originalLabel = wasBuy ? 'ซื้อ' : 'ขาย';
+  // ถามความหมายจาก transactionType.util ที่เดียว (default: throw) แทน Binary เดิม
+  const originalLabel = thaiLabel(result.originalType, 'flexMessage.buildUndoMessage');
+  const isDividend = result.originalType === 'dividend';
   const symbol = result.symbol ?? '';
 
   return bubble({
@@ -954,21 +973,39 @@ function buildUndoMessage(result) {
     headerBg: COLOR.warningBg,
     bodyContents: [
       textLine(
-        `ยอด ${symbol} ในพอร์ตกลับไปเป็นเหมือนก่อนบันทึกรายการ${originalLabel}นี้แล้ว`.trim(),
+        (isDividend
+          ? `ยอดเงินปันผลสะสมของ ${symbol} กลับไปเป็นเหมือนก่อนบันทึกรายการปันผลนี้แล้ว`
+          : `ยอด ${symbol} ในพอร์ตกลับไปเป็นเหมือนก่อนบันทึกรายการ${originalLabel}นี้แล้ว`
+        ).trim(),
         {
           size: 'md',
           weight: 'bold',
           color: COLOR.textPrimary,
         }
       ),
-      textLine(`จำนวน: ${formatNumber(result.quantity)} ${symbol}`.trimEnd(), {
-        size: 'sm',
-        color: COLOR.textSecondary,
-      }),
-      textLine(`มูลค่ารวม: ${formatNumber(result.amountThb)} บาท`, {
-        size: 'sm',
-        color: COLOR.textSecondary,
-      }),
+      // ปันผลไม่เคยแตะจำนวนที่ถือ จึงไม่มี "จำนวนที่ถูกย้อน" ให้แสดง (ดูเหตุผลด้านบน)
+      ...(isDividend
+        ? [
+            textLine(`ยอดถือ ${symbol} ในพอร์ตไม่เปลี่ยนแปลง`.trimEnd(), {
+              size: 'sm',
+              color: COLOR.textSecondary,
+            }),
+          ]
+        : [
+            textLine(`จำนวน: ${formatNumber(result.quantity)} ${symbol}`.trimEnd(), {
+              size: 'sm',
+              color: COLOR.textSecondary,
+            }),
+          ]),
+      // คำว่า "มูลค่ารวม" ใช้กับซื้อ/ขายเท่านั้น — ของปันผลคือ "เงินปันผลที่ย้อน"
+      // (ไม่ใช่มูลค่าสินทรัพย์ที่ซื้อขาย) ใช้คำเดียวกันจะกำกวมทันที
+      textLine(
+        `${isDividend ? 'เงินปันผลที่ย้อน' : 'มูลค่ารวม'}: ${formatNumber(result.amountThb)} บาท`,
+        {
+          size: 'sm',
+          color: COLOR.textSecondary,
+        }
+      ),
       textLine('* ระบบสร้างรายการตรงข้ามเพื่อชดเชย (ไม่ได้ลบ) ประวัติเดิมยังถูกเก็บไว้ครบถ้วน', {
         size: 'xs',
         color: COLOR.textSecondary,

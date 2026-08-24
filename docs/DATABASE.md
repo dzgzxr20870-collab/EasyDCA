@@ -284,10 +284,11 @@ CREATE TABLE transactions (
   id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id         UUID        NOT NULL REFERENCES users(id),
   asset_id        UUID        NOT NULL REFERENCES assets(id),
-  -- ⚠️ ยังเป็น ('buy','sell') อยู่ ณ ตอนนี้ — `dividend`/`dividend_reversal`
-  -- จะถูกเปิดใน Migration สุดท้ายของ Feature Set นี้เท่านั้น (Stage 6b)
-  -- ห้ามเปิดก่อนที่โค้ดทุกจุดจะ enumerate type ครบ (ดูตารางกฎการคำนวณด้านล่าง)
-  type            TEXT        NOT NULL CHECK (type IN ('buy', 'sell')),
+  -- ✅ migration 047 (Stage 6b) เปิด `dividend`/`dividend_reversal` แล้ว
+  -- ความหมายของแต่ละค่าตัดสินที่ utils/transactionType.util.js ที่เดียว
+  -- (ดูตารางกฎการคำนวณด้านล่าง) — ห้ามเพิ่มค่าใหม่ที่นี่ก่อนไปเพิ่ม case ในไฟล์นั้น
+  type            TEXT        NOT NULL
+                  CHECK (type IN ('buy', 'sell', 'dividend', 'dividend_reversal')),
   amount_thb      NUMERIC(15,2) NOT NULL CHECK (amount_thb > 0),
   price_per_unit  NUMERIC(20,8) NOT NULL CHECK (price_per_unit > 0),
   quantity        NUMERIC(20,8) NOT NULL CHECK (quantity > 0),
@@ -309,7 +310,7 @@ CREATE TABLE transactions (
 | id | UUID | Primary Key |
 | user_id | UUID | FK → users.id |
 | asset_id | UUID | FK → assets.id |
-| type | TEXT | ประเภท: `buy` / `sell` (จะเพิ่ม `dividend` / `dividend_reversal` ใน Stage 6b — ดูตารางกฎการคำนวณด้านล่าง) |
+| type | TEXT | ประเภท: `buy` / `sell` / `dividend` / `dividend_reversal` (เปิดครบแล้วใน migration 047 — ดูตารางกฎการคำนวณด้านล่าง) |
 | amount_thb | NUMERIC(15,2) | จำนวนเงินเป็นบาท |
 | price_per_unit | NUMERIC(20,8) | ราคาต่อหน่วย (รองรับ Crypto ทศนิยมสูง) |
 | quantity | NUMERIC(20,8) | จำนวนหน่วยที่ซื้อ/ขาย |
@@ -346,6 +347,36 @@ CREATE TABLE transactions (
   `amount_thb` มี `CHECK (amount_thb > 0)` อยู่แล้ว การเปิดให้ติดลบเพื่อ dividend
   อย่างเดียวเท่ากับ **ปิดเกราะที่ป้องกันทั้งตารางอยู่** ทำให้บั๊ก "เงินติดลบ" ใน
   อนาคตทะลุถึง DB ได้ทุกชนิดธุรกรรม — แลกไม่คุ้ม (Immutable Ledger § 8)
+
+#### ⭐ `quantity` และ `price_per_unit` ของแถว `dividend` เก็บอะไร (migration 047)
+
+> จุดนี้ **Design Doc § 4.5 เขียนไว้ไม่ครบ** และเป็นสิ่งแรกที่ต้องรู้ก่อนเขียนโค้ด
+> ที่ INSERT แถวปันผล ไม่งั้นจะชน CHECK ตอน Runtime แล้วหาสาเหตุไม่เจอ
+
+Schema บังคับ `quantity > 0` และ `price_per_unit > 0` กับ **ทุกแถว** ไม่มีข้อยกเว้น
+แต่ Design Doc ระบุ Body ของ Endpoint ว่า `quantity?` เป็น optional และไม่มี
+`pricePerUnit` เลย — ถ้าแปลตรงตัวว่าใส่ `0`/`NULL` แถวปันผลจะถูก DB ปฏิเสธทุกแถว
+
+**เลือกทางที่ไม่ต้องผ่อน CHECK** (เหตุผลเดียวกับข้อ `dividend_reversal` ด้านบนเป๊ะ:
+ผ่อนเกราะเพื่อ type เดียว = เปิดช่องให้บั๊กของ `buy`/`sell` ทะลุถึง DB ด้วย):
+
+| คอลัมน์ | เก็บอะไรสำหรับแถว `dividend` |
+|---|---|
+| `amount_thb` | เงินปันผลรวมที่ได้รับจริง (ผู้ใช้กรอก) |
+| `quantity` | **จำนวนหน่วยที่ถืออยู่ ณ วันที่ได้ปันผล** — ไม่ใช่วันนี้ (บันทึกย้อนหลังคือกรณีปกติ) · ผู้ใช้กรอกทับเองได้ |
+| `price_per_unit` | **เงินปันผลต่อหน่วย (DPS)** = `amount_thb / quantity` |
+
+ทั้งสามค่า `> 0` เสมอโดยธรรมชาติ และ `price_per_unit` ที่ได้ไม่ใช่ค่าขยะเพื่อให้ผ่าน
+Constraint แต่เป็นตัวเลขที่นักลงทุนใช้จริง (เทียบ DPS ข้ามงวดได้ทันที)
+
+> ⚠️ **`quantity` ของแถว `dividend` ไม่มีผลต่อยอดคงเหลือแม้แต่หน่วยเดียว** —
+> `heldQuantitySign('dividend') = 0` ทั้งฝั่ง JS (`utils/transactionType.util.js`)
+> และฝั่ง SQL (`CASE` ใน `create_transaction_locked` — migration 047) มันเป็นแค่
+> *บริบทของรายการ* ห้ามมีโค้ดที่ไหนเอาไปบวก/ลบยอดถือโดยไม่ผ่าน `heldQuantitySign`
+
+**ไม่ถือสินทรัพย์นั้นอยู่เลย ณ วันที่ระบุ → ห้ามบันทึก** (`403
+NOTHING_TO_RECEIVE_DIVIDEND`) — ตรวจจากยอดถือจริงเสมอ ไม่ใช่จาก `quantity` ที่
+ผู้ใช้กรอกมา ไม่งั้นกรอกเองก็ข้ามด่านได้ทุกครั้ง
 
 **Index:**
 ```sql

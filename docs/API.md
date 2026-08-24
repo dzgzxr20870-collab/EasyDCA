@@ -545,6 +545,7 @@ Premium)
 | GET | `/api/v1/transactions` | ✅ | Free | List ธุรกรรมของ User — รองรับ Pagination (Section 8) และ Sort/Filter (Section 9): Sort ได้ที่ `date`, `amountThb`, `createdAt`; Filter ได้ที่ `type`, `assetId`, `portfolioId`, `dateFrom`, `dateTo` |
 | GET | `/api/v1/transactions/{id}` | ✅ | Free | รายละเอียดธุรกรรม 1 รายการ |
 | POST | `/api/v1/transactions` | ✅ | Free | **✅ ทำแล้ว (S8 R1a)** — บันทึกรายการซื้อ (DCA) จากฟอร์มเว็บ ผ่าน `transaction.service` ตัวเดียวกับ LINE **สัญญาจริงดู [Section 15](#15-s8-r1a--web-dca-endpoints-สัญญาจริง)** (Body จริงคือ `{ symbol, amountTotal, currency, date?, note?, pricePerUnit? }` — **ไม่ใช่** Body ที่เอกสารรุ่นก่อนร่างไว้) |
+| POST | `/api/v1/transactions/dividend` | ✅ | Free | **✅ ทำแล้ว (Stage 6b — migration 047)** — บันทึกเงินปันผลรับ Body `{ assetId, amountThb, date?, quantity?, note? }` · แยก Endpoint ออกจาก `POST /transactions` โดยตั้งใจ (Payload ต่างกันเชิงความหมายทั้งชุด) · **ไม่กระทบยอดถือ/ต้นทุน/realizedPnL เลย** ดู Section 15.10 |
 | POST | `/api/v1/transactions/undo-last` | ✅ | Free | **✅ ทำแล้ว (S8 R1a)** — ยกเลิก "รายการล่าสุดของตัวเอง" ด้วย Reversal Pattern (Immutable Ledger — [DATABASE.md § 8](./DATABASE.md)) ดู [Section 15](#15-s8-r1a--web-dca-endpoints-สัญญาจริง) |
 | POST | `/api/v1/transactions/{id}/reverse` | — | — | 🚧 **ยังไม่ได้ทำ (ร่างไว้เฉยๆ)** — S8 R1a เลือกทำ `POST /transactions/undo-last` แทน เพื่อให้ Semantics ตรงกับคำสั่ง "ยกเลิก" ของ LINE เป๊ะ (ย้อนได้เฉพาะรายการล่าสุด ผ่าน `undoTransaction.service` ตัวเดียวกัน) — การรับ `{id}` อิสระจะเปิดให้ย้อนรายการเก่ากลางประวัติได้ ซึ่งทำให้ Moving Average Cost Basis เพี้ยนและไม่มีใน LINE |
 
@@ -1247,6 +1248,90 @@ AI ไม่กินโควตา**) → ลบ Session
 > "ใช้ลดหย่อนภาษีได้" เพราะเท่ากับระบบรับรองว่าสลิปใช้กับภาษีได้จริง ซึ่งเราไม่อยู่
 > ในฐานะรับประกัน และสุ่มเสี่ยงเข้าข่ายให้คำแนะนำด้านภาษี — ใช้สำนวนกลางๆ
 > "เป็นหลักฐาน เผื่อต้องใช้ภายหลัง" (ดู `flexMessage.buildSlipAttachPromptMessage`)
+
+---
+
+## 15.10 POST `/api/v1/transactions/dividend` — บันทึกเงินปันผลรับ
+
+Stage 6b (migration 047) — **Free ทุกแพ็กเกจ** (มติ Founder Q4.5 ไม่ Gate ด้วย Premium)
+
+> **แยก Endpoint ออกจาก `POST /transactions` โดยตั้งใจ** — Payload ต่างกันเชิง
+> ความหมายจนแทบไม่มีอะไรร่วมกัน: ระบุสินทรัพย์ด้วย `assetId` ตรงๆ (ผู้ใช้เลือกจาก
+> รายการในพอร์ตที่มีอยู่แล้ว จึงไม่มีทางกำกวมเรื่องโบรก และไม่ต้องสร้าง Asset ใหม่),
+> ไม่มีทิศทาง buy/sell, ไม่มีราคาที่ผู้ใช้กรอก, ไม่แตะ Price Feed / Symbol Registry /
+> Asset Limit เลย — การยัดรวมจะทำให้ Validation ของ Endpoint เดิมกลายเป็น if-else
+> ตาม type ทุกขั้น ซึ่งเป็นจุดที่พลาดง่ายที่สุดบนเส้นทางเงิน
+
+**Request**
+```json
+{
+  "assetId": "11111111-2222-4333-8444-555555555555",
+  "amountThb": 250,
+  "date": "2026-02-01",
+  "quantity": 100,
+  "note": "ปันผลงวด 2/2569"
+}
+```
+
+| Field | บังคับ | หมายเหตุ |
+|---|---|---|
+| `assetId` | ✅ | UUID ของสินทรัพย์ **ที่เป็นของตัวเองเท่านั้น** (ยืนยันเจ้าของผ่าน `queryForUser` — FK ตรวจได้แค่ "มีอยู่จริง" ไม่ได้ตรวจ "ของใคร") |
+| `amountThb` | ✅ | เงินปันผลรวมที่ได้รับจริง (> 0) — สกุลตามสินทรัพย์ (USD ก็เก็บเป็น USD) |
+| `date` | — | `YYYY-MM-DD` · ไม่ส่ง = วันนี้ตาม Asia/Bangkok · **ห้ามเป็นวันอนาคต** |
+| `quantity` | — | จำนวนหน่วยที่ได้ปันผลนี้ · ไม่ส่ง = **ยอดถือ ณ `date`** (ไม่ใช่ยอดวันนี้) |
+| `note` | — | ≤ 500 ตัวอักษร · **ห้ามขึ้นต้นด้วย `UNDO_OF:`** (จะปลอมเป็นรายการย้อนได้) |
+
+**Response `201`**
+```json
+{
+  "transaction": {
+    "transactionId": "9f1c2e6a-1234-4bcd-9876-0a1b2c3d4e5f",
+    "type": "dividend",
+    "symbol": "PTT",
+    "amountTotal": 250,
+    "units": 100,
+    "dividendPerUnit": 2.5,
+    "currency": "THB",
+    "date": "2026-02-01"
+  },
+  "heldQuantity": 100,
+  "message": "บันทึกเงินปันผล PTT เรียบร้อยแล้ว (ยอดถือในพอร์ตไม่เปลี่ยนแปลง)"
+}
+```
+
+> ⭐ `heldQuantity` คือยอดถือ **หลัง** บันทึก ซึ่งต้อง **เท่ากับก่อนบันทึกเป๊ะ**
+> (ค่านี้มาจาก `create_transaction_locked` ที่คำนวณใต้ Lock จริง ไม่ใช่ฝั่ง App
+> คำนวณเอง) — Frontend เอาไปแสดงยืนยันกับผู้ใช้ได้ตรงๆ
+
+**ผลต่อตัวเลขในพอร์ต** (ดูตารางเต็มที่ [DATABASE.md](./DATABASE.md) — กฎการคำนวณของแต่ละ `type`)
+
+| | ผล |
+|---|---|
+| จำนวนที่ถือ (`heldQty`) | **ไม่เปลี่ยน** |
+| ต้นทุน (`costBasis`) | **ไม่เปลี่ยน** |
+| กำไรที่รับรู้แล้ว (`realizedPnL`) | **ไม่รวม** (ปันผลเป็นรายได้ คนละก้อนกับกำไรส่วนต่างราคา) |
+| เงินปันผลสะสม (`totalDividendThb`) | **+`amountThb`** |
+
+**Error**
+
+| Code | HTTP | เมื่อไหร่ |
+|---|---|---|
+| `VALIDATION_ERROR` | 400 | `assetId` ไม่ใช่ UUID · `amountThb`/`quantity` ≤ 0 หรือไม่ใช่ตัวเลข · `date` ไม่มีอยู่จริง |
+| `DATE_IN_FUTURE` | 400 | `date` เกินวันนี้ (ปันผลที่ยังไม่เกิดขึ้นห้ามเข้า Ledger) |
+| `NOTE_RESERVED_PREFIX` | 400 | `note` ขึ้นต้นด้วย `UNDO_OF:` |
+| `ASSET_NOT_FOUND` | 400 | ไม่พบสินทรัพย์ หรือไม่ใช่ของผู้ใช้คนนี้ |
+| `NOTHING_TO_RECEIVE_DIVIDEND` | 403 | ไม่ได้ถือสินทรัพย์นี้อยู่ ณ `date` ที่ระบุ |
+
+> ⚠️ **ต่างจาก Design Doc § 4.5 หนึ่งจุดโดยตั้งใจ:** Design Doc ระบุ
+> `ASSET_NOT_FOUND` เป็น **404** — โค้ดจริงตอบ **400** เพราะ `ERROR_STATUS` เป็น
+> ตารางกลางที่ใช้ร่วมกับฝั่งขายซึ่ง Map ตัวนี้เป็น 400 มาตั้งแต่ต้น (Business Rule
+> ที่ผู้ใช้แก้เองได้ = 400 ตาม § 5-6) การให้ Code เดียวกันตอบคนละ Status ตาม
+> Endpoint จะทำให้ Frontend ต้องจำข้อยกเว้นรายเส้นทาง
+
+**การย้อนรายการปันผล** ใช้ `POST /transactions/undo-last` ตัวเดิม — ระบบสร้างแถว
+`dividend_reversal` (ไม่ใช่ `buy`/`sell` และไม่ลบ/ไม่แก้แถวเดิม ตาม Immutable Ledger)
+ยอดถือไม่ขยับทั้งตอนรับปันผลและตอนย้อน สิ่งเดียวที่กลับไปเป็นเหมือนเดิมคือ
+**ยอดเงินปันผลสะสม**
 
 ---
 
