@@ -338,11 +338,82 @@ async function reassignPortfolio(userId, fromPortfolioId, toPortfolioId) {
   return rows.length;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// updateMetaByIdForUser — แก้ "ป้ายกำกับ" ของสินทรัพย์ (Stage 8)
+// ═══════════════════════════════════════════════════════════════════════════
+// แก้ได้เฉพาะ broker_id / sector / portfolio_id เท่านั้น — **ห้ามเปิดให้แก้
+// symbol / type / user_id / is_active ผ่านทางนี้เด็ดขาด**:
+//   • symbol/type เปลี่ยน = เปลี่ยนตัวตนของสินทรัพย์ที่ธุรกรรมทั้งกองผูกอยู่
+//     ต้นทุนเฉลี่ยและ P&L ที่คำนวณจากประวัติเดิมจะกลายเป็นของผิดตัวทันที
+//   • is_active เปลี่ยน = เปลี่ยนการนับเพดาน Free Plan โดยไม่ผ่าน RPC ที่ Lock ไว้
+// (สามคอลัมน์ที่เปิดให้แก้ล้วน **ไม่เข้าสูตรคำนวณเงินใดๆ** — เป็นมิติสำหรับ
+// จัดกลุ่ม/แสดงผลเท่านั้น)
+//
+// ⚠️ broker_id / portfolio_id ที่ส่งเข้ามาต้องผ่านการยืนยันเจ้าของจากชั้น Service
+// มาก่อนแล้วเสมอ (brokerService.assertOwnedBrokerId /
+// portfoliosService.assertCanWriteToPortfolio) — FK ระดับ DB ตรวจได้แค่ "มีอยู่จริง"
+// ไม่ได้ตรวจ "เป็นของใคร"
+//
+// ⚠️ การแก้ broker_id/portfolio_id ชน UNIQUE ได้จริง: UNIQUE NULLS NOT DISTINCT
+// (user_id, symbol, portfolio_id, broker_id) ของ migration 046 — ย้าย BTC@Bitkub
+// ไปพอร์ตที่มี BTC@Bitkub อยู่แล้วจะชน แปลงเป็น ASSET_ALREADY_EXISTS ให้ Service
+// ตอบผู้ใช้ได้ (ห้ามรวมสองแถวให้อัตโนมัติ — กระทบต้นทุนเฉลี่ย = แตะเงินจริง)
+async function updateMetaByIdForUser(assetId, userId, patch) {
+  requireUserId(userId, 'asset.updateMetaByIdForUser');
+
+  const update = { updated_at: new Date().toISOString() };
+  if (patch.brokerId !== undefined) update.broker_id = patch.brokerId;
+  if (patch.sector !== undefined) update.sector = patch.sector;
+  if (patch.portfolioId !== undefined) update.portfolio_id = patch.portfolioId;
+
+  const { data, error } = await queryForUser('assets', userId, (q) =>
+    q.update(update).eq('id', assetId).select('*')
+  );
+
+  if (error) {
+    if (error.code === '23505') {
+      throw new AssetWriteError(
+        'ASSET_ALREADY_EXISTS',
+        'asset.updateMetaByIdForUser: another asset already occupies this (symbol, portfolio, broker)',
+        { assetId }
+      );
+    }
+    if (error.code === '23514') {
+      throw new AssetWriteError('VALIDATION_ERROR', 'asset.updateMetaByIdForUser: failed DB CHECK', {
+        assetId,
+      });
+    }
+    throw new Error(`Failed to update asset metadata: ${error.message}`);
+  }
+
+  const rows = Array.isArray(data) ? data : [data].filter(Boolean);
+  return toAsset(rows[0] ?? null);
+}
+
+// หาสินทรัพย์ด้วย id "ของ user คนนี้เท่านั้น" — คืน null ถ้าไม่มีจริงหรือเป็นของคนอื่น
+// (Caller ต้องแปลง null เป็น 404 ไม่ใช่ 403 — ห้ามยืนยันการมีอยู่ของ resource
+// ของผู้ใช้คนอื่น) · .maybeSingle() ต่อ "นอก" queryForUser เสมอ
+async function findByIdForUser(assetId, userId) {
+  requireUserId(userId, 'asset.findByIdForUser');
+
+  const { data, error } = await queryForUser('assets', userId, (q) =>
+    q.select('*').eq('id', assetId)
+  ).maybeSingle();
+
+  if (error) {
+    throw new Error(`Failed to find asset by id: ${error.message}`);
+  }
+
+  return toAsset(data);
+}
+
 module.exports = {
   AssetWriteError,
   findAllByUserAndSymbol,
   findByPortfolio,
   reassignPortfolio,
+  updateMetaByIdForUser,
+  findByIdForUser,
   create,
   findActiveByUser,
   findByIds,

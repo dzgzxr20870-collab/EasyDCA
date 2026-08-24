@@ -689,9 +689,71 @@ Check ใน [SRS.md § 2.3 [2]](./SRS.md)
 | Method | Path | Auth | Plan | คำอธิบาย |
 |---|---|---|---|---|
 | GET | `/api/v1/assets/symbols` | ✅ | Free | **✅ ทำแล้ว (S8 R1a)** — รายการสินทรัพย์ทั้งหมดที่ระบบรองรับ (Static จาก `symbolRegistry.service`) สำหรับ Dropdown ค้นหาบนเว็บ ดู [Section 15](#15-s8-r1a--web-dca-endpoints-สัญญาจริง) |
-| GET | `/api/v1/assets` | ✅ | Free | List สินทรัพย์ของ User — Filter ได้ที่ `isActive`, `portfolioId`, `type` |
-| GET | `/api/v1/assets/{id}` | ✅ | Free | รายละเอียดสินทรัพย์ 1 รายการ พร้อม Quantity/Average Cost ปัจจุบัน (คำนวณจาก `transactions` ตาม [DATABASE.md § 12](./DATABASE.md)) |
-| PATCH | `/api/v1/assets/{id}` | ✅ | Free (`isActive`) / Premium (`portfolioId`) | แก้ไข `isActive` (Soft Delete เมื่อขายหมด) หรือย้าย `portfolioId` (Premium เท่านั้น — Free ไม่มี `portfolioId` ให้ย้าย) |
+| GET | `/api/v1/assets` | ✅ | Free | **✅ ทำแล้ว (Stage 8)** — List สินทรัพย์ที่ถืออยู่ · Filter: `brokerId`, `sector`, `portfolioId` (ค่า `none` = แถวที่ไม่ได้ระบุมิตินั้น) |
+| GET | `/api/v1/assets/{id}` | ✅ | Free | ⏳ ยังไม่ทำ — รายละเอียดสินทรัพย์ 1 รายการ พร้อม Quantity/Average Cost ปัจจุบัน |
+| PATCH | `/api/v1/assets/{id}` | ✅ | Free | **✅ ทำแล้ว (Stage 8)** — แก้ **`brokerId` / `sector` / `portfolioId`** เท่านั้น (ดูกล่องเตือนด้านล่าง) |
+
+#### `GET /api/v1/assets` — List + filter (Stage 8 · Design Doc § 4.4)
+
+| Query | หมายเหตุ |
+|---|---|
+| `brokerId` | `<uuid>` = โบรกนั้น · `none` = แถวที่ไม่ผูกโบรก · ไม่ส่ง = ไม่กรองมิตินี้ |
+| `sector` | `<ชื่อ>` = **เทียบแบบไม่สนตัวพิมพ์** · `none` = แถวที่ไม่ระบุ sector |
+| `portfolioId` | `<uuid>` = พอร์ตนั้น · `none` = แถวที่ไม่สังกัดพอร์ต |
+
+> ⚠️ `sector` เทียบแบบ **case-insensitive + trim + ยุบช่องว่างซ้ำ** ให้ตรงกับวิธี
+> จัดกลุ่มของ `GET /portfolio/allocation` เป๊ะ — ถ้ากฎต่างกันแม้นิดเดียว ผู้ใช้กด
+> กลุ่มบนกราฟโดนัทแล้วจะเห็นรายการไม่ครบ
+
+#### `PATCH /api/v1/assets/{id}` — แก้ "ป้ายกำกับ" ของสินทรัพย์ (Stage 8)
+
+**Request** (ส่งมาเฉพาะ Field ที่จะแก้)
+```json
+{ "brokerId": "uuid-ของโบรก", "sector": "Tech", "portfolioId": "uuid-ของพอร์ต" }
+```
+
+| Field | ค่าที่รับได้ |
+|---|---|
+| `brokerId` | `<uuid>` · `null` / `"none"` = ล้างโบรก (กลับเป็น "ไม่ระบุ") |
+| `sector` | `<ชื่อ ≤ 60 ตัวอักษร>` · `null` / `""` = ล้างค่า · **คงตัวพิมพ์ตามที่ผู้ใช้พิมพ์** (`SET50` ไม่กลายเป็น `Set50`) |
+| `portfolioId` | `<uuid>` เท่านั้น — **ล้างเป็น `null` ไม่ได้** (ดูกล่องเตือน) |
+
+> ### ⚠️ แก้ Spec เดิม: `isActive` ถูกถอดออกจาก Endpoint นี้
+>
+> Spec เดิมเขียนว่า `PATCH` แก้ `isActive` ได้ — **ไม่เปิดให้แก้แล้ว** เพราะ
+> `is_active` คือตัวนับเพดาน Free Plan ซึ่งต้องผ่าน RPC `create_asset_locked`
+> ที่ Lock แถว `users` ไว้เท่านั้น (migration 035/046) การแก้ตรงๆ ผ่าน HTTP
+> จะข้ามด่าน Race Condition ที่ RPC นั้นมีไว้ทั้งหมด
+>
+> **และไม่เปิดให้แก้ `symbol` / `type` เด็ดขาด** — สองค่านี้คือ *ตัวตน* ของ
+> สินทรัพย์ที่ธุรกรรมทั้งกองผูกอยู่ ถ้าเปลี่ยนได้ ต้นทุนเฉลี่ยและ P&L ที่คำนวณ
+> จากประวัติเดิมจะกลายเป็นของผิดตัวทันทีแบบเงียบๆ
+>
+> ⚠️ Field ที่ไม่รองรับซึ่งส่งมาใน Body จะได้ **`400 VALIDATION_ERROR` พร้อม
+> `details.unsupportedFields`** — ไม่ใช่ถูกเพิกเฉยเงียบๆ (Silent Ignore เป็น
+> Anti-pattern แบบเดียวกับ Silent Default — กฎยืนข้อ 11)
+>
+> ### ⚠️ `portfolioId` ล้างเป็น `null` ไม่ได้
+> Invariant ของ migration 044/045 บังคับว่า **"สินทรัพย์ทุกแถวสังกัดพอร์ตเสมอ"**
+> ถ้าปล่อยให้ตั้งเป็น `NULL` ได้ migration 045 ที่ใช้เป็น Health Check จะ
+> `RAISE EXCEPTION` — ต้องย้ายไปพอร์ตอื่นเท่านั้น
+>
+> ### ⚠️ Cross-User (กฎเหล็กข้อ 3)
+> ทั้ง `brokerId` และ `portfolioId` มาจาก Body ที่ผู้ใช้กำหนดเองได้ 100% และ
+> FK ระดับ DB ตรวจได้แค่ "มีอยู่จริง" ไม่ได้ตรวจ "เป็นของใคร" → ผ่าน
+> `assertOwnedBrokerId` / `assertCanWriteToPortfolio` ก่อนใช้เสมอ ·
+> ของผู้ใช้คนอื่นตอบ **404** ไม่ใช่ 403
+
+**Error ของกลุ่มนี้**
+
+| Code | HTTP | เมื่อไหร่ |
+|---|---|---|
+| `VALIDATION_ERROR` | 400 | `sector` ยาวเกิน 60 / ชนิดผิด · `portfolioId` ถูกล้าง · Field ที่ไม่รองรับ · ไม่มีอะไรจะแก้ |
+| `ASSET_NOT_FOUND` | 404 | ไม่มีจริง **หรือเป็นของผู้ใช้คนอื่น** (แยกไม่ออกโดยเจตนา) |
+| `BROKER_NOT_FOUND` | 404 | `brokerId` ไม่มีจริงหรือเป็นของผู้ใช้คนอื่น |
+| `PORTFOLIO_NOT_FOUND` | 404 | `portfolioId` ไม่มีจริงหรือเป็นของผู้ใช้คนอื่น |
+| `PORTFOLIO_READ_ONLY` | 403 | สินทรัพย์อยู่ในพอร์ตส่วนเกินหลัง Premium หมดอายุ (หรือย้ายเข้าพอร์ตแบบนั้น) |
+| `ASSET_ALREADY_EXISTS` | 409 | ย้ายแล้วชน `UNIQUE (user_id, symbol, portfolio_id, broker_id)` ของ migration 046 — **ห้ามรวมสองแถวให้อัตโนมัติ** เพราะกระทบต้นทุนเฉลี่ย |
 
 > **ไม่มี `POST /assets` แยกต่างหาก** — Asset ถูกสร้างโดยอัตโนมัติเมื่อมี
 > `POST /transactions` ครั้งแรกของ `symbol` นั้น (SRS.md § 2.3 [3])

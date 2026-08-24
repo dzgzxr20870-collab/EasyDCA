@@ -4,6 +4,47 @@
 
 ## [Unreleased]
 ### Added
+- **Multi-Portfolio / Broker / Sector / Dividend — Stage 8 (3/3): Assets**
+  (Branch `feat/dashboard-production-wire` — ยัง**ไม่ได้ Push/Merge/Deploy**)
+  - **`GET /api/v1/assets`** (Free) — List สินทรัพย์ที่ถืออยู่ + Filter
+    `brokerId` / `sector` / `portfolioId` (ค่า `none` = แถวที่ไม่ได้ระบุมิตินั้น)
+  - **`PATCH /api/v1/assets/{id}`** (Free) — แก้ **`brokerId` / `sector` /
+    `portfolioId`** · ไฟล์ใหม่ `services/assets.service.js` + repository
+    `updateMetaByIdForUser` / `findByIdForUser`
+    > Design Doc § 4.4 เขียนว่า "ขยายของเดิม" แต่ **ของเดิมไม่มีอยู่จริง** —
+    > `assets.routes` มีแค่ `GET /symbols` เท่านั้น จึงต้องสร้างทั้ง 2 Endpoint ใหม่
+  - **⚠️ แก้ Spec เดิมของ `API.md § 14.4`: ถอด `isActive` ออกจาก PATCH**
+    Spec เดิมเขียนว่าแก้ `isActive` ได้ — **ไม่เปิดให้แก้แล้ว** เพราะ `is_active`
+    คือตัวนับเพดาน Free Plan ซึ่งต้องผ่าน RPC `create_asset_locked` ที่ Lock แถว
+    `users` ไว้เท่านั้น (migration 035/046) การแก้ตรงๆ ผ่าน HTTP จะข้ามด่าน
+    Race Condition ที่ RPC นั้นมีไว้ทั้งหมด
+  - **⚠️ ไม่เปิดให้แก้ `symbol` / `type` เด็ดขาด** — สองค่านี้คือ *ตัวตน* ของ
+    สินทรัพย์ที่ธุรกรรมทั้งกองผูกอยู่ ถ้าเปลี่ยนได้ ต้นทุนเฉลี่ยและ P&L ที่คำนวณ
+    จากประวัติเดิมจะกลายเป็น "ของผิดตัว" ทันทีแบบเงียบๆ
+    · Field ที่ไม่รองรับซึ่งส่งมาใน Body ได้ `400 VALIDATION_ERROR` พร้อม
+    `details.unsupportedFields` — **ไม่ใช่ถูกเพิกเฉยเงียบๆ** (Silent Ignore เป็น
+    Anti-pattern แบบเดียวกับ Silent Default — กฎยืนข้อ 11)
+  - **⚠️ `portfolioId` ล้างเป็น `null` ไม่ได้** — Invariant ของ migration 044/045
+    บังคับว่า "สินทรัพย์ทุกแถวสังกัดพอร์ตเสมอ" ถ้าปล่อยให้ตั้ง NULL ได้
+    migration 045 ที่ใช้เป็น Health Check จะ RAISE EXCEPTION (ย้ายพอร์ตได้ ล้างไม่ได้)
+  - Cross-User: `brokerId` → `assertOwnedBrokerId` · `portfolioId` →
+    `assertCanWriteToPortfolio` (ยืนยันเจ้าของ **และ** เช็คสิทธิ์เขียน) ·
+    `assetId` → `findByIdForUser` ที่ผ่าน `queryForUser` · ทั้งหมดตอบ 404 ไม่ใช่ 403
+    · **เช็คสิทธิ์เขียนของพอร์ตที่สินทรัพย์สังกัดอยู่ก่อนแตะอะไรทั้งสิ้น** ไม่งั้น
+    ผู้ใช้ที่ Premium หมดอายุจะยังแก้ป้ายกำกับในพอร์ตส่วนเกินได้
+  - ย้ายแล้วชน `UNIQUE (user_id, symbol, portfolio_id, broker_id)` ของ migration 046
+    → `409 ASSET_ALREADY_EXISTS` (**ห้ามรวมสองแถวให้อัตโนมัติ** = แตะเงินจริง)
+  - `sector` Normalize ตอนเขียน (trim + ยุบช่องว่างซ้ำ) **แต่คงตัวพิมพ์ตามที่
+    ผู้ใช้พิมพ์** — `SET50` ไม่กลายเป็น `Set50` (บทเรียนจาก Stage 2) ·
+    การกรองด้วย `?sector=` เทียบแบบไม่สนตัวพิมพ์ให้**ตรงกับวิธีจัดกลุ่มของ
+    `/portfolio/allocation` เป๊ะ** ไม่งั้นผู้ใช้กดกลุ่มบนกราฟแล้วเห็นรายการไม่ครบ
+  - **Red-Green จริง 3 ชุด** (ถอด Fix → แดง → ใส่กลับ → เขียว):
+    ถอด `assertOwnedBrokerId` **แดง 3/32** · ยอมให้ล้าง `portfolioId` เป็น null
+    **แดง 3/32** · เพิกเฉย Field ที่ไม่รองรับเงียบๆ **แดง 4/32**
+  - Test ทั้งชุด **128 suites / 2,564 → 129 suites / 2,596 เขียวทั้งหมด**
+  - **ยังไม่ได้ทำ:** `GET /assets/{id}` (รายละเอียดรายตัว — ยังไม่มีใครเรียกใช้) ·
+    Stage 9 ต่อ Frontend · Production Verification ทั้งหมด
+
 - **Multi-Portfolio / Broker / Sector / Dividend — Stage 8 (2/3): Allocation**
   (Branch `feat/dashboard-production-wire` — ยัง**ไม่ได้ Push/Merge/Deploy**)
   - **`GET /api/v1/portfolio/allocation?groupBy=broker|sector|assetType&portfolioId=`**
