@@ -96,14 +96,52 @@ async function getPortfolio(userId, portfolioId, userRecord) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// assertCanWriteToPortfolio — ด่านกลางสำหรับ "เขียนอะไรลงพอร์ตนี้ได้ไหม"
+// assertCanAddToPortfolio — ด่านกลางของ "เพิ่มของใหม่เข้าพอร์ตนี้ได้ไหม"
 // ═══════════════════════════════════════════════════════════════════════════
-// ใช้จากทุกจุดที่จะบันทึกสินทรัพย์/ธุรกรรมเข้าพอร์ตที่ระบุ — รวมไว้ที่เดียวเพื่อ
-// ไม่ให้กติกา "อ่านได้ เขียนไม่ได้" ถูกเขียนซ้ำด้วยกฎที่ต่างกันในแต่ละ Endpoint
+// ⭐ มติ Founder 24 ส.ค. 2569 — "เขียน" ต้องแยกเป็น 2 ชนิด ซึ่ง § 8.1(ก) เดิม
+// ไม่ได้แยกไว้ และการไม่แยกทำให้เกิดปัญหาที่ร้ายแรงกว่าที่ Gate ตั้งใจกัน:
+//
+//   ✅ ด่านนี้บล็อก — "เพิ่มของใหม่" (= ใช้ฟีเจอร์ Multi-portfolio ต่อโดยไม่จ่าย)
+//        ซื้อ · เพิ่มสินทรัพย์ · บันทึกปันผล · Bulk Import · ย้ายสินทรัพย์ **เข้า**
+//
+//   ❌ ด่านนี้ **ต้องไม่แตะ** — "ลดของเดิม / แก้ให้ตรงความจริง"
+//        ขาย · ย้อนรายการล่าสุด (Undo) · ย้ายสินทรัพย์ **ออก** ไปพอร์ตหลัก
+//
+// ── ทำไมการขาย/Undo ต้องทำได้เสมอ (สำคัญกว่าที่คิด) ─────────────────────────
+// ผู้ใช้ขายหุ้นจริงไปแล้วในโลกจริง ถ้าบันทึกไม่ได้ **พอร์ตจะโชว์ตัวเลขผิดถาวร**
+// ("ยังถือ BTC 0.5 อยู่" ทั้งที่ขายไปแล้ว) → กำไร/ขาดทุนที่เขาเห็นผิดตลอดไป
+// ซึ่งขัดกับจุดยืนทั้งหมดของผลิตภัณฑ์ (บันทึกให้ตรงความจริง) และเท่ากับ
+// "เอาข้อมูลผู้ใช้เป็นตัวประกันค่าสมาชิก" ซึ่งอยู่คนละเรื่องกับการจำกัดฟีเจอร์
+//
+//   **การล็อกต้องหมายถึง "โตต่อไม่ได้" ไม่ใช่ "ออกไม่ได้"**
+//
+// ── กฎการเลือกพอร์ตที่ตรวจ: ตรวจ "ปลายทางของของใหม่" เสมอ ──────────────────
+// ไม่ใช่ตรวจพอร์ตต้นทาง — กฎข้อเดียวนี้ให้ผลถูกทุกเคสพร้อมกัน:
+//   ย้ายออกไปพอร์ตหลัก → ปลายทาง = พอร์ตหลัก (เขียนได้) → ✅ ผ่าน
+//   ย้ายเข้าพอร์ตส่วนเกิน → ปลายทาง = พอร์ตส่วนเกิน       → ❌ บล็อก
+//   ซื้อเข้าพอร์ตส่วนเกิน → ปลายทาง = พอร์ตส่วนเกิน       → ❌ บล็อก
+//
+// portfolioId = null/undefined → คืน null โดยไม่ยิง Query เลย (ไม่ระบุพอร์ต =
+// ไม่มีอะไรให้ตรวจ) — ทำให้เส้นทางของผู้ใช้ Free ซึ่งไม่เคยส่ง portfolioId มา
+// **ไม่มี Query เพิ่มแม้แต่ครั้งเดียว** (กฎยืนข้อ 10 — ห้ามเพิ่ม Latency บน
+// Live Path โดยไม่จำเป็น · ผู้ใช้ Free คือคนส่วนใหญ่ของระบบวันนี้)
 //
 // ⚠️ ทำสองหน้าที่พร้อมกันโดยเจตนา: (1) ยืนยันความเป็นเจ้าของ (2) ตรวจสิทธิ์เขียน
 // เพราะถ้าแยกกัน Caller มีโอกาสเรียกแค่ข้อใดข้อหนึ่งแล้วคิดว่าครบ
-async function assertCanWriteToPortfolio(userId, portfolioId, userRecord) {
+//
+// ── ผู้เรียกจริง ณ ตอนนี้ (ตรวจซ้ำได้ด้วย grep — คอมเมนต์ต้องไม่โกหก) ────────
+//   transaction.service.validateBuy   → ครอบ ซื้อ ทุกช่องทางในจุดเดียว
+//                                        (เว็บ → processBuyCommand → validateBuy ·
+//                                         LINE → createPending/confirmPending → validateBuy ·
+//                                         Bulk Import → validateBuy ต่อรายการ)
+//   dividend.service.recordDividend   → ปันผล (แยก Endpoint ตาม Design Doc § 4.5)
+//   assets.service.updateAssetMeta    → ย้ายสินทรัพย์ (ตรวจปลายทาง)
+//   portfolios.service (ในไฟล์นี้เอง)  → update/delete พอร์ต
+//
+// ⚠️ **ไม่ได้ถูกเรียกจาก validateSell / undoTransaction โดยเจตนา** — สองทางนั้น
+// คือ "ลดของเดิม/แก้ให้ตรงความจริง" ที่ต้องทำได้เสมอ (ดูตารางด้านบน)
+// ถ้ามีใครเผลอเพิ่มด่านเข้าไป เทสต์ใน portfolioWriteGate.regression.test.js จะแดง
+async function assertCanAddToPortfolio(userId, portfolioId, userRecord) {
   if (portfolioId === null || portfolioId === undefined) return null;
 
   const portfolio = await portfolioRepository.findByIdForUser(portfolioId, userId);
@@ -176,7 +214,7 @@ async function createPortfolio(userId, params, userRecord) {
 // ⚠️ พอร์ต Default แก้ชื่อ/ประเภทได้ปกติ — ที่ห้ามคือ "ลบ" เท่านั้น
 // (Invariant บอกว่าต้องมี Default หนึ่งอันเป๊ะ ไม่ได้บอกว่าห้ามเปลี่ยนชื่อ)
 async function updatePortfolio(userId, portfolioId, patch, userRecord) {
-  await assertCanWriteToPortfolio(userId, portfolioId, userRecord);
+  await assertCanAddToPortfolio(userId, portfolioId, userRecord);
 
   const update = {};
   if (patch.name !== undefined) {
@@ -236,7 +274,17 @@ async function updatePortfolio(userId, portfolioId, patch, userRecord) {
 // **การรวมสองแถวเข้าด้วยกันกระทบต้นทุนเฉลี่ย = แตะเงินจริง ห้ามทำอัตโนมัติ**
 // ต้องปฏิเสธพร้อมบอกว่าตัวไหนชน ให้ผู้ใช้จัดการเองก่อน
 async function deletePortfolio(userId, portfolioId, userRecord) {
-  const portfolio = await assertCanWriteToPortfolio(userId, portfolioId, userRecord);
+  // ⚠️ **ไม่ผ่าน assertCanAddToPortfolio โดยเจตนา** — การลบพอร์ตส่วนเกินคือการ
+  // "ย้ายสินทรัพย์ออกไปรวมกับพอร์ตหลัก" ซึ่งเป็นทางออกจากพอร์ตที่ถูกล็อก
+  // (มติ Founder 24 ส.ค. 2569: การล็อกต้องหมายถึง "โตต่อไม่ได้" ไม่ใช่ "ออกไม่ได้")
+  // ถ้าบล็อกที่นี่ด้วย ผู้ใช้ที่ Premium หมดอายุจะรวมพอร์ตของตัวเองไม่ได้เลย
+  // ปลายทางของสินทรัพย์คือพอร์ต Default ซึ่งเขียนได้เสมออยู่แล้ว
+  const portfolio = await portfolioRepository.findByIdForUser(portfolioId, userId);
+  if (!portfolio) {
+    throw new PortfolioServiceError('PORTFOLIO_NOT_FOUND', `Portfolio ${portfolioId} not found`, {
+      portfolioId,
+    });
+  }
 
   if (portfolio.isDefault) {
     throw new PortfolioServiceError(
@@ -302,7 +350,7 @@ module.exports = {
   PORTFOLIO_TYPES,
   listPortfolios,
   getPortfolio,
-  assertCanWriteToPortfolio,
+  assertCanAddToPortfolio,
   createPortfolio,
   updatePortfolio,
   deletePortfolio,

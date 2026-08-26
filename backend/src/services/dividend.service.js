@@ -1,4 +1,6 @@
 const assetRepository = require('../repositories/asset.repository');
+// Stage 8-fix — ด่าน "เพิ่มของใหม่เข้าพอร์ตนี้ได้ไหม" (มติ Founder 24 ส.ค. 2569)
+const portfoliosService = require('./portfolios.service');
 const transactionRepository = require('../repositories/transaction.repository');
 const { calculateHeldQuantity, todayInBangkok } = require('./transaction.service');
 const { dividendSign } = require('../utils/transactionType.util');
@@ -115,6 +117,23 @@ async function recordDividend(userId, params, options = {}) {
       assetId: params.assetId,
     });
   }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // ⭐ ด่าน "อ่านได้ เขียนไม่ได้" ของพอร์ตส่วนเกิน (Stage 8-fix)
+  // ═══════════════════════════════════════════════════════════════════════
+  // ปันผลคือ "เพิ่มของใหม่" (รายได้เข้า Ledger) จึงถูกบล็อกเหมือนการซื้อ —
+  // ต่างจากการขาย/Undo ที่ต้องทำได้เสมอ (มติ Founder 24 ส.ค. 2569)
+  //
+  // ⚠️ ต้องเรียกที่นี่แยกต่างหาก **ไม่ได้ผ่าน validateBuy** เพราะ Design Doc § 4.5
+  // แยก Endpoint ปันผลออกจาก POST /transactions โดยตั้งใจ (Payload ต่างกันเชิง
+  // ความหมายทั้งชุด) จึงไม่ได้ใช้คอขวดเดียวกับการซื้อ
+  //
+  // ตรวจพอร์ตของสินทรัพย์ที่ปันผลจะถูกผูกเข้าไป (ปลายทางจริงของรายการนี้)
+  await portfoliosService.assertCanAddToPortfolio(
+    userId,
+    asset.portfolioId ?? null,
+    options.userRecord ?? { plan: options.plan, planExpiresAt: options.planExpiresAt }
+  );
 
   const date = params.date ?? todayInBangkok();
 

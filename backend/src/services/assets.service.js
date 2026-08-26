@@ -22,7 +22,7 @@ const portfoliosService = require('./portfolios.service');
 // FK ระดับ DB ตรวจได้แค่ "แถวนั้นมีอยู่จริง" ไม่ได้ตรวจ "เป็นของใคร" →
 // ต้องผ่านด่านยืนยันเจ้าของก่อนใช้เสมอ:
 //   brokerId    → brokerService.assertOwnedBrokerId
-//   portfolioId → portfoliosService.assertCanWriteToPortfolio
+//   portfolioId → portfoliosService.assertCanAddToPortfolio
 //                 (ทำสองหน้าที่: ยืนยันเจ้าของ **และ** เช็คสิทธิ์เขียนตอน Premium
 //                  หมดอายุ — ย้ายสินทรัพย์เข้าพอร์ตที่อ่านได้อย่างเดียวไม่ได้)
 
@@ -108,10 +108,20 @@ async function updateAssetMeta(userId, assetId, patch, userRecord) {
     throw new AssetServiceError('ASSET_NOT_FOUND', `Asset ${assetId} not found`, { assetId });
   }
 
-  // ── สินทรัพย์ที่อยู่ในพอร์ต "อ่านได้ เขียนไม่ได้" ห้ามแก้ ───────────────────
-  // ถ้าไม่เช็คตรงนี้ ผู้ใช้ที่ Premium หมดอายุจะยังแก้ป้ายกำกับของสินทรัพย์ใน
-  // พอร์ตส่วนเกินได้ ซึ่งขัดกับกติกา "เขียนไม่ได้" (มติ Founder § 8.1 ก)
-  await portfoliosService.assertCanWriteToPortfolio(userId, asset.portfolioId, userRecord);
+  // ── ⭐ ตรวจ "ปลายทาง" ไม่ใช่ "ต้นทาง" (มติ Founder 24 ส.ค. 2569) ───────────
+  // กฎข้อเดียวนี้ให้ผลถูกทุกเคสพร้อมกัน:
+  //   ย้าย **ออก** จากพอร์ตส่วนเกิน → พอร์ตหลัก → ปลายทางเขียนได้ → ✅ ผ่าน
+  //   ย้าย **เข้า** พอร์ตส่วนเกิน                → ปลายทางถูกล็อก → ❌ บล็อก
+  //   แก้ป้ายกำกับเฉยๆ (ไม่ย้าย)                → ปลายทาง = พอร์ตเดิมของมันเอง
+  //
+  // ⚠️ เดิมตรวจ "ต้นทาง" (asset.portfolioId) เสมอ ซึ่งทำให้ผู้ใช้ที่ Premium
+  // หมดอายุ **ย้ายสินทรัพย์ออกจากพอร์ตที่ถูกล็อกไม่ได้เลย** = ขังสินทรัพย์ไว้เป็น
+  // ตัวประกันค่าสมาชิก ซึ่งขัดกับหลัก "การล็อก = โตต่อไม่ได้ ไม่ใช่ออกไม่ได้"
+  const movingTo =
+    patch.portfolioId !== undefined && patch.portfolioId !== null && patch.portfolioId !== 'none'
+      ? patch.portfolioId
+      : asset.portfolioId;
+  await portfoliosService.assertCanAddToPortfolio(userId, movingTo, userRecord);
 
   const update = {};
 
@@ -143,9 +153,10 @@ async function updateAssetMeta(userId, assetId, patch, userRecord) {
         { field: 'portfolioId' }
       );
     }
-    // ยืนยันเจ้าของ **และ** เช็คสิทธิ์เขียนของพอร์ตปลายทางด้วย (ย้ายเข้าพอร์ตที่
-    // อ่านได้อย่างเดียวไม่ได้) — throw PORTFOLIO_NOT_FOUND / PORTFOLIO_READ_ONLY
-    await portfoliosService.assertCanWriteToPortfolio(userId, patch.portfolioId, userRecord);
+    // ยืนยันความเป็นเจ้าของพอร์ตปลายทาง (สิทธิ์เขียนถูกตรวจไปแล้วที่ movingTo
+    // ด้านบน — เรียกซ้ำที่นี่เพื่อกัน portfolioId ของผู้ใช้คนอื่นหลุดเข้ามา
+    // ในกรณีที่ movingTo ไปตกที่ asset.portfolioId แทน)
+    await portfoliosService.assertCanAddToPortfolio(userId, patch.portfolioId, userRecord);
     update.portfolioId = patch.portfolioId;
   }
 

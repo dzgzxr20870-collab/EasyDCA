@@ -87,6 +87,12 @@ const WEB_ERROR_MESSAGES = {
   AMBIGUOUS_ASSET_BROKER:
     'คุณถือสินทรัพย์นี้อยู่มากกว่า 1 โบรก/Exchange กรุณาเลือกก่อนว่าจะบันทึกรายการนี้ที่ไหน',
   BROKER_NOT_FOUND: 'ไม่พบโบรก/Exchange ที่เลือก (อาจถูกลบไปแล้ว) กรุณาเลือกใหม่อีกครั้ง',
+  // Stage 8-fix — พอร์ตส่วนเกินหลัง Premium หมดอายุ (มติ Founder 24 ส.ค. 2569)
+  // ⚠️ ต้องบอกทางออกที่ยังทำได้จริงให้ครบ ไม่ใช่แค่ "อ่านอย่างเดียว" ซึ่งชวนให้
+  // เข้าใจว่าทำอะไรไม่ได้เลย แล้วผู้ใช้จะไม่บันทึกการขายที่เกิดขึ้นจริง
+  PORTFOLIO_READ_ONLY:
+    'พอร์ตนี้เพิ่มรายการใหม่ไม่ได้ เพราะแพ็กเกจ Premium หมดอายุแล้ว — แต่ยังบันทึกการขาย ย้อนรายการล่าสุด และย้ายสินทรัพย์ออกไปพอร์ตหลักได้ตามปกติ ข้อมูลเดิมอยู่ครบทุกรายการ ต่ออายุแล้วกลับมาเพิ่มรายการได้ทันที',
+  PORTFOLIO_NOT_FOUND: 'ไม่พบพอร์ตที่เลือก (อาจถูกลบไปแล้ว)',
   NOTHING_TO_SELL: 'สินทรัพย์นี้ขายออกไปหมดแล้ว ไม่มียอดคงเหลือให้ขาย',
   // ── Stage 6b (dividend) ────────────────────────────────────────────────────
   // ข้อความต้องบอก "วันที่" ที่ระบบใช้ตัดสินด้วย เพราะกรณีที่พบบ่อยที่สุดคือผู้ใช้
@@ -169,6 +175,9 @@ const ERROR_STATUS = {
   // ASSET_ALREADY_EXISTS: ขัดกับสถานะปัจจุบันของข้อมูล ไม่ใช่ Validation ล้วน)
   AMBIGUOUS_ASSET_BROKER: 409,
   BROKER_NOT_FOUND: 404,
+  // 403 = "แพ็กเกจไม่ให้ทำ" (Pattern เดียวกับ portfolios.controller)
+  PORTFOLIO_READ_ONLY: 403,
+  PORTFOLIO_NOT_FOUND: 404,
   NOTHING_TO_SELL: 400,
   // ── Stage 6b (dividend) ────────────────────────────────────────────────────
   // "ไม่ได้ถือสินทรัพย์นี้อยู่ ณ วันที่ระบุ" = สิทธิ์ในการบันทึกรายการนี้ไม่มีจริง
@@ -786,7 +795,9 @@ async function createDividend(req, res) {
     const result = await dividendService.recordDividend(
       req.user.id,
       { assetId: body.assetId, amountThb, quantity, date, note },
-      { source: 'web' }
+      // userRecord ต้องส่งไปด้วย — dividend.service ใช้ตัดสินว่าพอร์ตของสินทรัพย์นี้
+      // ยังเขียนได้ไหม (พอร์ตส่วนเกินหลัง Premium หมดอายุ = เพิ่มของใหม่ไม่ได้)
+      { source: 'web', userRecord: req.userRecord }
     );
 
     return res.status(201).json({

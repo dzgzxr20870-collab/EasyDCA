@@ -79,7 +79,7 @@ beforeEach(() => {
   );
   assetRepository.findActiveByUser.mockResolvedValue([asset()]);
   brokerService.assertOwnedBrokerId.mockImplementation(async (_uid, id) => id);
-  portfoliosService.assertCanWriteToPortfolio.mockResolvedValue({ id: PORTFOLIO_A });
+  portfoliosService.assertCanAddToPortfolio.mockResolvedValue({ id: PORTFOLIO_A });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -99,7 +99,7 @@ describe('⚠️ Cross-User Isolation (กฎเหล็กข้อ 3)', () =>
   });
 
   test('⚠️ portfolioId ของผู้ใช้คนอื่น → 404 และห้ามเขียนอะไรลง DB เลย', async () => {
-    portfoliosService.assertCanWriteToPortfolio.mockRejectedValue(
+    portfoliosService.assertCanAddToPortfolio.mockRejectedValue(
       new MockError('PORTFOLIO_NOT_FOUND')
     );
 
@@ -213,7 +213,7 @@ describe('⚠️ Invariant migration 044/045 — สินทรัพย์ท�
 // ═══════════════════════════════════════════════════════════════════════════
 describe('⚠️ Premium หมดอายุ — สินทรัพย์ในพอร์ตส่วนเกินแก้ไม่ได้', () => {
   test('⚠️ สินทรัพย์อยู่ในพอร์ตที่อ่านได้อย่างเดียว → 403 PORTFOLIO_READ_ONLY', async () => {
-    portfoliosService.assertCanWriteToPortfolio.mockRejectedValue(
+    portfoliosService.assertCanAddToPortfolio.mockRejectedValue(
       new MockError('PORTFOLIO_READ_ONLY')
     );
 
@@ -234,7 +234,7 @@ describe('⚠️ Premium หมดอายุ — สินทรัพย์�
       mockRes()
     );
 
-    expect(portfoliosService.assertCanWriteToPortfolio).toHaveBeenCalledWith(
+    expect(portfoliosService.assertCanAddToPortfolio).toHaveBeenCalledWith(
       USER_ID,
       PORTFOLIO_A,
       FREE_USER

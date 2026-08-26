@@ -516,16 +516,16 @@ describe('DELETE /portfolios/:id — ลบ "กล่อง" ไม่ใช่
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-describe('assertCanWriteToPortfolio — ด่านกลางของทุกจุดที่เขียนลงพอร์ต', () => {
+describe('assertCanAddToPortfolio — ด่านกลางของทุกจุดที่เขียนลงพอร์ต', () => {
   test('portfolioId = null (ไม่ระบุพอร์ต) → ผ่าน ไม่ยิง Query เลย', async () => {
-    const result = await portfoliosService.assertCanWriteToPortfolio(USER_ID, null, FREE_USER);
+    const result = await portfoliosService.assertCanAddToPortfolio(USER_ID, null, FREE_USER);
 
     expect(result).toBeNull();
     expect(portfolioRepository.findByIdForUser).not.toHaveBeenCalled();
   });
 
   test('พอร์ตของตัวเองที่เขียนได้ → คืนพอร์ตนั้น', async () => {
-    const result = await portfoliosService.assertCanWriteToPortfolio(
+    const result = await portfoliosService.assertCanAddToPortfolio(
       USER_ID,
       P_DEFAULT.id,
       FREE_USER
@@ -538,7 +538,7 @@ describe('assertCanWriteToPortfolio — ด่านกลางของทุ�
     portfolioRepository.findByIdForUser.mockResolvedValue(null);
 
     await expect(
-      portfoliosService.assertCanWriteToPortfolio(USER_ID, P_SECOND.id, PREMIUM_USER)
+      portfoliosService.assertCanAddToPortfolio(USER_ID, P_SECOND.id, PREMIUM_USER)
     ).rejects.toMatchObject({ code: 'PORTFOLIO_NOT_FOUND' });
   });
 });

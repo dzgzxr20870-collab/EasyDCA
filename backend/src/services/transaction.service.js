@@ -10,6 +10,9 @@ const { heldQuantitySign } = require('../utils/transactionType.util');
 // Stage 5 (migration 046) — แหล่งตัดสิน "Symbol นี้หมายถึงสินทรัพย์แถวไหน" ที่เดียว
 // ของทั้งระบบ (ตั้งแต่ถือ Symbol เดียวกันได้หลายโบรก Symbol เดียวอาจตรงหลายแถว)
 const assetResolution = require('./assetResolution.service');
+// Stage 8-fix — ด่าน "เพิ่มของใหม่เข้าพอร์ตนี้ได้ไหม" (มติ Founder 24 ส.ค. 2569)
+// ⚠️ ต้องอยู่ใน validateBuy เท่านั้น ห้ามใส่ใน validateSell (ดูเหตุผลที่ validateBuy)
+const portfoliosService = require('./portfolios.service');
 
 // แหล่งราคาจริงตาม Asset Type (Pattern เดียวกับที่ priceFeed.service.js ใช้
 // จัดเส้นทาง Crypto → CoinGecko / หุ้นสหรัฐ → Twelve Data) — priceFeedService
@@ -436,6 +439,30 @@ async function validateBuy(userId, params, options = {}) {
     portfolioId,
     brokerId: params.brokerId,
   });
+  // ═══════════════════════════════════════════════════════════════════════
+  // ⭐ ด่าน "อ่านได้ เขียนไม่ได้" ของพอร์ตส่วนเกิน (Stage 8-fix)
+  // ═══════════════════════════════════════════════════════════════════════
+  // ⚠️ **จุดนี้คือคอขวดร่วมของ "การซื้อ" ทุกช่องทาง** จึงวางด่านที่นี่ที่เดียว
+  // แทนการแปะทีละ Controller (ไม่งั้นจะกลับมาเจอปัญหาเดิมคือ "แปะครบ 4 ที่
+  // ลืมที่ 5" — ซึ่งเป็นสาเหตุที่ด่านนี้ตกหล่นมาตั้งแต่ Stage 8 รอบแรก):
+  //   เว็บ        → transactions.controller → processBuyCommand → validateBuy
+  //   LINE        → pendingTransaction.createPending → validateBuy
+  //                 และตอนกดยืนยัน → confirmPending → processBuyCommand → validateBuy
+  //   Bulk Import → bulkImport.service → validateBuy ต่อรายการ
+  //                 และ confirmBatch → confirmPending → processBuyCommand → validateBuy
+  //
+  // ⚠️ ตรวจ "ปลายทางจริงของรายการนี้" ไม่ใช่ params.portfolioId ดิบ — เมื่อซื้อเพิ่ม
+  // ใน Symbol ที่ถืออยู่แล้ว ปลายทางคือพอร์ตของสินทรัพย์แถวนั้น ซึ่งอาจต่างจากที่
+  // Caller ส่งมา (เส้นทาง LINE ไม่เคยส่ง portfolioId มาเลย)
+  //
+  // ⚠️ ห้ามย้ายด่านนี้ไป validateSell เด็ดขาด — การขายคือ "ลดของเดิม/แก้ให้ตรง
+  // ความจริง" ซึ่งต้องทำได้เสมอแม้พอร์ตถูกล็อก (มติ Founder 24 ส.ค. 2569)
+  const targetPortfolioId = existingAsset ? existingAsset.portfolioId ?? null : portfolioId;
+  await portfoliosService.assertCanAddToPortfolio(userId, targetPortfolioId, {
+    plan,
+    planExpiresAt,
+  });
+
   if (existingAsset) {
     return {
       asset: existingAsset,
