@@ -1,0 +1,361 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   demo.css — Design system ของ /demo/* (Phase 2 + Feedback รอบ 2, S8 UX Demo)
+   ═══════════════════════════════════════════════════════════════════════
+   ทุก Class ขึ้นต้น .demo- (แยกจาก .dh-* ของ DashboardHome.css เดิมโดยเจตนา —
+   Vite Bundle CSS ทุกไฟล์รวมกันเสมอไม่ Scope ตาม Route เหมือน Pattern เดิม)
+   Design Token กำหนดที่ .demo-app เท่านั้น (ไม่ใช่ :root Global)
+
+   Feedback รอบ 2 (จุดที่ 2 — "ดูคลาสสิก/ย้อนยุค"): Palette แบรนด์เดิมทั้งหมด
+   (Mint #7ED47E / Leaf #22C55E / Cream #FFF5E6 / Sky #BDE9FF / Yellow #FFE08A /
+   Charcoal #282D31) ไม่เปลี่ยนสักตัว — เปลี่ยนแค่ "สัดส่วนและวิธีใช้":
+     - พื้นหลังทั้งหน้า ครีม → นิวทรัลอ่อนแบบมีอันเดอร์โทนเขียวจางๆ (--bg)
+     - Mint/Leaf ใช้เป็นสีเน้น (ปุ่มหลัก/ตัวเลขบวก/Active State) ไม่ใช่พื้นก้อนใหญ่
+     - Cream ลดบทบาทเหลือจุดไฮไลต์เล็กๆ (Donut center, Switcher panel)
+     - เงา (Elevation) แทนเส้นขอบเป็นตัวสร้างระดับชั้นของการ์ด/ปุ่มควบคุมใหญ่
+     - Typography ต่างระดับชัด: ตัวเลขสำคัญใหญ่/หนักขึ้น, Label เล็กลง/จางลง
+     - Padding/Gap กว้างขึ้นทั่วหน้าให้โปร่งตา
+   สี Donut Chart (lib/demo/demoColors.js) "ไม่แตะ" — ผ่าน dataviz validator แล้ว
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.demo-app {
+  --bg: #F7F9F7; --card: #FFFFFF; --ink: #282D31; --ink2: #545B52; --muted: #8B9587;
+  --line: #EEF1EC; --line2: #E4E8E1;
+  --mint: #7ED47E; --leaf: #22C55E; --leaf-deep: #189146;
+  --cream: #FFF5E6; --cream-deep: #F5E3C4;
+  --sky: #BDE9FF; --sky-deep: #4C9FCB;
+  --yellow: #FFE08A;
+  --green-soft: #E9F6EE; --red: #DE5050; --red-soft: #FDEEEE; --amber-soft: #FFF3D6;
+  --r: 20px; --r-sm: 14px;
+  --shadow: 0 1px 2px rgba(40,45,49,.04), 0 14px 32px rgba(40,45,49,.07);
+  --shadow-sm: 0 1px 2px rgba(40,45,49,.05), 0 4px 12px rgba(40,45,49,.05);
+
+  min-height: 100vh;
+  font-family: 'IBM Plex Sans Thai', 'Noto Sans Thai', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+}
+.demo-app * { box-sizing: border-box; }
+.demo-app button, .demo-app select, .demo-app input { font-family: inherit; }
+
+.demo-demo-badge {
+  background: var(--ink); color: #fff;
+  font-size: 12.5px; font-weight: 700; letter-spacing: .2px;
+  padding: 8px 14px;
+  display: flex; align-items: center; justify-content: center; gap: 14px; flex-wrap: wrap;
+}
+
+/* Feedback รอบ 3 (จุดที่ 2) — Toggle จำลองมุมมอง Free/Premium */
+.demo-plan-toggle { display: flex; background: rgba(255,255,255,.14); border-radius: 99px; padding: 3px; gap: 2px; }
+.demo-plan-toggle button {
+  border: none; background: none; color: rgba(255,255,255,.75); font-weight: 700; font-size: 11.5px;
+  padding: 5px 12px; border-radius: 99px; cursor: pointer;
+}
+.demo-plan-toggle-on { background: #fff !important; color: var(--ink) !important; }
+
+.demo-shell { display: flex; align-items: flex-start; gap: 26px; max-width: 1380px; margin: 0 auto; padding: 26px 26px 96px; }
+
+/* ── Sidebar ── */
+.demo-sidebar {
+  width: 252px; flex: none; position: sticky; top: 26px;
+  background: var(--card); border-radius: var(--r); box-shadow: var(--shadow);
+  padding: 20px 15px; display: flex; flex-direction: column; gap: 16px;
+}
+.demo-brand { display: flex; align-items: center; gap: 10px; padding: 2px 6px 14px; }
+.demo-brand-logo { width: 34px; height: 34px; border-radius: 9px; object-fit: cover; }
+.demo-brand b { display: block; font-size: 14.5px; }
+.demo-brand small { color: var(--muted); font-size: 11px; }
+
+/* Feedback รอบ 2 (จุดที่ 1) — ปุ่มบันทึกเด่นสุดใน Sidebar ใช้ Gradient Mint→Leaf
+   (สีเน้น ไม่ใช่พื้นก้อนใหญ่ทั่วการ์ด — ขอบเขตแค่ตัวปุ่มเดียว) */
+.demo-record-btn {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  border: none; border-radius: var(--r-sm); padding: 13px 14px;
+  background: linear-gradient(135deg, var(--mint), var(--leaf-deep));
+  color: #fff; font-weight: 800; font-size: 14px; cursor: pointer;
+  box-shadow: 0 6px 16px rgba(21,145,70,.28);
+}
+.demo-record-btn:hover { filter: brightness(1.04); }
+
+.demo-sidebar nav { display: flex; flex-direction: column; gap: 2px; }
+.demo-nav-item {
+  display: flex; align-items: center; gap: 11px; padding: 11px 12px; border-radius: 13px;
+  color: var(--ink2); font-weight: 600; font-size: 14px; text-decoration: none; transition: background .15s;
+}
+.demo-nav-item:hover { background: var(--green-soft); }
+.demo-nav-active { background: var(--leaf); color: #fff; box-shadow: var(--shadow-sm); }
+.demo-ic { font-size: 16px; }
+
+.demo-side-switcher {
+  margin-top: auto; padding: 12px; border-radius: var(--r-sm);
+  background: linear-gradient(180deg, var(--cream), #fff);
+}
+.demo-fl { display: block; font-size: 11px; font-weight: 700; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .4px; }
+
+/* Feedback รอบ 3 (จุดที่ 1) — Switcher เหลือหน้าที่สลับพอร์ตอย่างเดียว ปุ่มสร้าง
+   พอร์ตใหม่แยกออกมาเป็นปุ่มจริงข้างๆ ให้เห็นชัด ไม่ซ่อนใน <option> อีกต่อไป */
+.demo-switcher-row { display: flex; gap: 6px; align-items: stretch; }
+.demo-portfolio-switcher {
+  flex: 1; min-width: 0; border: none; border-radius: 11px; padding: 9px 10px;
+  font-size: 13px; font-weight: 700; color: var(--ink); background: #fff; cursor: pointer;
+  box-shadow: var(--shadow-sm);
+}
+.demo-add-portfolio-btn {
+  flex: none; width: 36px; border: none; border-radius: 11px; cursor: pointer;
+  background: linear-gradient(135deg, var(--mint), var(--leaf-deep)); color: #fff;
+  font-size: 17px; font-weight: 800; box-shadow: var(--shadow-sm);
+}
+.demo-add-portfolio-btn:hover { filter: brightness(1.05); }
+
+/* ── Main column ── */
+.demo-main-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 20px; }
+.demo-m-topbar { display: none; align-items: center; gap: 10px; }
+.demo-main { display: flex; flex-direction: column; gap: 20px; }
+.demo-sp { flex: 1; }
+
+/* ── Cards ── */
+.demo-card { background: var(--card); border-radius: var(--r); box-shadow: var(--shadow); padding: 22px 24px; }
+.demo-card-h { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+.demo-card-h h2 { font-size: 15.5px; font-weight: 800; margin: 0; letter-spacing: -.1px; }
+.demo-empty-msg { color: var(--muted); font-size: 13.5px; padding: 14px 0; }
+.demo-mut { color: var(--muted); }
+
+/* ── Stat tiles — Typography เป็นตัวสร้าง Hierarchy หลัก (Feedback รอบ 2) ── */
+.demo-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+.demo-stat { background: var(--card); border-radius: var(--r); box-shadow: var(--shadow); padding: 18px 20px; }
+.demo-stat-t { display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; }
+.demo-stat-ico { opacity: .55; font-size: 14px; }
+.demo-stat-v { font-size: 32px; font-weight: 900; margin-top: 8px; letter-spacing: -.6px; line-height: 1.1; }
+.demo-stat-v small { font-size: 13px; font-weight: 700; color: var(--muted); letter-spacing: 0; }
+.demo-stat-sub { font-size: 12.5px; font-weight: 700; color: var(--ink2); margin-top: 6px; }
+.demo-stat-note { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+.demo-up { color: var(--leaf-deep); }
+.demo-down { color: var(--red); }
+
+/* ── Allocation donut + legend + drilldown ── */
+.demo-alloc-body { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }
+.demo-donut-wrap { position: relative; width: 172px; height: 172px; flex: none; }
+.demo-donut-center {
+  position: absolute; inset: 22px; border-radius: 999px; background: var(--cream);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; pointer-events: none;
+}
+.demo-donut-center small { color: #8A7752; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; }
+.demo-donut-center b { font-size: 17px; font-weight: 900; color: var(--ink); }
+.demo-legend { flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 4px; }
+.demo-lg-group { border-radius: 10px; overflow: hidden; }
+.demo-lg-row {
+  width: 100%; display: flex; align-items: center; gap: 8px; padding: 9px 8px; border: none; background: none;
+  cursor: pointer; text-align: left; border-radius: 11px; transition: background .12s;
+}
+.demo-lg-row:hover { background: var(--bg); }
+.demo-lg-sw { width: 11px; height: 11px; border-radius: 4px; flex: none; }
+.demo-lg-nm { flex: 1; font-weight: 700; font-size: 13px; min-width: 0; }
+.demo-lg-val { font-weight: 800; font-size: 12.5px; }
+.demo-lg-pc { color: var(--muted); font-size: 12px; width: 42px; text-align: right; }
+.demo-lg-caret { color: var(--muted); font-size: 10px; width: 12px; text-align: center; }
+.demo-lg-drilldown { padding: 2px 6px 8px 31px; display: flex; flex-direction: column; gap: 4px; }
+.demo-lg-item { display: grid; grid-template-columns: 70px 1fr auto; gap: 8px; font-size: 12px; padding: 4px 0; border-bottom: 1px dashed var(--line); }
+.demo-chart-note { font-size: 11.5px; color: var(--muted); margin-top: 12px; }
+
+/* ── Portfolio page: 2-column grid + drill-downs ── */
+.demo-portfolio-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.demo-portfolio-grid > .demo-full { grid-column: 1 / -1; }
+
+/* ── Recent transactions / holdings rows ── */
+.demo-tx-list, .demo-hold-list { display: flex; flex-direction: column; gap: 2px; }
+.demo-tx, .demo-hrow { display: flex; align-items: center; gap: 11px; padding: 10px 4px; border-bottom: 1px solid var(--line); }
+.demo-tx:last-child, .demo-hrow:last-child { border-bottom: none; }
+.demo-avatar { width: 34px; height: 34px; border-radius: 11px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 800; color: #fff; flex: none; }
+.demo-tx-nm, .demo-hrow-nm { flex: 1; min-width: 0; font-size: 13.5px; }
+.demo-tx-nm small, .demo-hrow-nm small { display: block; color: var(--muted); font-size: 11.5px; margin-top: 1px; }
+.demo-side-b { font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: 99px; margin-left: 4px; }
+.demo-b-buy { background: var(--green-soft); color: var(--leaf-deep); }
+.demo-b-sell { background: var(--red-soft); color: var(--red); }
+.demo-b-dividend { background: var(--amber-soft); color: #9A7B16; }
+.demo-tx-amt { text-align: right; font-size: 13.5px; font-weight: 800; }
+.demo-tx-amt small { display: block; color: var(--muted); font-size: 10.5px; font-weight: 600; }
+
+/* ── Buttons ── */
+.demo-btn-main { background: linear-gradient(135deg, var(--mint), var(--leaf-deep)); color: #fff; border: none; border-radius: 13px; padding: 11px 20px; font-weight: 800; font-size: 13.5px; cursor: pointer; box-shadow: 0 5px 14px rgba(21,145,70,.24); }
+.demo-btn-main:hover { filter: brightness(1.04); }
+.demo-btn-ghost { border: none; border-radius: 12px; padding: 9px 15px; font-weight: 700; font-size: 12.5px; color: var(--ink2); background: var(--bg); cursor: pointer; }
+.demo-link-btn { background: none; border: none; color: var(--leaf-deep); font-weight: 700; font-size: 13px; cursor: pointer; padding: 0; }
+
+/* ── Filters (Transactions page) ── */
+.demo-filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin-bottom: 18px; }
+.demo-filter-field { display: flex; flex-direction: column; gap: 5px; }
+.demo-inp, .demo-filter-field select, .demo-filter-field input {
+  border: 1px solid var(--line2); border-radius: 11px; padding: 9px 11px; font-size: 13px; background: var(--bg); color: var(--ink);
+}
+.demo-search-field { flex: 1; min-width: 160px; }
+.demo-search-field input { width: 100%; }
+
+/* ── Table ── */
+.demo-table-wrap { overflow-x: auto; }
+.demo-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.demo-table th { text-align: left; color: var(--muted); font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .3px; padding: 9px 10px; border-bottom: 2px solid var(--line); white-space: nowrap; }
+.demo-table td { padding: 11px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.demo-table tbody tr:hover { background: var(--bg); }
+.demo-table-note { font-size: 12px; color: var(--muted); margin-top: 10px; }
+
+/* ── DCA page ── */
+.demo-dca-stats { margin-bottom: 4px; }
+.demo-plan-row-actions { display: flex; gap: 6px; }
+.demo-tbadge { font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 99px; margin-left: 6px; }
+.demo-t-active { background: var(--green-soft); color: var(--leaf-deep); }
+.demo-t-paused { background: var(--bg); color: var(--muted); }
+
+/* ── Record Transaction Modal: Type chips ── */
+.demo-type-chips { display: flex; gap: 8px; }
+.demo-chip { flex: 1; border: 1px solid var(--line2); background: var(--bg); border-radius: 12px; padding: 10px; font-size: 13px; font-weight: 700; color: var(--ink2); cursor: pointer; }
+.demo-chip-on { background: linear-gradient(135deg, var(--mint), var(--leaf-deep)); border-color: transparent; color: #fff; }
+
+/* ── AddPortfolioModal: Icon/Color pickers ── */
+.demo-icon-picker { display: flex; flex-wrap: wrap; gap: 8px; }
+.demo-icon-swatch { width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--line2); background: var(--bg); font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.demo-icon-swatch-on { border-color: var(--leaf); background: var(--green-soft); box-shadow: 0 0 0 2px var(--leaf) inset; }
+.demo-color-picker { display: flex; gap: 10px; }
+.demo-color-swatch { width: 30px; height: 30px; border-radius: 999px; border: 2px solid #fff; box-shadow: 0 0 0 1px var(--line2); cursor: pointer; }
+.demo-color-swatch-on { box-shadow: 0 0 0 2px var(--ink); }
+
+/* ── Modal ── */
+.demo-modal-overlay { position: fixed; inset: 0; background: rgba(40,45,49,.5); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 50; }
+.demo-modal { background: #fff; border-radius: var(--r); width: 100%; max-width: 440px; box-shadow: 0 24px 60px rgba(30,40,30,.28); max-height: 88vh; overflow-y: auto; }
+.demo-modal-header { padding: 18px 22px 0; }
+.demo-modal-header h3 { margin: 0; font-size: 16.5px; font-weight: 800; }
+.demo-modal-body { padding: 16px 22px 22px; display: flex; flex-direction: column; gap: 14px; }
+.demo-frow { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.demo-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+
+/* ── Profile page ── */
+.demo-profile-header { display: flex; align-items: center; gap: 16px; }
+.demo-profile-avatar { width: 66px; height: 66px; border-radius: 20px; background: linear-gradient(135deg, var(--mint), var(--leaf-deep)); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 23px; font-weight: 800; flex: none; }
+.demo-profile-rows { display: flex; flex-direction: column; gap: 0; }
+.demo-profile-row { display: flex; justify-content: space-between; gap: 12px; padding: 12px 2px; border-bottom: 1px solid var(--line); font-size: 13.5px; }
+.demo-profile-row:last-child { border-bottom: none; }
+.demo-profile-row span:first-child { color: var(--muted); }
+.demo-badge-premium { background: var(--yellow); color: #7A5A00; font-weight: 800; font-size: 11.5px; padding: 4px 11px; border-radius: 99px; }
+.demo-badge-free { background: var(--bg); color: var(--muted); font-weight: 800; font-size: 11.5px; padding: 4px 11px; border-radius: 99px; }
+.demo-toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 11px 2px; }
+.demo-compare-table td { vertical-align: top; }
+.demo-compare-table td:nth-child(2), .demo-compare-table td:nth-child(3) { font-weight: 700; }
+
+/* ── Locked feature card (Feedback รอบ 3 จุดที่ 2) — เบลอเนื้อหาจริงของผู้ใช้ ไม่ใช่
+   การ์ดเปล่า/Placeholder ปลอม โครงกราฟ/สัดส่วนยังเห็นราง ๆ แต่อ่านตัวเลขไม่ได้ ── */
+.demo-locked-wrap { position: relative; }
+.demo-locked-content { filter: blur(7px); opacity: .75; pointer-events: none; user-select: none; }
+.demo-locked-overlay {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 8px; text-align: center; padding: 20px;
+  background: rgba(255,255,255,.45); border-radius: var(--r);
+}
+.demo-locked-icon { font-size: 26px; }
+.demo-locked-text { font-size: 13px; font-weight: 800; color: var(--ink); max-width: 230px; margin: 0; }
+
+/* ── Asset-cap banner (Feedback รอบ 3 จุดที่ 2) — จังหวะชนเพดาน Free 2 สินทรัพย์ ── */
+.demo-cap-banner {
+  margin-top: 16px; padding: 18px; border-radius: var(--r-sm);
+  background: linear-gradient(180deg, var(--cream), #fff);
+}
+.demo-cap-banner-title { margin: 0 0 4px; font-weight: 800; font-size: 13.5px; color: var(--ink); }
+.demo-cap-banner-sub { margin: 0 0 8px; font-size: 12.5px; color: var(--ink2); font-weight: 700; }
+.demo-benefits-list { list-style: none; margin: 0 0 14px; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.demo-benefits-list li { font-size: 12.5px; color: var(--ink2); font-weight: 600; }
+
+/* ── AI Teaser skeleton (Feedback รอบ 3 จุดที่ 2 — "ยังไม่ทำ แค่โชว์เป็น Teaser") ── */
+.demo-skeleton-lines { display: flex; flex-direction: column; gap: 9px; margin: 4px 0 10px; }
+.demo-skeleton-line { height: 11px; border-radius: 6px; background: linear-gradient(90deg, var(--line) 0%, var(--line2) 50%, var(--line) 100%); }
+
+/* ── Export/Import teaser pill (Transactions page) ── */
+.demo-export-pill {
+  display: inline-flex; align-items: center; gap: 5px; border-radius: 99px; padding: 7px 13px;
+  font-size: 12px; font-weight: 700; text-decoration: none; background: var(--bg); color: var(--muted);
+  border: 1px solid var(--line2);
+}
+.demo-export-pill-on { background: var(--green-soft); color: var(--leaf-deep); border-color: transparent; cursor: default; }
+
+/* ── Serious modifier (Portfolio page) — เงา/สัดส่วนต่างจากหน้าอื่น ไม่ใช่เส้นขอบ
+   (Feedback รอบ 2: ตัด Border ที่เคยใส่ไว้ตรงนี้ทิ้ง เปลี่ยนไปใช้เงาที่คมกว่าแทน) ── */
+.demo-serious { --r: 14px; --r-sm: 10px; }
+.demo-serious .demo-card { box-shadow: 0 1px 3px rgba(40,45,49,.06), 0 8px 20px rgba(40,45,49,.05); }
+.demo-serious .demo-btn-main { background: linear-gradient(135deg, var(--sky), var(--sky-deep)); box-shadow: 0 5px 14px rgba(76,159,203,.28); }
+
+/* ── Bottom nav (mobile) ── */
+.demo-bottomnav { display: none; }
+
+/* ── Responsive ── */
+@media (max-width: 1180px) {
+  .demo-portfolio-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 980px) {
+  .demo-shell { gap: 18px; padding: 20px 18px 96px; }
+}
+@media (max-width: 820px) {
+  .demo-sidebar { display: none; }
+  .demo-m-topbar { display: flex; }
+  .demo-m-topbar .demo-switcher-row { flex: none; }
+  .demo-m-topbar .demo-portfolio-switcher { width: auto; max-width: 150px; flex: none; }
+  .demo-m-topbar .demo-add-portfolio-btn { width: 32px; }
+  .demo-shell { padding: 16px 16px 88px; }
+  .demo-bottomnav {
+    display: grid; grid-template-columns: repeat(6, 1fr); position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+    background: #fff; box-shadow: 0 -10px 28px rgba(40,45,49,.09);
+    padding: 7px 6px calc(7px + env(safe-area-inset-bottom));
+  }
+  .demo-bn-item {
+    display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 5px 2px;
+    text-decoration: none; color: var(--muted); font-size: 10.5px; font-weight: 700; border-radius: 10px;
+    border: none; background: none; cursor: pointer;
+  }
+  .demo-bn-i { font-size: 19px; line-height: 1.1; }
+  .demo-bn-active { color: var(--leaf-deep); }
+  .demo-bn-rec { transform: translateY(-16px); gap: 2px; }
+  .demo-bn-btn {
+    width: 54px; height: 54px; border-radius: 999px; background: linear-gradient(135deg, var(--mint), var(--leaf-deep));
+    display: grid; place-items: center; color: #fff; font-size: 26px; font-weight: 700;
+    box-shadow: 0 8px 18px rgba(21,145,70,.4); border: 4px solid var(--bg);
+  }
+  .demo-bn-lbl { font-size: 10.5px; font-weight: 700; color: var(--muted); }
+  .demo-frow { grid-template-columns: 1fr; }
+}
+@media (max-width: 620px) {
+  .demo-stats { grid-template-columns: 1fr 1fr; }
+  .demo-alloc-body { flex-direction: column; align-items: stretch; }
+  .demo-donut-wrap { align-self: center; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Stage 9 — State ที่ Demo ไม่มี (Loading / Error / Empty / Warn / Locked)
+   ═══════════════════════════════════════════════════════════════════════
+   Demo ใช้ Mock Data ที่พร้อมใช้ทันทีจึงไม่เคยต้องมี State พวกนี้เลย
+   ของจริงต้องมีครบทุกหน้า — ห้าม Silent Default (โหลดไม่ได้ต้องบอกผู้ใช้
+   ไม่ใช่แสดงหน้าว่างเปล่าให้เข้าใจผิดว่า "ไม่มีข้อมูล") */
+.app-state {
+  margin: 12px 0;
+  padding: 14px 16px;
+  border-radius: 10px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.app-state strong { display: block; margin-bottom: 4px; }
+.app-state p { margin: 4px 0; }
+.app-state--loading { background: #f1f5f9; color: #475569; }
+.app-state--error   { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+.app-state--empty   { background: #f8fafc; color: #64748b; border: 1px dashed #cbd5e1; }
+.app-state--warn    { background: #fffbeb; color: #92400e; border: 1px solid #fde68a; }
+
+.app-note { font-size: 13px; color: #64748b; margin: 8px 0; }
+
+/* แถบพอร์ตที่ถูกล็อก — ต้องอ่านแล้วรู้ทันทีว่า "ยังขาย/ย้ายออกได้"
+   ไม่ใช่เข้าใจว่าทำอะไรไม่ได้เลย (มติ Founder 24 ส.ค. 2569) */
+.app-locked-banner {
+  margin: 12px 0;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  color: #7c2d12;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.app-locked-banner ul { margin: 4px 0 8px 20px; }
+.app-locked-banner__safety { font-size: 13px; opacity: 0.85; }

@@ -155,6 +155,11 @@ async function getMe(req, res) {
       planExpiresAt: user.planExpiresAt ?? null,
       isPremiumActive: entitlementService.isPremiumActive(user),
       assetLimit: entitlementService.getActiveAssetLimit(user),
+      // Stage 9 — เพดานพอร์ต ณ ตอนนี้ (Free 1 / Premium 50)
+      // ⚠️ ส่งมาจาก Backend เสมอ **ห้าม Frontend Hardcode ตัวเลขเอง** — Demo เดิม
+      // (lib/demo/planEntitlements.js) Hardcode ไว้แล้วต้องมานั่ง grep เทียบกับ
+      // entitlement.service ทุกครั้งที่แก้ ซึ่งเป็นวิธีที่ "สอนผิดจากระบบจริง" ได้ง่าย
+      portfolioLimit: entitlementService.getActivePortfolioLimit(user),
       // role มาจาก JWT (req.user.role) ที่ requireAuth แนบไว้ — Frontend ใช้ตัดสิน
       // ว่าจะเปิด Route /admin ให้ไหม (Source เดียวกับที่ requireAdmin ใช้ ไม่คำนวณซ้ำ)
       role: req.user.role,

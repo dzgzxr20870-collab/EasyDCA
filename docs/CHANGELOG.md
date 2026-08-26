@@ -4,6 +4,46 @@
 
 ## [Unreleased]
 ### Added
+- **Stage 9 (1/n) — ฐานของ Dashboard แยกหน้า + หน้าพอร์ตต่อ API จริง**
+  (Branch `feat/dashboard-production-wire` — ยัง**ไม่ได้ Push/Merge/Deploy**)
+  - **Route คู่ขนานที่ `/app/*` หลัง Feature Flag `VITE_ENABLE_MULTIPAGE_APP`**
+    · **ไม่แตะ `/dashboard` เดิมเลยแม้แต่บรรทัดเดียว** · ไฟล์ Demo เดิมอยู่ครบ
+    (Port มาทีละไฟล์ **ไม่ได้ merge branch `demo/multipage-ux-redesign`** ซึ่งมี
+    6,872 deletions จะลบงาน Slip OCR + มาสคอต + Premium fixes ที่ Deploy แล้วทิ้ง)
+    · Rollback = ปิด Flag ตัวเดียว ไม่ต้อง Revert โค้ด
+  - **`lib/entitlements.js` มาแทน `lib/demo/planEntitlements.js` (ของปลอม)**
+    · สิทธิ์มาจาก `GET /dashboard/me` จริง **ห้าม Hardcode เพดานใน Frontend**
+    (Demo เดิม Hardcode `FREE_ASSET_CAP = 2` พร้อมคอมเมนต์ "Grep แล้ว 22 ส.ค."
+    ซึ่งจะเพี้ยนแน่นอนวันที่ Founder เปลี่ยนเพดาน)
+    · เพิ่ม `portfolioLimit` เข้า `/dashboard/me` เพื่อไม่ให้ UI ต้องเดา
+    · **Fail-closed**: โหลด `/me` ไม่เสร็จ → ถือเป็น Free + Disable ปุ่ม ไม่เดาว่า
+    เป็น Premium (เดาสูงเกินจริง = ผู้ใช้กดแล้วเจอ Error ซึ่ง UX แย่กว่า)
+  - **`lib/portfolioApi.js`** — ห่อ Endpoint ของ Stage 8 · **ไม่ใช่ API Client ใหม่**
+    ทุกฟังก์ชันเรียกผ่าน `lib/api.js` ตัวเดิม (Token/401/returnTo จัดการที่เดียว)
+  - **⭐ UI สะท้อนกติกา "พอร์ตถูกล็อก" ให้ตรงกับ Backend** (มติ 24 ส.ค. 2569):
+    `portfolioWriteState()` คืน `canAdd` (ตาม `canWrite` จาก Backend) และ
+    **`canReduce` ที่เป็น `true` เสมอไม่มีเงื่อนไข** — ถ้า UI ซ่อนปุ่มขายตอนพอร์ต
+    ถูกล็อก ผู้ใช้จะคิดว่า "ติดกับ" แล้ว**ไม่บันทึกการขายที่เกิดขึ้นจริง** →
+    ยอดในพอร์ตผิดถาวร ซึ่งเป็นสิ่งที่มติข้อนี้ตั้งใจกันตั้งแต่แรก
+    · แถบแจ้งเตือนบอก "ทางออกที่ยังทำได้จริง" ครบ (ขาย/ย้อนรายการ/ย้ายออก)
+    · **Frontend ซ่อนปุ่มคือ UX ไม่ใช่ Gate** — ด่านจริงอยู่ Backend เสมอ
+  - **`AppShell`** — พอร์ต + สิทธิ์จริงยิงขนานกันครั้งเดียวตอน mount แล้วส่งลง
+    หน้าลูกผ่าน Outlet Context (หน้าลูกไม่ยิงซ้ำ) · **ตัด Toggle "ดูแบบ Free /
+    ดูแบบ Premium" ของ Demo ออกทั้งหมด** เพราะเป็นของปลอมที่ไม่ผูกกับ Auth
+    · Switcher บอกตั้งแต่ในรายการว่าพอร์ตไหนถูกล็อก (ไม่ให้สลับเข้าไปแล้วค่อยงง)
+  - **`AppPortfolio`** — ต่อ `GET /portfolio/allocation` จริง · **ไม่คำนวณสัดส่วน/
+    ยอดรวมเองใน Frontend** (กฎยืนข้อ 1) · รองรับธงที่ Demo ไม่มีครบทุกตัว:
+    `fxUnavailableForUsd` (**เตือนก่อน ห้ามรวมยอดข้ามสกุลเงิน**) · `fxStale` ·
+    `priceUnavailableCount` (บอกว่ากลุ่มนั้นคิดที่ราคาทุน) · `isEmpty`
+  - **Loading / Error / Empty state ครบทุกหน้า** — Demo ไม่มีเลยเพราะใช้ Mock ที่
+    พร้อมใช้ทันที · Empty แยกจาก Error ชัดเจน (ผู้ใช้ใหม่ต้องไม่คิดว่าระบบพัง)
+  - Internal Navigation ใช้ `<NavLink>` ทั้งหมด **ไม่มี `<a href>` สักจุด**
+    (JWT เก็บใน Memory — full reload จะทำให้ Token หาย)
+  - Test Frontend **284 → 298 เขียวทั้งหมด** · `npm run build` ผ่าน
+  - **ยังไม่ได้ทำ:** Port หน้า Dashboard / Transactions / DCA / Profile ·
+    Modal สร้างพอร์ต/บันทึกรายการ (ตอนนี้ปุ่มยังไม่ผูก Action) ·
+    Production Verification ทั้งหมด
+
 - **Stage 8-fix — ปิดช่องโหว่ที่พบตอนรีวิวโค้ด (24 ส.ค. 2569)**
   (Branch `feat/dashboard-production-wire` — ยัง**ไม่ได้ Push/Merge/Deploy**
   · Migration **ยังไม่ได้ Apply บน Supabase**)

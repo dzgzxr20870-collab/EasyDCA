@@ -4,6 +4,13 @@ import DashboardHome from './pages/DashboardHome.jsx';
 import Admin from './pages/Admin.jsx';
 import Premium from './pages/Premium.jsx';
 import Support from './pages/Support.jsx';
+// Stage 9 — Dashboard แบบแยกหน้า (Route คู่ขนานที่ /app/*)
+// ⚠️ **ไม่ได้แทนที่ /dashboard เดิม** — เพิ่มเป็น Route คนละอันโดยเจตนา เพื่อให้
+// Rollback ทำได้ด้วยการปิด Feature Flag ตัวเดียว ไม่ต้อง Revert โค้ด
+// (ห้ามลบ Dashboard เดิมจนกว่าจะผ่านการใช้งานจริง)
+import { MULTIPAGE_APP_ENABLED } from './lib/featureFlags.js';
+import AppShell from './components/app/AppShell.jsx';
+import AppPortfolio from './pages/app/AppPortfolio.jsx';
 
 function App() {
   return (
@@ -28,6 +35,23 @@ function App() {
             เดิมที่ชนกับ Admin ตอบมือใน Chat Mode เดียวกัน (Bot ทับคำตอบของ Admin) */}
         <Route path="/support" element={<Support />} />
         <Route path="/admin" element={<Admin />} />
+
+        {/* ── Stage 9: Dashboard แยกหน้า (/app/*) ──────────────────────────
+            Nested Route ใต้ AppShell ซึ่งโหลดพอร์ต + สิทธิ์จริงครั้งเดียวแล้ว
+            ส่งลงหน้าลูกผ่าน Outlet Context (หน้าลูกไม่ยิง /portfolios ซ้ำ)
+
+            ⚠️ อยู่หลัง Feature Flag — ปิดอยู่ = ไม่มี Route นี้เลย ผู้ใช้ที่พิมพ์
+            URL ตรงจะตกไป Route "/" (Login) ตามปกติ ไม่เจอหน้าครึ่งๆ กลางๆ
+            เปิดด้วย VITE_ENABLE_MULTIPAGE_APP=true ตอน Deploy */}
+        {MULTIPAGE_APP_ENABLED && (
+          <Route path="/app" element={<AppShell />}>
+            <Route index element={<Navigate to="/app/portfolio" replace />} />
+            <Route path="portfolio" element={<AppPortfolio />} />
+            {/* หน้าอื่น (dashboard / transactions / dca / profile) ยัง Port ไม่เสร็จ
+                — ชี้กลับหน้าพอร์ตไว้ก่อน ดีกว่าปล่อยให้ตกไป Login แบบไม่มีคำอธิบาย */}
+            <Route path="*" element={<Navigate to="/app/portfolio" replace />} />
+          </Route>
+        )}
       </Routes>
     </BrowserRouter>
   );
