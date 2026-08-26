@@ -199,7 +199,82 @@ async function createPortfolio(userId, params, userRecord) {
   }
 
   try {
-    return await portfolioRepository.create(userId, { name, type: params.type });
+    // ⚠️ ส่ง limit ลงไปให้ RPC ตัดสินซ้ำใต้ Lock — Pre-check ด้านบนตอบผู้ใช้ได้เร็ว
+    // และแยกข้อความ Free/Premium ได้ ส่วน **ด่านจริงที่ Race Condition ข้ามไม่ได้
+    // อยู่ใน create_portfolio_locked** (migration 048) ความสัมพันธ์เดียวกับ
+    // validateBuy ↔ create_asset_locked ทุกประการ
+    return await portfolioRepository.create(userId, {
+      name,
+      type: params.type,
+      portfolioLimit: limit,
+    });
+  } catch (err) {
+    if (err instanceof portfolioRepository.PortfolioWriteError) {
+      // ⚠️ RPC รู้แค่ว่า "ชนเพดาน" ไม่รู้ว่าเป็น Free หรือ Premium — การแยก
+      // Error Code ต้องทำที่นี่เหมือน Pre-check ด้านบนเป๊ะ ไม่งั้น Premium ที่
+      // จ่ายเงินอยู่แล้วจะโดนชวนอัปเกรดเมื่อชน Sanity Cap 50 (ผ่านเส้นทาง Race)
+      if (err.code === 'PORTFOLIO_LIMIT_REACHED') {
+        const isPremium = entitlement.isPremiumActive(userRecord);
+        throw new PortfolioServiceError(
+          isPremium ? 'PORTFOLIO_CAP_REACHED' : 'PORTFOLIO_LIMIT_REACHED',
+          `Portfolio limit reached (enforced under lock, limit=${limit})`,
+          { limit }
+        );
+      }
+      throw new PortfolioServiceError(err.code, err.message, err.details);
+    }
+    throw err;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// setDefaultPortfolio — ผู้ใช้เลือก "พอร์ตหลัก" ของตัวเอง (มติ Founder 24 ส.ค.)
+// ═══════════════════════════════════════════════════════════════════════════
+// พอร์ตหลัก = พอร์ตที่ยังเขียนได้เสมอแม้ Premium หมดอายุ (ดู
+// entitlement.getWritablePortfolioIds) → ผู้ใช้ต้องเลือกเองได้ ไม่งั้นจะถูกขัง
+// อยู่กับพอร์ตที่ migration 044 Backfill สร้างให้ ซึ่งมักแทบว่างเปล่า
+//
+// ⚠️ **ไม่ Gate ด้วย Premium Active โดยเจตนา** (ต่างจาก create/update):
+// Prompt เดิมระบุ "Premium เท่านั้น เพราะ Free มีพอร์ตเดียวอยู่แล้ว" ซึ่งเหตุผล
+// คือ "Free ทำแล้วไม่มีความหมาย" ไม่ใช่ "ห้ามทำ" — ถ้า Gate ด้วย isPremiumActive
+// ตรงๆ ผู้ใช้ **Premium ที่หมดอายุ** จะเปลี่ยนพอร์ตหลักไม่ได้ = ถูกขังอยู่กับ
+// พอร์ตเดิมทั้งที่พอร์ตที่เขาใช้จริงถูกล็อก ซึ่งเป็น "กับดัก" แบบเดียวกับที่
+// มติ 24 ส.ค. ตั้งใจกำจัด (การล็อก = โตต่อไม่ได้ ไม่ใช่ออกไม่ได้)
+//
+// ตัวคุมสิทธิ์จริงคือ "มีพอร์ตมากกว่า 1 อันไหม" ซึ่งมีได้เฉพาะคนที่เคยเป็น
+// Premium อยู่แล้ว → ได้ผลเดียวกับ "Premium เท่านั้น" โดยไม่สร้างกับดัก
+async function setDefaultPortfolio(userId, portfolioId, userRecord) {
+  const portfolios = await portfolioRepository.findAllByUser(userId);
+
+  const target = portfolios.find((p) => p.id === portfolioId);
+  if (!target) {
+    throw new PortfolioServiceError('PORTFOLIO_NOT_FOUND', `Portfolio ${portfolioId} not found`, {
+      portfolioId,
+    });
+  }
+
+  if (target.isDefault) {
+    // เป็นพอร์ตหลักอยู่แล้ว — ไม่ต้องยิง RPC ให้เปลืองและไม่ต้อง Error
+    // (Idempotent: กดซ้ำได้ผลลัพธ์เดิม)
+    return target;
+  }
+
+  if (portfolios.length < 2) {
+    throw new PortfolioServiceError(
+      'VALIDATION_ERROR',
+      'Cannot change the default portfolio when only one portfolio exists',
+      { field: 'isDefault', portfolioCount: portfolios.length }
+    );
+  }
+
+  try {
+    const updated = await portfolioRepository.setDefaultForUser(userId, portfolioId);
+    if (!updated) {
+      throw new PortfolioServiceError('PORTFOLIO_NOT_FOUND', `Portfolio ${portfolioId} not found`, {
+        portfolioId,
+      });
+    }
+    return updated;
   } catch (err) {
     if (err instanceof portfolioRepository.PortfolioWriteError) {
       throw new PortfolioServiceError(err.code, err.message, err.details);
@@ -331,6 +406,18 @@ async function deletePortfolio(userId, portfolioId, userRecord) {
       );
     }
 
+    // ⚠️ **รู้ตัวว่าสองก้าวนี้ไม่ Atomic และยอมรับโดยตั้งใจ** (งานที่ 2.5 ของ
+    // รีวิว 24 ส.ค. 2569 — ไม่ใช่การมองข้าม):
+    // ถ้าพังระหว่าง reassign กับ delete จะได้ "สินทรัพย์ย้ายไปพอร์ต Default แล้ว
+    // แต่พอร์ตเก่ายังอยู่" ซึ่ง **ไม่อันตราย**:
+    //   • Invariant ของ migration 044/045 ยังจริง (สินทรัพย์ทุกแถวยังสังกัดพอร์ต
+    //     และพอร์ต Default ยังมีอันเดียว) → migration 045 ยังผ่าน
+    //   • ผู้ใช้กดลบซ้ำได้ผลลัพธ์เดิม = **Idempotent โดยธรรมชาติ** (รอบสองจะเจอ
+    //     พอร์ตว่าง ไม่มีอะไรให้ย้าย แล้วลบสำเร็จ)
+    //   • ไม่มีข้อมูลใดสูญหาย — reassign เป็น UPDATE ไม่ใช่ DELETE
+    // ต่างจากเพดานพอร์ต (migration 048) ที่ต้องเป็น RPC เพราะ Failure mode ตรงนั้น
+    // คือ "ทะลุเพดานถาวร" ซึ่งกู้เองไม่ได้ — ที่นี่แค่กดซ้ำก็จบ จึงไม่คุ้มกับ
+    // ความซับซ้อนของ RPC เพิ่มอีกตัว
     await assetRepository.reassignPortfolio(userId, portfolioId, defaultPortfolio.id);
   }
 
@@ -352,6 +439,7 @@ module.exports = {
   getPortfolio,
   assertCanAddToPortfolio,
   createPortfolio,
+  setDefaultPortfolio,
   updatePortfolio,
   deletePortfolio,
 };

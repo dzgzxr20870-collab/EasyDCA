@@ -531,9 +531,9 @@ Premium)
 | GET | `/api/v1/portfolio/allocation?groupBy=broker\|sector\|assetType&portfolioId=` | ✅ | **Free** | **✅ ทำแล้ว (Stage 8)** — สัดส่วนพอร์ตพร้อมใช้กับกราฟโดนัท · `groupBy` Default = `assetType` · ค่าที่ไม่รองรับ → `400 VALIDATION_ERROR` (ไม่เงียบๆ ใช้ Default) · ดูรายละเอียดด้านล่าง |
 | GET | `/api/v1/portfolio/snapshots?range=1y` | ✅ | Free | ดึง `portfolio_snapshots` รายวันสำหรับกราฟ Value vs Invested — `range` รองรับ `7d` / `30d` / `90d` / `1y` / `all` (SRS.md § 3.2 [2]) |
 | GET | `/api/v1/portfolios` | ✅ | **Free** | **✅ ทำแล้ว (Stage 8)** — List พอร์ตทั้งหมดของ User พร้อมธง `canWrite` ต่อพอร์ต |
-| POST | `/api/v1/portfolios` | ✅ | **Premium** | **✅ ทำแล้ว (Stage 8)** — สร้างพอร์ตใหม่ Body `{ name, type }` · Free = 1 พอร์ต → `403 PORTFOLIO_LIMIT_REACHED` · Premium ชน Sanity Cap 50 → `409 PORTFOLIO_CAP_REACHED` |
+| POST | `/api/v1/portfolios` | ✅ | **Premium** | **✅ ทำแล้ว (Stage 8)** — สร้างพอร์ตใหม่ Body `{ name, type }` · Free = 1 พอร์ต → `403 PORTFOLIO_LIMIT_REACHED` · Premium ชน Sanity Cap 50 → `409 PORTFOLIO_CAP_REACHED` · **เพดานบังคับใต้ Lock ที่ RPC `create_portfolio_locked` (migration 048)** ไม่ใช่ Pre-check ฝั่ง App ล้วน |
 | GET | `/api/v1/portfolios/{id}` | ✅ | **Free** | **✅ ทำแล้ว (Stage 8)** — ดูรายละเอียดพอร์ตเดียว |
-| PATCH | `/api/v1/portfolios/{id}` | ✅ | **Premium** | **✅ ทำแล้ว (Stage 8)** — แก้ `name` / `type` |
+| PATCH | `/api/v1/portfolios/{id}` | ✅ | **Premium** | **✅ ทำแล้ว (Stage 8)** — แก้ `name` / `type` / **`isDefault: true`** (ตั้งเป็นพอร์ตหลัก — ดูกล่องด้านล่าง) |
 | DELETE | `/api/v1/portfolios/{id}` | ✅ | **Premium** | **✅ ทำแล้ว (Stage 8)** — ลบพอร์ต · **สินทรัพย์ข้างในถูกย้ายเข้าพอร์ต Default ไม่ได้กลายเป็น `portfolio_id = NULL`** (ดูกล่องเตือนด้านล่าง) · ห้ามลบพอร์ต Default → `409 CANNOT_DELETE_DEFAULT_PORTFOLIO` |
 
 > ### ⚠️ แก้ Spec เดิม 2 จุด (Stage 8 — ของเดิมผิด ไม่ใช่แค่เปลี่ยนใจ)
@@ -592,6 +592,30 @@ Premium)
 > · "พอร์ตไหนคือส่วนเกิน" **Deterministic** เสมอ: เรียงตาม `created_at`
 > (Tie-break ด้วย `id`) **พอร์ตแรกสุด = ยังเขียนได้** · ค่านี้คำนวณสดทุกครั้ง
 > ไม่เก็บลง DB → **ต่ออายุแล้วกลับมาเขียนได้ทันที** ไม่ต้องรอ Job ไปไล่อัปเดต
+
+> ### ⭐ `isDefault: true` — ผู้ใช้เลือก "พอร์ตหลัก" ของตัวเอง (มติ Founder 24 ส.ค. 2569)
+>
+> **พอร์ตหลักคือพอร์ตที่ยังเขียนได้เสมอแม้ Premium หมดอายุ** (ดู `canWrite`) →
+> ผู้ใช้ต้องเลือกเองได้ ไม่งั้นจะถูกขังอยู่กับพอร์ตที่ migration 044 Backfill
+> สร้างให้อัตโนมัติ ซึ่งมักแทบว่างเปล่า ส่วนพอร์ตที่เขาใช้จริงกลับถูกล็อก
+>
+> - รับเฉพาะ `true` — ส่ง `false` มาได้ `400 VALIDATION_ERROR` เพราะ Invariant
+>   บังคับว่าต้องมีพอร์ตหลัก **1 อันเป๊ะเสมอ** (ปลดโดยไม่ตั้งตัวใหม่ = ไม่มีเลย)
+>   การ "ยกเลิก" ทำได้โดยตั้งพอร์ตอื่นเป็นหลักแทน
+> - เป็นพอร์ตหลักอยู่แล้ว → **Idempotent** คืนค่าเดิม ไม่ Error
+> - มีพอร์ตเดียว → `400 VALIDATION_ERROR` (เปลี่ยนไปก็ไม่มีความหมาย)
+> - ส่งมาพร้อม `name`/`type` ได้ — ระบบตั้งพอร์ตหลักก่อนแล้วค่อยแก้ Field อื่น
+>
+> ⚠️ **ไม่ Gate ด้วย "Premium ที่ยัง Active" โดยเจตนา** (ต่างจาก `POST`): ถ้า Gate
+> แบบนั้น ผู้ใช้ **Premium ที่หมดอายุ** จะเปลี่ยนพอร์ตหลักไม่ได้ = ถูกขังอยู่กับ
+> พอร์ตเดิม ซึ่งเป็นกับดักแบบเดียวกับที่มติ 24 ส.ค. ตั้งใจกำจัด · ตัวคุมสิทธิ์จริง
+> คือ **"ต้องมีพอร์ตมากกว่า 1 อัน"** ซึ่งมีได้เฉพาะคนที่เคยเป็น Premium อยู่แล้ว
+> → ได้ผลเดียวกับ "Premium เท่านั้น" โดยไม่สร้างกับดัก
+>
+> ⚠️ ทำผ่าน RPC `set_default_portfolio_locked` (migration 048) ไม่ใช่ `UPDATE`
+> 2 ครั้ง เพราะ `idx_portfolios_one_default_per_user` เป็น Partial UNIQUE →
+> ตั้งตัวใหม่ก่อนปลดตัวเก่าจะชน Index ทันที และถ้าแยก 2 คำสั่งแล้วพังกลางทาง
+> ผู้ใช้จะไม่มีพอร์ตหลักเลย = Invariant ของ 044/045 พังค้างถาวร
 
 **Error ของกลุ่มนี้**
 

@@ -147,7 +147,7 @@ CREATE TABLE portfolios (
 | user_id | UUID | FK → users.id |
 | name | TEXT | ชื่อพอร์ต เช่น "พอร์ต Crypto", "หุ้นไทย" |
 | type | TEXT | ประเภทพอร์ต: `crypto` / `stock_th` / `stock_us` / `etf` / `fund` / `custom` |
-| is_default | BOOLEAN | true = พอร์ตเริ่มต้น (ใช้กับ Free ที่มีพอร์ตเดียว) |
+| is_default | BOOLEAN | true = **พอร์ตหลักของผู้ใช้** · มีได้ 1 อันต่อ user เป๊ะ (`idx_portfolios_one_default_per_user`) · **ลบไม่ได้** · ⭐ (มติ 24 ส.ค. 2569) คอลัมน์นี้เป็นตัวตัดสินว่า **"พอร์ตไหนยังเขียนได้เมื่อ Premium หมดอายุ"** (`entitlement.getWritablePortfolioIds`) จึงไม่ใช่แค่ค่าแสดงผล — เปลี่ยนได้ผ่าน RPC `set_default_portfolio_locked` (migration 048) เท่านั้น ห้าม `UPDATE` ตรงๆ 2 ครั้ง เพราะจะชน Partial UNIQUE หรือทำให้ผู้ใช้ไม่มีพอร์ตหลักเลย |
 | created_at | TIMESTAMPTZ | วันที่สร้างพอร์ต |
 | updated_at | TIMESTAMPTZ | วันที่อัพเดทล่าสุด |
 

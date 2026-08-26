@@ -134,21 +134,76 @@ async function findDefaultByUser(userId) {
 // ใช้ supabaseAdmin ตรงไม่ผ่าน queryForUser เหมือน broker.create — queryForUser
 // ต่อ .eq() ซึ่งไม่มีความหมายกับ INSERT การกันข้ามบัญชีอยู่ที่ "ค่าที่ใส่ลง
 // คอลัมน์ user_id" ซึ่งบังคับด้วย requireUserId() + รับ userId จาก JWT เท่านั้น
-async function create(userId, { name, type }) {
+async function create(userId, { name, type, portfolioLimit = null }) {
   requireUserId(userId, 'portfolio.create');
 
-  const { data, error } = await supabaseAdmin
-    .from('portfolios')
-    .insert({ user_id: userId, name, type, is_default: false })
-    .select('*')
-    .single();
+  // ⚠️ ผ่าน RPC create_portfolio_locked (migration 048) ไม่ใช่ INSERT ตรงๆ —
+  // RPC Lock แถว users → นับ → Validate → INSERT ในธุรกรรมเดียว ทำให้เพดานพอร์ต
+  // เป็น **Atomic จริง** (เดิมเป็น check-then-insert: สองแท็บพร้อมกันอ่านได้
+  // current = 1 ทั้งคู่ → ผ่านทั้งคู่ → ทะลุเพดาน Free)
+  //
+  // portfolioLimit ส่งมาจาก entitlement.service ผ่าน Service Layer เสมอ —
+  // SQL ไม่ Hardcode ตัวเลข (Pattern เดียวกับ p_asset_limit ของ migration 035)
+  const { data: rows, error } = await supabaseAdmin.rpc('create_portfolio_locked', {
+    p_user_id: userId,
+    p_name: name,
+    p_type: type,
+    p_portfolio_limit: portfolioLimit,
+  });
 
   if (error) {
+    // RPC โยน Business Rule ผ่าน RAISE EXCEPTION (ERRCODE P0001) — แปลงเป็น
+    // Error ของโดเมนให้ Service ตัดสินต่อ (Pattern เดียวกับ asset.repository)
+    const raw = `${error.message ?? ''} ${error.details ?? ''} ${error.hint ?? ''}`;
+    if (raw.includes('PORTFOLIO_LIMIT_REACHED')) {
+      throw new PortfolioWriteError(
+        'PORTFOLIO_LIMIT_REACHED',
+        'portfolio.create: limit reached (enforced under lock)',
+        {}
+      );
+    }
+    if (raw.includes('DEFAULT_PORTFOLIO_CONFLICT')) {
+      throw new PortfolioWriteError('DEFAULT_PORTFOLIO_CONFLICT', 'portfolio.create', {});
+    }
+    if (raw.includes('USER_NOT_FOUND')) {
+      throw new PortfolioWriteError('USER_NOT_FOUND', 'portfolio.create', {});
+    }
     throwIfConstraintViolation(error, 'portfolio.create');
     throw new Error(`Failed to create portfolio: ${error.message}`);
   }
 
-  return toPortfolio(data);
+  const row = Array.isArray(rows) ? rows[0] : rows;
+  return toPortfolio(row ?? null);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// setDefaultForUser — สลับ "พอร์ตหลัก" ของผู้ใช้ (migration 048)
+// ═══════════════════════════════════════════════════════════════════════════
+// ⚠️ ต้องผ่าน RPC เท่านั้น ห้าม UPDATE 2 ครั้งจากที่นี่ —
+// idx_portfolios_one_default_per_user เป็น Partial UNIQUE บน (user_id)
+// WHERE is_default = TRUE → ตั้งตัวใหม่ก่อนปลดตัวเก่าจะชน Index ทันที
+// และถ้าแยกเป็น 2 คำสั่งแล้วพังกลางทาง ผู้ใช้จะไม่มีพอร์ต Default เลย =
+// Invariant ของ migration 044/045 พังค้างถาวร (ดูเหตุผลเต็มในหัวไฟล์ 048)
+async function setDefaultForUser(userId, portfolioId) {
+  requireUserId(userId, 'portfolio.setDefaultForUser');
+
+  const { data: rows, error } = await supabaseAdmin.rpc('set_default_portfolio_locked', {
+    p_user_id: userId,
+    p_portfolio_id: portfolioId,
+  });
+
+  if (error) {
+    const raw = `${error.message ?? ''} ${error.details ?? ''} ${error.hint ?? ''}`;
+    if (raw.includes('PORTFOLIO_NOT_FOUND')) {
+      throw new PortfolioWriteError('PORTFOLIO_NOT_FOUND', 'portfolio.setDefaultForUser', {
+        portfolioId,
+      });
+    }
+    throw new Error(`Failed to set default portfolio: ${error.message}`);
+  }
+
+  const row = Array.isArray(rows) ? rows[0] : rows;
+  return toPortfolio(row ?? null);
 }
 
 // แก้ชื่อ/ประเภทพอร์ต — Scope ด้วย user_id เสมอ คืน null ถ้าไม่เจอ
@@ -227,6 +282,7 @@ module.exports = {
   findByIdForUser,
   findDefaultByUser,
   create,
+  setDefaultForUser,
   updateByIdForUser,
   deleteByIdForUser,
   countByUser,

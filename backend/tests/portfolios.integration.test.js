@@ -154,9 +154,12 @@ describe('POST /portfolios — ตัวคุมสิทธิ์จริง�
     );
 
     expect(statusOf(res)).toBe(201);
+    // ⚠️ ต้องส่ง portfolioLimit ลงไปให้ RPC ตัดสินซ้ำใต้ Lock (migration 048) —
+    // ถ้าไม่ส่ง RPC จะถือว่า "ไม่จำกัด" แล้วเพดานจะกลับไป Race ได้เหมือนเดิม
     expect(portfolioRepository.create).toHaveBeenCalledWith(USER_ID, {
       name: 'พอร์ตคริปโต',
       type: 'crypto',
+      portfolioLimit: 50,
     });
   });
 
@@ -186,6 +189,7 @@ describe('POST /portfolios — ตัวคุมสิทธิ์จริง�
     expect(portfolioRepository.create).toHaveBeenCalledWith(USER_ID, {
       name: 'My Crypto Port',
       type: 'crypto',
+      portfolioLimit: 50,
     });
   });
 

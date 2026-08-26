@@ -152,6 +152,34 @@ async function updatePortfolio(req, res) {
   const body = req.body ?? {};
 
   try {
+    // ── ตั้งเป็น "พอร์ตหลัก" (มติ Founder 24 ส.ค. 2569) ──────────────────────
+    // พอร์ตหลัก = พอร์ตที่ยังเขียนได้เสมอแม้ Premium หมดอายุ → ผู้ใช้ต้องเลือก
+    // เองได้ ไม่งั้นถูกขังอยู่กับพอร์ตที่ migration 044 Backfill สร้างให้
+    //
+    // ⚠️ รับเฉพาะ true — ส่ง false มาไม่มีความหมาย เพราะ Invariant บังคับว่า
+    // ต้องมีพอร์ตหลัก 1 อันเป๊ะเสมอ (ปลดโดยไม่ตั้งตัวใหม่ = ไม่มีเลย = พัง)
+    // ต้องตอบ VALIDATION_ERROR ไม่ใช่เพิกเฉยเงียบๆ (Silent Ignore = Anti-pattern)
+    if (body.isDefault !== undefined) {
+      if (body.isDefault !== true) {
+        return fail(res, 'VALIDATION_ERROR', {
+          field: 'isDefault',
+          hint: 'ตั้งพอร์ตหลักได้ด้วย true เท่านั้น — การยกเลิกทำได้โดยตั้งพอร์ตอื่นเป็นหลักแทน',
+        });
+      }
+
+      const portfolio = await portfoliosService.setDefaultPortfolio(
+        req.user.id,
+        req.params.id,
+        req.userRecord
+      );
+
+      // อนุญาตให้ส่ง isDefault มาพร้อม name/type ได้ — ทำ isDefault ก่อนแล้ว
+      // ค่อยแก้ Field อื่นต่อ (ถ้ามี) เพื่อให้ผลลัพธ์ที่คืนไปสะท้อนทั้งสองอย่าง
+      if (body.name === undefined && body.type === undefined) {
+        return res.status(200).json({ portfolio: toPublicPortfolio(portfolio) });
+      }
+    }
+
     const portfolio = await portfoliosService.updatePortfolio(
       req.user.id,
       req.params.id,
