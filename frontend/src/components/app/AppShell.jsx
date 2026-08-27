@@ -8,6 +8,7 @@ import {
   UNKNOWN_ENTITLEMENTS,
   LOCKED_PORTFOLIO_NOTICE,
 } from '../../lib/entitlements.js';
+import RecordTransactionModal from './RecordTransactionModal.jsx';
 import './appShell.css';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -101,6 +102,7 @@ function AppShell() {
   const [entitlements, setEntitlements] = useState(UNKNOWN_ENTITLEMENTS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [showRecord, setShowRecord] = useState(false);
 
   // โหลดพอร์ต + สิทธิ์พร้อมกันครั้งเดียวตอน mount
   //
@@ -175,6 +177,18 @@ function AppShell() {
         >
           ＋ สร้างพอร์ตใหม่
         </NavLink>
+
+        {/* ⭐ ปุ่มบันทึกรายการ — เปิดได้เสมอ ไม่ว่าพอร์ตที่กำลังดูจะถูกล็อกหรือไม่
+            เพราะ Modal มีทั้ง "ซื้อ" (ปิดเมื่อล็อก) และ "ขาย" (เปิดเสมอ) อยู่ข้างใน
+            ถ้าปิดปุ่มนี้ทั้งปุ่ม ผู้ใช้จะบันทึกการขายไม่ได้เลย = ยอดผิดถาวร */}
+        <button
+          type="button"
+          className="demo-btn demo-btn--primary"
+          onClick={() => setShowRecord(true)}
+          disabled={loading}
+        >
+          ＋ บันทึกรายการ
+        </button>
       </header>
 
       {/* ── Loading / Error state (Demo ไม่มีทั้งคู่เพราะใช้ Mock) ───────── */}
@@ -214,6 +228,18 @@ function AppShell() {
           }}
         />
       </main>
+
+      {showRecord && (
+        <RecordTransactionModal
+          selectedPortfolio={selected}
+          onClose={() => setShowRecord(false)}
+          onSaved={async () => {
+            setShowRecord(false);
+            // โหลดพอร์ตใหม่ — ยอด/สิทธิ์อาจเปลี่ยนหลังบันทึก (เช่นชนเพดาน Free)
+            await load();
+          }}
+        />
+      )}
 
       <nav className="demo-bottomnav">
         {NAV_ITEMS.map((item) => (

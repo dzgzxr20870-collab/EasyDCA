@@ -11,6 +11,10 @@ import Support from './pages/Support.jsx';
 import { MULTIPAGE_APP_ENABLED } from './lib/featureFlags.js';
 import AppShell from './components/app/AppShell.jsx';
 import AppPortfolio from './pages/app/AppPortfolio.jsx';
+import AppDashboard from './pages/app/AppDashboard.jsx';
+import AppTransactions from './pages/app/AppTransactions.jsx';
+import AppDca from './pages/app/AppDca.jsx';
+import AppProfile from './pages/app/AppProfile.jsx';
 
 function App() {
   return (
@@ -45,11 +49,15 @@ function App() {
             เปิดด้วย VITE_ENABLE_MULTIPAGE_APP=true ตอน Deploy */}
         {MULTIPAGE_APP_ENABLED && (
           <Route path="/app" element={<AppShell />}>
-            <Route index element={<Navigate to="/app/portfolio" replace />} />
+            <Route index element={<Navigate to="/app/dashboard" replace />} />
+            <Route path="dashboard" element={<AppDashboard />} />
             <Route path="portfolio" element={<AppPortfolio />} />
-            {/* หน้าอื่น (dashboard / transactions / dca / profile) ยัง Port ไม่เสร็จ
-                — ชี้กลับหน้าพอร์ตไว้ก่อน ดีกว่าปล่อยให้ตกไป Login แบบไม่มีคำอธิบาย */}
-            <Route path="*" element={<Navigate to="/app/portfolio" replace />} />
+            <Route path="transactions" element={<AppTransactions />} />
+            <Route path="dca" element={<AppDca />} />
+            <Route path="profile" element={<AppProfile />} />
+            {/* Path ที่ไม่รู้จักใต้ /app → กลับหน้าแดชบอร์ด ดีกว่าปล่อยตกไป Login
+                แบบไม่มีคำอธิบาย (ผู้ใช้ Login อยู่แล้ว ไม่ควรถูกเด้งออก) */}
+            <Route path="*" element={<Navigate to="/app/dashboard" replace />} />
           </Route>
         )}
       </Routes>
