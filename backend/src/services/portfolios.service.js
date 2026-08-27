@@ -169,6 +169,41 @@ async function assertCanAddToPortfolio(userId, portfolioId, userRecord) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// assertOwnedPortfolioId — ด่านบังคับก่อน "เอา portfolioId จาก Input ไปใช้"
+// ═══════════════════════════════════════════════════════════════════════════
+// คู่แฝดของ broker.service.assertOwnedBrokerId เป๊ะ (กฎยืนข้อ 4: id ทุกตัวจาก
+// Request ต้องยืนยันเจ้าของก่อนใช้) — ใช้กับ portfolioId ที่มาจาก **LINE Postback**
+// ซึ่งเป็นค่าจากฝั่ง Client 100% แม้ปุ่มจะถูกสร้างโดยระบบเองก็ตาม
+//
+// ⚠️ ต่างจาก assertCanAddToPortfolio ตรงที่ **ไม่ตรวจสิทธิ์เขียน** — เพราะการ
+// "ขาย" ของพอร์ตที่ถูกล็อกต้องทำได้เสมอ (มติ Founder 24 ส.ค. 2569) ด่านเขียนจริง
+// ยังอยู่ที่ validateBuy → assertCanAddToPortfolio ตามเดิม ที่นี่ยืนยันแค่ความเป็น
+// เจ้าของอย่างเดียว
+//
+// null/undefined → คืน null ทันทีโดยไม่ยิง Query (= "ไม่ระบุพอร์ต" ซึ่งเป็นคำตอบ
+// ที่ถูกต้องพอๆ กับพอร์ตจริง สำหรับแถวที่ portfolio_id IS NULL ในโลกก่อน 044)
+async function assertOwnedPortfolioId(userId, portfolioId) {
+  if (portfolioId === null || portfolioId === undefined) return null;
+
+  if (typeof portfolioId !== 'string' || portfolioId.trim() === '') {
+    throw new PortfolioServiceError('VALIDATION_ERROR', 'invalid portfolioId', {
+      field: 'portfolioId',
+    });
+  }
+
+  const portfolio = await portfolioRepository.findByIdForUser(portfolioId, userId);
+  if (!portfolio) {
+    // 404 ไม่ใช่ 403 โดยเจตนา — ตอบ 403 เท่ากับยืนยันให้ผู้โจมตีรู้ว่า id นี้
+    // มีอยู่จริงแต่เป็นของคนอื่น (เหตุผลเดียวกับ assertOwnedBrokerId)
+    throw new PortfolioServiceError('PORTFOLIO_NOT_FOUND', `Portfolio ${portfolioId} not found`, {
+      portfolioId,
+    });
+  }
+
+  return portfolio.id;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // createPortfolio — Premium เท่านั้น (ตัวคุมสิทธิ์จริงของ Multi-portfolio)
 // ═══════════════════════════════════════════════════════════════════════════
 // Free มีพอร์ต Default อยู่แล้ว 1 อันจาก Backfill → นับได้ 1 ซึ่งชนเพดานพอดี
@@ -438,6 +473,7 @@ module.exports = {
   listPortfolios,
   getPortfolio,
   assertCanAddToPortfolio,
+  assertOwnedPortfolioId,
   createPortfolio,
   setDefaultPortfolio,
   updatePortfolio,

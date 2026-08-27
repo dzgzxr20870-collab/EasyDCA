@@ -72,15 +72,17 @@ const ERROR_MESSAGES = {
     'คุณถือสินทรัพย์นี้อยู่มากกว่า 1 ที่ (คนละโบรก/Exchange) ระบบจึงไม่ทราบว่าหมายถึงที่ไหน กรุณาบันทึกทีละรายการผ่านคำสั่งปกติ แล้วเลือกโบรกจากปุ่มที่ระบบถามกลับครับ',
   // Stage 8-fix — ถือ Symbol เดียวกันอยู่หลายพอร์ต แต่คำสั่งไม่ได้ระบุพอร์ต
   //
-  // ⚠️ เส้นทาง LINE ไม่มีคอนเซ็ปต์ "พอร์ต" เลย จึงยังไม่มีปุ่มให้เลือกพอร์ตเหมือน
-  // ที่มีให้เลือกโบรก — รอบนี้จึง **Reject พร้อมบอกทางออก** ตามกฎยืนข้อ 11
-  // (ห้ามเดาว่าเป็นพอร์ตหลัก: ผู้ใช้ถืออยู่ในพอร์ตอื่นแล้วเราไปสร้างแถวใหม่ใน
-  // พอร์ตหลักให้ = ประวัติแตกคนละ asset_id ซึ่งคือบั๊กที่ migration 014 เคยแก้)
+  // ⚠️ ข้อความนี้เป็น "ตาข่ายกันตก" ไม่ใช่เส้นทางหลัก (เหมือน AMBIGUOUS_ASSET_BROKER
+  // ข้างบนเป๊ะ) — เส้นทางหลักคือ buildPortfolioPickerMessage (ปุ่มให้เลือกพอร์ต)
+  // ที่ routeCommand ดักไว้ก่อนแล้ว · จะมาถึงข้อความนี้ได้เฉพาะ Path ที่ตอบเป็นปุ่ม
+  // ไม่ได้จริงๆ (นำเข้าพอร์ตแบบหลายบรรทัดที่ 1 Batch มีหลาย Symbol พร้อมกัน) หรือ
+  // ตอนประกอบปุ่มไม่สำเร็จ
   //
-  // TODO รอบหน้า: ปุ่มเลือกพอร์ตบน LINE โดย Reuse Pattern Quick Reply/Postback
-  // ชุดเดียวกับ buildBrokerPickerMessage (details.candidates พก portfolioId มาให้แล้ว)
+  // ⚠️ **ห้ามเดาว่าเป็นพอร์ตหลัก** (กฎยืนข้อ 11) — ผู้ใช้ถืออยู่ในพอร์ตอื่นแล้วเรา
+  // ไปสร้างแถวใหม่ในพอร์ตหลักให้ = ประวัติแตกคนละ asset_id ซึ่งคือบั๊กที่
+  // migration 014 เคยแก้
   AMBIGUOUS_ASSET_PORTFOLIO:
-    'คุณถือสินทรัพย์นี้อยู่ในมากกว่า 1 พอร์ตครับ ตอนนี้การเลือกพอร์ตทำได้บนเว็บเท่านั้น กรุณาบันทึกรายการนี้ผ่านเว็บ Dashboard แล้วเลือกพอร์ตที่ต้องการครับ',
+    'คุณถือสินทรัพย์นี้อยู่ในมากกว่า 1 พอร์ตครับ ระบบจึงไม่ทราบว่าหมายถึงพอร์ตไหน กรุณาบันทึกทีละรายการผ่านคำสั่งปกติ แล้วเลือกพอร์ตจากปุ่มที่ระบบถามกลับครับ',
   // ผู้ใช้กดปุ่มเลือกโบรกช้าเกินไปจนโบรกนั้นถูกลบไปแล้ว (หรือปุ่มมาจากข้อความเก่า)
   // — assertOwnedBrokerId ตอบ 404 เดียวกับกรณี "เป็นของผู้ใช้คนอื่น" โดยเจตนา
   // เพื่อไม่ยืนยันการมีอยู่ของข้อมูลผู้ใช้รายอื่น (Design Doc § 6.3)
@@ -1528,12 +1530,16 @@ function truncateCodePoints(text, max) {
 // brokerId = null หมายถึงแถว "ไม่ระบุโบรก" (broker_id IS NULL) ซึ่งเป็นตัวเลือก
 // ที่ถูกต้องพอๆ กับโบรกจริง จึง Encode เป็น 'none' ไม่ใช่ปล่อย Key หายไป (ถ้า
 // ปล่อยหาย ปลายทางจะอ่านได้เป็น undefined = "ยังไม่ได้ถาม" แล้ววนถามซ้ำไม่รู้จบ)
-function brokerPickPostback(commandType, symbol, brokerId, buy = {}) {
+//
+// ⚠️ **มิติที่ผู้ใช้ตอบไปแล้วต้องถูกพกต่อไปด้วยทุกครั้ง** — เมื่อกำกวมทั้งพอร์ต
+// และโบรกพร้อมกัน ผู้ใช้จะถูกถาม 2 รอบซ้อน ถ้ารอบที่ 2 ไม่พกคำตอบของรอบที่ 1
+// ไปด้วย ระบบจะลืมแล้ววนถามรอบที่ 1 ซ้ำไม่รู้จบ (Loop ที่ผู้ใช้ออกไม่ได้)
+// นี่คือเหตุผลที่ `broker`/`pf` ถูก Set จาก buy.* ก่อน แล้วปุ่มของแต่ละ Picker
+// ค่อย Set ทับเฉพาะมิติของตัวเอง
+function basePickPostback(commandType, symbol, buy = {}) {
   const p = new URLSearchParams();
-  p.set('action', 'pick_broker');
   p.set('cmd', commandType);
   p.set('sym', symbol);
-  p.set('broker', brokerId ?? 'none');
   if (buy.amountThb !== undefined && buy.amountThb !== null) p.set('amt', String(buy.amountThb));
   if (buy.quantity !== undefined && buy.quantity !== null) p.set('qty', String(buy.quantity));
   if (buy.pricePerUnit !== undefined && buy.pricePerUnit !== null) {
@@ -1541,6 +1547,27 @@ function brokerPickPostback(commandType, symbol, brokerId, buy = {}) {
   }
   if (buy.currency === 'USD') p.set('cur', 'USD');
   if (buy.sellAll) p.set('all', '1');
+  // มิติที่ตอบไปแล้วในรอบก่อน (undefined = ยังไม่เคยถูกถาม → ไม่ใส่ Key เลย
+  // เพื่อให้ปลายทางอ่านได้เป็น undefined ตามกติกา 3 ทางของ assetResolution)
+  if (buy.brokerId !== undefined) p.set('broker', buy.brokerId ?? 'none');
+  if (buy.portfolioId !== undefined) p.set('pf', buy.portfolioId ?? 'none');
+  return p;
+}
+
+function brokerPickPostback(commandType, symbol, brokerId, buy = {}) {
+  const p = basePickPostback(commandType, symbol, buy);
+  p.set('action', 'pick_broker');
+  p.set('broker', brokerId ?? 'none');
+  return p.toString();
+}
+
+// Postback ของปุ่มเลือกพอร์ต — portfolioId = null หมายถึงแถวที่ portfolio_id IS
+// NULL (โลกก่อน migration 044) ซึ่งเป็นตัวเลือกที่ถูกต้องพอๆ กับพอร์ตจริง จึง
+// Encode เป็น 'none' ด้วยเหตุผลเดียวกับ broker เป๊ะ
+function portfolioPickPostback(commandType, symbol, portfolioId, buy = {}) {
+  const p = basePickPostback(commandType, symbol, buy);
+  p.set('action', 'pick_portfolio');
+  p.set('pf', portfolioId ?? 'none');
   return p.toString();
 }
 
@@ -1570,6 +1597,84 @@ function buildBrokerPickerMessage(commandType, symbol, choices, buy = {}) {
     type: 'text',
     text:
       `คุณถือ ${symbol} อยู่มากกว่า 1 ที่ กรุณาเลือกก่อนว่าจะ${verb}ของที่ไหนครับ:\n${lines}`,
+    quickReply: { items },
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Portfolio Picker (Stage 8-fix — migration 044) — "BTC ในพอร์ตไหน?"
+// ═══════════════════════════════════════════════════════════════════════
+// คู่แฝดของ Broker Picker ข้างบนเป๊ะ ต่างกันแค่มิติที่ถาม — ผู้ใช้ Premium ที่
+// แยกพอร์ต "ระยะสั้น / ระยะยาว" แล้วถือ Symbol เดียวกันทั้งสองพอร์ตคือรูปแบบ
+// การใช้งานปกติมาก ไม่ใช่ Edge Case
+//
+// ⚠️ ก่อนหน้านี้เส้นทาง LINE ตอบแค่ข้อความ "ไปใช้เว็บ" ซึ่งแปลว่า **ผู้ใช้ที่จ่าย
+// เงินถูกลงโทษด้วยฟีเจอร์ที่เพิ่งซื้อ** — บันทึกผ่าน LINE ซึ่งเป็นจุดขายหลักของ
+// ผลิตภัณฑ์ไม่ได้อีกเลยสำหรับหุ้นตัวนั้น
+//
+// ⚠️ ถือพอร์ตเดียว = ไม่กำกวม = ไม่มีวันมาถึงฟังก์ชันนี้ (กฎยืนข้อ 10)
+//
+// ── ทำไมไม่ต้องมีตาราง Session ──────────────────────────────────────────
+// Reuse Pattern เดิม 100%: Quick Reply + Postback ที่พกพารามิเตอร์คำสั่งเดิม
+// ไปด้วย จึงไม่มี State ค้างให้ต้องหมดอายุ — ผู้ใช้ทิ้ง Flow ไว้เฉยๆ ก็จบไปเอง
+// เหมือน Broker Picker/Fund Class Picker (ไม่มี Pending ถูกสร้างก่อนถาม)
+
+// พอร์ตที่ผู้ใช้ยัง "เพิ่มรายการใหม่ไม่ได้" (Free ที่มีพอร์ตส่วนเกินจากตอนเคยเป็น
+// Premium) — ยังต้องโชว์เป็นตัวเลือกเสมอเพราะ **ขายออกได้อยู่** การซ่อนปุ่มจะทำให้
+// ผู้ใช้คิดว่าของหายไปจากระบบ · ติด 🔒 ให้เห็นก่อนกดแทน
+//
+// ⚠️ นี่คือ UX ล้วน **ไม่ใช่ Gate** — ด่านจริงอยู่ที่ validateBuy →
+// assertCanAddToPortfolio เสมอ (ผู้ใช้กดปุ่มที่ล็อกได้ แล้วจะได้ข้อความไทยที่
+// อธิบายว่าทำไมถึงเพิ่มไม่ได้ ซึ่งชัดกว่าปุ่มที่หายไปเฉยๆ)
+const LOCKED_MARK = '🔒';
+const NO_PORTFOLIO_LABEL = 'ไม่ระบุพอร์ต';
+
+// commandType = 'buy' | 'sell' | 'profit'
+// choices = [{ portfolioId, portfolioName, locked }] — portfolioId null = แถวที่
+//           ยังไม่สังกัดพอร์ต (โลกก่อน 044)
+// buy = พารามิเตอร์คำสั่งเดิม + มิติที่ตอบไปแล้ว (เช่น brokerId)
+function buildPortfolioPickerMessage(commandType, symbol, choices, buy = {}) {
+  // LINE จำกัด 13 items ต่อข้อความ (เหตุผลเดียวกับ Broker Picker)
+  const items = choices.slice(0, 13).map((c) => {
+    const name = c.portfolioName || NO_PORTFOLIO_LABEL;
+    // ⚠️ label ≤ 20 **Unicode Code Point** (กฎยืนข้อ 5) — 🔒 กินไป 1 จุด จึงเหลือ
+    // ให้ชื่อ 19 · ต้องตัดด้วย truncateCodePoints ห้ามใช้ slice() (ตัด Surrogate
+    // Pair ของอิโมจิขาดกลางตัว)
+    const label =
+      c.locked && commandType === 'buy'
+        ? `${LOCKED_MARK}${truncateCodePoints(name, 19)}`
+        : truncateCodePoints(name, 20);
+
+    return {
+      type: 'action',
+      action: {
+        type: 'postback',
+        label,
+        data: portfolioPickPostback(commandType, symbol, c.portfolioId ?? null, buy),
+        displayText: `${symbol} ในพอร์ต ${name}`,
+      },
+    };
+  });
+
+  const verb =
+    commandType === 'buy' ? 'บันทึกการซื้อ' : commandType === 'sell' ? 'บันทึกการขาย' : 'ดูกำไร';
+  const lines = choices
+    .map((c) => {
+      const name = c.portfolioName || NO_PORTFOLIO_LABEL;
+      return c.locked && commandType === 'buy' ? `• ${LOCKED_MARK} ${name}` : `• ${name}`;
+    })
+    .join('\n');
+
+  // มีพอร์ตที่ล็อกอยู่ในตัวเลือก → อธิบายให้ชัดว่า "เพิ่มใหม่ไม่ได้ แต่ยังขายได้"
+  // ไม่ใช่ปล่อยให้ผู้ใช้เดาเองว่าทำไมมีแม่กุญแจ
+  const lockedNote = choices.some((c) => c.locked) && commandType === 'buy'
+    ? `\n\n${LOCKED_MARK} = พอร์ตที่เพิ่มรายการใหม่ไม่ได้ในแพ็กเกจปัจจุบัน (ยังขายออกได้ตามปกติ)`
+    : '';
+
+  return {
+    type: 'text',
+    text:
+      `คุณถือ ${symbol} อยู่มากกว่า 1 พอร์ต กรุณาเลือกก่อนว่าจะ${verb}ของพอร์ตไหนครับ:\n${lines}${lockedNote}`,
     quickReply: { items },
   };
 }
@@ -4131,6 +4236,7 @@ module.exports = {
   buildBulkImportConfirmedMessage,
   buildFundClassPickerMessage,
   buildBrokerPickerMessage,
+  buildPortfolioPickerMessage,
   buildFundNotFoundMessage,
   buildDashboardLinkMessage,
   buildPlanDowngradedMessage,

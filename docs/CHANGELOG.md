@@ -4,6 +4,57 @@
 
 ## [Unreleased]
 ### Added
+- **🔴 ปิดหางของบั๊ก Asset Resolution อีก 2 เส้น (พบตอนรีวิว `6cf6aa1`)**
+  (Post-mortem § 10 + § 11: [`POSTMORTEM_PORTFOLIO_RESOLUTION.md`](./POSTMORTEM_PORTFOLIO_RESOLUTION.md))
+  - **หางเส้นที่ 2 — ระบุโบรกแล้วข้ามด่านพอร์ตทั้งหมด:** `resolveOwnedAsset` ให้
+    branch ของโบรก `return` ออกไป**ก่อน**ถึงด่านพอร์ต → ผู้ใช้ที่ตอบโบรกมาแล้วและ
+    ถือ Symbol นั้นที่โบรกเดียวกันใน 2 พอร์ต จะถูก `.find()` **หยิบแถวแรกตาม
+    `created_at` เงียบๆ** → เขียนธุรกรรมเข้าพอร์ตผิด → **ต้นทุนเฉลี่ยของทั้งสอง
+    พอร์ตเพี้ยนพร้อมกัน** · แก้โดยย้ายด่านพอร์ตขึ้นไปก่อนจุด `return` ทุกจุด และ
+    ตัดสินจาก "ปลายทางที่ยังเป็นไปได้" แทน `candidates` ดิบ
+  - **หางเส้นที่ 3 — รอยต่อ Preview→Confirm ไม่เคยพก `portfolioId`:**
+    `pendingTransaction.service` **ไม่ถูกแตะเลยในการแก้รอบที่ 1** ทั้งที่เอกสารเขียน
+    ว่า "ลบ `?? null` ทุกจุด" → LINE (ซึ่งไม่เคยส่ง `portfolioId` มา) เก็บ `NULL`
+    ลง `pending_transactions` ตอน Preview แล้วตอน Confirm ค้นด้วย
+    `portfolio_id IS NULL` → หลัง Apply `044` **หาสินทรัพย์เดิมไม่เจอ → สร้างแถวซ้ำ**
+    (และแถวใหม่ยังละเมิด Invariant ของ `045`) · **นี่คือเส้นทางที่ผู้ใช้ใช้บ่อยที่สุด
+    ของทั้งผลิตภัณฑ์** · แก้โดยให้ `validateBuy`/`validateSell` คืน `portfolioId`
+    ที่ Resolve ได้จริง แล้ว `createPending`/`createBatch` เก็บค่านั้น (Pattern เดียว
+    กับ `brokerId` ของ Stage 5 เป๊ะ) · `bulkImport` พก `portfolioId` + `brokerId`
+    ต่อรายการด้วย (`createBatch` ไม่เคยเก็บ `broker_id` เลย = บั๊กคลาสเดียวกันที่รออยู่)
+  - ✅ **ไม่ต้องทำ migration 049** — `pending_transactions.portfolio_id` มีอยู่แล้ว
+    ตั้งแต่ `migration 001` พร้อม `ON DELETE SET NULL` ตรง Pattern ที่ต้องการเป๊ะ
+  - **⭐ บทเรียนข้อ 1 เกิดซ้ำในไฟล์เดียวกันเป็นครั้งที่ 2:** คอมเมนต์เขียนว่า
+    *"ตรวจพอร์ตก่อนโบรกเสมอ"* ทั้งที่โครงสร้างจริงไม่ได้ตรวจก่อน · และเอกสาร
+    Post-mortem เองก็เขียนประโยคเดียวกันซ้ำ → **กฎใหม่: คำว่า "เสมอ/ทุกจุด/ที่เดียว"
+    ในคอมเมนต์คือข้อผูกพันที่ต้องพิสูจน์ด้วย `grep` จริงก่อน Commit ทุกครั้ง**
+  - **⭐ บทเรียนข้อ 3 เกิดซ้ำคนละรูป:** รอบแรกคือ *Mock ทั้ง Repository จนของจริง
+    ไม่เคยถูกรัน* · รอบนี้คือ ***Mock ที่หลวมกว่าของจริง*** —
+    `findAllByUserAndSymbol.mockResolvedValue([...])` ไม่สนใจ Argument `portfolioId`
+    เลย จึงเขียวสนิทตลอดเวลาที่บั๊กมีอยู่ → **Mock ของ Repository ที่มี Argument
+    ควบคุมการกรอง ต้องจำลองการกรองนั้นจริง (`mockImplementation`)**
+  - **⭐ เทสต์ที่ครอบแต่ละมิติครบ ≠ ครอบจุดตัดของทั้งสองมิติ** — 18 เคสของรอบที่ 1
+    ไม่มีเคสไหนผสม "ระบุโบรก + Symbol อยู่ 2 พอร์ต" เลย · จำนวนเคสที่ต้องครอบคือ
+    **ผลคูณ** ไม่ใช่ผลบวก
+  - **Red-Green จริง 5 ชุด** (ดู Post-mortem § 7 + § 11.4)
+  - Test **133 suites / 2,645 → 134 suites / 2,667** · ESLint 0 error
+
+- **⭐ ปุ่มเลือกพอร์ตบน LINE (`pick_portfolio`) — Reuse Pattern ของ Broker Picker 100%**
+  - เดิมกำกวมมิติพอร์ตแล้ว LINE ตอบแค่ "กรุณาใช้เว็บ" = **ผู้ใช้ Premium ที่แยกพอร์ต
+    บันทึกหุ้นที่ถือข้ามพอร์ตผ่าน LINE ไม่ได้เลย** ซึ่งขัดกับจุดขายหลักของผลิตภัณฑ์
+  - Quick Reply + Postback ที่พกพารามิเตอร์คำสั่งเดิม → **ไม่มีตาราง Session ใหม่
+    ไม่มี State ค้างให้หมดอายุ** (ผู้ใช้ทิ้ง Flow ไว้เฉยๆ ก็จบไปเอง)
+  - ⭐ **มิติที่ตอบไปแล้วถูกพกต่อในปุ่มรอบถัดไป** (`broker` + `pf` อยู่ด้วยกันได้)
+    — ถ้าไม่พก ระบบจะลืมคำตอบรอบแรกแล้ววนถามซ้ำเป็น Loop ที่ผู้ใช้ออกไม่ได้
+  - `portfolioId` จาก Postback ผ่าน **`assertOwnedPortfolioId`** ก่อนใช้เสมอ
+    (กฎยืนข้อ 4 · คู่แฝดของ `assertOwnedBrokerId` · ตอบ 404 ไม่ใช่ 403)
+  - `label` ตัดที่ **20 Unicode Code Point** ด้วย `truncateCodePoints` ไม่ใช่ `slice()`
+  - 🔒 พอร์ตที่เพิ่มรายการใหม่ไม่ได้ **ยังโชว์เป็นตัวเลือก** (ซ่อน = ผู้ใช้คิดว่าของหาย)
+    · ติดแม่กุญแจเฉพาะคำสั่ง **ซื้อ** เท่านั้น — คำสั่ง **ขาย** ต้องไม่มีแม่กุญแจเลย
+    · ⚠️ เป็น **UX ล้วน ไม่ใช่ Gate** — ด่านจริงอยู่ที่ `validateBuy` เสมอ
+  - แก้บั๊กพ่วง: `pick_broker` + `cmd=profit` เคยส่ง `portfolioId = null` แบบ Hardcode
+    (= "เจาะจงว่าไม่มีพอร์ต") ซึ่งหลัง Apply `044` จะหาสินทรัพย์ไม่เจอเลยสักตัว
+  - Test **134 suites / 2,667 → 135 suites / 2,684** · ESLint 0 error
 - **🔴 แก้บั๊ก Asset Resolution ที่บล็อกการ Apply migration 044**
   (Post-mortem เต็ม: [`POSTMORTEM_PORTFOLIO_RESOLUTION.md`](./POSTMORTEM_PORTFOLIO_RESOLUTION.md))
   - **อาการ:** `044` Backfill ให้สินทรัพย์ทุกแถวมี `portfolio_id` → ไม่เหลือแถวที่

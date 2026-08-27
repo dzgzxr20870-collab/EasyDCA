@@ -312,7 +312,17 @@ describe('Postback pick_broker — เล่นคำสั่งเดิมซ
 
     await handleEvent(postbackEvent(`action=pick_broker&cmd=profit&sym=BTC&broker=${BROKER_A.id}`));
 
-    expect(profitService.getAssetProfit).toHaveBeenCalledWith(USER.id, 'BTC', null, {}, BROKER_A.id);
+    // ⚠️ portfolioId ต้องเป็น **undefined** ไม่ใช่ null (Stage 8-fix รอบ 3) —
+    // เดิม Handler ส่ง null แบบ Hardcode ซึ่งแปลว่า "เจาะจงว่าไม่มีพอร์ต" จึงค้นด้วย
+    // portfolio_id IS NULL แล้วหลัง Apply 044 จะหาสินทรัพย์ไม่เจอเลยสักตัว
+    // (ผู้ใช้ยังไม่ได้ตอบมิติพอร์ต = undefined = ไม่กรองมิตินั้น)
+    expect(profitService.getAssetProfit).toHaveBeenCalledWith(
+      USER.id,
+      'BTC',
+      undefined,
+      {},
+      BROKER_A.id
+    );
     expect(pendingService.createPending).not.toHaveBeenCalled();
   });
 });
