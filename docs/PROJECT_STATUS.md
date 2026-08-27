@@ -40,7 +40,52 @@ Beta Wave 1)
 Node.js/Express + React/Vite + Supabase (Postgres 17.6) + Railway (2 Services:
 `EasyDCA` + `easydca-worker`) + LINE Messaging API + LIFF + Cloudflare R2
 (Nightly Backup, พิสูจน์ Restore แล้ว) — Migration ล่าสุดที่ Apply บน
-Production: **035**
+Production: **048** (Apply `042`–`048` ครบเมื่อ 27–28 ส.ค. 2569)
+
+---
+
+### 🚀 Production Deploy ล่าสุด (28 ส.ค. 2569)
+
+**Deploy `a05206d`** (merge `feat/dashboard-production-wire` → `main`) ทั้ง 2 Service ·
+**Apply migration `042` → `048` ครบทั้ง 7 ตัวบน Supabase Production**
+(รายละเอียด + ตัวเลขก่อน/หลัง: [`HANDOFF § 8`](./HANDOFF_DASHBOARD_MULTIPORTFOLIO.md))
+
+| ตาราง | ก่อน | หลัง |
+|---|---|---|
+| `assets` | 26 | 27 |
+| `portfolios` | **0** | **20** (Backfill ของ `044`) |
+| `transactions` | 71 | 74 |
+| `users` | 20 | 20 |
+
+#### ⭐ DoD ชั้นที่ 4 (Production Verification) — ผ่านจริงครั้งแรกของโปรเจกต์
+
+> ⚠️⚠️ **ห้ามเหมารวมว่า "ผ่านหมด"** — ตารางนี้แยกให้ชัดว่าอะไรถูกรันจริงบน
+> Production แล้วบ้าง และอะไร **ยังไม่เคยถูกรันเลยแม้แต่ครั้งเดียว**
+> ทุกแถวฝั่งซ้ายชี้ไปหลักฐานได้ว่าทดสอบอะไร ได้ผลอะไร (`HANDOFF § 8.2`)
+
+| ✅ ผ่าน DoD ชั้น 4 แล้ว (มีหลักฐาน) | ⏳ ยังไม่ได้ Verify |
+|---|---|
+| **ซื้อ** ผ่าน LINE — ซื้อ 2 ครั้งติด `assets` 26→27 (แถวเดียว) · แถวซ้ำ 0 | **หน้าเว็บ Stage 9** (`/app/*`) — ยังไม่เคยเปิดดูในเบราว์เซอร์เลย และ Feature Flag ยังปิดอยู่ |
+| **ขาย** ผ่าน LINE — ยอดถือหักลบตรงเป๊ะ | **ปุ่มเลือกพอร์ตบน LINE** — ต้องมี > 1 พอร์ตถึงจะเห็น แต่ตอนนี้ทุกคนมีพอร์ตเดียว (Backfill สร้างให้คนละ 1) |
+| **ดูกำไร** ผ่าน LINE — ต้นทุนเฉลี่ย/เงินลงทุนสอดคล้องกันทั้งชุด | **`POST /transactions/dividend`** — ยังไม่มี UI ที่เรียก จึงไม่เคยถูกยิงจริง |
+| **พอร์ต** (`พอต`) ผ่าน LINE | **Endpoint ชุด Stage 8** (`/portfolios` · `/portfolio/allocation` · `/assets` GET/PATCH · `/brokers`) — ยังไม่เคยถูกยิงจากของจริง |
+| **Migration `042`–`048`** ทั้งชุด + Verify Query ของแต่ละตัว | **PDPA ล้างชื่อ `portfolios`/`brokers`** — ยังไม่มีใครยื่นคำขอลบข้อมูลจริงหลัง Deploy |
+| **Backfill `044`/`045`** — `045` ผ่านครบ 5 CHECK | **`portfolioSnapshot.job` หลัง `044`** — ยังไม่ถึงรอบ Cron เที่ยงคืนแรกหลัง Apply |
+
+> ⚠️ **ยังห้ามเขียนคำว่า "ปิดสมบูรณ์" กับ Stage 8 หรือ Stage 9** — ฝั่งขวายังมีของ
+> ที่ไม่เคยรันจริงเลยหลายรายการ · สิ่งที่พูดได้คือ **"เส้นทางซื้อ/ขาย/ดูกำไร/พอร์ต
+> ผ่าน LINE ผ่าน DoD ชั้น 4 แล้ว"** เท่านั้น
+
+> ### 🔴 เหตุการณ์ระหว่าง Deploy ที่ต้องรู้
+>
+> ช่วง "หลัง Deploy จนถึงก่อน Apply `046`" **ทุกคำสั่งซื้อผ่าน LINE พังทั้งหมด**
+> (`Could not find the 'broker_id' column of 'pending_transactions'`) เพราะโค้ด
+> Stage 5 ต้องการคอลัมน์ที่ `046` เป็นคนเพิ่ม — พังแบบดัง ไม่แตะ Ledger ไม่มีข้อมูล
+> เสียหาย · แก้แล้วด้วยการ Apply `046` + `NOTIFY pgrst, 'reload schema'`
+>
+> Post-mortem + กฎป้องกัน: [`POSTMORTEM_MIGRATION_ORDER.md`](./POSTMORTEM_MIGRATION_ORDER.md)
+
+---
 
 ### ✅ ปิดสมบูรณ์แล้วทั้งหมด (ห้ามทำซ้ำ)
 
