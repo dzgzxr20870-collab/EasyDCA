@@ -80,6 +80,27 @@ const ASSET_IN_EXCESS = {
   sector: null,
 };
 
+// ⚠️⚠️ **ห้ามเปลี่ยนกลับเป็น `mockResolvedValue` เด็ดขาด** (AI_WORK_POLICY § 3.1)
+// ไฟล์นี้ทดสอบ "ด่านสิทธิ์ของพอร์ต" ซึ่งตัดสินจาก **พอร์ตของแถวที่ Resolve ได้จริง**
+// (`existingAsset.portfolioId`) — ถ้า Mock คืนแถวเดิมทุกครั้งไม่ว่าถูกค้นด้วย
+// `portfolioId` อะไร เคส "ไม่ส่ง portfolioId มาเลย (เส้นทาง LINE)" จะเขียวสนิท
+// แม้โค้ดจะถอยกลับไปส่ง `null` (= "เจาะจงว่าไม่มีพอร์ต") ซึ่งหลัง Apply 044
+// จะหาสินทรัพย์ไม่เจอแล้ว **สร้างแถวซ้ำ + ข้ามด่านสิทธิ์ไปเลย**
+//
+// กติกา 3 ทางที่ต้องจำลองให้ตรงของจริง:
+//   undefined → ไม่กรอง portfolio_id เลย   ·   null → .is('portfolio_id', null)
+//   '<uuid>'  → .eq('portfolio_id', uuid)
+function installAssets(rows) {
+  assetRepository.findAllByUserAndSymbol.mockImplementation(
+    async (_userId, symbol, portfolioId) => {
+      const bySymbol = rows.filter((r) => r.symbol === symbol);
+      if (portfolioId === undefined) return bySymbol;
+      if (portfolioId === null) return bySymbol.filter((r) => (r.portfolioId ?? null) === null);
+      return bySymbol.filter((r) => r.portfolioId === portfolioId);
+    }
+  );
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
   portfolioRepository.findAllByUser.mockResolvedValue(ALL_PORTFOLIOS);
@@ -87,7 +108,7 @@ beforeEach(() => {
   portfolioRepository.findByIdForUser.mockImplementation(async (id) =>
     ALL_PORTFOLIOS.find((p) => p.id === id) ?? null
   );
-  assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_IN_EXCESS]);
+  installAssets([ASSET_IN_EXCESS]);
   assetRepository.findActiveSymbolsByUser.mockResolvedValue(['BTC']);
   assetRepository.create.mockResolvedValue(ASSET_IN_EXCESS);
   transactionRepository.create.mockResolvedValue({ id: 'tx-1' });
@@ -210,9 +231,7 @@ describe('พอร์ตหลักตัดสินด้วย is_default �
   });
 
   test('ซื้อเข้าพอร์ตหลักได้ปกติแม้ Premium หมดอายุ', async () => {
-    assetRepository.findAllByUserAndSymbol.mockResolvedValue([
-      { ...ASSET_IN_EXCESS, id: 'asset-main', portfolioId: MAIN_PORTFOLIO.id },
-    ]);
+    installAssets([{ ...ASSET_IN_EXCESS, id: 'asset-main', portfolioId: MAIN_PORTFOLIO.id }]);
 
     const result = await transactionService.validateBuy(
       USER_ID,
@@ -230,9 +249,7 @@ describe('⭐ Free / Premium Active — พฤติกรรมต้องไ�
   // ถ้าพลาดจะบล็อกคนที่ไม่ควรโดนบล็อกทั้งฐาน
   test('⭐ Free (พอร์ตเดียว) → ซื้อได้ปกติ ไม่มีอะไรถูกบล็อกเพิ่ม', async () => {
     portfolioRepository.findAllByUser.mockResolvedValue([MAIN_PORTFOLIO]);
-    assetRepository.findAllByUserAndSymbol.mockResolvedValue([
-      { ...ASSET_IN_EXCESS, portfolioId: MAIN_PORTFOLIO.id },
-    ]);
+    installAssets([{ ...ASSET_IN_EXCESS, portfolioId: MAIN_PORTFOLIO.id }]);
 
     const result = await transactionService.validateBuy(
       USER_ID,
@@ -245,9 +262,7 @@ describe('⭐ Free / Premium Active — พฤติกรรมต้องไ�
 
   test('⭐ Free ที่ไม่ส่ง portfolioId มาเลย (เส้นทาง LINE ปกติ) → ต้องไม่พัง', async () => {
     portfolioRepository.findAllByUser.mockResolvedValue([MAIN_PORTFOLIO]);
-    assetRepository.findAllByUserAndSymbol.mockResolvedValue([
-      { ...ASSET_IN_EXCESS, portfolioId: MAIN_PORTFOLIO.id },
-    ]);
+    installAssets([{ ...ASSET_IN_EXCESS, portfolioId: MAIN_PORTFOLIO.id }]);
 
     await expect(
       transactionService.processBuyCommand(

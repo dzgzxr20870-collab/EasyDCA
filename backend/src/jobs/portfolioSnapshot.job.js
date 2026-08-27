@@ -64,10 +64,24 @@ async function runPortfolioSnapshot(snapshotDate = todayInBangkok()) {
           // getAssetProfit จะ throw AMBIGUOUS_ASSET_BROKER ทั้งสองแถว แล้วถูก catch
           // ด้านล่างนับเป็น excludedCount → มูลค่ารวมรายคืนขาด Symbol นั้นไปทั้งก้อน
           // แบบไม่มี Error ให้เห็นเลย (Snapshot คือตัวเลขเงินที่ผู้ใช้เห็นย้อนหลัง)
+          // ⚠️⚠️ **ต้องส่ง holding.portfolioId ด้วย ห้ามส่ง null แบบ Hardcode**
+          // (Stage 8-fix รอบ 4 — 27 ส.ค. 2569) เดิมบรรทัดนี้ส่ง `null` ซึ่งแปลว่า
+          // **"เจาะจงว่าไม่มีพอร์ต"** → ค้นด้วย `.is('portfolio_id', null)` →
+          // หลัง Backfill ของ 044 ไม่เหลือแถวแบบนั้นเลย → ASSET_NOT_FOUND ทุกแถว
+          // → ถูก catch ด้านล่างนับเป็น excludedCount ทั้งหมด → **totalCurrentValue
+          // กลายเป็น null ทุกคืน ทุกคน แบบไม่มี Error ที่ไหนเลย** (มี catch ครอบอยู่)
+          //
+          // ⚠️ และ **ห้ามเปลี่ยนเป็น undefined** ด้วย — ผู้ใช้ที่ถือ Symbol เดียวกัน
+          // 2 พอร์ตจะมี holding 2 แถวที่ symbol เท่ากัน ถ้าไม่ระบุพอร์ตจะได้
+          // AMBIGUOUS_ASSET_PORTFOLIO ทั้งคู่ แล้วตกหล่นทั้งสองแถวเหมือนกัน
+          // (บทเรียนเดียวกับ brokerId ข้างบนเป๊ะ)
+          //
+          // holding พก portfolioId + brokerId มาให้แล้วจาก getPortfolioSummary
+          // ซึ่งรวมกันเป็นคีย์ที่ระบุแถวได้เป๊ะตัวเดียวตาม UNIQUE ของ migration 046
           const profit = await profitService.getAssetProfit(
             userId,
             holding.symbol,
-            null,
+            holding.portfolioId ?? null,
             { allowRetry: true },
             holding.brokerId ?? null
           );

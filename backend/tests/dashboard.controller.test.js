@@ -254,7 +254,18 @@ describe('getProfit', () => {
 
     // Stage 5 (migration 046) — Argument ที่ 5 คือ brokerId
     // undefined = "ผู้ใช้ยังไม่ได้ระบุโบรก" (คนละความหมายกับ null = "ไม่ระบุโบรก")
-    expect(profitService.getAssetProfit).toHaveBeenCalledWith(USER_ID, 'BTC', null, {}, undefined);
+    //
+    // ⚠️ Stage 8-fix รอบ 4 — Argument ที่ 3 (portfolioId) ต้องเป็น **undefined**
+    // ไม่ใช่ null · เดิม Controller ส่ง `null` แบบ Hardcode ซึ่งแปลว่า "เจาะจงว่า
+    // ไม่มีพอร์ต" → หลัง Apply 044 จะหาสินทรัพย์ไม่เจอเลยแล้วตอบ 404 ทุกครั้ง
+    // (เทสต์เดิมยืนยัน null อยู่ = ยืนยันบั๊ก จึงแก้ assertion ในรอบ Audit)
+    expect(profitService.getAssetProfit).toHaveBeenCalledWith(
+      USER_ID,
+      'BTC',
+      undefined,
+      {},
+      undefined
+    );
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith(profit);
   });
@@ -266,7 +277,13 @@ describe('getProfit', () => {
     const res = mockRes();
     await getProfit(req, res);
 
-    expect(profitService.getAssetProfit).toHaveBeenCalledWith(USER_ID, 'BTC', null, {}, undefined);
+    expect(profitService.getAssetProfit).toHaveBeenCalledWith(
+      USER_ID,
+      'BTC',
+      undefined,
+      {},
+      undefined
+    );
   });
 
   // ── Stage 5 (migration 046) — ?brokerId เจาะจงว่า "BTC ที่โบรกไหน" ─────────
@@ -279,7 +296,13 @@ describe('getProfit', () => {
     await getProfit(req, res);
 
     expect(brokerService.assertOwnedBrokerId).toHaveBeenCalledWith(USER_ID, 'broker-a');
-    expect(profitService.getAssetProfit).toHaveBeenCalledWith(USER_ID, 'BTC', null, {}, 'broker-a');
+    expect(profitService.getAssetProfit).toHaveBeenCalledWith(
+      USER_ID,
+      'BTC',
+      undefined,
+      {},
+      'broker-a'
+    );
     expect(res.status).toHaveBeenCalledWith(200);
   });
 
@@ -292,7 +315,7 @@ describe('getProfit', () => {
     await getProfit(req, res);
 
     expect(brokerService.assertOwnedBrokerId).toHaveBeenCalledWith(USER_ID, null);
-    expect(profitService.getAssetProfit).toHaveBeenCalledWith(USER_ID, 'BTC', null, {}, null);
+    expect(profitService.getAssetProfit).toHaveBeenCalledWith(USER_ID, 'BTC', undefined, {}, null);
   });
 
   // ⚠️ Cross-User: brokerId มาจาก Query String ที่ผู้ใช้กำหนดเองได้ 100%
