@@ -17,7 +17,10 @@
 //
 // เปิดใช้ตอน Deploy ด้วย: VITE_ENABLE_MULTIPAGE_APP=true
 // (ยังไม่ตั้ง = ปิด ซึ่งคือค่าเริ่มต้นที่ปลอดภัยตอนนี้)
-function readFlag(name) {
+// Export เพื่อให้เทสต์พิสูจน์พฤติกรรม Fail-closed ได้ตรงๆ — ค่าที่ไม่ใช่ 'true'
+// เป๊ะๆ ต้องแปลว่า "ปิด" ทุกกรณี รวมถึงค่าที่ "ดูเหมือนเปิด" อย่าง 'TRUE'/'1'/'yes'
+// (ถ้าเผลอทำให้ค่าพวกนี้เปิดได้ Flag จะเปิดเองจากการพิมพ์ผิดบน Railway)
+export function readFlag(name) {
   try {
     const env = import.meta.env ?? {};
     return env[name] === 'true' || env[name] === true;

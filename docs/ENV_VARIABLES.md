@@ -87,6 +87,39 @@ cp .env.example .env
 
 ---
 
+## Frontend (Vite — Build-time)
+
+> ⚠️ Variable ของ Frontend **ต่างจากของ Backend เชิงกลไก**: Vite ฝังค่าลงไปใน
+> Bundle **ตอน Build** ไม่ใช่อ่านตอน Runtime → **เปลี่ยนค่าแล้วต้อง Redeploy
+> (Rebuild) เสมอ** การแก้ Variable บน Railway เฉยๆ ไม่มีผลกับ Bundle ที่ Build ไปแล้ว
+>
+> ⚠️ ทุกค่าที่ขึ้นต้น `VITE_` จะ**ปรากฏใน JS ที่ส่งถึงเบราว์เซอร์ผู้ใช้**
+> — **ห้ามใส่ Secret/Key ใดๆ เด็ดขาด** (ตั้งที่ Service ของ React App เท่านั้น
+> ไม่ใช่ Service `backend`)
+
+| Variable | จำเป็น | คำอธิบาย |
+|---|---|---|
+| `VITE_API_BASE_URL` | ✅ | URL ของ Backend API ที่ React App จะเรียก (เช่น `https://easydca-production.up.railway.app`) |
+| `VITE_ENABLE_MULTIPAGE_APP` | ❌ | Feature Flag ของ **Dashboard แบบแยกหน้า (`/app/*`)** — Stage 9 · ค่าที่รับได้: `true` เท่านั้นที่เปิด · **ค่าอื่นทั้งหมดรวมถึงไม่ตั้งเลย = ปิด** (Fail-closed) · Default: **ปิด** |
+
+> ### `VITE_ENABLE_MULTIPAGE_APP` — เปิด/ปิดแล้วเกิดอะไร
+>
+> | สถานะ | ผลที่เกิด |
+> |---|---|
+> | **ปิด (Default)** | Route `/app/*` **ไม่มีอยู่ในแอปเลย** ผู้ใช้ที่พิมพ์ URL ตรงจะตกไปหน้า Login ตามปกติ · `/dashboard` เดิมทำงานเหมือนเดิมทุกประการ |
+> | **เปิด (`true`)** | Route `/app/dashboard` `/app/portfolio` `/app/transactions` `/app/dca` `/app/profile` ใช้งานได้ · **`/dashboard` เดิมยังอยู่ครบไม่ถูกแทนที่** (Route คู่ขนาน) |
+>
+> ⭐ **นี่คือสวิตช์ Rollback** — ถ้าหน้าใหม่มีปัญหาบน Production ให้ปิด Flag แล้ว
+> Redeploy พอ **ไม่ต้อง Revert โค้ด** (นี่คือเหตุผลที่ทำเป็น Route คู่ขนานตั้งแต่แรก)
+>
+> ⚠️ **ตอน Deploy รอบที่มี Stage 9 ครั้งแรก ยังไม่ต้องเปิด** — เปิดหลังเปิดดูหน้าเว็บ
+> ด้วยตาบน Production แล้วเท่านั้น (ดู `DEPLOYMENT.md`)
+>
+> **ตั้งที่ไหน:** Railway → Service ของ **React App** (ไม่ใช่ `backend` / `easydca-worker`)
+> → Variables → เพิ่ม `VITE_ENABLE_MULTIPAGE_APP=true` → Redeploy
+
+---
+
 ## Premium / Payment
 
 | Variable | จำเป็น | คำอธิบาย |
@@ -274,6 +307,11 @@ JWT_EXPIRES_IN=24h
 APP_URL=http://localhost:3000
 NODE_ENV=development
 PORT=3000
+
+# ===== Frontend (Vite — ตั้งที่ Service ของ React App เท่านั้น) =====
+# ⚠️ ค่าที่ขึ้นต้น VITE_ ถูกฝังลง Bundle ตอน Build และผู้ใช้เห็นได้ — ห้ามใส่ Secret
+# VITE_API_BASE_URL=https://easydca-production.up.railway.app
+# VITE_ENABLE_MULTIPAGE_APP=true   # Feature Flag /app/* (Stage 9) — ไม่ตั้ง = ปิด
 
 # ===== Market Data (หุ้นสหรัฐ) =====
 # TWELVE_DATA_API_KEY=your_twelve_data_api_key_here
