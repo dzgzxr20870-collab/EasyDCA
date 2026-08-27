@@ -4,6 +4,38 @@
 
 ## [Unreleased]
 ### Added
+- **🔍 Audit ทั้งระบบก่อน Apply migration (27 ส.ค. 2569) — เจอหางที่ 4**
+  (Post-mortem § 12: [`POSTMORTEM_PORTFOLIO_RESOLUTION.md`](./POSTMORTEM_PORTFOLIO_RESOLUTION.md))
+  - **🔴 `portfolioSnapshot.job` ส่ง `portfolioId = null` แบบ Hardcode** → หลัง `044`
+    ทุก Holding โยน `ASSET_NOT_FOUND` แล้วถูก `catch` นับเป็น `excludedCount` →
+    **`totalCurrentValue = null` ทุกคืน ทุกคน โดยไม่มี Error ที่ไหนเลย**
+    (กราฟมูลค่าย้อนหลังว่างเปล่า) · แก้เป็น `holding.portfolioId ?? null`
+    — **ไม่ใช่ `undefined`** เพราะถือ Symbol เดียวกัน 2 พอร์ตจะตกหล่นทั้งคู่
+  - **🟠 `dashboard.controller.getProfit` ส่ง `null` เช่นกัน** → `GET /dashboard/profit/:symbol`
+    ตอบ 404 ทุกครั้งหลัง `044` · แก้เป็นรับ `?portfolioId` (กติกา 3 ทางเดียวกับ
+    `?brokerId`) ผ่าน `assertOwnedPortfolioId` + Map `AMBIGUOUS_ASSET_PORTFOLIO` เป็น 409
+  - **⭐ บทเรียน: "แก้ที่ Resolver ไม่ได้แปลว่าแก้ครบ"** — กติกา 3 ทางเป็นสัญญาที่
+    ผูกกับ **ทุก Call Site** จำนวนจุดที่ต้องแก้ = จำนวน Call Site ไม่ใช่จำนวน
+    ฟังก์ชันต้นตอ · เมื่อเปลี่ยนความหมายของ Argument ต้อง `grep` Call Site
+    ทุกจุดแล้วไล่ทีละอันในรอบเดียวกัน
+  - **🔒 Cross-User Audit ของ Endpoint ใหม่ — ไม่พบช่องโหว่** แต่ขยาย
+    `idorEndToEnd.regression.test.js` จาก **14 → 24 เคส** เพราะ Endpoint ชุด
+    Stage 1/8 (`/portfolios/*` · `/assets` · `/brokers/*` · `/transactions/dividend` ·
+    `/portfolio/allocation`) **ไม่เคยถูกครอบด้วยเทสต์ IDOR ระดับ HTTP เลยสักตัว**
+    · ⭐ เพิ่มเวกเตอร์ **"id ที่มาทาง Body"** ซึ่งการ Grep `:id` ใน `routes/` มองไม่เห็น
+  - **🧪 กวาด Mock ที่หลวมกว่าของจริง** — `portfolioWriteGate.regression.test.js`
+    (ด่าน Entitlement) พิสูจน์แล้วว่า **ถอด Fix ออกแล้วยังเขียว 12/12** = เทสต์
+    พิสูจน์อะไรไม่ได้เลย · แก้เป็น `mockImplementation` ที่กรองจริง → ถอดแล้วแดงทันที
+  - **📋 อ่านทวน migration 042–048 เทียบ Schema จริง — ไม่พบปัญหา**
+    RPC ทุกตัวเหลือ Signature เดียวหลัง Apply ครบ (`046` DROP ตรงกับนิยาม `035` เป๊ะ ·
+    `047` พารามิเตอร์ 11 ตัวเท่า `041` ทุกตัวจึง `CREATE OR REPLACE` ได้ · `048` ชื่อใหม่)
+    · ชื่อ Argument ของ RPC ตรงกับที่โค้ดส่งจริงครบทั้ง 4 ตัว · ลำดับ 042→048
+    ไม่มีตัวไหนพึ่งของที่ตัวถัดไปเพิ่งสร้าง · `GRANT EXECUTE` ให้ `service_role` เท่านั้น
+  - **📝 Audit คอมเมนต์เชิงโครงสร้าง 45 ไฟล์** — แก้ 1 จุดที่ล้าสมัย
+    (`broker.service` เขียนว่า `assertOwnedBrokerId` ใช้แค่ "assets PATCH"
+    ทั้งที่มี 4 จุดแล้ว) · เพิ่มเอกสาร RLS ของ `brokers` ลง `DATABASE.md § 3`
+    (เปิด RLS โดย **ไม่มี Policy โดยเจตนา** = service_role เท่านั้น — เข้มกว่าตารางอื่น
+    ไม่ใช่หลวมกว่า แต่ไม่เคยถูกเขียนไว้ที่ไหนเลย)
 - **Stage 9 (3/3) — ปิดงานที่เหลือทั้งหมดของ Dashboard แยกหน้า**
   (Branch `feat/dashboard-production-wire` — ยัง**ไม่ได้ Push/Merge/Deploy**)
   - **Modal สร้างพอร์ตใหม่** (`CreatePortfolioModal`) — `POST /api/v1/portfolios`

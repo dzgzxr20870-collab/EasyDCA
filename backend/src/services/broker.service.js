@@ -146,7 +146,13 @@ async function deleteBroker(userId, brokerId) {
 // ═══════════════════════════════════════════════════════════════════════════
 // assertOwnedBrokerId — ด่านบังคับก่อน "เอา brokerId จาก Body ไปใช้" ทุกครั้ง
 // ═══════════════════════════════════════════════════════════════════════════
-// ใช้โดย assets PATCH (Stage 1/2) และทุกจุดในอนาคตที่รับ brokerId จากผู้ใช้
+// ── ผู้เรียกจริง ณ ตอนนี้ (ตรวจซ้ำได้ด้วย grep — คอมเมนต์ต้องไม่โกหก) ────────
+//   assets.service.updateAssetMeta      → PATCH /assets/{id} (brokerId ใน Body)
+//   transactions.controller             → POST /transactions (brokerId ใน Body)
+//   dashboard.controller.getProfit      → GET /dashboard/profit/{symbol}?brokerId
+//   webhook.controller.decodePickedBrokerId → LINE Postback ปุ่มเลือกโบรก
+// ⚠️ เพิ่มจุดที่รับ brokerId จากผู้ใช้เมื่อไหร่ **ต้องมาต่อรายการนี้ด้วย**
+// (Audit 27 ส.ค. 2569 พบว่ารายการเดิมเขียนไว้แค่ "assets PATCH" ทั้งที่มี 4 จุดแล้ว)
 //
 // รับ null/undefined ได้ (= "ล้างค่าโบรก" หรือ "ไม่ได้ส่งมา") → คืน null ทันที
 // โดยไม่ยิง Query — แต่ค่าอื่นที่ไม่ใช่ String ต้องเป็น VALIDATION_ERROR ห้าม

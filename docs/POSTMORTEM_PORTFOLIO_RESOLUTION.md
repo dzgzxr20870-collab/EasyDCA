@@ -215,7 +215,8 @@ return portfolioId ? base.eq('portfolio_id', portfolioId) : base.is('portfolio_i
 | 2 | แก้ Asset Resolution + เทสต์ 2 ชั้น | ✅ `6cf6aa1` |
 | 3 | ขยายคำเตือน Header ให้ครอบทุกมิติ | ✅ `6cf6aa1` |
 | 3b | **ปิดหางของบั๊กเดียวกัน — branch โบรกข้ามด่านพอร์ต** (§ 10) | ✅ รอบนี้ |
-| 3c | **ปิดหางเส้นที่ 3 — รอยต่อ Preview→Confirm ไม่พกพอร์ต** (§ 11) | ✅ รอบนี้ |
+| 3c | **ปิดหางเส้นที่ 3 — รอยต่อ Preview→Confirm ไม่พกพอร์ต** (§ 11) | ✅ `035c221` |
+| 3d | **ปิดหางเส้นที่ 4 — `portfolioId = null` นอกเส้นทาง Resolution** (§ 12) | ✅ รอบนี้ |
 | 4 | ปุ่มเลือก **พอร์ต** บน LINE | ✅ รอบนี้ (`pick_portfolio`) |
 | 5 | Deploy + Verify บน Production ทั้งก่อนและหลัง `044` | ⏳ รอ Founder |
 | 6 | ทบทวน Fixture ของเทสต์เดิมให้ครอบ "โลกหลัง 044" มากขึ้น | ⏳ ทำบางส่วนแล้ว |
@@ -439,3 +440,75 @@ assetRepository.findAllByUserAndSymbol.mockResolvedValue([BTC_AT_A, BTC_AT_B]);
 > ที่พร้อมใช้งานล่วงหน้าตั้งแต่ก่อนมีฟีเจอร์ Multi-Portfolio ด้วยซ้ำ
 > นี่คือเหตุผลที่ต้อง **อ่าน Schema จริงก่อนเขียน Migration ใหม่เสมอ** ไม่ใช่
 > อนุมานจากว่า "ฟีเจอร์นี้เพิ่งมี เลยยังไม่น่ามีคอลัมน์"
+
+---
+
+## 12. 🔴 รอบที่ 4 — หางเส้นที่ 4: `portfolioId = null` นอกเส้นทาง Resolution
+
+> พบตอน **Audit ทั้งระบบก่อน Apply migration** (27 ส.ค. 2569) — ไม่ได้บังเอิญเจอ
+> แต่มาจากการไล่ตรวจตามรายการอย่างเป็นระบบ ซึ่งเป็นความต่างสำคัญจาก 3 รอบก่อน
+> (3 รอบแรกเจอเพราะ "มีคนไปมองตรงนั้นพอดี")
+
+### 12.1 สิ่งที่เจอ
+
+การแก้ 3 รอบก่อนหน้าครอบเฉพาะ **เส้นทาง Resolution** (ซื้อ/ขาย/กำไร/LINE) แต่ยังมี
+ผู้บริโภคอื่นที่เรียก `getAssetProfit()` ด้วย `portfolioId = null` แบบ Hardcode
+ค้างไว้ตั้งแต่ก่อนมีแนวคิด Multi-portfolio:
+
+| จุด | อาการหลัง 044 | ความรุนแรง |
+|---|---|---|
+| `portfolioSnapshot.job:70` | ทุก Holding โยน `ASSET_NOT_FOUND` → ถูก `catch` นับเป็น `excludedCount` → **`totalCurrentValue = null` ทุกคืน ทุกคน** | 🔴 **เงียบสนิท** — มี `catch` ครอบ ไม่มี Error ที่ไหนเลย |
+| `dashboard.controller.getProfit` | `GET /dashboard/profit/:symbol` ตอบ 404 ทุกครั้ง | 🟠 พังดัง |
+
+**การแก้:**
+
+- `portfolioSnapshot.job` → ส่ง `holding.portfolioId ?? null`
+  ⚠️ **ไม่ใช่ `undefined`** — ผู้ใช้ที่ถือ Symbol เดียวกัน 2 พอร์ตจะมี holding 2 แถว
+  ที่ `symbol` เท่ากัน ถ้าไม่ระบุพอร์ตจะได้ `AMBIGUOUS_ASSET_PORTFOLIO` ทั้งคู่แล้ว
+  **ตกหล่นทั้งสองแถว** (บทเรียนเดียวกับ `brokerId` ของ Stage 5 เป๊ะ)
+- `dashboard.controller` → รับ `?portfolioId` (กติกา 3 ทางเดียวกับ `?brokerId`)
+  ผ่าน `assertOwnedPortfolioId` ก่อนใช้เสมอ + Map `AMBIGUOUS_ASSET_PORTFOLIO` เป็น 409
+  (เดิมครอบแค่ `AMBIGUOUS_ASSET_BROKER` มิติพอร์ตจึงหลุดไปเป็น 500 INTERNAL_ERROR)
+
+### 12.2 ⭐ ทำไมยังหลุดมาได้อีก — "Mock ที่หลวมกว่าของจริง" ครั้งที่ 4
+
+`portfolioSnapshot.job.test.js` Mock `profit.service` **ทั้งก้อน** แล้วใช้
+`getAssetProfit.mockResolvedValue(profit())` ซึ่งตอบค่าเดิมทุกครั้ง
+**ไม่ว่าจะถูกเรียกด้วย Argument อะไร**
+
+> รูปแบบเดียวกับที่ทำให้หางที่ 1, 2, 3 รอดมาได้ — และเป็นเหตุผลที่รอบนี้เขียนกฎ
+> เรื่อง Mock ลง [`AI_WORK_POLICY.md § 3.1`](./AI_WORK_POLICY.md) เป็นการถาวร
+
+### 12.3 ⭐⭐ บทเรียนที่ใหญ่กว่าตัวบั๊ก — "แก้ที่ Resolver ไม่ได้แปลว่าแก้ครบ"
+
+รอบที่ 1 แก้ `assetResolution.service` + `asset.repository` แล้วสรุปว่าปิดจบ
+**แต่กติกา 3 ทางเป็นสัญญาที่ผูกกับ *ทุก Caller* ไม่ใช่กับ Resolver**
+
+จำนวนจุดที่ต้องแก้ = **จำนวน Call Site** ไม่ใช่จำนวนฟังก์ชันที่เป็นต้นตอ
+
+> **กฎที่ได้:** เมื่อเปลี่ยน "ความหมายของค่า Argument" ของฟังก์ชันกลาง
+> (เช่น `null` เปลี่ยนความหมายจาก "ไม่ระบุ" เป็น "เจาะจงว่าไม่มี") ต้อง
+> **`grep` Call Site ทุกจุดแล้วตรวจทีละอันในรอบเดียวกัน** และแปะผลการ `grep`
+> ลงใน Commit เป็นหลักฐาน — ห้ามแก้ตรงกลางแล้วเชื่อว่าปลายทางตามมาเอง
+
+### 12.4 Validation (Red-Green รันจริง)
+
+| ชุด | ถอดอะไรออก | แดง | เขียว |
+|---|---|---|---|
+| Baseline | เขียน `postBackfillConsumers` ก่อนแก้โค้ด | **5 / 9** | — |
+| RED-1 | `job` ส่ง `null` กลับไป | **2 / 9** | 9/9 |
+| RED-2 | `job` ส่ง `undefined` แทนพอร์ตของ holding | **1 / 9** | 9/9 |
+| RED-3 | `controller` ส่ง `null` กลับไป | **3 / 9** | 9/9 |
+| RED-4 | `controller` ไม่ Map `AMBIGUOUS_ASSET_PORTFOLIO` | **1 / 9** | 9/9 |
+
+### 12.5 จุดที่ตรวจแล้ว **ไม่พบปัญหา** (ต้องบันทึกไว้ด้วย)
+
+`getPortfolioSummary` เป็น **คอขวดร่วม** ของผู้บริโภคที่เหลือทั้งหมด
+(`reportExport` · `dashboardOverview` · `portfolioSummary` · `allocation` ·
+`dcaStats` · `reminderSetupFlow` · `guidedBuyFlow` · คำสั่ง `พอต` ทาง LINE)
+และมันอ่านผ่าน `findActiveByUser` ซึ่งกรองแค่ `user_id + is_active`
+**ไม่กรอง `portfolio_id` เลย** → `migration 044` ไม่มีทางทำให้ตัวเลขหายได้
+
+⚠️ ข้อสรุปนี้ **ไม่ได้มาจากการอ่านโค้ดอย่างเดียว** — มีเทสต์ยืนยันใน
+`postBackfillConsumers.regression.test.js` ว่าหลัง 044 ยังคืน Holding ครบและพา
+`portfolioId` ไปให้ Consumer ถูกต้อง

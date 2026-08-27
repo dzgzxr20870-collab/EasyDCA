@@ -893,6 +893,20 @@ CREATE POLICY "payments_insert_own" ON payments
 -- UPDATE / DELETE ทำได้เฉพาะ service_role (Admin)
 ```
 
+**brokers** (migration 042)
+```sql
+ALTER TABLE brokers ENABLE ROW LEVEL SECURITY;
+-- ⚠️ **ไม่มี POLICY โดยเจตนา** = ปฏิเสธทุก Request ที่ไม่ใช่ service_role
+-- (RLS เปิดแต่ไม่มี Policy ใน Postgres แปลว่า "ไม่อนุญาตใคร" ไม่ใช่ "อนุญาตทุกคน")
+--
+-- ต่างจากตารางอื่นที่มี "<table>_own" policy เพราะตารางนี้ถูกอ่าน/เขียนผ่าน
+-- Backend (service_role) เท่านั้น 100% — ไม่มี Path ไหนที่ Client แตะตรงเลย
+-- จึงเข้มกว่าตารางอื่น ไม่ใช่หลวมกว่า
+--
+-- ⚠️ ถ้าวันหนึ่งเปิดให้ Client เข้าถึงด้วย auth.uid() ต้องมาเพิ่ม Policy ที่นี่ก่อน
+-- ไม่งั้นจะได้ผลลัพธ์ว่างเปล่าแบบไม่มี Error ให้เห็น (ตรวจพบตอน Audit 27 ส.ค. 2569)
+```
+
 **goals**
 ```sql
 ALTER TABLE goals ENABLE ROW LEVEL SECURITY;
