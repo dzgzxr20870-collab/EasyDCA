@@ -257,3 +257,168 @@ describe('⚠️ ถือ Symbol เดียวกันข้ามพอร�
     expect(transactionRepository.create).not.toHaveBeenCalled();
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ⭐ หางของบั๊กเดียวกัน (รอบที่ 2) — "ระบุโบรกแล้วข้ามด่านพอร์ตทั้งหมด"
+// ═══════════════════════════════════════════════════════════════════════════
+// พบตอนรีวิว 27 ส.ค. 2569 · เป็น **บั๊กคลาสเดียวกันเป๊ะ** กับข้างบน ไม่ใช่บั๊กใหม่
+//
+// ── บั๊ก ──────────────────────────────────────────────────────────────────
+// resolveOwnedAsset เคยเรียงลำดับเป็น [กรองโบรก → return] แล้วค่อยมีด่านพอร์ต
+// อยู่ "ข้างล่างจุด return" — พอผู้ใช้ตอบโบรกมาแล้ว (brokerId !== undefined)
+// การตัดสินจึงจบที่ `.find()` ซึ่ง **หยิบแถวแรกตาม created_at เงียบๆ**
+// → ถือ BTC @ Bitkub อยู่ทั้งพอร์ต A และพอร์ต B (ถูกต้องตาม UNIQUE ของ 046
+//   เพราะ portfolio_id ต่างกัน) → เขียนธุรกรรมเข้าพอร์ตผิด → ต้นทุนเฉลี่ยของ
+//   **ทั้งสองพอร์ตเพี้ยนพร้อมกัน** โดยไม่มี Error ให้เห็น
+//
+// ── ทำไม 18 เคสข้างบนจับไม่ได้ ────────────────────────────────────────────
+// ทุกเคสข้างบนเป็น "พอร์ตกำกวม แต่ไม่ได้ระบุโบรก" หรือ "โบรกกำกวม แต่พอร์ตเดียว"
+// **ไม่มีเคสไหนผสมสองมิติพร้อมกัน** (ระบุโบรก + Symbol อยู่ 2 พอร์ต) เลยแม้แต่เคสเดียว
+//
+// ⚠️ คนที่แยกพอร์ต "ระยะสั้น/ระยะยาว" แต่ใช้ Exchange เดียว = การใช้งานปกติมาก
+// ไม่ใช่ Edge Case ที่ต้องจงใจสร้าง
+
+const BK = 'cccccccc-3333-4333-8333-333333333333'; // โบรก Bitkub
+const BN = 'dddddddd-4444-4444-8444-444444444444'; // โบรก Binance
+
+// ถือ BTC ที่ **โบรกเดียวกัน** แต่คนละพอร์ต — นี่คือรูปแบบที่พังเงียบ
+const BTC_BK_P1 = { ...BTC_BEFORE_044, id: 'asset-btc-bk-p1', portfolioId: P1, brokerId: BK };
+const BTC_BK_P2 = { ...BTC_BEFORE_044, id: 'asset-btc-bk-p2', portfolioId: P2, brokerId: BK };
+// ถือ BTC 2 โบรกใน **พอร์ตเดียวกัน** — เคสปกติของ Stage 5 (ต้องไม่เปลี่ยนพฤติกรรม)
+const BTC_BN_P1 = { ...BTC_BEFORE_044, id: 'asset-btc-bn-p1', portfolioId: P1, brokerId: BN };
+
+describe('⭐ ระบุโบรกแล้ว แต่ Symbol อยู่หลายพอร์ต — ห้ามหยิบแถวแรกเงียบๆ', () => {
+  beforeEach(() => installRepo([BTC_BK_P1, BTC_BK_P2]));
+
+  // ⭐⭐ เคสสำคัญที่สุดของบล็อกนี้ — ถ้าแดงแปลว่าธุรกรรมกำลังเข้าพอร์ตผิด
+  test('⭐ resolveOwnedAsset: brokerId=Bitkub + BTC อยู่ 2 พอร์ต → ต้องถาม ไม่ใช่หยิบแถวแรก', async () => {
+    await expect(
+      assetResolution.resolveOwnedAsset(USER_ID, 'BTC', { brokerId: BK })
+    ).rejects.toMatchObject({ code: 'AMBIGUOUS_ASSET_PORTFOLIO' });
+  });
+
+  // assert ว่า "ไม่มีอะไรถูกเขียนลง DB เลย" ไม่ใช่แค่ assert ว่า throw
+  test('⭐ validateBuy: ระบุโบรกแล้วยังกำกวมพอร์ต → ห้ามเขียน DB แม้แต่แถวเดียว', async () => {
+    await expect(
+      transactionService.validateBuy(USER_ID, { ...BUY, brokerId: BK }, FREE_USER)
+    ).rejects.toMatchObject({ code: 'AMBIGUOUS_ASSET_PORTFOLIO' });
+
+    expect(assetRepository.create).not.toHaveBeenCalled();
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
+
+  test('⭐ processBuyCommand: เส้นทาง Commit จริงก็ต้องถูกดักเหมือนกัน', async () => {
+    await expect(
+      transactionService.processBuyCommand(USER_ID, { ...BUY, brokerId: BK }, FREE_USER)
+    ).rejects.toMatchObject({ code: 'AMBIGUOUS_ASSET_PORTFOLIO' });
+
+    expect(assetRepository.create).not.toHaveBeenCalled();
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
+
+  test('ขายก็ต้องถูกดัก — ไม่ใช่ตัดยอดพอร์ตผิด', async () => {
+    await expect(
+      transactionService.validateSell(USER_ID, {
+        symbol: 'BTC',
+        quantity: 1,
+        pricePerUnit: 1200,
+        brokerId: BK,
+      })
+    ).rejects.toMatchObject({ code: 'AMBIGUOUS_ASSET_PORTFOLIO' });
+
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
+
+  // Error ต้องพกตัวเลือกไปให้ชั้นบนสร้างปุ่มได้ โดยเหลือเฉพาะตัวเลือกที่ยังเป็นไปได้
+  test('candidates ที่พกไปต้องเหลือเฉพาะแถวของโบรกที่ผู้ใช้ตอบมาแล้ว', async () => {
+    const err = await assetResolution
+      .resolveOwnedAsset(USER_ID, 'BTC', { brokerId: BK })
+      .catch((e) => e);
+
+    expect(err.details.candidates).toEqual([
+      { assetId: 'asset-btc-bk-p1', portfolioId: P1, brokerId: BK },
+      { assetId: 'asset-btc-bk-p2', portfolioId: P2, brokerId: BK },
+    ]);
+  });
+
+  // ⚠️ กฎยืนข้อ 10 — ตอบครบทั้งสองมิติแล้วห้ามถามอะไรอีก
+  test('ระบุทั้ง brokerId และ portfolioId → เจอแถวเดียวเป๊ะ ไม่ถามอะไรเลย', async () => {
+    const { asset } = await assetResolution.resolveOwnedAsset(USER_ID, 'BTC', {
+      brokerId: BK,
+      portfolioId: P2,
+    });
+
+    expect(asset.id).toBe('asset-btc-bk-p2');
+  });
+
+  // โบรกใหม่ที่ยังไม่เคยถือ แต่ Symbol นี้กระจายอยู่ 2 พอร์ต → ปลายทางของแถวใหม่
+  // ยังกำกวมอยู่ดี (จะสร้างใน P1 หรือ P2?) จึงต้องถาม ไม่ใช่ลงพอร์ต Default เงียบๆ
+  test('โบรกใหม่ + Symbol กระจาย 2 พอร์ต → ยังต้องถามพอร์ตก่อนสร้างแถวใหม่', async () => {
+    await expect(
+      assetResolution.resolveOwnedAsset(USER_ID, 'BTC', { brokerId: BN })
+    ).rejects.toMatchObject({ code: 'AMBIGUOUS_ASSET_PORTFOLIO' });
+  });
+});
+
+describe('พฤติกรรม Stage 5 เดิม (โบรกหลายเจ้าในพอร์ตเดียว) ต้องไม่เปลี่ยน', () => {
+  beforeEach(() => installRepo([BTC_BK_P1, BTC_BN_P1]));
+
+  test('ระบุ brokerId + Symbol อยู่พอร์ตเดียว (แต่หลายโบรก) → เจอแถวถูก ไม่ถามซ้ำ', async () => {
+    const { asset } = await assetResolution.resolveOwnedAsset(USER_ID, 'BTC', { brokerId: BN });
+
+    expect(asset.id).toBe('asset-btc-bn-p1');
+  });
+
+  test('ไม่ระบุโบรก + พอร์ตเดียวแต่หลายโบรก → ถามโบรก (ไม่ใช่ถามพอร์ต)', async () => {
+    await expect(
+      assetResolution.resolveOwnedAsset(USER_ID, 'BTC')
+    ).rejects.toMatchObject({ code: 'AMBIGUOUS_ASSET_BROKER' });
+  });
+
+  test('ระบุ brokerId ที่ยังไม่เคยถือ (พอร์ตเดียว) → asset = null ให้ Caller สร้างใหม่', async () => {
+    const { asset } = await assetResolution.resolveOwnedAsset(USER_ID, 'BTC', {
+      brokerId: 'eeeeeeee-5555-4555-8555-555555555555',
+    });
+
+    expect(asset).toBeNull();
+  });
+
+  test('ระบุ brokerId + ไม่เคยถือ Symbol นี้เลย → asset = null', async () => {
+    const { asset, candidates } = await assetResolution.resolveOwnedAsset(USER_ID, 'ETH', {
+      brokerId: BK,
+    });
+
+    expect(asset).toBeNull();
+    expect(candidates).toEqual([]);
+  });
+});
+
+// ⚠️ เคสนี้คือเหตุผลที่เลือก "กรองโบรกก่อน แล้วค่อยตรวจพอร์ต" แทนการตรวจ
+// candidates ทั้งชุดก่อนเสมอ — ถ้าตรวจทั้งชุดก่อน เคสนี้จะถามพอร์ตทั้งที่คำตอบ
+// เหลือทางเดียวอยู่แล้ว = เพิ่ม Latency บน Live Path โดยไม่จำเป็น (กฎยืนข้อ 10)
+describe('กฎยืนข้อ 10 — โบรกที่ตอบมาแล้วชี้พอร์ตได้ทางเดียว ห้ามถามซ้ำ', () => {
+  // BTC @ Bitkub อยู่พอร์ต 1 · BTC @ Binance อยู่พอร์ต 2 (คนละโบรก คนละพอร์ต)
+  beforeEach(() => installRepo([BTC_BK_P1, { ...BTC_BN_P1, portfolioId: P2 }]));
+
+  test('ตอบ Bitkub แล้ว → ปลายทางเหลือพอร์ต 1 ทางเดียว ต้องไม่ถามพอร์ต', async () => {
+    const { asset } = await assetResolution.resolveOwnedAsset(USER_ID, 'BTC', { brokerId: BK });
+
+    expect(asset.id).toBe('asset-btc-bk-p1');
+    expect(asset.portfolioId).toBe(P1);
+  });
+
+  test('ยังไม่ตอบโบรก → กำกวมทั้งสองมิติ ต้องถาม **พอร์ตก่อน** ไม่ใช่โบรกก่อน', async () => {
+    await expect(
+      assetResolution.resolveOwnedAsset(USER_ID, 'BTC')
+    ).rejects.toMatchObject({ code: 'AMBIGUOUS_ASSET_PORTFOLIO' });
+  });
+
+  // ตอบพอร์ตแล้ว candidates ถูกกรองตั้งแต่ Repository → มิติโบรกเหลือทางเดียวเอง
+  test('ตอบพอร์ตแล้ว → มิติโบรกเหลือทางเดียวเอง ไม่ต้องถามรอบสอง', async () => {
+    const { asset } = await assetResolution.resolveOwnedAsset(USER_ID, 'BTC', {
+      portfolioId: P2,
+    });
+
+    expect(asset.brokerId).toBe(BN);
+  });
+});

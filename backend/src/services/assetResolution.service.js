@@ -70,42 +70,66 @@ function brokerKey(value) {
 //   candidates = ทุกแถวของ Symbol นี้ (เรียงตาม created_at) — Caller ใช้สร้าง
 //                ปุ่มให้เลือกได้โดยไม่ต้อง Query ซ้ำ
 //
-// throw AMBIGUOUS_ASSET_BROKER เมื่อ (candidates > 1 && brokerId === undefined)
+// throw AMBIGUOUS_ASSET_PORTFOLIO เมื่อ "ปลายทางที่เป็นไปได้" ยังกระจายอยู่ >1 พอร์ต
+//       และผู้ใช้ยังไม่ได้ระบุพอร์ต
+// throw AMBIGUOUS_ASSET_BROKER    เมื่อพอร์ตชัดแล้ว แต่ยังเหลือหลายโบรกและผู้ใช้
+//       ยังไม่ได้ระบุโบรก
 async function resolveOwnedAsset(userId, symbol, { portfolioId, brokerId } = {}) {
   // ⚠️ **ห้ามใส่ Default `= null` ให้ portfolioId เด็ดขาด** (เคยเป็นแบบนั้นและคือ
   // ต้นตอของบั๊กที่บล็อก migration 044) — undefined ต้องไหลลงไปถึง Repository
   // ตามที่เป็น เพื่อให้แปลว่า "ไม่กรองมิตินี้" ไม่ใช่ "เจาะจงว่าไม่มีพอร์ต"
   const candidates = await assetRepository.findAllByUserAndSymbol(userId, symbol, portfolioId);
 
-  // ── ผู้ใช้ระบุโบรกมาแล้ว (รวมกรณีระบุว่า "ไม่ระบุโบรก") ─────────────────────
-  // ไม่เจอ = ยังไม่เคยถือ Symbol นี้ "ที่โบรกนั้น" ซึ่งเป็นคนละความหมายกับ
-  // "ไม่เคยถือ Symbol นี้เลย" แต่ปลายทางเหมือนกัน (buy → สร้างแถวใหม่ของโบรกนั้น)
-  if (brokerId !== undefined) {
-    const wanted = brokerKey(brokerId);
-    const asset = candidates.find((a) => brokerKey(a.brokerId) === wanted) ?? null;
-    return { asset, candidates };
-  }
+  // ── ชั้นที่ 1: หด "ปลายทางที่ยังเป็นไปได้" ตามคำตอบที่ผู้ใช้ให้มาแล้ว ──────────
+  // brokerId === undefined = ยังไม่ได้ถาม → ทุกแถวยังเป็นไปได้หมด
+  const wantedBroker = brokerKey(brokerId);
+  const matchedByBroker =
+    brokerId === undefined
+      ? candidates
+      : candidates.filter((a) => brokerKey(a.brokerId) === wantedBroker);
 
-  if (candidates.length === 0) return { asset: null, candidates };
-  if (candidates.length === 1) return { asset: candidates[0], candidates };
+  // ⚠️ ถ้าโบรกที่ผู้ใช้ระบุ "ยังไม่เคยถือ Symbol นี้" (matchedByBroker ว่าง) แปลว่า
+  // ปลายทางคือ **แถวใหม่ที่ยังไม่มี** ซึ่งจะไปลงพอร์ตไหนก็ยังเป็นไปได้ทั้งหมด
+  // จึงต้องกลับไปใช้ candidates ทั้งชุดตัดสินความกำกวมของมิติพอร์ต — ไม่ใช่ชุดว่าง
+  // (ถ้าใช้ชุดว่าง จะได้ portfolios.size === 0 → ไม่กำกวม → validateBuy ลงพอร์ต
+  // Default เงียบๆ ทั้งที่ผู้ใช้ถือ Symbol นี้กระจายอยู่หลายพอร์ต = Silent Default)
+  const possible = matchedByBroker.length > 0 ? matchedByBroker : candidates;
 
-  // ── กำกวมมิติ "พอร์ต" (ตรวจก่อนมิติโบรกเสมอ) ─────────────────────────────
-  // ⚠️ ตรวจพอร์ตก่อนโบรกโดยเจตนา เพราะพอร์ตเป็นมิติที่ "หยาบกว่า" — ถ้าผู้ใช้ถือ
-  // BTC อยู่ทั้งพอร์ต A และพอร์ต B การถามว่า "โบรกไหน" ก่อนจะสับสน เพราะโบรก
-  // เดียวกันอาจมีอยู่ในทั้งสองพอร์ต · ตอบพอร์ตแล้วมิติโบรกมักเหลือทางเดียวเอง
+  // ── ชั้นที่ 2: ด่านพอร์ต — อยู่ก่อน "ทุก" จุดที่ return แถวสุดท้าย ────────────
+  // (ผู้ใช้ระบุพอร์ตมาแล้ว = มิตินี้ไม่กำกวมโดยนิยาม ด่านจึงผ่านทันที ไม่ใช่ถูกข้าม)
+  // ⚠️⚠️ **บั๊กรอบที่ 2 (27 ส.ค. 2569) อยู่ตรงนี้เป๊ะ** — เดิม branch ของโบรก
+  // `return` ออกไปก่อนจะมาถึงด่านนี้ ทำให้ "ระบุโบรกแล้ว" = ข้ามด่านพอร์ตทั้งหมด
+  // แล้ว `.find()` หยิบแถวแรกตาม created_at เงียบๆ (ถือ BTC @ Bitkub ทั้งพอร์ต A
+  // และ B → เขียนธุรกรรมเข้าพอร์ตผิด → ต้นทุนเฉลี่ยเพี้ยนพร้อมกันสองพอร์ต)
+  //
+  // ── ทำไมกรองโบรกก่อน (matchedByBroker) แล้วค่อยตรวจพอร์ต ─────────────────
+  // ทางเลือกที่ตรงตัวกว่าคือ "ตรวจ candidates ทั้งชุดก่อนเสมอ ไม่สนโบรก" แต่แบบนั้น
+  // จะถามพอร์ตในกรณีที่ **คำตอบมีอยู่ทางเดียวอยู่แล้ว**: ถือ BTC @ Bitkub ในพอร์ต A
+  // และ BTC @ Binance ในพอร์ต B — ผู้ใช้ตอบ "Bitkub" มาแล้ว ปลายทางเหลือ A ทางเดียว
+  // การถามพอร์ตซ้ำจึงเป็นการเพิ่ม Latency บน Live Path โดยไม่จำเป็น (กฎยืนข้อ 10)
+  // การกรองโบรกก่อนให้ผลลัพธ์ "ห้ามหยิบแถวแรกเงียบๆ" เหมือนกันทุกกรณี แต่ถามน้อยกว่า
+  //
+  // ── ลำดับคำถามที่ผู้ใช้จะเจอเมื่อกำกวมทั้งสองมิติ (2 พอร์ต × 2 โบรก) ──────────
+  // ยังไม่ตอบอะไรเลย → matchedByBroker = candidates → ด่านนี้ยิง "ถามพอร์ตก่อน"
+  // ตอบพอร์ตแล้ว → candidates ถูกกรองเหลือพอร์ตเดียวตั้งแต่ Repository → ด่านนี้ผ่าน
+  // → ตกไปที่ AMBIGUOUS_ASSET_BROKER ข้างล่าง = ถามโบรกเป็นคำถามที่สอง
+  // พอร์ตจึงถูกถามก่อนโบรกเสมอเมื่อกำกวมทั้งคู่ (พอร์ตเป็นมิติที่หยาบกว่า และตอบ
+  // พอร์ตแล้วมิติโบรกมักเหลือทางเดียวเอง = ไม่ต้องถามรอบสอง)
   //
   // ⚠️ **ห้ามเดาว่าเป็นพอร์ต Default เงียบๆ เด็ดขาด** (กฎยืนข้อ 11) — ผู้ใช้ที่ถือ
   // BTC อยู่ในพอร์ตอื่นแล้วเราไปสร้างแถวใหม่ในพอร์ต Default ให้ = บั๊กเดิม
   // (ประวัติแตกคนละ asset_id) กลับมาในรูปใหม่
   if (portfolioId === undefined) {
-    const portfolios = new Set(candidates.map((a) => a.portfolioId ?? null));
+    const portfolios = new Set(possible.map((a) => a.portfolioId ?? null));
     if (portfolios.size > 1) {
       throw new AssetResolutionError(
         'AMBIGUOUS_ASSET_PORTFOLIO',
-        `Symbol ${symbol} matches ${candidates.length} assets across different portfolios`,
+        `Symbol ${symbol} matches ${possible.length} assets across different portfolios`,
         {
           symbol,
-          candidates: candidates.map((a) => ({
+          // พก **เฉพาะตัวเลือกที่ยังเป็นไปได้** ไปให้ชั้นบนสร้างปุ่ม — ถ้าผู้ใช้ตอบ
+          // โบรกมาแล้ว ต้องไม่โชว์พอร์ตของโบรกอื่นให้กดผิด
+          candidates: possible.map((a) => ({
             assetId: a.id,
             portfolioId: a.portfolioId ?? null,
             brokerId: a.brokerId ?? null,
@@ -115,7 +139,38 @@ async function resolveOwnedAsset(userId, symbol, { portfolioId, brokerId } = {})
     }
   }
 
-  // ── กำกวม: ถือ Symbol นี้อยู่หลายโบรก แต่ยังไม่รู้ว่าหมายถึงโบรกไหน ──────────
+  // ── ชั้นที่ 3: ผู้ใช้ระบุโบรกมาแล้ว (รวมกรณีระบุว่า "ไม่ระบุโบรก") ────────────
+  // ไม่เจอ = ยังไม่เคยถือ Symbol นี้ "ที่โบรกนั้น" ซึ่งเป็นคนละความหมายกับ
+  // "ไม่เคยถือ Symbol นี้เลย" แต่ปลายทางเหมือนกัน (buy → สร้างแถวใหม่ของโบรกนั้น)
+  if (brokerId !== undefined) {
+    // ถึงตรงนี้ matchedByBroker เหลือได้มากสุด 1 แถว **ตราบใดที่ UNIQUE ของ 046
+    // ยังอยู่ครบ**: ถ้า portfolioId เป็น
+    // undefined ด่านชั้นที่ 2 กรองกรณีหลายพอร์ตออกไปแล้ว · ถ้าระบุพอร์ตมา
+    // candidates ถูกกรองเหลือพอร์ตเดียวตั้งแต่ Repository และ UNIQUE NULLS NOT
+    // DISTINCT (user_id, symbol, portfolio_id, broker_id) ของ migration 046
+    // การันตีว่า (พอร์ต, โบรก) ชุดเดียวกันมีได้แถวเดียว
+    // เงื่อนไขนี้จึงไม่ควรเป็นจริง — แต่ถ้าเป็นจริงเมื่อไหร่ให้ "ดัง" ไม่ใช่หยิบแถวแรก
+    if (matchedByBroker.length > 1) {
+      throw new AssetResolutionError(
+        'AMBIGUOUS_ASSET_PORTFOLIO',
+        `Symbol ${symbol} matches ${matchedByBroker.length} assets at the same broker`,
+        {
+          symbol,
+          candidates: matchedByBroker.map((a) => ({
+            assetId: a.id,
+            portfolioId: a.portfolioId ?? null,
+            brokerId: a.brokerId ?? null,
+          })),
+        }
+      );
+    }
+    return { asset: matchedByBroker[0] ?? null, candidates };
+  }
+
+  if (candidates.length === 0) return { asset: null, candidates };
+  if (candidates.length === 1) return { asset: candidates[0], candidates };
+
+  // ── ชั้นที่ 4: กำกวม — ถือ Symbol นี้อยู่หลายโบรก แต่ยังไม่รู้ว่าหมายถึงโบรกไหน ──
   // details.candidates พก assetId + brokerId ไปให้ชั้นบนสร้างปุ่ม/ตัวเลือกได้เลย
   // (ไม่พกชื่อโบรกมาที่นี่โดยเจตนา — Service ชั้นนี้ไม่ควรรู้จักเรื่องการแสดงผล
   // ชั้น Controller เป็นคน Join ชื่อโบรกเองจาก brokerRepository)
@@ -129,6 +184,7 @@ async function resolveOwnedAsset(userId, symbol, { portfolioId, brokerId } = {})
     }
   );
 }
+
 
 module.exports = {
   AssetResolutionError,
