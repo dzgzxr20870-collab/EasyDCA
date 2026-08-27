@@ -15,6 +15,17 @@ const entitlement = require('../services/entitlement.service');
 const symbolRegistry = require('../services/symbolRegistry.service');
 const mutualFundService = require('../services/mutualFund.service');
 const assetRepository = require('../repositories/asset.repository');
+// Stage 5 (migration 046) — ใช้แปลง broker_id → ชื่อโบรกที่ผู้ใช้ตั้งเอง ตอนสร้าง
+// ปุ่มให้เลือกว่า "BTC ที่โบรกไหน" (assetResolution.service ไม่รู้จักการแสดงผลเลย
+// โดยเจตนา จึงส่งมาแค่ id — Controller เป็นคน Join ชื่อเอง)
+const brokerRepository = require('../repositories/broker.repository');
+// assertOwnedBrokerId — ด่านบังคับก่อนเอา brokerId ที่มาจากฝั่ง Client ไปใช้
+const brokerService = require('../services/broker.service');
+// Stage 8-fix (migration 044) — ใช้แปลง portfolio_id → ชื่อพอร์ตที่ผู้ใช้ตั้งเอง
+// ตอนสร้างปุ่ม "BTC ในพอร์ตไหน" (เหตุผลเดียวกับ brokerRepository ข้างบนเป๊ะ)
+const portfolioRepository = require('../repositories/portfolio.repository');
+// assertOwnedPortfolioId — ด่านบังคับก่อนเอา portfolioId จาก Postback ไปใช้
+const portfoliosService = require('../services/portfolios.service');
 const transactionRepository = require('../repositories/transaction.repository');
 const lineWebhookEventRepository = require('../repositories/lineWebhookEvent.repository');
 const lineService = require('../services/line.service');
@@ -217,19 +228,43 @@ async function createFundPendingReply(user, { projId, fundClassName, symbol, nam
 //     ให้ createPending throw VALIDATION_ERROR (ไม่รู้จักสินทรัพย์) ตามเดิม
 async function tryResolveFundBuy(user, parsed) {
   const symbol = parsed.params.symbol;
-  const portfolioId = parsed.params.portfolioId ?? null;
+  // ⚠️ ห้ามใส่ `?? null` — undefined ต้องไหลลงไปถึง Repository ตามที่เป็น เพื่อให้
+  // แปลว่า "ไม่กรองพอร์ต" ไม่ใช่ "เจาะจงว่าไม่มีพอร์ต" (ดู assetResolution.service)
+  // เส้นทาง LINE ไม่มีคอนเซ็ปต์พอร์ตเลย จึงเป็น undefined เสมอในทางปฏิบัติ
+  const { portfolioId } = parsed.params;
 
   // 1) ถือกองทุนนี้อยู่แล้ว → Reuse Class เดิม (ไม่ถามซ้ำ) เติม projId/class ให้ parsed
-  const existing = await assetRepository.findByUserAndSymbol(user.id, symbol, portfolioId);
-  if (existing) {
-    if (existing.type === 'fund' && existing.projId && existing.fundClassName) {
+  //
+  // ⚠️ Stage 5 (migration 046): Symbol เดียวอาจตรงได้หลายแถว (คนละโบรก) จึงอ่าน
+  // "ทุกแถว" แล้วดูเฉพาะ Metadata ของกองทุน (projId/fundClassName) ซึ่งเป็นคุณสมบัติ
+  // ของ "ตัวกองทุน" ไม่ใช่ของโบรก — ที่นี่จึง **ไม่** ตัดสินว่าจะเขียนเข้าแถวไหน
+  // (การตัดสินนั้นเป็นของ assetResolution.service ผ่าน validateBuy ซึ่งจะโยน
+  // AMBIGUOUS_ASSET_BROKER ให้ถามผู้ใช้เองทีหลัง)
+  //
+  // ถ้าหลายแถวดันมี Class ไม่ตรงกัน (ผู้ใช้ซื้อคนละ Class ที่คนละโบรก) ห้ามหยิบ
+  // แถวใดแถวหนึ่งมาใช้เงียบๆ — ปล่อยตกไปที่ Class Picker ให้ผู้ใช้เลือกเอง
+  const candidates = await assetRepository.findAllByUserAndSymbol(user.id, symbol, portfolioId);
+  if (candidates.length > 0) {
+    const funds = candidates.filter((a) => a.type === 'fund' && a.projId && a.fundClassName);
+    const sameClass =
+      funds.length === candidates.length &&
+      funds.every(
+        (a) => a.projId === funds[0].projId && a.fundClassName === funds[0].fundClassName
+      );
+
+    if (funds.length > 0 && sameClass) {
       parsed.params.type = 'fund';
-      parsed.params.projId = existing.projId;
-      parsed.params.fundClassName = existing.fundClassName;
-      parsed.params.name = existing.name;
+      parsed.params.projId = funds[0].projId;
+      parsed.params.fundClassName = funds[0].fundClassName;
+      parsed.params.name = funds[0].name;
+      return null;
     }
-    // Asset เดิม (ชนิดใดก็ตาม) — ปล่อยให้ createPending ทำต่อ (มี Asset อยู่แล้ว)
-    return null;
+
+    if (funds.length === 0) {
+      // Asset เดิมที่ไม่ใช่กองทุน — ปล่อยให้ createPending ทำต่อ (มี Asset อยู่แล้ว)
+      return null;
+    }
+    // Class ไม่ตรงกันระหว่างแถว → ตกไปข้อ 2 ให้ SEC ตอบ Class Picker
   }
 
   // 2) Symbol ใหม่ — ลองค้น SEC Master List
@@ -288,6 +323,232 @@ async function tryResolveFundBuy(user, parsed) {
   return null;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Broker Picker (Stage 5 — migration 046): "ซื้อ BTC 100" ขณะถือ BTC หลายโบรก
+// ═══════════════════════════════════════════════════════════════════════════
+// assetResolution.service โยน AMBIGUOUS_ASSET_BROKER ขึ้นมาพร้อม details.candidates
+// = [{ assetId, brokerId }] — ที่นี่ Join ชื่อโบรกเข้าไปแล้วตอบเป็นปุ่มให้กด
+//
+// คืน null ถ้าประกอบปุ่มไม่ได้ (มี Candidate < 2 หลัง Map = ข้อมูลไม่สมเหตุสมผล) →
+// Caller ต้อง Re-throw ให้ replyWithError แปลเป็นข้อความ AMBIGUOUS_ASSET_BROKER แทน
+// ห้ามตอบปุ่มว่างๆ ที่ผู้ใช้กดอะไรไม่ได้เลย
+async function buildBrokerPickerReply(user, commandType, symbol, err, buy) {
+  const candidates = err?.details?.candidates ?? [];
+  if (candidates.length < 2) return null;
+
+  const brokers = await brokerRepository.findAllByUser(user.id);
+  const nameById = new Map(brokers.map((b) => [b.id, b.name]));
+
+  const choices = candidates.map((c) => ({
+    brokerId: c.brokerId ?? null,
+    // brokerId ที่หาชื่อไม่เจอไม่ควรเกิดจริง (FK ON DELETE SET NULL กันแถวค้างไว้แล้ว)
+    // แต่ถ้าเกิด ต้องไม่แสดงเป็น "ไม่ระบุโบรก" เพราะจะซ้ำกับตัวเลือกอื่นจนแยกไม่ออก
+    brokerName: c.brokerId ? nameById.get(c.brokerId) ?? `โบรก ${c.brokerId.slice(0, 8)}` : null,
+  }));
+
+  return flexMessage.buildBrokerPickerMessage(commandType, symbol, choices, buy);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Portfolio Picker (Stage 8-fix — migration 044): "BTC ในพอร์ตไหน?"
+// ═══════════════════════════════════════════════════════════════════════════
+// คู่แฝดของ buildBrokerPickerReply เป๊ะ — assetResolution โยน
+// AMBIGUOUS_ASSET_PORTFOLIO พร้อม details.candidates = [{ assetId, portfolioId,
+// brokerId }] ที่นี่ Join ชื่อพอร์ตเข้าไปแล้วตอบเป็นปุ่มให้กด
+//
+// ⚠️ ต้องยุบพอร์ตซ้ำก่อนเสมอ — candidates เป็นรายการ "แถวสินทรัพย์" ไม่ใช่รายการ
+// พอร์ต ผู้ใช้ที่ถือ BTC ที่ 2 โบรกในพอร์ตเดียวกันจะได้ candidates 2 ตัวที่
+// portfolioId เท่ากัน ถ้าไม่ยุบจะเห็นปุ่มชื่อเดียวกันซ้ำสองปุ่มแล้วกดผิดได้ง่ายมาก
+// ประกอบการ์ดเลือกพอร์ตจาก "รายการ portfolioId ที่เลือกได้" — ใช้ร่วมกันทั้ง
+// เหตุผล 'ambiguous' (ข้อเท็จจริงบังคับ) และ 'choice' (ผู้ใช้มีสิทธิ์เลือก)
+// เพื่อไม่ให้การ Join ชื่อ/ตัดสิน 🔒 แตกเป็นสองชุดที่เพี้ยนจากกันได้
+function buildPortfolioPickerFrom(user, commandType, symbol, portfolioIds, portfolios, buy, reason) {
+  const nameById = new Map(portfolios.map((p) => [p.id, p.name]));
+  // พอร์ตที่ "เพิ่มรายการใหม่ได้" ตามแพ็กเกจปัจจุบัน — ใช้ติด 🔒 ให้ตัวที่เหลือ
+  // (UX เท่านั้น ด่านจริงยังอยู่ที่ validateBuy → assertCanAddToPortfolio)
+  const writable = entitlement.getWritablePortfolioIds(user, portfolios);
+
+  const choices = portfolioIds.map((id) => ({
+    portfolioId: id,
+    // พอร์ตที่หาชื่อไม่เจอไม่ควรเกิดจริง (queryForUser กรองด้วย user_id อยู่แล้ว)
+    // แต่ถ้าเกิด ต้องไม่แสดงเป็น "ไม่ระบุพอร์ต" เพราะจะซ้ำกับตัวเลือกอื่นจนแยกไม่ออก
+    portfolioName: id ? nameById.get(id) ?? `พอร์ต ${id.slice(0, 8)}` : null,
+    locked: id ? !writable.has(id) : false,
+  }));
+
+  return flexMessage.buildPortfolioPickerMessage(commandType, symbol, choices, buy, {
+    reason,
+    // null ได้ (ยังไม่ตั้ง FRONTEND_URL) — ตัวสร้างข้อความรองรับไว้แล้ว
+    manageUrl: buildExternalUrl('/dashboard'),
+  });
+}
+
+async function buildPortfolioPickerReply(user, commandType, symbol, err, buy) {
+  const candidates = err?.details?.candidates ?? [];
+
+  const seen = new Set();
+  const uniquePortfolioIds = [];
+  for (const c of candidates) {
+    const id = c.portfolioId ?? null;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    uniquePortfolioIds.push(id);
+  }
+
+  // เหลือพอร์ตเดียวหลังยุบซ้ำ = ไม่มีอะไรให้เลือกจริง (ข้อมูลไม่สมเหตุสมผล) →
+  // คืน null ให้ Caller Re-throw เป็นข้อความไทยแทน ห้ามตอบปุ่มที่กดแล้ววนที่เดิม
+  if (uniquePortfolioIds.length < 2) return null;
+
+  const portfolios = await portfolioRepository.findAllByUser(user.id);
+
+  return buildPortfolioPickerFrom(
+    user,
+    commandType,
+    symbol,
+    uniquePortfolioIds,
+    portfolios,
+    buy,
+    'ambiguous'
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ⭐ ฝั่ง "ซื้อ": ถามพอร์ตเมื่อผู้ใช้มีมากกว่า 1 พอร์ต (มติ Founder 27 ส.ค. 2569)
+// ═══════════════════════════════════════════════════════════════════════════
+// ⚠️⚠️ **ซื้อกับขายใช้เกณฑ์คนละอันโดยเจตนา — ห้าม "แก้ให้เหมือนกัน"** ⚠️⚠️
+//
+//   ซื้อ → ถามเมื่อ **ผู้ใช้มี > 1 พอร์ต** (ไม่ว่าจะเคยถือ Symbol นี้หรือไม่)
+//          เพราะปลายทางเป็น **ทางเลือกของผู้ใช้เสมอ** — Symbol ใหม่เอี่ยมก็ยัง
+//          เลือกได้ว่าจะเก็บเข้าพอร์ตไหน · เดาเป็นพอร์ต Default ให้ = Silent
+//          Default (กฎยืนข้อ 11) ซึ่งเป็นช่องสุดท้ายที่เหลืออยู่ก่อนมติข้อนี้
+//
+//   ขาย → ถามเมื่อ **Symbol นั้นอยู่หลายพอร์ต** เท่านั้น (ตรรกะเดิมผ่าน
+//          AMBIGUOUS_ASSET_PORTFOLIO) เพราะปลายทางถูกกำหนดโดย **ข้อเท็จจริง**
+//          ไม่ใช่ทางเลือก — ถือ PTT อยู่พอร์ตเดียวแล้วถาม = คำถามที่มีคำตอบเดียว
+//          ให้กด = เพิ่ม Latency เปล่าๆ (กฎยืนข้อ 10)
+//
+// คืน null = ไม่ต้องถาม (ให้ Flow เดิมเดินต่อตามปกติทุกประการ)
+//
+// ── ⚠️ ต้นทุน Query เพิ่ม 1 ครั้งบน Live Path — ทำไมเลี่ยงไม่ได้ ────────────
+// เกณฑ์คือ "ผู้ใช้มีกี่พอร์ต" ซึ่งไม่มี Flow ไหนบนเส้นทางซื้อดึงมาก่อนหน้านี้เลย
+// (validateBuy เรียก assertCanAddToPortfolio ซึ่ง **ไม่ยิง Query เลย** เมื่อ
+// portfolioId เป็น undefined — ดูคอมเมนต์ในฟังก์ชันนั้น)
+//
+// ทางเลือกที่เร็วกว่าคือเดาจาก user.plan ('free' = น่าจะมีพอร์ตเดียว) แต่ **ผิดจริง**
+// สำหรับผู้ใช้ที่เคยเป็น Premium แล้วหมดอายุ (มีพอร์ตส่วนเกินค้างอยู่) — การตัดสิน
+// เรื่องปลายทางของเงินจาก Proxy Signal คือสิ่งที่โปรเจกต์นี้ห้ามไว้ชัดเจน
+// → ยอมจ่าย 1 Query ที่ Index ด้วย user_id ดีกว่าเดาผิดแล้วเงียบ
+//
+// จำกัดขอบเขตให้แคบที่สุดเท่าที่ทำได้: ยิงเฉพาะ **คำสั่งซื้อทาง LINE ที่ยังไม่ได้
+// ระบุพอร์ต** เท่านั้น · ตอบพอร์ตแล้ว (มาจากปุ่ม) ไม่ยิงซ้ำ · คำสั่งขาย/ดูกำไร/
+// คำสั่งอื่นทั้งหมดไม่ได้รับผลกระทบเลยแม้แต่ Query เดียว
+//
+// ⚠️ ถามก่อน Validate โดยเจตนา: ถ้ารอให้ createPending ผ่านก่อนจะมีแถว pending
+// ค้างใน DB ตอนถาม (ผู้ใช้ทิ้ง Flow = ขยะ) · ผลข้างเคียงที่ยอมรับแล้วคือผู้ใช้ที่
+// พิมพ์ Symbol ผิดจะถูกถามพอร์ตก่อนแล้วค่อยเจอ "ไม่รู้จักสินทรัพย์นี้"
+async function buildBuyPortfolioChoiceReply(user, parsed) {
+  // ตอบมาแล้ว (undefined = ยังไม่ได้ถาม · null/uuid = ตอบแล้ว) → ห้ามถามซ้ำ
+  if (parsed.params.portfolioId !== undefined) return null;
+
+  const portfolios = await portfolioRepository.findAllByUser(user.id);
+
+  // ⭐ พอร์ตเดียว (ผู้ใช้ Free แทบทั้งหมดของระบบวันนี้) → ไม่ถาม ไม่เปลี่ยนอะไรเลย
+  if (portfolios.length <= 1) return null;
+
+  return buildPortfolioPickerFrom(
+    user,
+    'buy',
+    parsed.params.symbol,
+    portfolios.map((p) => p.id),
+    portfolios,
+    extractCommandParamsForBrokerPick(parsed.params),
+    'choice'
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ทางเข้าเดียวของ "คำสั่งกำกวม → ถามกลับด้วยปุ่ม"
+// ═══════════════════════════════════════════════════════════════════════════
+// รวมไว้จุดเดียวเพื่อให้ Caller ทั้ง 3 จุด (ซื้อ/ขาย/ดูกำไร) ไม่ต้องรู้ว่ากำกวม
+// มิติไหน และไม่ต้องแก้ทีละที่เมื่อเพิ่มมิติที่ 3 ในอนาคต
+//
+// ⚠️ ลำดับสำคัญ: ตรวจ PORTFOLIO ก่อน BROKER ให้ตรงกับลำดับที่ assetResolution
+// โยน Error ออกมา (พอร์ตเป็นมิติหยาบกว่า ตอบพอร์ตแล้วมิติโบรกมักเหลือทางเดียวเอง
+// — ดู assetResolution.service ชั้นที่ 2) · ในทางปฏิบัติ Error มาทีละตัวอยู่แล้ว
+// ลำดับนี้จึงเป็นการยืนยันเจตนา ไม่ใช่ Logic ที่จำเป็น
+//
+// คืน null เมื่อ (ก) ไม่ใช่ Error ที่ถามกลับได้ หรือ (ข) ประกอบปุ่มไม่ได้ —
+// Caller **ต้อง Re-throw** ห้าม Swallow เงียบๆ (ผู้ใช้ต้องรู้ว่าคำสั่งไม่ถูกบันทึก)
+async function buildAmbiguityPickerReply(user, commandType, symbol, err, buy) {
+  if (err?.code === 'AMBIGUOUS_ASSET_PORTFOLIO') {
+    return buildPortfolioPickerReply(user, commandType, symbol, err, buy);
+  }
+  if (err?.code === 'AMBIGUOUS_ASSET_BROKER') {
+    return buildBrokerPickerReply(user, commandType, symbol, err, buy);
+  }
+  return null;
+}
+
+// ── อ่าน "มิติที่ผู้ใช้ตอบไปแล้ว" กลับจาก Postback ─────────────────────────
+// ⚠️⚠️ ต้องแยก 3 ทางให้ตรงกับกติกาของ assetResolution.service เป๊ะ:
+//   ไม่มี Key เลย → undefined = "ยังไม่เคยถูกถาม" (ไม่กรองมิตินั้น)
+//   'none'        → null      = "ตอบแล้วว่าไม่มี"
+//   uuid          → ค่านั้น (ผ่านการยืนยันเจ้าของแล้ว)
+// ถ้ายุบ "ไม่มี Key" กับ 'none' เข้าด้วยกัน ระบบจะสร้างสินทรัพย์ซ้ำแถวใหม่เงียบๆ
+// (บั๊กเดียวกับที่ migration 014 เคยแก้ · ดูหัวไฟล์ assetResolution.service)
+async function decodePickedBrokerId(user, params) {
+  const raw = params.get('broker');
+  if (raw === null) return undefined;
+  // ยืนยันเจ้าของเสมอแม้ค่าจะมาจากปุ่มที่ระบบสร้างเอง (กฎยืนข้อ 4) — FK ระดับ DB
+  // ตรวจแค่ "โบรกนี้มีอยู่" ไม่ได้ตรวจ "เป็นของใคร"
+  return brokerService.assertOwnedBrokerId(user.id, raw === 'none' ? null : raw);
+}
+
+async function decodePickedPortfolioId(user, params) {
+  const raw = params.get('pf');
+  if (raw === null) return undefined;
+  return portfoliosService.assertOwnedPortfolioId(user.id, raw === 'none' ? null : raw);
+}
+
+// ถอดพารามิเตอร์คำสั่งเดิมกลับจาก Postback ของปุ่มเลือกโบรก
+//
+// ⚠️ ใส่เฉพาะ Key ที่มีอยู่จริงใน Postback เท่านั้น ห้ามใส่ Key ที่ค่าเป็น NaN
+// เด็ดขาด (decodeBuyParamsFromPostback ของกองทุนใส่ qty/price เสมอได้เพราะกองทุน
+// มีครบทั้งคู่แน่นอน แต่คำสั่งขายอาจมีแต่ quantity ไม่มี pricePerUnit) — NaN ที่
+// หลุดเข้า resolveQuantityAndPrice จะกลายเป็นยอดเงิน NaN ที่ไหลลง Ledger ได้
+function decodeBrokerPickParams(qs) {
+  const out = {};
+  const amt = qs.get('amt');
+  const qty = qs.get('qty');
+  const price = qs.get('price');
+  if (amt !== null) out.amountThb = Number(amt);
+  if (qty !== null) out.quantity = Number(qty);
+  if (price !== null) out.pricePerUnit = Number(price);
+  if (qs.get('cur') === 'USD') out.currency = 'USD';
+  if (qs.get('all') === '1') out.sellAll = true;
+  return out;
+}
+
+// พารามิเตอร์คำสั่งที่ต้องพกข้าม Postback ไปให้ครบ เพื่อเล่นคำสั่งเดิมซ้ำได้เป๊ะ
+// หลังผู้ใช้เลือกโบรก/พอร์ต (ต่างจาก extractBuyParams ที่ใช้กับกองทุนตรงที่ต้องพก
+// currency/sellAll ไปด้วย — คำสั่งขายทั้งหมดและคำสั่งราคา USD ต้องรอดข้ามมา)
+//
+// ⚠️⚠️ **มิติที่ผู้ใช้ตอบไปแล้วต้องพกต่อด้วยเสมอ** — เมื่อกำกวมทั้งพอร์ตและโบรก
+// พร้อมกัน (2 พอร์ต × 2 โบรก) ผู้ใช้จะถูกถาม 2 รอบซ้อน ถ้ารอบที่ 2 ไม่พกคำตอบ
+// ของรอบที่ 1 ไปด้วย ระบบจะลืมแล้ววนถามรอบที่ 1 ซ้ำ = Loop ที่ผู้ใช้ออกไม่ได้
+//
+// ใช้ `in` เช็ค ไม่ใช่ `?? null` — "ไม่มี Key" (ยังไม่ถูกถาม) กับ "มี Key ค่า null"
+// (ตอบแล้วว่าไม่มี) เป็นคนละความหมายตามกติกา 3 ทางของ assetResolution.service
+function extractCommandParamsForBrokerPick(params) {
+  return {
+    ...extractBuyParams(params),
+    ...(params.currency === 'USD' ? { currency: 'USD' } : {}),
+    ...(params.sellAll ? { sellAll: true } : {}),
+    ...(params.brokerId !== undefined ? { brokerId: params.brokerId } : {}),
+    ...(params.portfolioId !== undefined ? { portfolioId: params.portfolioId } : {}),
+  };
+}
+
 async function routeCommand(user, parsed) {
   switch (parsed.command) {
     case COMMANDS.BUY:
@@ -341,11 +602,46 @@ async function routeCommand(user, parsed) {
       // Pending รอ Confirm ส่ง Preview พร้อมปุ่มยืนยัน/แก้ไข/ยกเลิกกลับไป
       // ถ้า Validate ไม่ผ่าน (Limit/type/ยอดไม่พอ) createPending จะ throw
       // ให้ตัว catch ด้านล่างแปลเป็นข้อความไทย โดยไม่มี Pending ค้าง
-      const pending = await pendingService.createPending(user.id, parsed, {
-        plan: user.plan,
-        planExpiresAt: user.planExpiresAt,
-      });
-      return flexMessage.buildPreviewMessage(pending);
+      //
+      // ⚠️ Stage 5 (migration 046) — ถือ Symbol นี้อยู่หลายโบรก แล้วคำสั่งไม่ได้บอกว่า
+      // โบรกไหน: ห้ามเดาเด็ดขาด (เดาผิด = ธุรกรรมเข้าโบรกผิด ต้นทุนเฉลี่ยเพี้ยนสองก้อน
+      // พร้อมกันแบบไม่มี Error ให้เห็น) — ถามกลับด้วยปุ่ม Quick Reply แทน
+      //
+      // ⚠️ Stage 8-fix (migration 044) — มิติ "พอร์ต" ก็กำกวมได้แบบเดียวกันเป๊ะ
+      // (ถือ BTC ทั้งพอร์ต "ระยะสั้น" และ "ระยะยาว") เดิมเส้นทาง LINE ตอบแค่
+      // ข้อความให้ไปใช้เว็บ ซึ่งลงโทษผู้ใช้ Premium ด้วยฟีเจอร์ที่เพิ่งซื้อ —
+      // ตอนนี้ถามกลับด้วยปุ่มชุดเดียวกันแล้ว
+      //
+      // ถือพอร์ต/โบรกเดียว = ไม่กำกวม = ไม่เข้า catch นี้เลย บันทึกตรงเหมือนเดิม
+      // ทุกประการ (กฎยืนข้อ 10 — ไม่มี Query หรือคำถามเพิ่มบน Live Path ปกติ)
+
+      // ⭐ มติ Founder 27 ส.ค. 2569 — ฝั่ง "ซื้อ" ถามพอร์ตเมื่อผู้ใช้มี > 1 พอร์ต
+      // (ดูเหตุผลเต็ม + ความไม่สมมาตรกับฝั่งขาย ที่ buildBuyPortfolioChoiceReply)
+      // ผู้ใช้พอร์ตเดียว → คืน null → ไม่มีอะไรเปลี่ยนแม้แต่บรรทัดเดียว
+      if (parsed.command === COMMANDS.BUY) {
+        const choice = await buildBuyPortfolioChoiceReply(user, parsed);
+        if (choice) return choice;
+      }
+
+      try {
+        const pending = await pendingService.createPending(user.id, parsed, {
+          plan: user.plan,
+          planExpiresAt: user.planExpiresAt,
+        });
+        return flexMessage.buildPreviewMessage(pending);
+      } catch (err) {
+        const picker = await buildAmbiguityPickerReply(
+          user,
+          parsed.command === COMMANDS.BUY ? 'buy' : 'sell',
+          parsed.params.symbol,
+          err,
+          extractCommandParamsForBrokerPick(parsed.params)
+        );
+        // ไม่ใช่ Error ที่ถามกลับได้ / ประกอบปุ่มไม่ได้ → Re-throw ให้ replyWithError
+        // ตอบข้อความไทยแทน (ห้าม Swallow เงียบๆ — ผู้ใช้ต้องรู้ว่าคำสั่งไม่ถูกบันทึก)
+        if (!picker) throw err;
+        return picker;
+      }
     }
 
     case COMMANDS.PORTFOLIO: {
@@ -361,8 +657,24 @@ async function routeCommand(user, parsed) {
     case COMMANDS.PROFIT: {
       // Price Feed พร้อมแล้ว (รองรับเฉพาะ Crypto) — คำนวณกำไร/ขาดทุนจริง
       // ถ้าไม่มี Holding/ราคาหาไม่ได้ service จะ throw ให้ catch แปลเป็นข้อความไทย
-      const profit = await profitService.getAssetProfit(user.id, parsed.params.symbol);
-      return flexMessage.buildProfitMessage(profit);
+      //
+      // Stage 5 (migration 046) — "กำไร BTC" ขณะถือ BTC หลายโบรกก็กำกวมเช่นกัน
+      // (ห้ามรวมต้นทุนข้ามโบรกให้เองเงียบๆ — นั่นคือการเปลี่ยนสูตรต้นทุนเฉลี่ยที่
+      // ยังไม่ได้ออกแบบ) ถามกลับด้วยปุ่มชุดเดียวกับคำสั่งซื้อ/ขาย
+      try {
+        const profit = await profitService.getAssetProfit(user.id, parsed.params.symbol);
+        return flexMessage.buildProfitMessage(profit);
+      } catch (err) {
+        const picker = await buildAmbiguityPickerReply(
+          user,
+          'profit',
+          parsed.params.symbol,
+          err,
+          {}
+        );
+        if (!picker) throw err;
+        return picker;
+      }
     }
 
     case COMMANDS.UNDO_LAST: {
@@ -599,6 +911,43 @@ async function routePostback(user, data) {
       return shouldAskForSlip
         ? [confirmMessage, flexMessage.buildSlipAttachPromptMessage()]
         : confirmMessage;
+    }
+
+    // ── ผู้ใช้เลือกโบรก/พอร์ตแล้ว (Stage 5 · Stage 8-fix) ────────────────────
+    // เล่นคำสั่งเดิมซ้ำทั้งดุ้นผ่าน routeCommand ตัวเดิม โดยเติม params.brokerId /
+    // params.portfolioId ให้เท่านั้น — ห้ามเขียน Flow สร้าง Pending คู่ขนานขึ้นมา
+    // ใหม่ที่นี่เด็ดขาด (ถ้าเขียนใหม่ Preview/Validation/สูตรเงินจะแตกเป็นสองชุดทันที)
+    //
+    // ⚠️ สอง Case รวมกันโดยเจตนา เพราะหลังตอบคำถามแล้ว "สิ่งที่ต้องทำต่อ" เหมือนกัน
+    // ทุกประการ ต่างกันแค่มิติไหนที่เพิ่งถูกตอบ — และทั้งคู่ต้องอ่าน **ทั้งสองมิติ**
+    // กลับมาเสมอ เพื่อไม่ให้คำตอบของรอบก่อนหายไประหว่างทางแล้ววนถามซ้ำ
+    case 'pick_broker':
+    case 'pick_portfolio': {
+      const cmd = params.get('cmd');
+      const symbol = params.get('sym');
+
+      // ยืนยันเจ้าของทั้งสองมิติก่อนใช้ (กฎยืนข้อ 4) — undefined = ยังไม่เคยถูกถาม
+      const brokerId = await decodePickedBrokerId(user, params);
+      const portfolioId = await decodePickedPortfolioId(user, params);
+
+      if (cmd === 'profit') {
+        // ⚠️ เดิมบรรทัดนี้ส่ง `null` เป็น portfolioId แบบ Hardcode ซึ่งแปลว่า
+        // "เจาะจงว่าไม่มีพอร์ต" — หลัง Apply 044 จะหาสินทรัพย์ไม่เจอเลยสักตัว
+        // ต้องส่ง undefined (ไม่กรองพอร์ต) เมื่อผู้ใช้ยังไม่ได้ตอบมิตินี้
+        const profit = await profitService.getAssetProfit(
+          user.id,
+          symbol,
+          portfolioId,
+          {},
+          brokerId
+        );
+        return flexMessage.buildProfitMessage(profit);
+      }
+
+      return routeCommand(user, {
+        command: cmd === 'sell' ? COMMANDS.SELL : COMMANDS.BUY,
+        params: { symbol, brokerId, portfolioId, ...decodeBrokerPickParams(params) },
+      });
     }
 
     case 'cancel': {

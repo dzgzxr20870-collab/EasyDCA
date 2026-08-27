@@ -1,7 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // Free-tier Asset Limit Race — พิสูจน์ว่าสร้าง Asset เกินเพดาน Free Plan ไม่ได้อีกต่อไป
 // ═══════════════════════════════════════════════════════════════════════════
-// บั๊กเดิม: validateBuy อ่านจำนวน Asset Active ผ่าน countActiveByUser → เทียบเพดาน
+// บั๊กเดิม: validateBuy อ่านจำนวน Asset Active ผ่าน findActiveSymbolsByUser → เทียบเพดาน
 // ในชั้น App → assetRepository.create() เป็น check-then-insert ที่ไม่ Atomic สอง
 // คำสั่งซื้อ Symbol ใหม่คนละตัวที่เข้ามาพร้อมกันจะอ่านจำนวนชุดเดียวกัน (Stale Read)
 // แล้วผ่านการตรวจทั้งคู่ → ได้ Asset เกินเพดาน 2 ตัวของ Free Plan
@@ -14,6 +14,11 @@
 // ⚠️ ขอบเขต: พิสูจน์ได้ว่าโค้ด App ตอบสนองถูกต้องเมื่อ DB ปฏิเสธ — ตัว SQL FOR UPDATE
 // เองทำงานจริงไหม ทดสอบแยกกับ Postgres จริงบน Production แล้ว (verify035.js)
 
+// Stage 8-fix (บั๊ก Asset Resolution) — validateBuy ต้อง Resolve พอร์ต Default
+// ตอนสร้างสินทรัพย์ใหม่ (Invariant migration 044/045: สินทรัพย์ทุกแถวสังกัดพอร์ต)
+// จึงต้อง Mock portfolio.repository ด้วย · Automock คืน undefined = "ยังไม่มีพอร์ต"
+// ซึ่งตรงกับสภาพก่อน Apply 044 พอดี → พฤติกรรมของเทสต์เดิมไม่เปลี่ยน
+jest.mock('../src/repositories/portfolio.repository');
 jest.mock('../src/config/supabase', () => ({
   supabaseAdmin: { rpc: jest.fn() },
 }));
@@ -23,8 +28,8 @@ jest.mock('../src/repositories/asset.repository', () => {
   const actual = jest.requireActual('../src/repositories/asset.repository');
   return {
     ...actual,
-    findByUserAndSymbol: jest.fn(),
-    countActiveByUser: jest.fn(),
+    findAllByUserAndSymbol: jest.fn(),
+    findActiveSymbolsByUser: jest.fn(),
   };
 });
 // Ledger ไม่ใช่จุดที่ทดสอบในไฟล์นี้ (มี oversellRace.test.js ทดสอบแยกแล้ว) — Mock
@@ -90,7 +95,7 @@ beforeEach(() => {
   installFakeRpc();
   // ทุก Symbol ที่ทดสอบเป็น "ใหม่เสมอ" (ยังไม่เคยมีในพอร์ต) — บังคับให้เข้า Path
   // สร้าง Asset ใหม่ทุกครั้ง ตรงกับสถานการณ์ Race ที่ Audit ระบุ
-  assetRepository.findByUserAndSymbol.mockResolvedValue(null);
+  assetRepository.findAllByUserAndSymbol.mockResolvedValue([]);
   transactionRepository.create.mockResolvedValue({
     id: 'tx-1',
     date: '2026-01-01',
@@ -106,7 +111,7 @@ beforeEach(() => {
 describe('processBuyCommand — Concurrent Buy สินทรัพย์ใหม่คนละตัว (Promise.all)', () => {
   test('🔒 มี 0 Asset (Free Limit=2) ยิงซื้อ Symbol ใหม่ 5 ตัวพร้อมกัน → สำเร็จได้แค่ 2 ตัว', async () => {
     // Pre-check ทุก Request อ่านจำนวนชุดเดียวกัน (0) = จำลอง Stale Read ของบั๊กเดิมเป๊ะ
-    assetRepository.countActiveByUser.mockResolvedValue(0);
+    assetRepository.findActiveSymbolsByUser.mockResolvedValue(Array.from({ length: 0 }, (_, i) => `__OTHER${i}`));
 
     const symbols = ['SYM0', 'SYM1', 'SYM2', 'SYM3', 'SYM4'];
     const results = await Promise.allSettled(
@@ -131,7 +136,7 @@ describe('processBuyCommand — Concurrent Buy สินทรัพย์ให
 
   test('🔒 มี 1 Asset อยู่แล้ว (เหลือโควตา 1) ยิงซื้อ Symbol ใหม่ 4 ตัวพร้อมกัน → สำเร็จได้แค่ 1 ตัว', async () => {
     state.activeCount = 1; // จำลองว่ามี Asset เดิมอยู่แล้ว 1 ตัวใน "DB"
-    assetRepository.countActiveByUser.mockResolvedValue(1); // Pre-check เห็นค่าเดียวกัน
+    assetRepository.findActiveSymbolsByUser.mockResolvedValue(Array.from({ length: 1 }, (_, i) => `__OTHER${i}`)); // Pre-check เห็นค่าเดียวกัน
 
     const symbols = ['SYM0', 'SYM1', 'SYM2', 'SYM3'];
     const results = await Promise.allSettled(
@@ -145,7 +150,7 @@ describe('processBuyCommand — Concurrent Buy สินทรัพย์ให
   });
 
   test('🔒 Premium (assetLimit=null/ไม่จำกัด) ยิงซื้อ Symbol ใหม่ 5 ตัวพร้อมกัน → สำเร็จหมดทุกตัว', async () => {
-    assetRepository.countActiveByUser.mockResolvedValue(0);
+    assetRepository.findActiveSymbolsByUser.mockResolvedValue(Array.from({ length: 0 }, (_, i) => `__OTHER${i}`));
 
     const symbols = ['SYM0', 'SYM1', 'SYM2', 'SYM3', 'SYM4'];
     const futureExpiry = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
@@ -168,7 +173,7 @@ describe('processBuyCommand — Concurrent Buy สินทรัพย์ให
       const existing = Math.floor(Math.random() * FREE_LIMIT);
       state.activeCount = existing;
       state.rows = [];
-      assetRepository.countActiveByUser.mockResolvedValue(existing);
+      assetRepository.findActiveSymbolsByUser.mockResolvedValue(Array.from({ length: existing }, (_, i) => `__OTHER${i}`));
 
       const n = 2 + Math.floor(Math.random() * 6);
       const symbols = Array.from({ length: n }, (_, i) => `R${round}SYM${i}`);
@@ -191,7 +196,7 @@ describe('processBuyCommand — Concurrent Buy สินทรัพย์ให
 
 describe('assetRepository.create เรียก create_asset_locked เท่านั้น', () => {
   test('processBuyCommand (Asset ใหม่) → ส่ง p_asset_limit ตามที่ validateBuy คำนวณ', async () => {
-    assetRepository.countActiveByUser.mockResolvedValue(0);
+    assetRepository.findActiveSymbolsByUser.mockResolvedValue(Array.from({ length: 0 }, (_, i) => `__OTHER${i}`));
 
     await transactionService.processBuyCommand(USER_ID, buyNewSymbolParams('BTC'), {
       plan: 'free',
@@ -204,18 +209,18 @@ describe('assetRepository.create เรียก create_asset_locked เท่�
   });
 
   test('Asset เดิมมีอยู่แล้ว (ไม่ใช่ Asset ใหม่) → ไม่เรียก RPC เลย (ไม่ต้อง Lock)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue({
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{
       id: 'existing-asset',
       symbol: 'BTC',
       type: 'crypto',
-    });
+    }]);
 
     await transactionService.processBuyCommand(USER_ID, buyNewSymbolParams('BTC'), {
       plan: 'free',
     });
 
     expect(supabaseAdmin.rpc).not.toHaveBeenCalled();
-    expect(assetRepository.countActiveByUser).not.toHaveBeenCalled();
+    expect(assetRepository.findActiveSymbolsByUser).not.toHaveBeenCalled();
   });
 });
 
@@ -227,7 +232,7 @@ describe('Error Contract — Caller เดิมต้องไม่รู้�
   test('Error จาก RPC เป็น TransactionServiceError จริง พร้อม Code เดิม ASSET_LIMIT_REACHED', async () => {
     // Pre-check เห็น 0 (Stale) แต่ DB จริงเต็มแล้ว (Race) — ปล่อยผ่านไปถึง RPC
     state.activeCount = 2;
-    assetRepository.countActiveByUser.mockResolvedValue(0);
+    assetRepository.findActiveSymbolsByUser.mockResolvedValue(Array.from({ length: 0 }, (_, i) => `__OTHER${i}`));
 
     await expect(
       transactionService.processBuyCommand(USER_ID, buyNewSymbolParams('NEWSYM'), {
@@ -240,7 +245,7 @@ describe('Error Contract — Caller เดิมต้องไม่รู้�
 
   test('details ใช้ยอดจริงจาก DB (ไม่ใช่ยอด Stale ที่ Pre-check อ่านมา)', async () => {
     state.activeCount = 2; // DB จริงเต็มแล้ว
-    assetRepository.countActiveByUser.mockResolvedValue(0); // Pre-check เห็นค่าเก่า (Stale)
+    assetRepository.findActiveSymbolsByUser.mockResolvedValue(Array.from({ length: 0 }, (_, i) => `__OTHER${i}`)); // Pre-check เห็นค่าเก่า (Stale)
 
     await expect(
       transactionService.processBuyCommand(USER_ID, buyNewSymbolParams('NEWSYM'), {
@@ -253,7 +258,7 @@ describe('Error Contract — Caller เดิมต้องไม่รู้�
   });
 
   test('Symbol ซ้ำชนกันพอดี (Race) → ASSET_ALREADY_EXISTS ไม่ใช่ ASSET_LIMIT_REACHED', async () => {
-    assetRepository.countActiveByUser.mockResolvedValue(0);
+    assetRepository.findActiveSymbolsByUser.mockResolvedValue(Array.from({ length: 0 }, (_, i) => `__OTHER${i}`));
     supabaseAdmin.rpc.mockResolvedValueOnce({
       data: null,
       error: { message: 'ASSET_ALREADY_EXISTS' },
@@ -267,7 +272,7 @@ describe('Error Contract — Caller เดิมต้องไม่รู้�
   });
 
   test('Error อื่นของ DB (ไม่ใช่เงื่อนไขธุรกิจ) ยังโยนต่อเป็น Error ทั่วไปเหมือนเดิม', async () => {
-    assetRepository.countActiveByUser.mockResolvedValue(0);
+    assetRepository.findActiveSymbolsByUser.mockResolvedValue(Array.from({ length: 0 }, (_, i) => `__OTHER${i}`));
     supabaseAdmin.rpc.mockResolvedValueOnce({
       data: null,
       error: { message: 'connection terminated' },

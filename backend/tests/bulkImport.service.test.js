@@ -86,8 +86,8 @@ describe('previewBatch — Aggregate Asset Limit (Free Plan)', () => {
         { line: 3, symbol: 'SOL', quantity: 1, pricePerUnit: 100 },
       ],
     });
-    assetRepository.countActiveByUser.mockResolvedValue(1); // มี 1 Asset อยู่แล้ว
-    assetRepository.findByUserAndSymbol.mockResolvedValue(null); // ทั้ง 3 เป็น Symbol ใหม่หมด
+    // ถือ XRP อยู่ 1 ตัว — ทั้ง 3 Symbol ในก้อน (BTC/ETH/SOL) จึงเป็นของใหม่หมด
+    assetRepository.findActiveSymbolsByUser.mockResolvedValue(['XRP']);
 
     const result = await bulkImportService.previewBatch(USER_ID, 'text', { plan: 'free' });
 
@@ -111,8 +111,7 @@ describe('previewBatch — Aggregate Asset Limit (Free Plan)', () => {
         { line: 2, symbol: 'BTC', quantity: 2, pricePerUnit: 200 },
       ],
     });
-    assetRepository.countActiveByUser.mockResolvedValue(1);
-    assetRepository.findByUserAndSymbol.mockResolvedValue(null);
+    assetRepository.findActiveSymbolsByUser.mockResolvedValue(['XRP']);
     transactionService.validateBuy.mockResolvedValue({
       amounts: { quantity: 1, pricePerUnit: 100, amountThb: 100 },
       assetType: 'crypto',
@@ -133,8 +132,8 @@ describe('previewBatch — Aggregate Asset Limit (Free Plan)', () => {
       errors: [],
       items: [{ line: 1, symbol: 'BTC', quantity: 1, pricePerUnit: 100 }],
     });
-    assetRepository.countActiveByUser.mockResolvedValue(2); // เต็ม Limit แล้ว
-    assetRepository.findByUserAndSymbol.mockResolvedValue({ id: 'a-btc', type: 'crypto' }); // แต่ BTC มีอยู่แล้ว
+    // เต็ม Limit แล้ว (2 ตัว) แต่ BTC เป็นหนึ่งในนั้น → ไม่ใช่ Symbol ใหม่ ไม่นับเพิ่ม
+    assetRepository.findActiveSymbolsByUser.mockResolvedValue(['BTC', 'XRP']);
     transactionService.validateBuy.mockResolvedValue({
       amounts: { quantity: 1, pricePerUnit: 100, amountThb: 100 },
       assetType: 'crypto',

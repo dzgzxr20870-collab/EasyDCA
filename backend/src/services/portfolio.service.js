@@ -1,6 +1,8 @@
 const assetRepository = require('../repositories/asset.repository');
 const transactionRepository = require('../repositories/transaction.repository');
 const { calculateHeldQuantity } = require('./transaction.service');
+// Stage 6a — แหล่งตัดสิน "ความหมายของ transaction type" ที่เดียวของทั้งระบบ
+const { costBasisRole } = require('../utils/transactionType.util');
 
 // ปัดทศนิยม 2 ตำแหน่งสำหรับจำนวนเงินบาท (สอดคล้องกับ transaction.service)
 function roundToTwo(value) {
@@ -47,12 +49,25 @@ function calculateTotalInvested(transactions) {
     const amount = Number(t.amountThb);
     let quantity = Number(t.quantity);
 
-    if (t.type === 'buy') {
+    // Stage 6a — เดิมเขียนแบบ Binary `if (t.type === 'buy') {...} else {...ตัดต้นทุน...}`
+    // ซึ่งแปลว่า "ทุก type ที่ไม่ใช่ buy = ขาย" — ถ้า dividend เข้ามาได้ ต้นทุนจะ
+    // ถูกตัดทิ้งและ realizedPnL จะเพี้ยนทันทีโดยไม่มี Error ใดๆ (Design Doc § 2)
+    const role = costBasisRole(t.type, 'portfolio.calculateTotalInvested');
+
+    if (role === 'increase_cost') {
       costBasis += amount;
       heldQty += quantity;
       continue;
     }
 
+    // ปันผล (และรายการหักล้างปันผล) ไม่แตะต้นทุนและไม่แตะจำนวนที่ถือเลย —
+    // เป็น "รายได้" คนละก้อนกับกำไรจากส่วนต่างราคา (Design Doc § 5.3)
+    // ยอดปันผลสะสมคำนวณแยกต่างหาก ไม่ปนกับ realizedPnL ที่นี่
+    if (role === 'income' || role === 'income_reversal') {
+      continue;
+    }
+
+    // ถึงตรงนี้ได้เฉพาะ role === 'realize_pnl' (ขาย) เท่านั้น
     // ป้องกัน Data Inconsistency (ไม่ควรเกิดเพราะมี NOTHING_TO_SELL/INSUFFICIENT_QUANTITY
     // Guard อยู่แล้วตอนบันทึกธุรกรรม) — Clamp แทนการ throw เพราะนี่คือ Read-Path สรุปผล
     // ไม่ใช่ Write-Path ธุรกรรม
@@ -109,6 +124,18 @@ async function getPortfolioSummary(userId) {
       symbol: asset.symbol,
       name: asset.name,
       type: asset.type,
+      // ⚠️ Stage 5 (migration 046) — ตั้งแต่ถือ Symbol เดียวกันได้หลายโบรก
+      // "symbol" ไม่ใช่ Key ที่ระบุ Holding ได้อีกต่อไป (BTC โผล่ได้ 2 แถว)
+      // ทุก Consumer ที่เอา holding.symbol ไป Lookup ต่อ ต้องพา brokerId ไปด้วย
+      // มิฉะนั้นจะเจอ AMBIGUOUS_ASSET_BROKER แล้ว "ตกหล่นทั้งสองแถว" เงียบๆ
+      // (เคสจริงที่ต้องระวัง: portfolioSnapshot.job นับ excludedAssetCount แล้ว
+      // มูลค่ารวมรายคืนจะขาด BTC ไปทั้งก้อนโดยไม่มี Error ให้เห็น)
+      assetId: asset.id,
+      brokerId: asset.brokerId ?? null,
+      // Stage 8 — มิติที่ Allocation Endpoint ใช้จัดกลุ่ม (null = "ไม่ระบุ")
+      // Additive ล้วน: Consumer เดิมที่ไม่ได้อ่าน 2 Field นี้ไม่กระทบเลย
+      sector: asset.sector ?? null,
+      portfolioId: asset.portfolioId ?? null,
       // กองทุนรวม (Round 7) — พา proj_id/fund_class_name ไปให้ portfolioSummary ดึง NAV
       // ตรง Class (null สำหรับสินทรัพย์อื่น) ไม่กระทบ Consumer เดิมที่ไม่ได้อ่าน Field นี้
       projId: asset.projId ?? null,

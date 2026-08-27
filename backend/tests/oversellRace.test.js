@@ -97,7 +97,7 @@ beforeEach(() => {
   state.held = 0;
   state.rows = [];
   installFakeRpc();
-  assetRepository.findByUserAndSymbol.mockResolvedValue({ id: ASSET_ID, symbol: 'BTC' });
+  assetRepository.findAllByUserAndSymbol.mockResolvedValue([{ id: ASSET_ID, symbol: 'BTC' }]);
   assetRepository.findByIds.mockResolvedValue([{ id: ASSET_ID, symbol: 'BTC' }]);
 });
 

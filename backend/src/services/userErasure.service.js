@@ -1,5 +1,8 @@
 const userRepository = require('../repositories/user.repository');
 const paymentRepository = require('../repositories/payment.repository');
+// ป้ายกำกับที่ผู้ใช้ตั้งชื่อเอง — ต้องล้างชื่อตอน Erasure (มติ Founder 27 ส.ค. 2569)
+const portfolioRepository = require('../repositories/portfolio.repository');
+const brokerRepository = require('../repositories/broker.repository');
 const storageService = require('../services/storage.service');
 const erasureLogRepository = require('../repositories/erasureLog.repository');
 const logger = require('../utils/logger.util');
@@ -11,11 +14,30 @@ const logger = require('../utils/logger.util');
 //      เผื่อขั้นตอนนี้ Fail จะได้ยัง Retry ได้โดยไม่ต้องพึ่ง user_id เดิมที่ถูกล้างไปแล้ว)
 //   2b) ลบรูปสลิปธุรกรรม (S8 — Bucket transaction-slips) แบบ Error Isolated: ถ้าลบไม่
 //      สำเร็จ Log แล้วไปต่อ ไม่ Block การ Anonymize (รูปไม่ใช่ Ledger ทางบัญชี)
+//   2c) ล้าง "ชื่อที่ผู้ใช้ตั้งเอง" ของ portfolios/brokers (มติ Founder 27 ส.ค. 2569)
+//      — ทำ **ก่อน** Anonymize users ด้วยเหตุผลเดียวกับข้อ 2: ถ้าขั้นนี้ Fail ยัง
+//      Retry ได้โดยไม่ต้องพึ่ง user_id เดิม (ซึ่งยังไม่ถูกล้าง)
 //   3) Anonymize users Row (line_user_id/display_name/picture_url + anonymized_at)
 //      — ไม่แตะ transactions/payments แถวจริงเด็ดขาด (Immutable Ledger)
 //   4) บันทึก erasure_logs (Audit Trail — hadPendingPayment เผื่อ Admin สืบย้อนหลัง)
 //
-// คืน { paymentCount, deletedSlipCount, deletedTransactionSlipCount } ให้ Caller
+// ── ⚠️ อะไรถูกล้าง อะไรถูกเก็บ และทำไม (มติ Founder 27 ส.ค. 2569) ────────────
+//   ล้าง: users (line_user_id/display_name/picture_url) · รูปสลิปทั้งหมดใน Storage
+//         · **ชื่อ portfolios/brokers** ← เพิ่มรอบนี้
+//   เก็บ: transactions/assets/payments แถวจริง (Immutable Ledger — เป็นหลักฐาน
+//         ทางบัญชีและเป็นฐานของยอดเงินที่ผู้ใช้เคยตกลงไว้)
+//
+// เหตุผลที่ชื่อ portfolios/brokers **ไม่ได้รับเกราะ Immutable Ledger**: มันเป็น
+// "ป้ายกำกับ" ที่ผู้ใช้พิมพ์เอง **ไม่เข้าสูตรคำนวณเงินสักสูตร** — ลบชื่อทิ้งแล้ว
+// ตัวเลขทุกตัวในระบบยังเท่าเดิมเป๊ะ ต่างจาก transactions ที่ลบแล้วยอดเปลี่ยนทันที
+//
+// 📌 **Open Question ที่ยังไม่มีใครตัดสิน** — `transactions.note` ก็เป็นข้อความอิสระ
+// ที่ผู้ใช้พิมพ์เองเหมือนกัน และการอ้าง Immutable Ledger เพื่อเก็บไว้หลังคำขอลบ
+// ตาม PDPA เป็นฐานที่อ่อนกว่าที่คิด · **ห้ามแก้พฤติกรรมของ note เองเด็ดขาด**
+// เป็นคำถามเชิงนโยบาย/กฎหมาย ไม่ใช่บั๊ก (ดู SECURITY.md § PDPA)
+//
+// คืน { paymentCount, deletedSlipCount, deletedTransactionSlipCount,
+//       anonymizedPortfolioCount, anonymizedBrokerCount } ให้ Caller
 // Log/ตรวจสอบเพิ่มได้ถ้าต้องการ
 async function eraseUserData(userId, { hadPendingPayment = false } = {}) {
   const payments = await paymentRepository.findAllByUserId(userId);
@@ -55,6 +77,14 @@ async function eraseUserData(userId, { hadPendingPayment = false } = {}) {
     });
   }
 
+  // ── ล้างชื่อป้ายกำกับที่ผู้ใช้ตั้งเอง ─────────────────────────────────────
+  // ⚠️ **ไม่ Error-Isolated โดยเจตนา** (ต่างจากการลบรูปสลิปด้านบน) — ถ้าล้างชื่อ
+  // ไม่สำเร็จแล้วเราเดินหน้า Anonymize users ต่อ ผู้ใช้จะถูกบอกว่า "ลบข้อมูลแล้ว"
+  // ทั้งที่ชื่อที่อาจมี PII ยังอยู่ครบใน DB = คำตอบที่ผิดต่อคำขอตาม PDPA
+  // ปล่อยให้ throw แล้ว Retry ทั้ง Flow ได้ ดีกว่ารายงานผลลวง
+  const anonymizedPortfolioCount = await portfolioRepository.anonymizeNamesForUser(userId);
+  const anonymizedBrokerCount = await brokerRepository.anonymizeNamesForUser(userId);
+
   await userRepository.anonymize(userId);
 
   try {
@@ -72,6 +102,8 @@ async function eraseUserData(userId, { hadPendingPayment = false } = {}) {
     deletedSlipCount,
     deletedTransactionSlipCount,
     deletedFacebookProofCount,
+    anonymizedPortfolioCount,
+    anonymizedBrokerCount,
     hadPendingPayment,
   });
 
@@ -80,6 +112,8 @@ async function eraseUserData(userId, { hadPendingPayment = false } = {}) {
     deletedSlipCount,
     deletedTransactionSlipCount,
     deletedFacebookProofCount,
+    anonymizedPortfolioCount,
+    anonymizedBrokerCount,
   };
 }
 

@@ -1,4 +1,6 @@
 const { dowToDayName, THAI_DAY_NAMES, formatThaiDate } = require('./thaiDate.util');
+// Stage 6a — แหล่งตัดสิน "ความหมายของ transaction type" ที่เดียวของทั้งระบบ
+const { thaiLabel, directionTone } = require('./transactionType.util');
 
 // Flex Message Builders ตาม Design System ใน UI_UX.md § 1, § 3
 // สี Sync กับ Theme จริงของเว็บ Dashboard (frontend/src/pages/DashboardHome.css
@@ -60,6 +62,41 @@ const ERROR_MESSAGES = {
   // สำเร็จไปแล้ว จึงชวนตรวจพอร์ตแทนบอกให้ "ลองใหม่" (ซึ่งจะซ้ำอีกไม่มีจบ)
   ASSET_ALREADY_EXISTS: 'สินทรัพย์นี้เพิ่งถูกเพิ่มเข้าพอร์ตไปแล้ว (อาจกดซ้ำ) ลองพิมพ์ "พอต" เพื่อตรวจสอบพอร์ตของคุณ',
   ASSET_NOT_FOUND: 'ไม่พบสินทรัพย์นี้ในพอร์ตของคุณ ลองบันทึกรายการซื้อก่อนนะครับ',
+  // Stage 5 (migration 046) — ถือ Symbol เดียวกันหลายโบรก แล้วคำสั่งไม่ได้ระบุว่าโบรกไหน
+  //
+  // ⚠️ ข้อความนี้เป็น "ตาข่ายกันตก" ไม่ใช่เส้นทางหลัก — เส้นทางหลักคือ
+  // buildBrokerPickerMessage (ปุ่มให้เลือกโบรก) ที่ routeCommand ดักไว้ก่อนแล้ว
+  // จะมาถึงข้อความนี้ได้เฉพาะ Path ที่ตอบเป็นปุ่มไม่ได้จริงๆ (เช่น นำเข้าพอร์ตแบบ
+  // หลายบรรทัดที่ 1 Batch มีหลาย Symbol พร้อมกัน จะถามทีละตัวไม่ไหว)
+  AMBIGUOUS_ASSET_BROKER:
+    'คุณถือสินทรัพย์นี้อยู่มากกว่า 1 ที่ (คนละโบรก/Exchange) ระบบจึงไม่ทราบว่าหมายถึงที่ไหน กรุณาบันทึกทีละรายการผ่านคำสั่งปกติ แล้วเลือกโบรกจากปุ่มที่ระบบถามกลับครับ',
+  // Stage 8-fix — ถือ Symbol เดียวกันอยู่หลายพอร์ต แต่คำสั่งไม่ได้ระบุพอร์ต
+  //
+  // ⚠️ ข้อความนี้เป็น "ตาข่ายกันตก" ไม่ใช่เส้นทางหลัก (เหมือน AMBIGUOUS_ASSET_BROKER
+  // ข้างบนเป๊ะ) — เส้นทางหลักคือ buildPortfolioPickerMessage (ปุ่มให้เลือกพอร์ต)
+  // ที่ routeCommand ดักไว้ก่อนแล้ว · จะมาถึงข้อความนี้ได้เฉพาะ Path ที่ตอบเป็นปุ่ม
+  // ไม่ได้จริงๆ (นำเข้าพอร์ตแบบหลายบรรทัดที่ 1 Batch มีหลาย Symbol พร้อมกัน) หรือ
+  // ตอนประกอบปุ่มไม่สำเร็จ
+  //
+  // ⚠️ **ห้ามเดาว่าเป็นพอร์ตหลัก** (กฎยืนข้อ 11) — ผู้ใช้ถืออยู่ในพอร์ตอื่นแล้วเรา
+  // ไปสร้างแถวใหม่ในพอร์ตหลักให้ = ประวัติแตกคนละ asset_id ซึ่งคือบั๊กที่
+  // migration 014 เคยแก้
+  AMBIGUOUS_ASSET_PORTFOLIO:
+    'คุณถือสินทรัพย์นี้อยู่ในมากกว่า 1 พอร์ตครับ ระบบจึงไม่ทราบว่าหมายถึงพอร์ตไหน กรุณาบันทึกทีละรายการผ่านคำสั่งปกติ แล้วเลือกพอร์ตจากปุ่มที่ระบบถามกลับครับ',
+  // ผู้ใช้กดปุ่มเลือกโบรกช้าเกินไปจนโบรกนั้นถูกลบไปแล้ว (หรือปุ่มมาจากข้อความเก่า)
+  // — assertOwnedBrokerId ตอบ 404 เดียวกับกรณี "เป็นของผู้ใช้คนอื่น" โดยเจตนา
+  // เพื่อไม่ยืนยันการมีอยู่ของข้อมูลผู้ใช้รายอื่น (Design Doc § 6.3)
+  BROKER_NOT_FOUND: 'ไม่พบโบรก/Exchange ที่เลือก (อาจถูกลบไปแล้ว) กรุณาพิมพ์คำสั่งใหม่อีกครั้งครับ',
+  // Stage 8-fix — พอร์ตส่วนเกินหลัง Premium หมดอายุ (มติ Founder 24 ส.ค. 2569)
+  //
+  // ⚠️ ต้องบอก "ทางออกที่ยังทำได้จริง" ให้ครบ — ถ้าเขียนแค่ "พอร์ตนี้อ่านได้อย่างเดียว"
+  // ผู้ใช้จะเข้าใจว่าทำอะไรไม่ได้เลย แล้วจะไม่บันทึกการขายที่เกิดขึ้นจริงในโลกจริง
+  // ทำให้ยอดในพอร์ตผิดถาวร ซึ่งเป็นสิ่งที่มติข้อนี้ตั้งใจกันตั้งแต่แรก
+  //
+  // ⚠️ ห้ามใช้ภาษาชี้นำการลงทุน (กฎเหล็กข้อ 1) — บอกได้แค่ "ระบบทำอะไรได้/ไม่ได้"
+  PORTFOLIO_READ_ONLY:
+    'พอร์ตนี้เพิ่มรายการใหม่ไม่ได้ เพราะแพ็กเกจ Premium หมดอายุแล้วครับ แต่ยังบันทึกการขาย ย้อนรายการล่าสุด และย้ายสินทรัพย์ออกไปพอร์ตหลักได้ตามปกติ ข้อมูลเดิมอยู่ครบทุกรายการ ต่ออายุแล้วกลับมาเพิ่มรายการได้ทันทีครับ',
+  PORTFOLIO_NOT_FOUND: 'ไม่พบพอร์ตที่เลือก (อาจถูกลบไปแล้ว) กรุณาลองใหม่อีกครั้งครับ',
   INSUFFICIENT_QUANTITY:
     'จำนวนที่ต้องการขายมากกว่าที่คุณถือครองอยู่ กรุณาตรวจสอบยอดคงเหลืออีกครั้ง',
   NO_HOLDING_TO_CALCULATE_PROFIT:
@@ -723,9 +760,12 @@ function buildHistoryMessage(transactions) {
   const body = [];
 
   transactions.forEach((tx) => {
-    const isBuy = tx.type === 'buy';
-    const label = isBuy ? '🟢 ซื้อ' : '🔴 ขาย';
-    const color = isBuy ? COLOR.profit : COLOR.loss;
+    // Stage 6a — เดิม `const isBuy = tx.type === 'buy'` แล้วตกทุก type ที่เหลือ
+    // เป็น "🔴 ขาย" ซึ่งจะทำให้ LINE แสดงรายการปันผลว่า "ขาย" (Design Doc § 2)
+    const tone = directionTone(tx.type, 'flexMessage.transactionList');
+    const isPositive = tone === 'positive';
+    const label = `${isPositive ? '🟢' : '🔴'} ${thaiLabel(tx.type, 'flexMessage.transactionList')}`;
+    const color = isPositive ? COLOR.profit : COLOR.loss;
     // Multi-Currency (Round 10) — หน่วยตามสกุลของธุรกรรม (Default THB)
     const unit = tx.currency === 'USD' ? 'USD' : 'บาท';
 
@@ -926,9 +966,28 @@ function buildEditHintMessage() {
 // ไม่ใช่อธิบายกลไกทางบัญชี ("สร้างรายการตรงข้ามเพื่อชดเชย") ขึ้นก่อน — Founder เอง
 // ยังสะดุดตอนเห็นข้อความกลไกเป็นบรรทัดแรกครั้งแรก คำอธิบายกลไก (ประวัติยังเก็บไว้ครบ)
 // ยังคงอยู่ แต่ย้ายไปเป็นหมายเหตุตัวเล็กท้ายการ์ดแทน
+// ⚠️ Stage 6b — จุดนี้คือ "จุดที่ 8" ของ Design Doc § 2 ที่ทั้ง Design Doc และ Stage 6a
+// มองข้ามไป (ตารางใน Design Doc ระบุไว้ 6 จุด · Stage 6a เจอเพิ่มจุดที่ 7 ที่
+// undoTransaction.service:121 · เหลือจุดนี้ที่ยังเป็น Binary อยู่)
+//
+// เดิม: `const wasBuy = result.originalType === 'buy'` แล้ว `wasBuy ? 'ซื้อ' : 'ขาย'`
+// = ทุก type ที่ไม่ใช่ buy กลายเป็น "ขาย" → กด "ย้อนล่าสุด" บนรายการปันผลจะได้การ์ด
+// ที่เขียนว่า "...ก่อนบันทึกรายการ**ขาย**นี้" ทั้งที่ผู้ใช้เพิ่งย้อนรายการปันผล
+//
+// ── และข้อความเดิมยังผิดข้อเท็จจริงสำหรับ dividend อีกชั้นหนึ่ง ────────────────
+// "ยอด X ในพอร์ตกลับไปเป็นเหมือนก่อนบันทึก..." เป็นจริงเฉพาะ buy/sell ที่เปลี่ยน
+// จำนวนที่ถือ — ปันผลไม่เคยเปลี่ยนจำนวนที่ถือตั้งแต่แรก (heldQuantitySign = 0)
+// การบอกว่า "ยอดกลับไปเป็นเหมือนเดิม" จึงชวนให้เข้าใจผิดว่าเมื่อกี้ยอดเคยขยับ
+// (ขัดกฎยืน "ห้ามข้อความในระบบผิดข้อเท็จจริง/กำกวม" — ชุดเดียวกับ commit 07b34a3)
+// สิ่งที่กลับไปเป็นเหมือนเดิมจริงๆ สำหรับปันผลคือ "ยอดเงินปันผลสะสม"
+//
+// บรรทัด "จำนวน:" ก็ถูกซ่อนสำหรับปันผล — quantity ของแถวปันผลคือ "จำนวนหน่วยที่ได้
+// ปันผลนี้" (บริบท) ไม่ใช่จำนวนที่ถูกย้อนออกจากพอร์ต การโชว์เลขนั้นบนการ์ด "ย้อน
+// รายการ" จะอ่านเป็น "ถูกหักออกจากพอร์ตเท่านี้" ทันที ซึ่งไม่จริงเลย
 function buildUndoMessage(result) {
-  const wasBuy = result.originalType === 'buy';
-  const originalLabel = wasBuy ? 'ซื้อ' : 'ขาย';
+  // ถามความหมายจาก transactionType.util ที่เดียว (default: throw) แทน Binary เดิม
+  const originalLabel = thaiLabel(result.originalType, 'flexMessage.buildUndoMessage');
+  const isDividend = result.originalType === 'dividend';
   const symbol = result.symbol ?? '';
 
   return bubble({
@@ -937,21 +996,39 @@ function buildUndoMessage(result) {
     headerBg: COLOR.warningBg,
     bodyContents: [
       textLine(
-        `ยอด ${symbol} ในพอร์ตกลับไปเป็นเหมือนก่อนบันทึกรายการ${originalLabel}นี้แล้ว`.trim(),
+        (isDividend
+          ? `ยอดเงินปันผลสะสมของ ${symbol} กลับไปเป็นเหมือนก่อนบันทึกรายการปันผลนี้แล้ว`
+          : `ยอด ${symbol} ในพอร์ตกลับไปเป็นเหมือนก่อนบันทึกรายการ${originalLabel}นี้แล้ว`
+        ).trim(),
         {
           size: 'md',
           weight: 'bold',
           color: COLOR.textPrimary,
         }
       ),
-      textLine(`จำนวน: ${formatNumber(result.quantity)} ${symbol}`.trimEnd(), {
-        size: 'sm',
-        color: COLOR.textSecondary,
-      }),
-      textLine(`มูลค่ารวม: ${formatNumber(result.amountThb)} บาท`, {
-        size: 'sm',
-        color: COLOR.textSecondary,
-      }),
+      // ปันผลไม่เคยแตะจำนวนที่ถือ จึงไม่มี "จำนวนที่ถูกย้อน" ให้แสดง (ดูเหตุผลด้านบน)
+      ...(isDividend
+        ? [
+            textLine(`ยอดถือ ${symbol} ในพอร์ตไม่เปลี่ยนแปลง`.trimEnd(), {
+              size: 'sm',
+              color: COLOR.textSecondary,
+            }),
+          ]
+        : [
+            textLine(`จำนวน: ${formatNumber(result.quantity)} ${symbol}`.trimEnd(), {
+              size: 'sm',
+              color: COLOR.textSecondary,
+            }),
+          ]),
+      // คำว่า "มูลค่ารวม" ใช้กับซื้อ/ขายเท่านั้น — ของปันผลคือ "เงินปันผลที่ย้อน"
+      // (ไม่ใช่มูลค่าสินทรัพย์ที่ซื้อขาย) ใช้คำเดียวกันจะกำกวมทันที
+      textLine(
+        `${isDividend ? 'เงินปันผลที่ย้อน' : 'มูลค่ารวม'}: ${formatNumber(result.amountThb)} บาท`,
+        {
+          size: 'sm',
+          color: COLOR.textSecondary,
+        }
+      ),
       textLine('* ระบบสร้างรายการตรงข้ามเพื่อชดเชย (ไม่ได้ลบ) ประวัติเดิมยังถูกเก็บไว้ครบถ้วน', {
         size: 'xs',
         color: COLOR.textSecondary,
@@ -1422,6 +1499,217 @@ function buildFundClassPickerMessage(project, buy = {}) {
     `กองทุน ${project.projAbbrName} มีหลายชนิดหน่วยลงทุน กรุณาเลือกชนิดที่ต้องการบันทึกครับ:\n${lines}`;
 
   return { type: 'text', text, quickReply: { items } };
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Broker Picker (Stage 5 — migration 046) — "BTC ที่โบรกไหน?"
+// ═══════════════════════════════════════════════════════════════════════
+// ตั้งแต่ UNIQUE Key มี broker_id อยู่ด้วย ผู้ใช้ถือ BTC ได้ทั้งที่ Bitkub และ
+// Binance พร้อมกัน คำสั่ง "ซื้อ BTC 100" จึงกำกวม — assetResolution.service โยน
+// AMBIGUOUS_ASSET_BROKER ขึ้นมาแทนที่จะเดาแถวใดแถวหนึ่ง (กฎยืนข้อ 11: Silent
+// Default เป็น Anti-pattern เสมอ) ที่นี่คือหน้าตาของ "การถามกลับ"
+//
+// ⚠️ ถือโบรกเดียว = ไม่กำกวม = ไม่มีวันมาถึงฟังก์ชันนี้ (กฎยืนข้อ 10 — ห้ามเพิ่ม
+// Latency/ขั้นตอนบน Live Path โดยไม่จำเป็น) การถามเกิดเฉพาะตอนกำกวมจริงเท่านั้น
+//
+// Reuse Pattern เดิมของ Fund Class Picker เป๊ะ: Quick Reply + Postback ที่พก
+// พารามิเตอร์คำสั่งเดิมไปด้วย จึงไม่ต้องมีตาราง Session ใหม่ให้ค้าง/หมดอายุเพิ่ม
+// (LINE Postback ≤ 300 ตัวอักษร — cmd + symbol + uuid + ยอด พอสบาย)
+
+// ตัดข้อความให้ยาวไม่เกิน n **Unicode Code Point** (กฎยืนข้อ 5: label ของ
+// quickReply.items[].action ยาวได้ ≤ 20)
+//
+// ⚠️ ห้ามใช้ String.prototype.slice() ตรงๆ กับงานนี้ — slice นับเป็น UTF-16 Code
+// Unit ซึ่งตัด Surrogate Pair (Emoji) ขาดกลางตัวได้ กลายเป็นอักขระเสีย
+function truncateCodePoints(text, max) {
+  const points = [...String(text ?? '')];
+  return points.length <= max ? points.join('') : points.slice(0, max).join('');
+}
+
+// Postback ของปุ่มเลือกโบรก — พกคำสั่งเดิมกลับไปให้ Controller เล่นซ้ำได้ทั้งดุ้น
+// brokerId = null หมายถึงแถว "ไม่ระบุโบรก" (broker_id IS NULL) ซึ่งเป็นตัวเลือก
+// ที่ถูกต้องพอๆ กับโบรกจริง จึง Encode เป็น 'none' ไม่ใช่ปล่อย Key หายไป (ถ้า
+// ปล่อยหาย ปลายทางจะอ่านได้เป็น undefined = "ยังไม่ได้ถาม" แล้ววนถามซ้ำไม่รู้จบ)
+//
+// ⚠️ **มิติที่ผู้ใช้ตอบไปแล้วต้องถูกพกต่อไปด้วยทุกครั้ง** — เมื่อกำกวมทั้งพอร์ต
+// และโบรกพร้อมกัน ผู้ใช้จะถูกถาม 2 รอบซ้อน ถ้ารอบที่ 2 ไม่พกคำตอบของรอบที่ 1
+// ไปด้วย ระบบจะลืมแล้ววนถามรอบที่ 1 ซ้ำไม่รู้จบ (Loop ที่ผู้ใช้ออกไม่ได้)
+// นี่คือเหตุผลที่ `broker`/`pf` ถูก Set จาก buy.* ก่อน แล้วปุ่มของแต่ละ Picker
+// ค่อย Set ทับเฉพาะมิติของตัวเอง
+function basePickPostback(commandType, symbol, buy = {}) {
+  const p = new URLSearchParams();
+  p.set('cmd', commandType);
+  p.set('sym', symbol);
+  if (buy.amountThb !== undefined && buy.amountThb !== null) p.set('amt', String(buy.amountThb));
+  if (buy.quantity !== undefined && buy.quantity !== null) p.set('qty', String(buy.quantity));
+  if (buy.pricePerUnit !== undefined && buy.pricePerUnit !== null) {
+    p.set('price', String(buy.pricePerUnit));
+  }
+  if (buy.currency === 'USD') p.set('cur', 'USD');
+  if (buy.sellAll) p.set('all', '1');
+  // มิติที่ตอบไปแล้วในรอบก่อน (undefined = ยังไม่เคยถูกถาม → ไม่ใส่ Key เลย
+  // เพื่อให้ปลายทางอ่านได้เป็น undefined ตามกติกา 3 ทางของ assetResolution)
+  if (buy.brokerId !== undefined) p.set('broker', buy.brokerId ?? 'none');
+  if (buy.portfolioId !== undefined) p.set('pf', buy.portfolioId ?? 'none');
+  return p;
+}
+
+function brokerPickPostback(commandType, symbol, brokerId, buy = {}) {
+  const p = basePickPostback(commandType, symbol, buy);
+  p.set('action', 'pick_broker');
+  p.set('broker', brokerId ?? 'none');
+  return p.toString();
+}
+
+// Postback ของปุ่มเลือกพอร์ต — portfolioId = null หมายถึงแถวที่ portfolio_id IS
+// NULL (โลกก่อน migration 044) ซึ่งเป็นตัวเลือกที่ถูกต้องพอๆ กับพอร์ตจริง จึง
+// Encode เป็น 'none' ด้วยเหตุผลเดียวกับ broker เป๊ะ
+function portfolioPickPostback(commandType, symbol, portfolioId, buy = {}) {
+  const p = basePickPostback(commandType, symbol, buy);
+  p.set('action', 'pick_portfolio');
+  p.set('pf', portfolioId ?? 'none');
+  return p.toString();
+}
+
+const NO_BROKER_LABEL = 'ไม่ระบุโบรก';
+
+// commandType = 'buy' | 'sell' | 'profit'
+// choices = [{ brokerId, brokerName }] — brokerId null = แถวที่ไม่ได้ผูกโบรก
+// buy = พารามิเตอร์คำสั่งเดิม (amountThb หรือ quantity+pricePerUnit หรือ sellAll)
+function buildBrokerPickerMessage(commandType, symbol, choices, buy = {}) {
+  // LINE จำกัด 13 items ต่อข้อความ — ตัดที่ 13 พอดี (ไม่มีปุ่มยกเลิกต่อท้ายเพราะ
+  // Flow นี้ไม่มี Session ค้างให้ต้องเคลียร์: ผู้ใช้แค่ไม่กดปุ่มก็จบไปเอง)
+  const items = choices.slice(0, 13).map((c) => ({
+    type: 'action',
+    action: {
+      type: 'postback',
+      label: truncateCodePoints(c.brokerName || NO_BROKER_LABEL, 20),
+      data: brokerPickPostback(commandType, symbol, c.brokerId ?? null, buy),
+      displayText: `${symbol} ที่ ${c.brokerName || NO_BROKER_LABEL}`,
+    },
+  }));
+
+  const verb =
+    commandType === 'buy' ? 'บันทึกการซื้อ' : commandType === 'sell' ? 'บันทึกการขาย' : 'ดูกำไร';
+  const lines = choices.map((c) => `• ${c.brokerName || NO_BROKER_LABEL}`).join('\n');
+
+  return {
+    type: 'text',
+    text:
+      `คุณถือ ${symbol} อยู่มากกว่า 1 ที่ กรุณาเลือกก่อนว่าจะ${verb}ของที่ไหนครับ:\n${lines}`,
+    quickReply: { items },
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Portfolio Picker (Stage 8-fix — migration 044) — "BTC ในพอร์ตไหน?"
+// ═══════════════════════════════════════════════════════════════════════
+// คู่แฝดของ Broker Picker ข้างบนเป๊ะ ต่างกันแค่มิติที่ถาม — ผู้ใช้ Premium ที่
+// แยกพอร์ต "ระยะสั้น / ระยะยาว" แล้วถือ Symbol เดียวกันทั้งสองพอร์ตคือรูปแบบ
+// การใช้งานปกติมาก ไม่ใช่ Edge Case
+//
+// ⚠️ ก่อนหน้านี้เส้นทาง LINE ตอบแค่ข้อความ "ไปใช้เว็บ" ซึ่งแปลว่า **ผู้ใช้ที่จ่าย
+// เงินถูกลงโทษด้วยฟีเจอร์ที่เพิ่งซื้อ** — บันทึกผ่าน LINE ซึ่งเป็นจุดขายหลักของ
+// ผลิตภัณฑ์ไม่ได้อีกเลยสำหรับหุ้นตัวนั้น
+//
+// ⚠️ ถือพอร์ตเดียว = ไม่กำกวม = ไม่มีวันมาถึงฟังก์ชันนี้ (กฎยืนข้อ 10)
+//
+// ── ทำไมไม่ต้องมีตาราง Session ──────────────────────────────────────────
+// Reuse Pattern เดิม 100%: Quick Reply + Postback ที่พกพารามิเตอร์คำสั่งเดิม
+// ไปด้วย จึงไม่มี State ค้างให้ต้องหมดอายุ — ผู้ใช้ทิ้ง Flow ไว้เฉยๆ ก็จบไปเอง
+// เหมือน Broker Picker/Fund Class Picker (ไม่มี Pending ถูกสร้างก่อนถาม)
+
+// พอร์ตที่ผู้ใช้ยัง "เพิ่มรายการใหม่ไม่ได้" (Free ที่มีพอร์ตส่วนเกินจากตอนเคยเป็น
+// Premium) — ยังต้องโชว์เป็นตัวเลือกเสมอเพราะ **ขายออกได้อยู่** การซ่อนปุ่มจะทำให้
+// ผู้ใช้คิดว่าของหายไปจากระบบ · ติด 🔒 ให้เห็นก่อนกดแทน
+//
+// ⚠️ นี่คือ UX ล้วน **ไม่ใช่ Gate** — ด่านจริงอยู่ที่ validateBuy →
+// assertCanAddToPortfolio เสมอ (ผู้ใช้กดปุ่มที่ล็อกได้ แล้วจะได้ข้อความไทยที่
+// อธิบายว่าทำไมถึงเพิ่มไม่ได้ ซึ่งชัดกว่าปุ่มที่หายไปเฉยๆ)
+const LOCKED_MARK = '🔒';
+const NO_PORTFOLIO_LABEL = 'ไม่ระบุพอร์ต';
+
+// ═══════════════════════════════════════════════════════════════════════
+// สองเหตุผลที่ถามพอร์ต — ข้อความต้องต่างกัน ไม่งั้นผู้ใช้เข้าใจผิด
+// ═══════════════════════════════════════════════════════════════════════
+//   'ambiguous' = **ข้อเท็จจริงบังคับให้ถาม** — ถือ Symbol นี้อยู่หลายพอร์ตจริง
+//                 ระบบไม่รู้ว่าหมายถึงก้อนไหน (ใช้กับคำสั่งขาย/ดูกำไร)
+//   'choice'    = **ผู้ใช้มีสิทธิ์เลือก** — มีหลายพอร์ตจึงเลือกได้ว่าจะเก็บเข้าที่ไหน
+//                 (ใช้กับคำสั่งซื้อ · มติ Founder 27 ส.ค. 2569)
+//
+// ⚠️ ถ้าใช้ข้อความ 'ambiguous' กับเคส 'choice' ผู้ใช้ที่ซื้อ Symbol ใหม่จะอ่านว่า
+// "คุณถือ XXX อยู่มากกว่า 1 พอร์ต" ทั้งที่ยังไม่เคยถือเลยแม้แต่หน่วยเดียว = โกหก
+
+// commandType = 'buy' | 'sell' | 'profit'
+// choices = [{ portfolioId, portfolioName, locked }] — portfolioId null = แถวที่
+//           ยังไม่สังกัดพอร์ต (โลกก่อน 044)
+// buy = พารามิเตอร์คำสั่งเดิม + มิติที่ตอบไปแล้ว (เช่น brokerId)
+// options.reason    = 'ambiguous' | 'choice' (ดูด้านบน · Default 'ambiguous')
+// options.manageUrl = URL หน้าเว็บสำหรับจัดการพอร์ต · null = ไม่ตั้ง FRONTEND_URL
+function buildPortfolioPickerMessage(commandType, symbol, choices, buy = {}, options = {}) {
+  const reason = options.reason === 'choice' ? 'choice' : 'ambiguous';
+  // LINE จำกัด 13 items ต่อข้อความ (เหตุผลเดียวกับ Broker Picker)
+  const items = choices.slice(0, 13).map((c) => {
+    const name = c.portfolioName || NO_PORTFOLIO_LABEL;
+    // ⚠️ label ≤ 20 **Unicode Code Point** (กฎยืนข้อ 5) — 🔒 กินไป 1 จุด จึงเหลือ
+    // ให้ชื่อ 19 · ต้องตัดด้วย truncateCodePoints ห้ามใช้ slice() (ตัด Surrogate
+    // Pair ของอิโมจิขาดกลางตัว)
+    const label =
+      c.locked && commandType === 'buy'
+        ? `${LOCKED_MARK}${truncateCodePoints(name, 19)}`
+        : truncateCodePoints(name, 20);
+
+    return {
+      type: 'action',
+      action: {
+        type: 'postback',
+        label,
+        data: portfolioPickPostback(commandType, symbol, c.portfolioId ?? null, buy),
+        displayText: `${symbol} ในพอร์ต ${name}`,
+      },
+    };
+  });
+
+  const verb =
+    commandType === 'buy' ? 'บันทึกการซื้อ' : commandType === 'sell' ? 'บันทึกการขาย' : 'ดูกำไร';
+  const lines = choices
+    .map((c) => {
+      const name = c.portfolioName || NO_PORTFOLIO_LABEL;
+      return c.locked && commandType === 'buy' ? `• ${LOCKED_MARK} ${name}` : `• ${name}`;
+    })
+    .join('\n');
+
+  // มีพอร์ตที่ล็อกอยู่ในตัวเลือก → อธิบายให้ชัดว่า "เพิ่มใหม่ไม่ได้ แต่ยังขายได้"
+  // ไม่ใช่ปล่อยให้ผู้ใช้เดาเองว่าทำไมมีแม่กุญแจ
+  const lockedNote = choices.some((c) => c.locked) && commandType === 'buy'
+    ? `\n\n${LOCKED_MARK} = พอร์ตที่เพิ่มรายการใหม่ไม่ได้ในแพ็กเกจปัจจุบัน (ยังขายออกได้ตามปกติ)`
+    : '';
+
+  // ── "สร้างพอร์ตใหม่ทำได้บนเว็บเท่านั้น" (มติ Founder 27 ส.ค. 2569) ──────────
+  // ⚠️ **ห้ามมีปุ่ม "+ สร้างพอร์ตใหม่" ใน Quick Reply เด็ดขาด** — การสร้างพอร์ตเป็น
+  // งานที่ต้องตั้งชื่อ/เลือกประเภท ซึ่งทำในแชทแล้วได้ Flow หลายขั้นที่พังง่าย
+  // (และเป็นสิทธิ์ Premium ที่ต้องตรวจเพดานใต้ Lock — ดู create_portfolio_locked)
+  //
+  // ⚠️ บอกเป็น "ข้อความ" ไม่ใช่ปุ่ม uri — ถ้า manageUrl เป็น null (ยังไม่ตั้ง
+  // FRONTEND_URL) ปุ่ม uri ที่ว่างจะทำให้ LINE ปฏิเสธ **ทั้งข้อความ** ด้วย 400
+  // ผู้ใช้จะไม่เห็นแม้แต่รายการพอร์ตให้เลือก (Pattern เดียวกับ
+  // buildPdpaConsentRequiredMessage / buildPremiumExpiringSoonMessage)
+  const manageNote = options.manageUrl
+    ? `\n\nสร้าง/จัดการพอร์ตได้ที่หน้าเว็บ: ${options.manageUrl}`
+    : '\n\nสร้าง/จัดการพอร์ตได้ที่หน้าเว็บของ EasyDCA (ในแชททำไม่ได้)';
+
+  // ⚠️ ข้อความต้องตรงกับความจริงของแต่ละเหตุผล (ดูหัวข้อด้านบน)
+  // ห้ามใช้ภาษาชี้นำการลงทุน — บอกแค่ "ระบบต้องรู้อะไร" (กฎเหล็กข้อ 1)
+  const head =
+    reason === 'choice'
+      ? `${symbol} — เลือกพอร์ตที่จะ${verb}ครับ:`
+      : `คุณถือ ${symbol} อยู่มากกว่า 1 พอร์ต กรุณาเลือกก่อนว่าจะ${verb}ของพอร์ตไหนครับ:`;
+
+  return {
+    type: 'text',
+    text: `${head}\n${lines}${lockedNote}${manageNote}`,
+    quickReply: { items },
+  };
 }
 
 // ไม่พบกองทุนที่ค้นหา (Scope ข้อ 4) — ไม่ทำ Did-you-mean
@@ -3980,6 +4268,8 @@ module.exports = {
   buildBulkImportPreviewMessage,
   buildBulkImportConfirmedMessage,
   buildFundClassPickerMessage,
+  buildBrokerPickerMessage,
+  buildPortfolioPickerMessage,
   buildFundNotFoundMessage,
   buildDashboardLinkMessage,
   buildPlanDowngradedMessage,

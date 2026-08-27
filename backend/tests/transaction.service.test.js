@@ -1,3 +1,8 @@
+// Stage 8-fix (บั๊ก Asset Resolution) — validateBuy ต้อง Resolve พอร์ต Default
+// ตอนสร้างสินทรัพย์ใหม่ (Invariant migration 044/045: สินทรัพย์ทุกแถวสังกัดพอร์ต)
+// จึงต้อง Mock portfolio.repository ด้วย · Automock คืน undefined = "ยังไม่มีพอร์ต"
+// ซึ่งตรงกับสภาพก่อน Apply 044 พอดี → พฤติกรรมของเทสต์เดิมไม่เปลี่ยน
+jest.mock('../src/repositories/portfolio.repository');
 jest.mock('../src/repositories/asset.repository');
 jest.mock('../src/repositories/transaction.repository');
 jest.mock('../src/services/priceFeed.service');
@@ -35,7 +40,7 @@ beforeEach(() => {
 
 describe('processBuyCommand', () => {
   test('ซื้อสำเร็จ — Asset เก่าที่มีอยู่แล้ว (ไม่สร้าง Asset ใหม่)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET]);
 
     const result = await processBuyCommand(USER_ID, {
       symbol: 'PTT',
@@ -44,7 +49,7 @@ describe('processBuyCommand', () => {
     });
 
     expect(assetRepository.create).not.toHaveBeenCalled();
-    expect(assetRepository.countActiveByUser).not.toHaveBeenCalled();
+    expect(assetRepository.findActiveSymbolsByUser).not.toHaveBeenCalled();
     expect(transactionRepository.create).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: USER_ID,
@@ -66,8 +71,8 @@ describe('processBuyCommand', () => {
   });
 
   test('ซื้อสำเร็จ — สร้าง Asset ใหม่ (ยังไม่ถึง Freemium Limit)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(null);
-    assetRepository.countActiveByUser.mockResolvedValue(1);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([]);
+    assetRepository.findActiveSymbolsByUser.mockResolvedValue(Array.from({ length: 1 }, (_, i) => `__OTHER${i}`));
 
     const result = await processBuyCommand(
       USER_ID,
@@ -75,7 +80,7 @@ describe('processBuyCommand', () => {
       { plan: 'free' }
     );
 
-    expect(assetRepository.countActiveByUser).toHaveBeenCalledWith(USER_ID);
+    expect(assetRepository.findActiveSymbolsByUser).toHaveBeenCalledWith(USER_ID);
     expect(assetRepository.create).toHaveBeenCalledWith(
       USER_ID,
       null,
@@ -86,14 +91,17 @@ describe('processBuyCommand', () => {
       { projId: undefined, fundClassName: undefined },
       // migration 035 — assetLimit ที่ validateBuy คำนวณไว้แล้วส่งต่อให้ RPC ตัดสินอีกชั้น
       // (plan: 'free' → FREE_TIER_ASSET_LIMIT = 2)
-      2
+      2,
+      // Stage 5 (migration 046) — brokerId ที่ผู้ใช้เลือก (ไม่ได้ระบุมา → null
+      // = "ไม่ระบุโบรก" ซึ่งเป็นค่าของทุกแถวเดิมในระบบวันนี้)
+      null
     );
     expect(result.newAssetCreated).toBe(true);
   });
 
   test('ซื้อเกิน Freemium Limit — Free ที่มี 2 Asset แล้ว สร้าง Symbol ใหม่ → ASSET_LIMIT_REACHED', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(null);
-    assetRepository.countActiveByUser.mockResolvedValue(MAX_FREE_ASSETS);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([]);
+    assetRepository.findActiveSymbolsByUser.mockResolvedValue(Array.from({ length: MAX_FREE_ASSETS }, (_, i) => `__OTHER${i}`));
 
     await expect(
       processBuyCommand(
@@ -108,7 +116,7 @@ describe('processBuyCommand', () => {
   });
 
   test('Premium ที่ยัง Active ไม่ติด Freemium Limit แม้มี Asset เกิน 2', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(null);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([]);
 
     // ผ่าน entitlement: premium ต้องมี planExpiresAt อนาคตจึงถือว่า Active
     const future = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
@@ -118,13 +126,13 @@ describe('processBuyCommand', () => {
       { plan: 'premium', planExpiresAt: future }
     );
 
-    expect(assetRepository.countActiveByUser).not.toHaveBeenCalled();
+    expect(assetRepository.findActiveSymbolsByUser).not.toHaveBeenCalled();
     expect(result.newAssetCreated).toBe(true);
   });
 
   test('Premium ที่หมดอายุแล้ว → ถือเป็น free ติด Freemium Limit (entitlement)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(null);
-    assetRepository.countActiveByUser.mockResolvedValue(MAX_FREE_ASSETS);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([]);
+    assetRepository.findActiveSymbolsByUser.mockResolvedValue(Array.from({ length: MAX_FREE_ASSETS }, (_, i) => `__OTHER${i}`));
 
     // plan=premium แต่วันหมดอายุเป็นอดีต → entitlement ถือเป็น free → บังคับ Limit
     const past = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -136,12 +144,12 @@ describe('processBuyCommand', () => {
       )
     ).rejects.toMatchObject({ code: 'ASSET_LIMIT_REACHED' });
 
-    expect(assetRepository.countActiveByUser).toHaveBeenCalledWith(USER_ID);
+    expect(assetRepository.findActiveSymbolsByUser).toHaveBeenCalledWith(USER_ID);
     expect(assetRepository.create).not.toHaveBeenCalled();
   });
 
   test('รูปแบบจำนวนเงินล้วน (amountThb) + Price Feed หาราคาไม่ได้ → PRICE_FEED_NOT_IMPLEMENTED ก่อนเขียน DB', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET]);
     priceFeedService.getCurrentPrice.mockResolvedValue(null);
 
     await expect(
@@ -155,7 +163,7 @@ describe('processBuyCommand', () => {
   // ── Manual Quantity Fallback (Round 10-B) ────────────────────────────────
   test('Manual Quantity (quantity + amountThb, ไม่มี pricePerUnit) THB → price = amount/quantity, ไม่เรียก Price Feed', async () => {
     const ASSET_EOSE = { id: 'asset-eose', userId: USER_ID, symbol: 'EOSE', type: 'stock_us' };
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_EOSE);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_EOSE]);
 
     const result = await processBuyCommand(USER_ID, { symbol: 'EOSE', quantity: 10, amountThb: 1000 });
 
@@ -170,7 +178,7 @@ describe('processBuyCommand', () => {
 
   test('Manual Quantity USD → currency=USD, price = amount/quantity, ไม่พึ่ง USD Price Feed', async () => {
     const ASSET_EOSE = { id: 'asset-eose', userId: USER_ID, symbol: 'EOSE', type: 'stock_us' };
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_EOSE);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_EOSE]);
     // Price Feed คืน null เสมอ (Default) — ต้องไม่ถูกเรียกเลย
     const result = await processBuyCommand(USER_ID, {
       symbol: 'EOSE',
@@ -187,7 +195,7 @@ describe('processBuyCommand', () => {
   });
 
   test('Manual Quantity ที่ quantity ≤ 0 → VALIDATION_ERROR (ไม่เขียน DB)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET]);
 
     await expect(
       processBuyCommand(USER_ID, { symbol: 'EOSE', quantity: 0, amountThb: 1000 })
@@ -198,7 +206,7 @@ describe('processBuyCommand', () => {
 
   test('รูปแบบจำนวนเงินล้วน (amountThb) + Price Feed สำเร็จ → คำนวณ quantity จากราคาจริง', async () => {
     const ASSET_BTC = { id: 'asset-uuid-btc', userId: USER_ID, symbol: 'BTC', type: 'crypto' };
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_BTC);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_BTC]);
     // ราคา 2,000,000 บาท/BTC → ซื้อด้วย 1,000 บาท ได้ 0.0005 BTC
     priceFeedService.getCurrentPrice.mockResolvedValue(2000000);
 
@@ -226,7 +234,7 @@ describe('processBuyCommand', () => {
 
   test('amountThb หารด้วยราคาไม่ลงตัว → quantity ถูกปัดเศษ 8 ตำแหน่ง (ไม่เกิน Precision NUMERIC(20,8))', async () => {
     const ASSET_BTC = { id: 'asset-uuid-btc', userId: USER_ID, symbol: 'BTC', type: 'crypto' };
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_BTC);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_BTC]);
     // 1000 / 3400000 = 0.0002941176470588235 (ทศนิยม 19 ตำแหน่ง) → ปัดเหลือ 0.00029412
     priceFeedService.getCurrentPrice.mockResolvedValue(3400000);
 
@@ -243,7 +251,7 @@ describe('processBuyCommand', () => {
 
   test('รูปแบบจำนวนเงินล้วน (amountThb) กับหุ้นสหรัฐ (AAPL) → priceSource เป็น twelvedata ไม่ใช่ coingecko', async () => {
     const ASSET_AAPL = { id: 'asset-uuid-aapl', userId: USER_ID, symbol: 'AAPL', type: 'stock_us' };
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_AAPL);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_AAPL]);
     priceFeedService.getCurrentPrice.mockResolvedValue(7000);
 
     const result = await processBuyCommand(USER_ID, { symbol: 'AAPL', amountThb: 14000 });
@@ -252,8 +260,8 @@ describe('processBuyCommand', () => {
   });
 
   test('สร้าง Asset ใหม่แต่ไม่ส่ง type มา → VALIDATION_ERROR (ไม่เดา type)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(null);
-    assetRepository.countActiveByUser.mockResolvedValue(0);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([]);
+    assetRepository.findActiveSymbolsByUser.mockResolvedValue(Array.from({ length: 0 }, (_, i) => `__OTHER${i}`));
 
     await expect(
       processBuyCommand(USER_ID, { symbol: 'DOGE', quantity: 10, pricePerUnit: 5 }, { plan: 'free' })
@@ -266,7 +274,7 @@ describe('processBuyCommand', () => {
 
 describe('processSellCommand', () => {
   test('ขายสำเร็จ — ขายไม่เกินยอดคงเหลือ', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET]);
     transactionRepository.findAllByAsset.mockResolvedValue([
       { type: 'buy', quantity: 100 },
       { type: 'sell', quantity: 20 },
@@ -291,7 +299,7 @@ describe('processSellCommand', () => {
   });
 
   test('ขายเกินยอดคงเหลือ → INSUFFICIENT_QUANTITY (ไม่บันทึก Transaction)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET]);
     transactionRepository.findAllByAsset.mockResolvedValue([{ type: 'buy', quantity: 30 }]);
 
     await expect(
@@ -302,7 +310,7 @@ describe('processSellCommand', () => {
   });
 
   test('ขาย Asset ที่ไม่มีอยู่ → ASSET_NOT_FOUND', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(null);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([]);
 
     await expect(
       processSellCommand(USER_ID, { symbol: 'XRP', quantity: 5, pricePerUnit: 20 })
@@ -313,7 +321,7 @@ describe('processSellCommand', () => {
   });
 
   test('ขายรูปแบบจำนวนเงินล้วน (amountThb) → PRICE_FEED_NOT_IMPLEMENTED', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET]);
 
     await expect(
       processSellCommand(USER_ID, { symbol: 'PTT', amountThb: 500 })
@@ -325,7 +333,7 @@ describe('processSellCommand', () => {
   // Regression: ขาย Crypto บางส่วนแล้วเหลือยอดน้อยกว่า 0.01 — remainingQuantity
   // ต้องคงทศนิยม 8 ตำแหน่ง ไม่ถูกปัดเป็น 0 (ก่อนแก้ใช้ roundToTwo จะได้ 0)
   test('ขาย Crypto บางส่วนเหลือยอดน้อยกว่า 0.01 → remainingQuantity ไม่ปัดเป็น 0', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET]);
     transactionRepository.findAllByAsset.mockResolvedValue([{ type: 'buy', quantity: 0.001 }]);
 
     const result = await processSellCommand(USER_ID, {
@@ -339,7 +347,7 @@ describe('processSellCommand', () => {
   });
 
   test('ขายพอดียอดคงเหลือทั้งหมด (Boundary) → สำเร็จ เหลือ 0', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET]);
     transactionRepository.findAllByAsset.mockResolvedValue([{ type: 'buy', quantity: 50 }]);
 
     const result = await processSellCommand(USER_ID, {
@@ -422,7 +430,7 @@ describe('calculateHeldQuantity', () => {
 
 describe('TransactionServiceError', () => {
   test('มี code และ details ติดไปกับ Error', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(null);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([]);
 
     const error = await processSellCommand(USER_ID, {
       symbol: 'XRP',
@@ -441,7 +449,7 @@ describe('processSellCommand — ขายทั้งหมด (sellAll)', () =
   const ASSET_BTC = { id: 'asset-uuid-btc', userId: USER_ID, symbol: 'BTC', type: 'crypto' };
 
   test('คำนวณ amountThb = heldQuantity × ราคาตลาดปัจจุบัน (ขายหมดเหลือ 0)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_BTC);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_BTC]);
     // ยอดคงเหลือ = 0.5 (จากประวัติ — Reuse calculateHeldQuantity)
     transactionRepository.findAllByAsset.mockResolvedValue([
       { type: 'buy', quantity: 0.3 },
@@ -476,7 +484,7 @@ describe('processSellCommand — ขายทั้งหมด (sellAll)', () =
 
   test('หุ้นสหรัฐ (NVDA) ขายทั้งหมด → priceSource เป็น twelvedata', async () => {
     const ASSET_NVDA = { id: 'asset-nvda', userId: USER_ID, symbol: 'NVDA', type: 'stock_us' };
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_NVDA);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_NVDA]);
     transactionRepository.findAllByAsset.mockResolvedValue([{ type: 'buy', quantity: 3 }]);
     priceFeedService.getCurrentPrice.mockResolvedValue(3500);
 
@@ -486,7 +494,7 @@ describe('processSellCommand — ขายทั้งหมด (sellAll)', () =
   });
 
   test('Symbol ไม่มีในพอร์ตเลย (ไม่เคยซื้อ) → ASSET_NOT_FOUND', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(null);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([]);
 
     await expect(
       processSellCommand(USER_ID, { symbol: 'DOGE', sellAll: true })
@@ -498,7 +506,7 @@ describe('processSellCommand — ขายทั้งหมด (sellAll)', () =
   });
 
   test('Holding เป็น 0 อยู่แล้ว (ขายไปหมดก่อนหน้า) → NOTHING_TO_SELL', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_BTC);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_BTC]);
     // buy 0.5 แล้ว sell 0.5 → held = 0
     transactionRepository.findAllByAsset.mockResolvedValue([
       { type: 'buy', quantity: 0.5 },
@@ -515,7 +523,7 @@ describe('processSellCommand — ขายทั้งหมด (sellAll)', () =
   });
 
   test('ดึงราคาตลาดไม่ได้ (Price Feed คืน null) → MARKET_PRICE_UNAVAILABLE (ไม่เดาราคา/0)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_BTC);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_BTC]);
     transactionRepository.findAllByAsset.mockResolvedValue([{ type: 'buy', quantity: 0.5 }]);
     priceFeedService.getCurrentPrice.mockResolvedValue(null);
 
@@ -532,7 +540,7 @@ describe('สกุลเงิน USD (Round 10) — เก็บ USD ตาม
   const ASSET_MSFT = { id: 'asset-msft', userId: USER_ID, symbol: 'MSFT', type: 'stock_us' };
 
   test('processBuyCommand: 2 หุ้น × 300 USD → บันทึกเป็น USD ตามจริง (currency=USD, price 300, รวม 600)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_MSFT);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_MSFT]);
 
     const result = await processBuyCommand(USER_ID, {
       symbol: 'MSFT',
@@ -561,7 +569,7 @@ describe('สกุลเงิน USD (Round 10) — เก็บ USD ตาม
   });
 
   test('validateBuy คืน amounts.fx (ยอดเทียบบาทสำหรับ Preview เท่านั้น) ผ่าน fxRate.service', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_MSFT);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_MSFT]);
 
     const { amounts } = await validateBuy(USER_ID, {
       symbol: 'MSFT',
@@ -583,7 +591,7 @@ describe('สกุลเงิน USD (Round 10) — เก็บ USD ตาม
   });
 
   test('ดึง FX Rate ไม่ได้ (null) → ยังบันทึก USD ได้ตามปกติ, fx=null (ไม่ Block)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_MSFT);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_MSFT]);
     fxRateService.getUsdThbRate.mockResolvedValue(null);
 
     const result = await processBuyCommand(USER_ID, {
@@ -601,7 +609,7 @@ describe('สกุลเงิน USD (Round 10) — เก็บ USD ตาม
   });
 
   test('จำนวนเงินรวมเป็น USD ("ซื้อ MSFT 600 USD") → หาร quantity จากราคา USD (getCurrentPriceUsd)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_MSFT);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_MSFT]);
     priceFeedService.getCurrentPriceUsd.mockResolvedValue(300);
 
     const result = await processBuyCommand(USER_ID, {
@@ -619,7 +627,7 @@ describe('สกุลเงิน USD (Round 10) — เก็บ USD ตาม
   });
 
   test('จำนวนเงินรวม USD แต่ไม่มี USD Price Feed → PRICE_FEED_NOT_IMPLEMENTED (ไม่บันทึก)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_MSFT);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_MSFT]);
     priceFeedService.getCurrentPriceUsd.mockResolvedValue(null);
 
     await expect(
@@ -630,7 +638,7 @@ describe('สกุลเงิน USD (Round 10) — เก็บ USD ตาม
   });
 
   test('ไม่ระบุ USD (Default THB) → ไม่เรียก FX, บันทึก THB คงเดิม (Path เดิมไม่กระทบ)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(ASSET_MSFT);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([ASSET_MSFT]);
 
     const result = await processBuyCommand(USER_ID, {
       symbol: 'MSFT',
@@ -652,7 +660,7 @@ describe('ทองคำ (Phase 3 Round 7) — BUY ใช้ราคา sell �
   const GOLD_ORN_ASSET = { id: 'asset-goldorn', userId: USER_ID, symbol: 'GOLDORN', type: 'gold_ornament' };
 
   test('ซื้อทองด้วยจำนวนเงิน (ไม่พิมพ์ราคา) → ใช้ราคา "ขายออก" (sell) หาร quantity + priceSource thaigold', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(GOLD_BAR_ASSET);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([GOLD_BAR_ASSET]);
     priceFeedService.getGoldPriceThb.mockResolvedValue({ buy: 70950, sell: 71150, updatedAt: 'x' });
     priceFeedService.getUsdThbFxRate.mockResolvedValue(35);
 
@@ -667,7 +675,7 @@ describe('ทองคำ (Phase 3 Round 7) — BUY ใช้ราคา sell �
   });
 
   test('ทองรูปพรรณ (GOLDORN) → เรียก getGoldPriceThb ด้วย gold_ornament (ไม่ปนกับ gold_bar)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(GOLD_ORN_ASSET);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([GOLD_ORN_ASSET]);
     priceFeedService.getGoldPriceThb.mockResolvedValue({ buy: 69523.76, sell: 71950, updatedAt: 'x' });
     priceFeedService.getUsdThbFxRate.mockResolvedValue(35);
 
@@ -680,7 +688,7 @@ describe('ทองคำ (Phase 3 Round 7) — BUY ใช้ราคา sell �
   });
 
   test('ซื้อทองด้วยจำนวนเงินแต่ดึงราคาทองไม่ได้ (feed throw) → GOLD_PRICE_UNAVAILABLE, ไม่บันทึก', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(GOLD_BAR_ASSET);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([GOLD_BAR_ASSET]);
     priceFeedService.getGoldPriceThb.mockRejectedValue(
       Object.assign(new Error('feed down'), { code: 'GOLD_PRICE_UNAVAILABLE' })
     );
@@ -694,7 +702,7 @@ describe('ทองคำ (Phase 3 Round 7) — BUY ใช้ราคา sell �
   // goldUsd อยู่ใน amounts (Path ของ Preview ผ่าน validateBuy→createPending) ไม่ใช่
   // ผลลัพธ์ commit ของ processBuyCommand — จึงตรวจผ่าน validateBuy โดยตรง
   test('ซื้อทองพิมพ์ราคาต้นทุนเอง → priceSource user + goldUsd (ราคาอ้างอิง USD) แนบใน amounts', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(GOLD_BAR_ASSET);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([GOLD_BAR_ASSET]);
     priceFeedService.getUsdThbFxRate.mockResolvedValue(35);
 
     const { amounts } = await validateBuy(USER_ID, { symbol: 'GOLD', quantity: 1, pricePerUnit: 70000 });
@@ -707,7 +715,7 @@ describe('ทองคำ (Phase 3 Round 7) — BUY ใช้ราคา sell �
   });
 
   test('FX Rate ดึงไม่ได้ (null) → goldUsd = null แต่ยังซื้อได้ตามปกติ (USD เป็นแค่ข้อมูลอ้างอิง)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(GOLD_BAR_ASSET);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([GOLD_BAR_ASSET]);
     priceFeedService.getUsdThbFxRate.mockResolvedValue(null);
 
     const { amounts } = await validateBuy(USER_ID, { symbol: 'GOLD', quantity: 1, pricePerUnit: 70000 });
@@ -718,7 +726,7 @@ describe('ทองคำ (Phase 3 Round 7) — BUY ใช้ราคา sell �
 
   test('ราคาซื้อ (sell) ≠ ราคาขาย (buy): ขายทองด้วยจำนวนเงินใช้ราคา buy (รับซื้อคืน)', async () => {
     // validateSell path — side='sell' → ใช้ gold.buy (70950) ไม่ใช่ sell (71150)
-    assetRepository.findByUserAndSymbol.mockResolvedValue(GOLD_BAR_ASSET);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([GOLD_BAR_ASSET]);
     transactionRepository.findAllByAsset.mockResolvedValue([
       { type: 'buy', quantity: 2, amountThb: 140000 },
     ]);
@@ -739,7 +747,7 @@ describe('กองทุนรวมไทย (Round 7) — BUY Default รา�
   };
 
   test('(d) ซื้อกองทุนด้วยจำนวนเงิน (ไม่พิมพ์ราคา) → ใช้ last_val หาร quantity + priceSource secnav', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(FUND_ASSET);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([FUND_ASSET]);
     priceFeedService.getMutualFundNav.mockResolvedValue({ navDate: '2024-11-22', lastVal: 12.5 });
 
     const result = await processBuyCommand(USER_ID, {
@@ -756,7 +764,7 @@ describe('กองทุนรวมไทย (Round 7) — BUY Default รา�
   });
 
   test('ซื้อกองทุน Asset ใหม่ → สร้าง Asset พร้อม proj_id + fund_class_name', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(null); // Asset ใหม่
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([]); // Asset ใหม่
     priceFeedService.getMutualFundNav.mockResolvedValue({ navDate: '2024-11-22', lastVal: 10 });
 
     await processBuyCommand(USER_ID, {
@@ -768,12 +776,14 @@ describe('กองทุนรวมไทย (Round 7) — BUY Default รา�
       USER_ID, null, 'K-SELECT', 'K Select Equity Fund', 'fund',
       { projId: 'M0001', fundClassName: 'K-SELECT-A(A)' },
       // migration 035 — ไม่ส่ง options → plan Default 'free' → assetLimit = 2
-      2
+      2,
+      // Stage 5 (migration 046) — brokerId (ไม่ระบุ → null)
+      null
     );
   });
 
   test('(f) ดึง NAV ไม่ได้ (feed throw) → MUTUAL_FUND_NAV_UNAVAILABLE, ไม่บันทึก', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(FUND_ASSET);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([FUND_ASSET]);
     priceFeedService.getMutualFundNav.mockRejectedValue(
       Object.assign(new Error('nav down'), { code: 'MUTUAL_FUND_NAV_UNAVAILABLE' })
     );
@@ -788,7 +798,7 @@ describe('กองทุนรวมไทย (Round 7) — BUY Default รา�
   });
 
   test('SEC ไม่ config → โยน SEC_NOT_CONFIGURED (แยกจาก NAV unavailable)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(FUND_ASSET);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([FUND_ASSET]);
     priceFeedService.getMutualFundNav.mockRejectedValue(
       Object.assign(new Error('not configured'), { code: 'SEC_NOT_CONFIGURED' })
     );
@@ -802,7 +812,7 @@ describe('กองทุนรวมไทย (Round 7) — BUY Default รา�
   });
 
   test('ผู้ใช้พิมพ์ราคาต้นทุนเอง → priceSource user, ไม่เรียก NAV, แต่ Asset เก็บ Class', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue(null);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([]);
     priceFeedService.getMutualFundNav.mockResolvedValue({ navDate: 'x', lastVal: 99 });
 
     const result = await processBuyCommand(USER_ID, {
@@ -816,12 +826,14 @@ describe('กองทุนรวมไทย (Round 7) — BUY Default รา�
       USER_ID, null, 'K-SELECT', 'K Select', 'fund',
       { projId: 'M0001', fundClassName: 'K-SELECT-A(A)' },
       // migration 035 — ไม่ส่ง options → plan Default 'free' → assetLimit = 2
-      2
+      2,
+      // Stage 5 (migration 046) — brokerId (ไม่ระบุ → null)
+      null
     );
   });
 
   test('type=fund แต่ไม่มี projId (Manual fund) → ไม่เรียก SEC, ตกไป path ราคาปกติ (PRICE_FEED_NOT_IMPLEMENTED)', async () => {
-    assetRepository.findByUserAndSymbol.mockResolvedValue({ id: 'a', type: 'fund', symbol: 'XFUND' });
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{ id: 'a', type: 'fund', symbol: 'XFUND' }]);
     priceFeedService.getCurrentPrice.mockResolvedValue(null);
 
     await expect(

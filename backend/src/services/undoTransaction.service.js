@@ -1,6 +1,8 @@
 const assetRepository = require('../repositories/asset.repository');
 const transactionRepository = require('../repositories/transaction.repository');
 const { calculateHeldQuantity, todayInBangkok } = require('./transaction.service');
+// Stage 6a — แหล่งตัดสิน "ความหมายของ transaction type" ที่เดียวของทั้งระบบ
+const { reversalTypeFor } = require('../utils/transactionType.util');
 
 // Marker ที่เก็บใน transactions.note เพื่อ Trace ว่ารายการนี้เป็น Reversal ของ
 // รายการใด — ตาม DATABASE.md § 8: transactions เป็น Immutable, "ยกเลิกรายการ"
@@ -118,7 +120,10 @@ async function undoLastTransaction(userId, options = {}) {
     );
   }
 
-  const reversalType = latest.type === 'buy' ? 'sell' : 'buy';
+  // Stage 6a — เดิม `latest.type === 'buy' ? 'sell' : 'buy'` ซึ่งแปลว่า "ทุก type
+  // ที่ไม่ใช่ buy ให้ย้อนด้วย buy" — ถ้า dividend เข้ามาได้ การย้อนรายการปันผลจะ
+  // สร้างแถว buy เพิ่มทั้งจำนวนที่ถือและต้นทุนให้ผู้ใช้จากอากาศ (Design Doc § 5.2)
+  const reversalType = reversalTypeFor(latest.type, 'undoTransaction.undoLast');
 
   // เฉพาะ Reversal ฝั่ง sell (ย้อน buy) เท่านั้นที่ลดยอดคงเหลือจนอาจติดลบ
   // Edge Case: รายการล่าสุดเป็น buy แต่มี sell วัน/รอบเดียวกันเกิดตามหลัง ทำให้

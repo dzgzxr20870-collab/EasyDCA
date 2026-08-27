@@ -68,6 +68,14 @@ const B_TRANSACTION_ID = 'b1111111-0000-4000-8000-000000000001';
 const B_PAYMENT_ID = 'b2222222-0000-4000-8000-000000000002';
 const B_PLAN_ID = 'b3333333-0000-4000-8000-000000000003';
 const B_FB_REQUEST_ID = 'b4444444-0000-4000-8000-000000000004';
+// Stage 1/8 (migration 042-048) — Endpoint ชุดใหม่ที่ยังไม่เคยถูก Audit เป็นชุด
+const B_ASSET_ID = 'b5555555-0000-4000-8000-000000000005';
+const B_PORTFOLIO_ID = 'b6666666-0000-4000-8000-000000000006';
+const B_BROKER_ID = 'b7777777-0000-4000-8000-000000000007';
+// ของ A เอง — ใช้พิสูจน์ "id ที่มาทาง Body" (A เป็นเจ้าของ :id จริง แต่พยายาม
+// ยัด id ของ B เข้ามาใน Body) ซึ่งเป็นช่องที่การ Grep `:id` ใน routes/ มองไม่เห็นเลย
+const A_ASSET_ID = 'a5555555-0000-4000-8000-000000000005';
+const A_PORTFOLIO_ID = 'a6666666-0000-4000-8000-000000000006';
 
 // ค่าที่จำเพาะพอจะค้นเจอถ้าหลุดไปอยู่ใน Response ที่ A ได้รับ
 const B_SECRETS = [
@@ -75,6 +83,8 @@ const B_SECRETS = [
   '424242.42', // ยอดเงินของ B
   'b-slip-secret-path.jpg', // path สลิปของ B
   'ความลับของ B', // ข้อความอิสระของ B
+  'พอร์ตลับของ B', // ชื่อพอร์ตของ B (migration 044)
+  'โบรกลับของ B', // ชื่อโบรกของ B (migration 042)
 ];
 
 function userRow(id, lineUserId) {
@@ -126,17 +136,72 @@ function seed() {
       },
     ],
 
-    // สินทรัพย์ของ B (เป้าหมายของ GET /dashboard/profit/:symbol)
+    // สินทรัพย์ของ B (เป้าหมายของ GET /dashboard/profit/:symbol + PATCH /assets/:id)
+    // และของ A (ใช้เป็น :id ที่ถูกต้อง เพื่อทดสอบ id ที่ยัดมาทาง Body)
     assets: [
       {
-        id: 'b5555555-0000-4000-8000-000000000005',
+        id: B_ASSET_ID,
         user_id: USER_B,
         symbol: 'ZZSECRET',
         name: 'ความลับของ B',
         asset_type: 'crypto',
+        type: 'crypto',
+        portfolio_id: B_PORTFOLIO_ID,
+        broker_id: B_BROKER_ID,
+        sector: null,
         total_quantity: '13.37',
         total_cost_thb: '424242.42',
         is_active: true,
+        created_at: '2026-08-01T00:00:00.000Z',
+        updated_at: '2026-08-01T00:00:00.000Z',
+      },
+      {
+        id: A_ASSET_ID,
+        user_id: USER_A,
+        symbol: 'AOWN',
+        name: 'ของ A เอง',
+        asset_type: 'crypto',
+        type: 'crypto',
+        portfolio_id: A_PORTFOLIO_ID,
+        broker_id: null,
+        sector: null,
+        total_quantity: '1',
+        total_cost_thb: '100',
+        is_active: true,
+        created_at: '2026-08-01T00:00:00.000Z',
+        updated_at: '2026-08-01T00:00:00.000Z',
+      },
+    ],
+
+    // พอร์ตของทั้งคู่ (migration 044) — A มีพอร์ตของตัวเองด้วย เพื่อให้ Control
+    // Group พิสูจน์ได้ว่า A ใช้งานของตัวเองได้ปกติ ไม่ใช่ทุกอย่างพังเหมือนกันหมด
+    portfolios: [
+      {
+        id: B_PORTFOLIO_ID,
+        user_id: USER_B,
+        name: 'พอร์ตลับของ B',
+        type: 'custom',
+        is_default: true,
+        created_at: '2026-08-01T00:00:00.000Z',
+        updated_at: '2026-08-01T00:00:00.000Z',
+      },
+      {
+        id: A_PORTFOLIO_ID,
+        user_id: USER_A,
+        name: 'พอร์ตของ A',
+        type: 'custom',
+        is_default: true,
+        created_at: '2026-08-01T00:00:00.000Z',
+        updated_at: '2026-08-01T00:00:00.000Z',
+      },
+    ],
+
+    // โบรกของ B (migration 042)
+    brokers: [
+      {
+        id: B_BROKER_ID,
+        user_id: USER_B,
+        name: 'โบรกลับของ B',
         created_at: '2026-08-01T00:00:00.000Z',
         updated_at: '2026-08-01T00:00:00.000Z',
       },
@@ -361,6 +426,82 @@ const IDOR_CASES = [
     body: { reason: 'nope' },
     allow: [403],
   },
+  // ── Stage 1/8 — Endpoint ชุดใหม่ (migration 042-048) ────────────────────
+  // ⚠️ ชุดนี้เพิ่มเข้ามาตอน Audit ก่อน Apply migration (27 ส.ค. 2569) — ก่อนหน้านั้น
+  // Endpoint ทั้งหมดนี้ **ไม่เคยถูกครอบด้วยเทสต์ IDOR ระดับ HTTP เลยสักตัว**
+  {
+    name: 'GET /portfolios/:id — ดูพอร์ตของ B',
+    method: 'GET',
+    path: `/api/v1/portfolios/${B_PORTFOLIO_ID}`,
+    allow: [403, 404],
+  },
+  {
+    name: 'PATCH /portfolios/:id — เปลี่ยนชื่อพอร์ตของ B',
+    method: 'PATCH',
+    path: `/api/v1/portfolios/${B_PORTFOLIO_ID}`,
+    body: { name: 'ถูกยึดแล้ว' },
+    allow: [403, 404],
+  },
+  {
+    name: 'PATCH /portfolios/:id — ยึดพอร์ตของ B มาเป็นพอร์ตหลักของ A',
+    method: 'PATCH',
+    path: `/api/v1/portfolios/${B_PORTFOLIO_ID}`,
+    body: { isDefault: true },
+    allow: [403, 404],
+  },
+  {
+    name: 'DELETE /portfolios/:id — ลบพอร์ตของ B',
+    method: 'DELETE',
+    path: `/api/v1/portfolios/${B_PORTFOLIO_ID}`,
+    allow: [403, 404],
+  },
+  {
+    name: 'PATCH /assets/:id — แก้ป้ายกำกับสินทรัพย์ของ B',
+    method: 'PATCH',
+    path: `/api/v1/assets/${B_ASSET_ID}`,
+    body: { sector: 'ถูกยึดแล้ว' },
+    allow: [403, 404],
+  },
+  {
+    name: 'PATCH /brokers/:id — เปลี่ยนชื่อโบรกของ B',
+    method: 'PATCH',
+    path: `/api/v1/brokers/${B_BROKER_ID}`,
+    body: { name: 'ถูกยึดแล้ว' },
+    allow: [403, 404],
+  },
+  {
+    name: 'DELETE /brokers/:id — ลบโบรกของ B',
+    method: 'DELETE',
+    path: `/api/v1/brokers/${B_BROKER_ID}`,
+    allow: [403, 404],
+  },
+  {
+    name: 'POST /transactions/dividend — บันทึกปันผลเข้าสินทรัพย์ของ B',
+    method: 'POST',
+    path: '/api/v1/transactions/dividend',
+    body: { assetId: B_ASSET_ID, amountThb: 100, quantity: 1, date: '2026-08-01' },
+    allow: [400, 403, 404],
+  },
+
+  // ── ⭐ id ที่มาทาง Body — ช่องที่การ Grep `:id` ใน routes/ มองไม่เห็น ──────
+  // A เป็นเจ้าของ :id จริง (ผ่าน Ownership ของ Resource หลักไปแล้ว) แล้วค่อยยัด
+  // id ของ B เข้ามาใน Body — ถ้าชั้น Service ไม่ยืนยันเจ้าของของ **ทุก id ใน Body**
+  // A จะผูกสินทรัพย์ตัวเองเข้ากับพอร์ต/โบรกของ B ได้สำเร็จโดยไม่มีอะไรเตือน
+  {
+    name: '⭐ PATCH /assets/:id (ของ A) — ย้ายเข้าพอร์ตของ B ผ่าน Body',
+    method: 'PATCH',
+    path: `/api/v1/assets/${A_ASSET_ID}`,
+    body: { portfolioId: B_PORTFOLIO_ID },
+    allow: [403, 404],
+  },
+  {
+    name: '⭐ PATCH /assets/:id (ของ A) — ผูกโบรกของ B ผ่าน Body',
+    method: 'PATCH',
+    path: `/api/v1/assets/${A_ASSET_ID}`,
+    body: { brokerId: B_BROKER_ID },
+    allow: [403, 404],
+  },
+
   {
     name: 'GET /admin/payments — รายการชำระเงินของทุกคน',
     method: 'GET',
@@ -377,7 +518,9 @@ const IDOR_CASES = [
 
 describe('IDOR End-to-End — A ยิงด้วย id ของ B ผ่าน HTTP จริง', () => {
   test('ครอบครบทุก Endpoint ที่รับ Path Parameter (กันลืมเพิ่มตอนมี Route ใหม่)', () => {
-    expect(IDOR_CASES).toHaveLength(14);
+    // ⚠️ เพิ่ม Endpoint ใหม่ที่รับ id จาก Client (ทั้งทาง Path **และทาง Body**)
+    // ต้องมาเพิ่มเคสที่นี่ด้วยเสมอ แล้วอัปเดตเลขนี้
+    expect(IDOR_CASES).toHaveLength(24);
   });
 
   test.each(IDOR_CASES.map((c) => [c.name, c]))('%s', async (_name, c) => {
@@ -404,6 +547,31 @@ describe('IDOR End-to-End — A ยิงด้วย id ของ B ผ่า�
 // ═══════════════════════════════════════════════════════════════════════════
 // ⚠️ ขาดส่วนนี้ไป เทสต์ทั้งไฟล์จะไร้ค่าทันที: ถ้า App โยน 500 ทุก Request (เช่น
 // Fake Supabase เพี้ยน) เทสต์ด้านบนก็ยัง "ไม่ได้ 200" ครบทุกข้อเหมือนกัน
+// ═══════════════════════════════════════════════════════════════════════════
+// GET /portfolio/allocation?portfolioId=<ของ B> — เคสที่ "ตอบ 200 ได้อย่างถูกต้อง"
+// ═══════════════════════════════════════════════════════════════════════════
+// ต่างจากเคสอื่นตรงที่ Endpoint นี้ **ไม่ได้ assertOwned portfolioId โดยเจตนา** —
+// allocation.service กรองจาก holdings ที่ getPortfolioSummary(userId) คืนมา ซึ่ง
+// Scope ด้วย userId อยู่แล้ว การส่ง portfolioId ของคนอื่นมาจึงได้ผลลัพธ์ "ว่าง"
+// ไม่ใช่ข้อมูลของคนอื่น (และ 200+ว่าง ปลอดภัยกว่า 404 ด้วยซ้ำ เพราะไม่ยืนยันว่า
+// พอร์ตนั้นมีอยู่จริง)
+//
+// ⚠️ เทสต์นี้คือสิ่งที่พิสูจน์ว่า **คอมเมนต์ในโค้ดที่อ้างแบบนั้นเป็นความจริง**
+// ไม่ใช่แค่ข้อความที่เขียนไว้แล้วไม่มีใครตรวจ (portfolios.controller.js § getAllocation)
+describe('GET /portfolio/allocation — ส่ง portfolioId ของ B มาต้องได้ "ว่าง" ไม่ใช่ของ B', () => {
+  test('⭐ ตอบได้ปกติ แต่ต้องไม่มีข้อมูลของ B หลุดออกมาแม้แต่ Field เดียว', async () => {
+    const { status, text } = await asA(
+      'GET',
+      `/api/v1/portfolio/allocation?groupBy=assetType&portfolioId=${B_PORTFOLIO_ID}`
+    );
+
+    expect([200, 403, 404]).toContain(status);
+    for (const secret of B_SECRETS) {
+      expect(text).not.toContain(secret);
+    }
+  });
+});
+
 describe('Control Group — A เข้าถึงของตัวเองได้ปกติ', () => {
   test('GET /dashboard/me ด้วย Token ของ A → 200 (App ทำงานจริง ไม่ได้พังทั้งก้อน)', async () => {
     const { status, text } = await asA('GET', '/api/v1/dashboard/me');

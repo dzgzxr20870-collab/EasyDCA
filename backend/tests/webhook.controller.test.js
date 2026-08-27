@@ -47,6 +47,7 @@ jest.mock('../src/services/reportExport.service');
 jest.mock('../src/services/slipOcr.service');
 jest.mock('../src/services/mutualFund.service');
 jest.mock('../src/repositories/asset.repository');
+jest.mock('../src/repositories/portfolio.repository');
 jest.mock('../src/repositories/transaction.repository');
 jest.mock('../src/repositories/lineWebhookEvent.repository');
 // Override เฉพาะค่าที่ Postback Premium/Dashboard ใช้ (adminIds/liff.id/publicBaseUrl)
@@ -140,6 +141,23 @@ function lastReplyText() {
   return JSON.stringify(call[1]);
 }
 
+// ⚠️ มติ Founder 27 ส.ค. 2569 — ฝั่ง "ซื้อ" ถามพอร์ตเมื่อผู้ใช้มี > 1 พอร์ต
+// ไฟล์นี้จำลอง **ผู้ใช้พอร์ตเดียว** (สภาพของผู้ใช้ Free แทบทั้งหมดของระบบ) จึงต้อง
+// ไม่มีการถามพอร์ตเกิดขึ้นเลย และพฤติกรรมทุกเคสในไฟล์นี้ต้องเหมือนเดิมทุกตัวอักษร
+//
+// ⚠️ ตั้งที่ Module Scope โดยเจตนา ไม่ใช่ใน beforeEach — `jest.clearAllMocks()`
+// ล้างแค่ประวัติการเรียก (mockClear) ไม่ล้าง Implementation ค่านี้จึงอยู่ครบทุกเคส
+// โดยไม่ต้องไปแทรกในทุก beforeEach ของไฟล์ (บางไฟล์มีหลายตัว)
+require('../src/repositories/portfolio.repository').findAllByUser.mockResolvedValue([
+  {
+    id: 'pf-single-0000-4000-8000-000000000001',
+    name: 'พอร์ตของฉัน',
+    type: 'custom',
+    isDefault: true,
+    createdAt: '2026-01-01T00:00:00.000Z',
+  },
+]);
+
 beforeEach(() => {
   jest.clearAllMocks();
   userRepository.findByLineUserId.mockResolvedValue(FREE_USER);
@@ -156,7 +174,7 @@ beforeEach(() => {
   guidedBuyFlow.cancelFlow.mockResolvedValue(undefined);
   // Default: ไม่ถือ Asset ใดอยู่ + ค้นกองทุนไม่พบ (Symbol ที่ไม่รู้จักถือเป็น unknown asset)
   // — Test ของ Flow กองทุนจะ Override เอง
-  assetRepository.findByUserAndSymbol.mockResolvedValue(null);
+  assetRepository.findAllByUserAndSymbol.mockResolvedValue([]);
   mutualFundService.resolveFundForBuy.mockResolvedValue({ status: 'not_found' });
   // Default: Claim สำเร็จเสมอ (Event ใหม่) — Test ของ Dedup จะ Override เอง
   // (ไม่กระทบ Test เดิมทั้งหมดที่ไม่ได้ใส่ webhookEventId มาด้วย เพราะ Guard เป็น
@@ -2201,10 +2219,10 @@ describe('handleEvent — กองทุนรวมไทย (Round 7)', () =>
       command: COMMANDS.BUY,
       params: { symbol: 'K-SELECT', amountThb: 2000 },
     });
-    assetRepository.findByUserAndSymbol.mockResolvedValue({
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{
       id: 'a-fund', type: 'fund', symbol: 'K-SELECT', name: 'เค ซีเล็คท์',
       projId: 'M0001', fundClassName: 'K-SELECT-A(A)',
-    });
+    }]);
     pendingService.createPending.mockResolvedValue({
       id: 'pf-4', commandType: 'buy', assetSymbol: 'K-SELECT', fundClassName: 'K-SELECT-A(A)',
       quantity: 160, pricePerUnit: 12.5, amountThb: 2000, priceSource: 'secnav',

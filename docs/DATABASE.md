@@ -147,13 +147,64 @@ CREATE TABLE portfolios (
 | user_id | UUID | FK → users.id |
 | name | TEXT | ชื่อพอร์ต เช่น "พอร์ต Crypto", "หุ้นไทย" |
 | type | TEXT | ประเภทพอร์ต: `crypto` / `stock_th` / `stock_us` / `etf` / `fund` / `custom` |
-| is_default | BOOLEAN | true = พอร์ตเริ่มต้น (ใช้กับ Free ที่มีพอร์ตเดียว) |
+| is_default | BOOLEAN | true = **พอร์ตหลักของผู้ใช้** · มีได้ 1 อันต่อ user เป๊ะ (`idx_portfolios_one_default_per_user`) · **ลบไม่ได้** · ⭐ (มติ 24 ส.ค. 2569) คอลัมน์นี้เป็นตัวตัดสินว่า **"พอร์ตไหนยังเขียนได้เมื่อ Premium หมดอายุ"** (`entitlement.getWritablePortfolioIds`) จึงไม่ใช่แค่ค่าแสดงผล — เปลี่ยนได้ผ่าน RPC `set_default_portfolio_locked` (migration 048) เท่านั้น ห้าม `UPDATE` ตรงๆ 2 ครั้ง เพราะจะชน Partial UNIQUE หรือทำให้ผู้ใช้ไม่มีพอร์ตหลักเลย |
 | created_at | TIMESTAMPTZ | วันที่สร้างพอร์ต |
 | updated_at | TIMESTAMPTZ | วันที่อัพเดทล่าสุด |
 
 **Index:**
 ```sql
 CREATE INDEX idx_portfolios_user_id ON portfolios(user_id);
+
+-- migration 044 — พอร์ต Default ได้ "1 อันต่อ user เท่านั้น" บังคับที่ระดับ DB
+-- Partial Index เพราะพอร์ตที่ไม่ใช่ Default มีกี่อันก็ได้
+CREATE UNIQUE INDEX idx_portfolios_one_default_per_user
+  ON portfolios(user_id) WHERE is_default = TRUE;
+```
+
+> **Invariant หลัง migration 044/045 (โค้ดทั้งระบบพึ่งข้อนี้ได้):**
+> **ผู้ใช้ทุกคนมีพอร์ต Default หนึ่งอันเป๊ะ และสินทรัพย์ทุกแถวสังกัดพอร์ตเสมอ**
+> — migration 045 เป็น Guard ที่ `RAISE EXCEPTION` ถ้า Invariant นี้ไม่จริง
+> (รันซ้ำได้ ไม่มีผลข้างเคียง ใช้เป็น Health Check ประจำได้)
+>
+> ⚠️ `type` ของพอร์ตที่ Backfill สร้างให้คือ **`'custom'`** ไม่ใช่ `'mixed'`
+> (`'mixed'` ไม่อยู่ใน CHECK ของ `portfolios.type` — เคยเขียนผิดไว้ใน Design Doc)
+
+---
+
+### `brokers`
+
+โบรกเกอร์/Exchange ที่ผู้ใช้สร้างเอง — **ต่อ User ไม่ใช่ Master List กลาง**
+(ผู้ใช้พิมพ์ชื่อเอง ระบบ Normalize ก่อนเทียบ · ยังไม่ทำ Autocomplete ในรอบนี้)
+ใช้จัดกลุ่ม "Broker Allocation" เท่านั้น **ไม่เข้าสูตรคำนวณเงินใดๆ**
+
+```sql
+-- migration 042
+CREATE TABLE brokers (
+  id          UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     UUID          NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  name        TEXT          NOT NULL
+              CHECK (btrim(name) <> '' AND char_length(name) <= 60),
+  created_at  TIMESTAMPTZ   NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ   NOT NULL DEFAULT now()
+);
+```
+
+| Field | Type | คำอธิบาย |
+|---|---|---|
+| id | UUID | Primary Key |
+| user_id | UUID | FK → users.id (`RESTRICT` — users ไม่เคยถูก DELETE จริง Anonymize เท่านั้น) |
+| name | TEXT | ชื่อโบรกตามที่ผู้ใช้พิมพ์ — **เก็บรูปแบบตัวพิมพ์ที่ผู้ใช้ตั้งใจไว้** ("InnovestX" ต้องไม่กลายเป็น "innovestx") ยาวไม่เกิน 60 ตัวอักษร (ต้องตรงกับ `BROKER_NAME_MAX_LENGTH` ใน `broker.service.js`) |
+| created_at | TIMESTAMPTZ | วันที่สร้าง |
+| updated_at | TIMESTAMPTZ | วันที่อัพเดทล่าสุด (มี Trigger `set_updated_at`) |
+
+**Index:**
+```sql
+-- ⚠️ UNIQUE แบบ Case-insensitive (Functional Index บน lower(name)) ไม่ใช่ UNIQUE ธรรมดา
+-- UNIQUE ธรรมดาเทียบ Case-sensitive ผู้ใช้คนเดียวกันจึงสร้าง "Bitkub"/"bitkub"/
+-- "BITKUB" ได้ครบ 3 แถว แล้วกราฟโดนัทจะแตกเป็น 3 กลุ่มทั้งที่เป็นโบรกเดียวกัน
+-- ต้องบังคับที่ระดับ DB (ไม่ใช่แค่เช็คในโค้ด) เพราะ check-then-insert ไม่ Atomic
+CREATE UNIQUE INDEX uniq_brokers_user_name_ci ON brokers (user_id, lower(name));
+CREATE INDEX idx_brokers_user_id ON brokers (user_id);
 ```
 
 ---
@@ -175,6 +226,14 @@ CREATE TABLE assets (
   -- (nullable: สินทรัพย์ชนิดอื่นไม่ใช้) ดู migration 010
   proj_id          TEXT,
   fund_class_name  TEXT,
+  -- migration 042 — โบรก/Exchange ที่ถือสินทรัพย์นี้อยู่ (NULL = ไม่ระบุ)
+  -- ON DELETE SET NULL ไม่ใช่ CASCADE: ลบโบรกต้องไม่ลบสินทรัพย์ทิ้ง
+  broker_id    UUID        REFERENCES brokers(id) ON DELETE SET NULL,
+  -- migration 043 — หมวด/Sector ของสินทรัพย์ (Free Text, NULL = ไม่ระบุ)
+  -- ไม่ล็อกค่าเพราะ Taxonomy ต่างกันตามประเภทสินทรัพย์ (SET Industry Group /
+  -- DeFi-L1-Meme / AIMC) — CHECK คุมแค่ "รูปร่าง" ไม่คุม "ค่า"
+  sector       TEXT        CONSTRAINT assets_sector_shape_check
+               CHECK (sector IS NULL OR (btrim(sector) <> '' AND char_length(sector) <= 60)),
   is_active    BOOLEAN     NOT NULL DEFAULT true,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -183,7 +242,13 @@ CREATE TABLE assets (
   -- เดียวกับ portfolio_snapshots ด้านล่าง (§ "ข้อควรระวัง: NULL กับ UNIQUE Constraint")
   -- — Plain UNIQUE เดิมถือว่า NULL <> NULL จึงปล่อยให้สอง Symbol เดียวกันของ User
   -- เดียวกันสร้างซ้ำเป็นคนละ asset_id ได้ ทำให้ Transaction History แตกกระจาย
-  UNIQUE NULLS NOT DISTINCT (user_id, symbol, portfolio_id)
+  --
+  -- migration 046 — เพิ่ม broker_id เข้า Key เพื่อให้ถือ Symbol เดียวกันได้หลายโบรก
+  -- ⚠️ ต้องคง NULLS NOT DISTINCT ไว้เสมอ ถ้าหลุดไปเมื่อไหร่ = เปิดบั๊ก Duplicate
+  -- ของ migration 014 กลับมาทั้งดุ้น (ข้อมูลเดิม 100% มี broker_id เป็น NULL)
+  --   (U, BTC, P1, NULL) + (U, BTC, P1, NULL)     → ชนกัน ✅ (กันบั๊กเดิมได้ครบ)
+  --   (U, BTC, P1, Bitkub) + (U, BTC, P1, Binance) → อยู่ร่วมกันได้ ✅ (ฟีเจอร์ใหม่)
+  UNIQUE NULLS NOT DISTINCT (user_id, symbol, portfolio_id, broker_id)
 );
 ```
 
@@ -191,10 +256,12 @@ CREATE TABLE assets (
 |---|---|---|
 | id | UUID | Primary Key |
 | user_id | UUID | FK → users.id |
-| portfolio_id | UUID | FK → portfolios.id (nullable สำหรับ Free ที่ไม่มี Multiple Portfolio) |
+| portfolio_id | UUID | FK → portfolios.id — **หลัง migration 044 ไม่เป็น NULL อีกแล้ว** (ทุกแถวถูก Backfill เข้าพอร์ต Default ของเจ้าของ) คอลัมน์ยังคง Nullable ในเชิง Schema เพื่อรองรับ `ON DELETE SET NULL` ตอนผู้ใช้ลบพอร์ต |
 | symbol | TEXT | ตัวย่อสินทรัพย์ เช่น `BTC`, `PTT`, `AAPL` |
 | name | TEXT | ชื่อเต็ม เช่น "Bitcoin", "PTT Public Company" |
 | type | TEXT | ประเภทสินทรัพย์: `crypto` / `stock_th` / `stock_us` / `etf` / `fund` |
+| broker_id | UUID | (migration 042) FK → brokers.id · NULL = ไม่ระบุโบรก (แถวเดิมทั้งหมดก่อน 042) — **UI ต้องแสดงเป็นกลุ่ม "ไม่ระบุ" ไม่ใช่ซ่อนแถว** มิฉะนั้นยอดรวมกราฟโดนัทจะไม่เท่ามูลค่าพอร์ตจริง · ไม่เข้าสูตรคำนวณเงินโดยตรง **แต่ (migration 046) อยู่ใน UNIQUE Key แล้ว** จึงเป็นส่วนหนึ่งของ "ตัวตนของสินทรัพย์": `symbol` อย่างเดียวระบุแถวไม่ได้อีกต่อไป ทุกจุดที่แปลง Symbol → asset row ต้องผ่าน `assetResolution.service` เท่านั้น |
+| sector | TEXT | (migration 043) หมวดธุรกิจ/กลุ่มสินทรัพย์ที่ผู้ใช้ระบุเอง · NULL = ไม่ระบุ · เก็บรูปแบบตัวพิมพ์ตามที่ผู้ใช้พิมพ์ แต่**จัดกลุ่มแบบ Case-insensitive ด้วย `lower(sector)`** (Index `idx_assets_sector_lower`) · ไม่เข้าสูตรคำนวณเงินใดๆ |
 | is_active | BOOLEAN | false = ขายออกหมดแล้ว แต่ยังเก็บประวัติ |
 | created_at | TIMESTAMPTZ | วันที่เพิ่มสินทรัพย์ |
 | updated_at | TIMESTAMPTZ | วันที่อัพเดทล่าสุด |
@@ -217,7 +284,11 @@ CREATE TABLE transactions (
   id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id         UUID        NOT NULL REFERENCES users(id),
   asset_id        UUID        NOT NULL REFERENCES assets(id),
-  type            TEXT        NOT NULL CHECK (type IN ('buy', 'sell')),
+  -- ✅ migration 047 (Stage 6b) เปิด `dividend`/`dividend_reversal` แล้ว
+  -- ความหมายของแต่ละค่าตัดสินที่ utils/transactionType.util.js ที่เดียว
+  -- (ดูตารางกฎการคำนวณด้านล่าง) — ห้ามเพิ่มค่าใหม่ที่นี่ก่อนไปเพิ่ม case ในไฟล์นั้น
+  type            TEXT        NOT NULL
+                  CHECK (type IN ('buy', 'sell', 'dividend', 'dividend_reversal')),
   amount_thb      NUMERIC(15,2) NOT NULL CHECK (amount_thb > 0),
   price_per_unit  NUMERIC(20,8) NOT NULL CHECK (price_per_unit > 0),
   quantity        NUMERIC(20,8) NOT NULL CHECK (quantity > 0),
@@ -239,7 +310,7 @@ CREATE TABLE transactions (
 | id | UUID | Primary Key |
 | user_id | UUID | FK → users.id |
 | asset_id | UUID | FK → assets.id |
-| type | TEXT | ประเภท: `buy` / `sell` |
+| type | TEXT | ประเภท: `buy` / `sell` / `dividend` / `dividend_reversal` (เปิดครบแล้วใน migration 047 — ดูตารางกฎการคำนวณด้านล่าง) |
 | amount_thb | NUMERIC(15,2) | จำนวนเงินเป็นบาท |
 | price_per_unit | NUMERIC(20,8) | ราคาต่อหน่วย (รองรับ Crypto ทศนิยมสูง) |
 | quantity | NUMERIC(20,8) | จำนวนหน่วยที่ซื้อ/ขาย |
@@ -249,6 +320,76 @@ CREATE TABLE transactions (
 | source | TEXT | ช่องทางบันทึก: `line` / `web` / `slip_ai` (ตั้ง `slip_ai` เมื่อมาจาก AI Slip OCR — S8) |
 | slip_image_path | TEXT | Storage path รูปสลิปต้นฉบับใน Bucket `transaction-slips` (Private) — nullable |
 | created_at | TIMESTAMPTZ | วันที่บันทึกเข้าระบบ |
+
+#### ⭐ กฎการคำนวณของแต่ละ `type` (Single Source of Truth = `utils/transactionType.util.js`)
+
+> **ห้ามเขียน `type === 'buy' ? ... : ...` ที่ไหนอีกเด็ดขาด** — Pattern Binary
+> แบบนั้นแปลว่า *"ทุก type ที่ไม่ใช่ buy = ขาย"* ซึ่งจะทำให้ `dividend` ถูก
+> ตีความเป็นการขาย **เงียบๆ โดยไม่มี Error** ทันทีที่มันเข้า DB ได้
+> ทุกจุดต้องเรียกฟังก์ชันจาก `utils/transactionType.util.js` ซึ่งเป็น
+> exhaustive switch ที่ `default: throw` (migration/Stage 6a)
+
+| ผลกระทบต่อ | `buy` | `sell` | `dividend` | `dividend_reversal` |
+|---|---|---|---|---|
+| `heldQty` (จำนวนที่ถือ) | **+qty** | **−qty** | **0 — ไม่เปลี่ยน** | **0 — ไม่เปลี่ยน** |
+| `costBasis` (ต้นทุน) | **+amount** | ตัดตามสัดส่วนที่ขาย | **0 — ไม่เปลี่ยน** | **0 — ไม่เปลี่ยน** |
+| `realizedPnL` | — | **+(amount − ต้นทุนส่วนที่ขาย)** | **ไม่รวม** | **ไม่รวม** |
+| `totalDividendThb` | 0 | 0 | **+amount** | **−amount** |
+| ชนิดของแถวหักล้างตอน Undo | `sell` | `buy` | `dividend_reversal` | *ห้ามเกิด (throw)* |
+
+**เหตุผลที่ต้องเป็นแบบนี้:**
+- `dividend` **ไม่เปลี่ยน `heldQty`** เพราะปันผล *เงินสด* ไม่ได้ทำให้ถือหุ้นเพิ่ม
+  (ปันผลเป็น *หุ้น* เป็นคนละเรื่อง — จะเป็น type ที่ 5 แยกต่างหากในรอบถัดไป)
+- `dividend` **ไม่ตัด `costBasis`** เพราะการตัดต้นทุนจะทำให้ ROI ของสินทรัพย์เพี้ยน
+- `dividend` **ไม่รวมใน `realizedPnL`** เพราะปันผลเป็น **รายได้** คนละก้อนกับ
+  กำไรจากส่วนต่างราคา — ต้องแสดงแยกเป็นบรรทัดของตัวเอง
+- **ทำไมต้องมี `dividend_reversal` เป็น type แยก แทนการใส่ amount ติดลบ:**
+  `amount_thb` มี `CHECK (amount_thb > 0)` อยู่แล้ว การเปิดให้ติดลบเพื่อ dividend
+  อย่างเดียวเท่ากับ **ปิดเกราะที่ป้องกันทั้งตารางอยู่** ทำให้บั๊ก "เงินติดลบ" ใน
+  อนาคตทะลุถึง DB ได้ทุกชนิดธุรกรรม — แลกไม่คุ้ม (Immutable Ledger § 8)
+
+#### ⭐ `quantity` และ `price_per_unit` ของแถว `dividend` เก็บอะไร (migration 047)
+
+> จุดนี้ **Design Doc § 4.5 เขียนไว้ไม่ครบ** และเป็นสิ่งแรกที่ต้องรู้ก่อนเขียนโค้ด
+> ที่ INSERT แถวปันผล ไม่งั้นจะชน CHECK ตอน Runtime แล้วหาสาเหตุไม่เจอ
+
+Schema บังคับ `quantity > 0` และ `price_per_unit > 0` กับ **ทุกแถว** ไม่มีข้อยกเว้น
+แต่ Design Doc ระบุ Body ของ Endpoint ว่า `quantity?` เป็น optional และไม่มี
+`pricePerUnit` เลย — ถ้าแปลตรงตัวว่าใส่ `0`/`NULL` แถวปันผลจะถูก DB ปฏิเสธทุกแถว
+
+**เลือกทางที่ไม่ต้องผ่อน CHECK** (เหตุผลเดียวกับข้อ `dividend_reversal` ด้านบนเป๊ะ:
+ผ่อนเกราะเพื่อ type เดียว = เปิดช่องให้บั๊กของ `buy`/`sell` ทะลุถึง DB ด้วย):
+
+| คอลัมน์ | เก็บอะไรสำหรับแถว `dividend` |
+|---|---|
+| `amount_thb` | เงินปันผลรวมที่ได้รับจริง (ผู้ใช้กรอก) |
+| `quantity` | **จำนวนหน่วยที่ได้ปันผล — ผู้ใช้กรอกเสมอ** (บังคับ ไม่มี Default ให้) ระบบ**ไม่**เติมยอดถือให้เองแม้จะคำนวณได้ ดูกล่องด้านล่าง |
+| `price_per_unit` | **เงินปันผลต่อหน่วย (DPS)** = `amount_thb / quantity` |
+
+ทั้งสามค่า `> 0` เสมอโดยธรรมชาติ และ `price_per_unit` ที่ได้ไม่ใช่ค่าขยะเพื่อให้ผ่าน
+Constraint แต่เป็นตัวเลขที่นักลงทุนใช้จริง (เทียบ DPS ข้ามงวดได้ทันที)
+
+> ⚠️ **ทำไม `quantity` ถึงบังคับกรอก ไม่เติมยอดถือให้เอง** (มติ Founder 24 ส.ค. 2569
+> — เดิม Stage 6b ทำเป็น optional ไว้ก่อนมติจะมาถึง): จำนวนหน่วยที่ *ระบบรู้* กับที่
+> *ได้ปันผลจริง* ไม่จำเป็นต้องเท่ากันเลย — ปันผลจ่ายตามยอด ณ **วัน XD** ซึ่งมักเป็น
+> คนละวันกับวันที่เงินเข้า และผู้ใช้จำนวนมากเพิ่งเริ่มบันทึกกลางทาง ระบบจึงเห็นประวัติ
+> ไม่ครบ การเติมให้เองคือ **Silent Default (กฎยืนข้อ 11)** ที่เขียนตัวเลขซึ่งผู้ใช้
+> ไม่เคยยืนยันลง Ledger ถาวร แล้วไหลต่อไปเป็น `price_per_unit` (DPS) ที่ผู้ใช้เอาไป
+> เทียบข้ามงวดจริง — ผิดแบบเงียบสนิท
+>
+> ⚠️ แต่ **`heldQuantityAsOf` ยังต้องอยู่** ในฐานะด่าน `NOTHING_TO_RECEIVE_DIVIDEND`:
+> ตรวจจาก **ยอดถือจริง ณ `date` เสมอ ไม่ใช่จาก `quantity` ที่ผู้ใช้กรอก** ไม่งั้น
+> ผู้ใช้จะบันทึกปันผลของหุ้นที่ไม่เคยถือได้ทุกครั้งแค่กรอกตัวเลขอะไรก็ได้มา
+> (`quantity` = "สิ่งที่ผู้ใช้อ้าง" · `heldQuantityAsOf` = "ของจริงที่ระบบยืนยันได้")
+
+> ⚠️ **`quantity` ของแถว `dividend` ไม่มีผลต่อยอดคงเหลือแม้แต่หน่วยเดียว** —
+> `heldQuantitySign('dividend') = 0` ทั้งฝั่ง JS (`utils/transactionType.util.js`)
+> และฝั่ง SQL (`CASE` ใน `create_transaction_locked` — migration 047) มันเป็นแค่
+> *บริบทของรายการ* ห้ามมีโค้ดที่ไหนเอาไปบวก/ลบยอดถือโดยไม่ผ่าน `heldQuantitySign`
+
+**ไม่ถือสินทรัพย์นั้นอยู่เลย ณ วันที่ระบุ → ห้ามบันทึก** (`403
+NOTHING_TO_RECEIVE_DIVIDEND`) — ตรวจจากยอดถือจริงเสมอ ไม่ใช่จาก `quantity` ที่
+ผู้ใช้กรอกมา ไม่งั้นกรอกเองก็ข้ามด่านได้ทุกครั้ง
 
 **Index:**
 ```sql
@@ -750,6 +891,20 @@ CREATE POLICY "payments_select_own" ON payments
 CREATE POLICY "payments_insert_own" ON payments
   FOR INSERT WITH CHECK (user_id = auth.uid());
 -- UPDATE / DELETE ทำได้เฉพาะ service_role (Admin)
+```
+
+**brokers** (migration 042)
+```sql
+ALTER TABLE brokers ENABLE ROW LEVEL SECURITY;
+-- ⚠️ **ไม่มี POLICY โดยเจตนา** = ปฏิเสธทุก Request ที่ไม่ใช่ service_role
+-- (RLS เปิดแต่ไม่มี Policy ใน Postgres แปลว่า "ไม่อนุญาตใคร" ไม่ใช่ "อนุญาตทุกคน")
+--
+-- ต่างจากตารางอื่นที่มี "<table>_own" policy เพราะตารางนี้ถูกอ่าน/เขียนผ่าน
+-- Backend (service_role) เท่านั้น 100% — ไม่มี Path ไหนที่ Client แตะตรงเลย
+-- จึงเข้มกว่าตารางอื่น ไม่ใช่หลวมกว่า
+--
+-- ⚠️ ถ้าวันหนึ่งเปิดให้ Client เข้าถึงด้วย auth.uid() ต้องมาเพิ่ม Policy ที่นี่ก่อน
+-- ไม่งั้นจะได้ผลลัพธ์ว่างเปล่าแบบไม่มี Error ให้เห็น (ตรวจพบตอน Audit 27 ส.ค. 2569)
 ```
 
 **goals**

@@ -528,12 +528,164 @@ Premium)
 | Method | Path | Auth | Plan | คำอธิบาย |
 |---|---|---|---|---|
 | GET | `/api/v1/portfolio/summary` | ✅ | Free | สรุปภาพรวมพอร์ตทั้งหมด: Total Value, Total Invested, P&L, ROI, Allocation รายสินทรัพย์ (SRS.md § 3.2 [1]) |
+| GET | `/api/v1/portfolio/allocation?groupBy=broker\|sector\|assetType&portfolioId=` | ✅ | **Free** | **✅ ทำแล้ว (Stage 8)** — สัดส่วนพอร์ตพร้อมใช้กับกราฟโดนัท · `groupBy` Default = `assetType` · ค่าที่ไม่รองรับ → `400 VALIDATION_ERROR` (ไม่เงียบๆ ใช้ Default) · ดูรายละเอียดด้านล่าง |
 | GET | `/api/v1/portfolio/snapshots?range=1y` | ✅ | Free | ดึง `portfolio_snapshots` รายวันสำหรับกราฟ Value vs Invested — `range` รองรับ `7d` / `30d` / `90d` / `1y` / `all` (SRS.md § 3.2 [2]) |
-| GET | `/api/v1/portfolios` | ✅ | Premium | List พอร์ตย่อยทั้งหมดของ User (Multiple Portfolio) |
-| POST | `/api/v1/portfolios` | ✅ | Premium | สร้างพอร์ตย่อยใหม่ — Body: `{ name, type }` |
-| GET | `/api/v1/portfolios/{id}` | ✅ | Premium | ดูรายละเอียดพอร์ตย่อย 1 พอร์ต |
-| PATCH | `/api/v1/portfolios/{id}` | ✅ | Premium | แก้ไขชื่อ/ประเภทพอร์ต |
-| DELETE | `/api/v1/portfolios/{id}` | ✅ | Premium | ลบพอร์ตย่อย — Asset ที่อยู่ในพอร์ตนี้ย้ายเป็น "ไม่มีพอร์ต" (`portfolio_id = NULL`) ตาม FK Cascade Policy `SET NULL` ([DATABASE.md § 9](./DATABASE.md)) |
+| GET | `/api/v1/portfolios` | ✅ | **Free** | **✅ ทำแล้ว (Stage 8)** — List พอร์ตทั้งหมดของ User พร้อมธง `canWrite` ต่อพอร์ต |
+| POST | `/api/v1/portfolios` | ✅ | **Premium** | **✅ ทำแล้ว (Stage 8)** — สร้างพอร์ตใหม่ Body `{ name, type }` · Free = 1 พอร์ต → `403 PORTFOLIO_LIMIT_REACHED` · Premium ชน Sanity Cap 50 → `409 PORTFOLIO_CAP_REACHED` · **เพดานบังคับใต้ Lock ที่ RPC `create_portfolio_locked` (migration 048)** ไม่ใช่ Pre-check ฝั่ง App ล้วน |
+| GET | `/api/v1/portfolios/{id}` | ✅ | **Free** | **✅ ทำแล้ว (Stage 8)** — ดูรายละเอียดพอร์ตเดียว |
+| PATCH | `/api/v1/portfolios/{id}` | ✅ | **Premium** | **✅ ทำแล้ว (Stage 8)** — แก้ `name` / `type` / **`isDefault: true`** (ตั้งเป็นพอร์ตหลัก — ดูกล่องด้านล่าง) |
+| DELETE | `/api/v1/portfolios/{id}` | ✅ | **Premium** | **✅ ทำแล้ว (Stage 8)** — ลบพอร์ต · **สินทรัพย์ข้างในถูกย้ายเข้าพอร์ต Default ไม่ได้กลายเป็น `portfolio_id = NULL`** (ดูกล่องเตือนด้านล่าง) · ห้ามลบพอร์ต Default → `409 CANNOT_DELETE_DEFAULT_PORTFOLIO` |
+
+> ### ⚠️ แก้ Spec เดิม 2 จุด (Stage 8 — ของเดิมผิด ไม่ใช่แค่เปลี่ยนใจ)
+>
+> **(1) `GET` เปลี่ยนจาก Premium → Free**
+> ตารางนี้เดิมเขียน `GET` ทั้งสองตัวเป็น Premium ซึ่งใช้ไม่ได้จริงหลัง
+> **migration 044**: Backfill สร้างพอร์ต Default ให้ผู้ใช้ **ทุกคนรวม Free** และ
+> Invariant ใหม่บังคับว่า "สินทรัพย์ทุกแถวสังกัดพอร์ตเสมอ" → หน้า Dashboard ต้อง
+> อ่านพอร์ตมา render ตั้งแต่โหลดหน้าแรก ถ้า `GET` คืน `403` ให้ Free
+> **หน้า Dashboard ของผู้ใช้ Free จะพังทันที**
+> ตัวคุมสิทธิ์ Multiple Portfolio ที่แท้จริงคือ **`POST`** (Free สร้างพอร์ตที่ 2 ไม่ได้)
+> ไม่ใช่ `GET` — ซึ่งตรงกับ `AI_CONTEXT.md` บรรทัด 95 (`Multiple Portfolio: Free ❌`)
+> ที่พูดถึง "การมีหลายพอร์ต" ไม่ได้พูดถึง "การเห็นพอร์ตของตัวเอง"
+>
+> **(2) `DELETE` ไม่ปล่อยให้ `portfolio_id` กลายเป็น `NULL`**
+> ตารางนี้เดิมเขียนว่าอาศัย FK `ON DELETE SET NULL` — **ห้ามทำแบบนั้นแล้ว**
+> เพราะจะทำ Invariant ของ migration 044/045 พังทันที ("สินทรัพย์ทุกแถวสังกัด
+> พอร์ตเสมอ") แล้ว migration 045 ที่ใช้เป็น Health Check จะ `RAISE EXCEPTION`
+> · Service จึง **ย้ายสินทรัพย์เข้าพอร์ต Default ก่อน แล้วค่อยลบแถวพอร์ต**
+> (ประวัติธุรกรรมและต้นทุนเฉลี่ยไม่เปลี่ยนเลย เพราะ `transactions` ผูกกับ
+> `asset_id` ไม่ใช่ `portfolio_id`)
+>
+> ⚠️ ถ้าการย้ายจะชน `UNIQUE NULLS NOT DISTINCT (user_id, symbol, portfolio_id,
+> broker_id)` (migration 046) — เช่นทั้งสองพอร์ตมี `BTC` ที่โบรกเดียวกัน — จะ
+> **ปฏิเสธด้วย `409 PORTFOLIO_HAS_CONFLICTING_ASSETS` พร้อมรายการที่ชน** และ
+> ไม่ลบอะไรเลย เพราะการรวมสองแถวเข้าด้วยกัน**กระทบต้นทุนเฉลี่ย = แตะเงินจริง**
+> ระบบจึงไม่ทำให้อัตโนมัติ (เคสเดียวกับที่ migration 044 STEP 6 ดักไว้)
+
+**Response `200` ของ `GET /api/v1/portfolios`**
+```json
+{
+  "portfolios": [
+    {
+      "id": "aaaaaaaa-1111-4111-8111-111111111111",
+      "name": "พอร์ตของฉัน",
+      "type": "custom",
+      "isDefault": true,
+      "canWrite": true,
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-01-01T00:00:00.000Z"
+    }
+  ]
+}
+```
+
+| Field | หมายเหตุ |
+|---|---|
+| `type` | `crypto` / `stock_th` / `stock_us` / `etf` / `fund` / `custom` — **ไม่มี `mixed`** (Design Doc เคยเขียนผิด ดู CHANGELOG Stage 3) |
+| `isDefault` | พอร์ตเริ่มต้นที่ Backfill สร้างให้ · มีได้ **1 อันต่อ user เป๊ะ** (Partial Unique Index) · ลบไม่ได้ |
+| `canWrite` | **บันทึกสินทรัพย์/รายการใหม่เข้าพอร์ตนี้ได้ไหม ณ ตอนนี้** — Frontend ต้องใช้ธงนี้ตัดสินว่าจะ Disable ปุ่มบันทึกไหม **ห้ามเดาเองจาก `plan`** |
+
+> **`canWrite` มาจากไหน (มติ Founder § 8.1 ก — "อ่านได้ เขียนไม่ได้"):**
+> ผู้ใช้ที่เคยเป็น Premium แล้วสร้างไว้ 3 พอร์ต พอหมดอายุ **ห้ามลบข้อมูลเด็ดขาด**
+> — พอร์ตส่วนเกินยังเปิดดูย้อนหลังได้ปกติ (`GET` คืนครบทุกพอร์ต) แต่เขียนเพิ่ม
+> ไม่ได้ (`canWrite: false` → เขียนจริงจะได้ `403 PORTFOLIO_READ_ONLY`)
+> · "พอร์ตไหนคือส่วนเกิน" **Deterministic** เสมอ: เรียงตาม `created_at`
+> (Tie-break ด้วย `id`) **พอร์ตแรกสุด = ยังเขียนได้** · ค่านี้คำนวณสดทุกครั้ง
+> ไม่เก็บลง DB → **ต่ออายุแล้วกลับมาเขียนได้ทันที** ไม่ต้องรอ Job ไปไล่อัปเดต
+
+> ### ⭐ `isDefault: true` — ผู้ใช้เลือก "พอร์ตหลัก" ของตัวเอง (มติ Founder 24 ส.ค. 2569)
+>
+> **พอร์ตหลักคือพอร์ตที่ยังเขียนได้เสมอแม้ Premium หมดอายุ** (ดู `canWrite`) →
+> ผู้ใช้ต้องเลือกเองได้ ไม่งั้นจะถูกขังอยู่กับพอร์ตที่ migration 044 Backfill
+> สร้างให้อัตโนมัติ ซึ่งมักแทบว่างเปล่า ส่วนพอร์ตที่เขาใช้จริงกลับถูกล็อก
+>
+> - รับเฉพาะ `true` — ส่ง `false` มาได้ `400 VALIDATION_ERROR` เพราะ Invariant
+>   บังคับว่าต้องมีพอร์ตหลัก **1 อันเป๊ะเสมอ** (ปลดโดยไม่ตั้งตัวใหม่ = ไม่มีเลย)
+>   การ "ยกเลิก" ทำได้โดยตั้งพอร์ตอื่นเป็นหลักแทน
+> - เป็นพอร์ตหลักอยู่แล้ว → **Idempotent** คืนค่าเดิม ไม่ Error
+> - มีพอร์ตเดียว → `400 VALIDATION_ERROR` (เปลี่ยนไปก็ไม่มีความหมาย)
+> - ส่งมาพร้อม `name`/`type` ได้ — ระบบตั้งพอร์ตหลักก่อนแล้วค่อยแก้ Field อื่น
+>
+> ⚠️ **ไม่ Gate ด้วย "Premium ที่ยัง Active" โดยเจตนา** (ต่างจาก `POST`): ถ้า Gate
+> แบบนั้น ผู้ใช้ **Premium ที่หมดอายุ** จะเปลี่ยนพอร์ตหลักไม่ได้ = ถูกขังอยู่กับ
+> พอร์ตเดิม ซึ่งเป็นกับดักแบบเดียวกับที่มติ 24 ส.ค. ตั้งใจกำจัด · ตัวคุมสิทธิ์จริง
+> คือ **"ต้องมีพอร์ตมากกว่า 1 อัน"** ซึ่งมีได้เฉพาะคนที่เคยเป็น Premium อยู่แล้ว
+> → ได้ผลเดียวกับ "Premium เท่านั้น" โดยไม่สร้างกับดัก
+>
+> ⚠️ ทำผ่าน RPC `set_default_portfolio_locked` (migration 048) ไม่ใช่ `UPDATE`
+> 2 ครั้ง เพราะ `idx_portfolios_one_default_per_user` เป็น Partial UNIQUE →
+> ตั้งตัวใหม่ก่อนปลดตัวเก่าจะชน Index ทันที และถ้าแยก 2 คำสั่งแล้วพังกลางทาง
+> ผู้ใช้จะไม่มีพอร์ตหลักเลย = Invariant ของ 044/045 พังค้างถาวร
+
+**Error ของกลุ่มนี้**
+
+| Code | HTTP | เมื่อไหร่ |
+|---|---|---|
+| `VALIDATION_ERROR` | 400 | ชื่อว่าง / ยาวเกิน 60 / `type` ไม่อยู่ในรายการ |
+| `PORTFOLIO_NOT_FOUND` | 404 | ไม่มีจริง **หรือเป็นของผู้ใช้คนอื่น** (แยกไม่ออกโดยเจตนา — ห้ามยืนยันการมีอยู่ของ resource ผู้ใช้รายอื่น) |
+| `PORTFOLIO_LIMIT_REACHED` | 403 | Free พยายามสร้างพอร์ตที่ 2 |
+| `PORTFOLIO_READ_ONLY` | 403 | เขียนลงพอร์ตส่วนเกินหลัง Premium หมดอายุ |
+| `PORTFOLIO_CAP_REACHED` | 409 | Premium ชน Sanity Cap 50 พอร์ต |
+| `CANNOT_DELETE_DEFAULT_PORTFOLIO` | 409 | ลบพอร์ต `isDefault` |
+| `PORTFOLIO_HAS_CONFLICTING_ASSETS` | 409 | ย้ายสินทรัพย์เข้าพอร์ต Default แล้วจะชน UNIQUE ของ migration 046 |
+
+#### `GET /api/v1/portfolio/allocation` — สัดส่วนพอร์ตสำหรับกราฟโดนัท (Stage 8)
+
+**Query**
+
+| Param | บังคับ | หมายเหตุ |
+|---|---|---|
+| `groupBy` | — | `broker` / `sector` / `assetType` · Default `assetType` · ค่าอื่น → `400 VALIDATION_ERROR` |
+| `portfolioId` | — | กรองเฉพาะสินทรัพย์ในพอร์ตนั้น · ไม่ส่ง = ทั้งพอร์ตรวมกัน · ผิดรูป → `404` |
+
+**Response `200`**
+```json
+{
+  "groupBy": "broker",
+  "portfolioId": null,
+  "totalValueThb": 152340.50,
+  "groups": [
+    { "key": "uuid-ของโบรก", "label": "Bitkub", "valueThb": 91404.30, "percent": 60.0,
+      "valueByCurrency": { "THB": 91404.30, "USD": 0 },
+      "assetCount": 3, "priceUnavailableCount": 0 },
+    { "key": null, "label": "ไม่ระบุ", "valueThb": 60936.20, "percent": 40.0,
+      "valueByCurrency": { "THB": 60936.20, "USD": 0 },
+      "assetCount": 2, "priceUnavailableCount": 1 }
+  ],
+  "isEmpty": false,
+  "fxRate": 35, "fxAsOf": "2026-08-24", "fxStale": false,
+  "fxUnavailableForUsd": false
+}
+```
+
+> **⚠️ กฎบังคับของ Endpoint นี้ (Design Doc § 4.3 + กฎยืนข้อ 1):**
+> `totalValueThb` **มาจาก `portfolio.service` + `portfolioSummary.priceHoldings`
+> ตัวเดิมที่ `/portfolio/summary` และหน้า Dashboard ใช้อยู่** — ห้ามเขียนสูตรรวม
+> มูลค่าใหม่ในไฟล์ allocation เด็ดขาด ไม่งั้นวันหนึ่งเลขบนการ์ดสรุปกับเลขบน
+> กราฟโดนัทจะไม่ตรงกันแล้วหาสาเหตุไม่เจอ (เพราะทั้งคู่ "ดูถูก" ทั้งคู่)
+
+| Field | หมายเหตุ |
+|---|---|
+| `key` | `uuid` ของโบรก / ชื่อ sector ที่ Normalize แล้ว / `assets.type` · **`null` = กลุ่ม "ไม่ระบุ"** |
+| `label` | ชื่อที่เอาไปแสดงได้เลย · sector คงรูปแบบตัวพิมพ์ที่ผู้ใช้พิมพ์ (`SET50` ไม่กลายเป็น `Set50`) |
+| `percent` | รวมกันได้ 100 เสมอ · ยอดรวมเป็น 0 → ทุกกลุ่มเป็น 0 (ไม่ใช่ `NaN`) |
+| `priceUnavailableCount` | จำนวนสินทรัพย์ในกลุ่มที่ **ตีมูลค่าที่ต้นทุน** เพราะไม่มีราคาสด — Frontend ต้องติดหมายเหตุได้ว่าตัวเลขกลุ่มนี้ไม่ใช่มูลค่าตลาดทั้งหมด |
+
+> **⚠️ สินทรัพย์ที่ไม่มีราคาสด (หุ้นไทย / NAV ล่ม) → ตีมูลค่า "ที่ต้นทุน" ไม่ใช่ข้ามทิ้ง**
+> ต่างจากการ์ด "กำไร/ขาดทุน" ที่ต้องข้ามแล้วนับ `excludedCount` โดยเจตนา —
+> ถ้าข้ามที่นี่ด้วย หุ้นไทยจะหายไปจากกราฟโดนัททั้งที่ผู้ใช้ถืออยู่จริง และผลรวม
+> สัดส่วนจะไม่เท่ามูลค่าพอร์ตที่แสดงบนการ์ด
+>
+> **⚠️ กลุ่ม `key: null` ("ไม่ระบุ") ต้องแสดงเสมอ ห้ามซ่อน** — ข้อมูลเดิม 100%
+> มี `broker_id`/`sector` เป็น `NULL` ถ้าซ่อน ยอดรวมกราฟจะไม่เท่ามูลค่าพอร์ตจริง
+>
+> **⚠️ `sector` จัดกลุ่มแบบ case-insensitive** (trim + ยุบช่องว่างซ้ำ + เทียบตัวพิมพ์เล็ก)
+> กัน `Tech` / `tech` / `Tech ` กลายเป็น 3 กลุ่ม · **แต่ `label` คงรูปแบบที่ผู้ใช้พิมพ์**
+> · `broker` ไม่ต้อง Normalize เพราะตาราง `brokers` มี UNIQUE แบบ case-insensitive
+> อยู่แล้วตั้งแต่ migration 042
+>
+> **⚠️ `fxUnavailableForUsd: true` = ห้ามรวมยอดข้ามสกุล** — Frontend ต้องเตือน
+> ไม่ใช่แสดงยอดที่ขาดส่วน USD ไปเงียบๆ
 
 ### 14.3 Transactions
 
@@ -545,6 +697,7 @@ Premium)
 | GET | `/api/v1/transactions` | ✅ | Free | List ธุรกรรมของ User — รองรับ Pagination (Section 8) และ Sort/Filter (Section 9): Sort ได้ที่ `date`, `amountThb`, `createdAt`; Filter ได้ที่ `type`, `assetId`, `portfolioId`, `dateFrom`, `dateTo` |
 | GET | `/api/v1/transactions/{id}` | ✅ | Free | รายละเอียดธุรกรรม 1 รายการ |
 | POST | `/api/v1/transactions` | ✅ | Free | **✅ ทำแล้ว (S8 R1a)** — บันทึกรายการซื้อ (DCA) จากฟอร์มเว็บ ผ่าน `transaction.service` ตัวเดียวกับ LINE **สัญญาจริงดู [Section 15](#15-s8-r1a--web-dca-endpoints-สัญญาจริง)** (Body จริงคือ `{ symbol, amountTotal, currency, date?, note?, pricePerUnit? }` — **ไม่ใช่** Body ที่เอกสารรุ่นก่อนร่างไว้) |
+| POST | `/api/v1/transactions/dividend` | ✅ | Free | **✅ ทำแล้ว (Stage 6b — migration 047)** — บันทึกเงินปันผลรับ Body `{ assetId, amountThb, quantity, date?, note? }` · แยก Endpoint ออกจาก `POST /transactions` โดยตั้งใจ (Payload ต่างกันเชิงความหมายทั้งชุด) · **ไม่กระทบยอดถือ/ต้นทุน/realizedPnL เลย** ดู Section 15.10 |
 | POST | `/api/v1/transactions/undo-last` | ✅ | Free | **✅ ทำแล้ว (S8 R1a)** — ยกเลิก "รายการล่าสุดของตัวเอง" ด้วย Reversal Pattern (Immutable Ledger — [DATABASE.md § 8](./DATABASE.md)) ดู [Section 15](#15-s8-r1a--web-dca-endpoints-สัญญาจริง) |
 | POST | `/api/v1/transactions/{id}/reverse` | — | — | 🚧 **ยังไม่ได้ทำ (ร่างไว้เฉยๆ)** — S8 R1a เลือกทำ `POST /transactions/undo-last` แทน เพื่อให้ Semantics ตรงกับคำสั่ง "ยกเลิก" ของ LINE เป๊ะ (ย้อนได้เฉพาะรายการล่าสุด ผ่าน `undoTransaction.service` ตัวเดียวกัน) — การรับ `{id}` อิสระจะเปิดให้ย้อนรายการเก่ากลางประวัติได้ ซึ่งทำให้ Moving Average Cost Basis เพี้ยนและไม่มีใน LINE |
 
@@ -560,9 +713,71 @@ Check ใน [SRS.md § 2.3 [2]](./SRS.md)
 | Method | Path | Auth | Plan | คำอธิบาย |
 |---|---|---|---|---|
 | GET | `/api/v1/assets/symbols` | ✅ | Free | **✅ ทำแล้ว (S8 R1a)** — รายการสินทรัพย์ทั้งหมดที่ระบบรองรับ (Static จาก `symbolRegistry.service`) สำหรับ Dropdown ค้นหาบนเว็บ ดู [Section 15](#15-s8-r1a--web-dca-endpoints-สัญญาจริง) |
-| GET | `/api/v1/assets` | ✅ | Free | List สินทรัพย์ของ User — Filter ได้ที่ `isActive`, `portfolioId`, `type` |
-| GET | `/api/v1/assets/{id}` | ✅ | Free | รายละเอียดสินทรัพย์ 1 รายการ พร้อม Quantity/Average Cost ปัจจุบัน (คำนวณจาก `transactions` ตาม [DATABASE.md § 12](./DATABASE.md)) |
-| PATCH | `/api/v1/assets/{id}` | ✅ | Free (`isActive`) / Premium (`portfolioId`) | แก้ไข `isActive` (Soft Delete เมื่อขายหมด) หรือย้าย `portfolioId` (Premium เท่านั้น — Free ไม่มี `portfolioId` ให้ย้าย) |
+| GET | `/api/v1/assets` | ✅ | Free | **✅ ทำแล้ว (Stage 8)** — List สินทรัพย์ที่ถืออยู่ · Filter: `brokerId`, `sector`, `portfolioId` (ค่า `none` = แถวที่ไม่ได้ระบุมิตินั้น) |
+| GET | `/api/v1/assets/{id}` | ✅ | Free | ⏳ ยังไม่ทำ — รายละเอียดสินทรัพย์ 1 รายการ พร้อม Quantity/Average Cost ปัจจุบัน |
+| PATCH | `/api/v1/assets/{id}` | ✅ | Free | **✅ ทำแล้ว (Stage 8)** — แก้ **`brokerId` / `sector` / `portfolioId`** เท่านั้น (ดูกล่องเตือนด้านล่าง) |
+
+#### `GET /api/v1/assets` — List + filter (Stage 8 · Design Doc § 4.4)
+
+| Query | หมายเหตุ |
+|---|---|
+| `brokerId` | `<uuid>` = โบรกนั้น · `none` = แถวที่ไม่ผูกโบรก · ไม่ส่ง = ไม่กรองมิตินี้ |
+| `sector` | `<ชื่อ>` = **เทียบแบบไม่สนตัวพิมพ์** · `none` = แถวที่ไม่ระบุ sector |
+| `portfolioId` | `<uuid>` = พอร์ตนั้น · `none` = แถวที่ไม่สังกัดพอร์ต |
+
+> ⚠️ `sector` เทียบแบบ **case-insensitive + trim + ยุบช่องว่างซ้ำ** ให้ตรงกับวิธี
+> จัดกลุ่มของ `GET /portfolio/allocation` เป๊ะ — ถ้ากฎต่างกันแม้นิดเดียว ผู้ใช้กด
+> กลุ่มบนกราฟโดนัทแล้วจะเห็นรายการไม่ครบ
+
+#### `PATCH /api/v1/assets/{id}` — แก้ "ป้ายกำกับ" ของสินทรัพย์ (Stage 8)
+
+**Request** (ส่งมาเฉพาะ Field ที่จะแก้)
+```json
+{ "brokerId": "uuid-ของโบรก", "sector": "Tech", "portfolioId": "uuid-ของพอร์ต" }
+```
+
+| Field | ค่าที่รับได้ |
+|---|---|
+| `brokerId` | `<uuid>` · `null` / `"none"` = ล้างโบรก (กลับเป็น "ไม่ระบุ") |
+| `sector` | `<ชื่อ ≤ 60 ตัวอักษร>` · `null` / `""` = ล้างค่า · **คงตัวพิมพ์ตามที่ผู้ใช้พิมพ์** (`SET50` ไม่กลายเป็น `Set50`) |
+| `portfolioId` | `<uuid>` เท่านั้น — **ล้างเป็น `null` ไม่ได้** (ดูกล่องเตือน) |
+
+> ### ⚠️ แก้ Spec เดิม: `isActive` ถูกถอดออกจาก Endpoint นี้
+>
+> Spec เดิมเขียนว่า `PATCH` แก้ `isActive` ได้ — **ไม่เปิดให้แก้แล้ว** เพราะ
+> `is_active` คือตัวนับเพดาน Free Plan ซึ่งต้องผ่าน RPC `create_asset_locked`
+> ที่ Lock แถว `users` ไว้เท่านั้น (migration 035/046) การแก้ตรงๆ ผ่าน HTTP
+> จะข้ามด่าน Race Condition ที่ RPC นั้นมีไว้ทั้งหมด
+>
+> **และไม่เปิดให้แก้ `symbol` / `type` เด็ดขาด** — สองค่านี้คือ *ตัวตน* ของ
+> สินทรัพย์ที่ธุรกรรมทั้งกองผูกอยู่ ถ้าเปลี่ยนได้ ต้นทุนเฉลี่ยและ P&L ที่คำนวณ
+> จากประวัติเดิมจะกลายเป็นของผิดตัวทันทีแบบเงียบๆ
+>
+> ⚠️ Field ที่ไม่รองรับซึ่งส่งมาใน Body จะได้ **`400 VALIDATION_ERROR` พร้อม
+> `details.unsupportedFields`** — ไม่ใช่ถูกเพิกเฉยเงียบๆ (Silent Ignore เป็น
+> Anti-pattern แบบเดียวกับ Silent Default — กฎยืนข้อ 11)
+>
+> ### ⚠️ `portfolioId` ล้างเป็น `null` ไม่ได้
+> Invariant ของ migration 044/045 บังคับว่า **"สินทรัพย์ทุกแถวสังกัดพอร์ตเสมอ"**
+> ถ้าปล่อยให้ตั้งเป็น `NULL` ได้ migration 045 ที่ใช้เป็น Health Check จะ
+> `RAISE EXCEPTION` — ต้องย้ายไปพอร์ตอื่นเท่านั้น
+>
+> ### ⚠️ Cross-User (กฎเหล็กข้อ 3)
+> ทั้ง `brokerId` และ `portfolioId` มาจาก Body ที่ผู้ใช้กำหนดเองได้ 100% และ
+> FK ระดับ DB ตรวจได้แค่ "มีอยู่จริง" ไม่ได้ตรวจ "เป็นของใคร" → ผ่าน
+> `assertOwnedBrokerId` / `assertCanWriteToPortfolio` ก่อนใช้เสมอ ·
+> ของผู้ใช้คนอื่นตอบ **404** ไม่ใช่ 403
+
+**Error ของกลุ่มนี้**
+
+| Code | HTTP | เมื่อไหร่ |
+|---|---|---|
+| `VALIDATION_ERROR` | 400 | `sector` ยาวเกิน 60 / ชนิดผิด · `portfolioId` ถูกล้าง · Field ที่ไม่รองรับ · ไม่มีอะไรจะแก้ |
+| `ASSET_NOT_FOUND` | 404 | ไม่มีจริง **หรือเป็นของผู้ใช้คนอื่น** (แยกไม่ออกโดยเจตนา) |
+| `BROKER_NOT_FOUND` | 404 | `brokerId` ไม่มีจริงหรือเป็นของผู้ใช้คนอื่น |
+| `PORTFOLIO_NOT_FOUND` | 404 | `portfolioId` ไม่มีจริงหรือเป็นของผู้ใช้คนอื่น |
+| `PORTFOLIO_READ_ONLY` | 403 | สินทรัพย์อยู่ในพอร์ตส่วนเกินหลัง Premium หมดอายุ (หรือย้ายเข้าพอร์ตแบบนั้น) |
+| `ASSET_ALREADY_EXISTS` | 409 | ย้ายแล้วชน `UNIQUE (user_id, symbol, portfolio_id, broker_id)` ของ migration 046 — **ห้ามรวมสองแถวให้อัตโนมัติ** เพราะกระทบต้นทุนเฉลี่ย |
 
 > **ไม่มี `POST /assets` แยกต่างหาก** — Asset ถูกสร้างโดยอัตโนมัติเมื่อมี
 > `POST /transactions` ครั้งแรกของ `symbol` นั้น (SRS.md § 2.3 [3])
@@ -1247,6 +1462,90 @@ AI ไม่กินโควตา**) → ลบ Session
 > "ใช้ลดหย่อนภาษีได้" เพราะเท่ากับระบบรับรองว่าสลิปใช้กับภาษีได้จริง ซึ่งเราไม่อยู่
 > ในฐานะรับประกัน และสุ่มเสี่ยงเข้าข่ายให้คำแนะนำด้านภาษี — ใช้สำนวนกลางๆ
 > "เป็นหลักฐาน เผื่อต้องใช้ภายหลัง" (ดู `flexMessage.buildSlipAttachPromptMessage`)
+
+---
+
+## 15.10 POST `/api/v1/transactions/dividend` — บันทึกเงินปันผลรับ
+
+Stage 6b (migration 047) — **Free ทุกแพ็กเกจ** (มติ Founder Q4.5 ไม่ Gate ด้วย Premium)
+
+> **แยก Endpoint ออกจาก `POST /transactions` โดยตั้งใจ** — Payload ต่างกันเชิง
+> ความหมายจนแทบไม่มีอะไรร่วมกัน: ระบุสินทรัพย์ด้วย `assetId` ตรงๆ (ผู้ใช้เลือกจาก
+> รายการในพอร์ตที่มีอยู่แล้ว จึงไม่มีทางกำกวมเรื่องโบรก และไม่ต้องสร้าง Asset ใหม่),
+> ไม่มีทิศทาง buy/sell, ไม่มีราคาที่ผู้ใช้กรอก, ไม่แตะ Price Feed / Symbol Registry /
+> Asset Limit เลย — การยัดรวมจะทำให้ Validation ของ Endpoint เดิมกลายเป็น if-else
+> ตาม type ทุกขั้น ซึ่งเป็นจุดที่พลาดง่ายที่สุดบนเส้นทางเงิน
+
+**Request**
+```json
+{
+  "assetId": "11111111-2222-4333-8444-555555555555",
+  "amountThb": 250,
+  "date": "2026-02-01",
+  "quantity": 100,
+  "note": "ปันผลงวด 2/2569"
+}
+```
+
+| Field | บังคับ | หมายเหตุ |
+|---|---|---|
+| `assetId` | ✅ | UUID ของสินทรัพย์ **ที่เป็นของตัวเองเท่านั้น** (ยืนยันเจ้าของผ่าน `queryForUser` — FK ตรวจได้แค่ "มีอยู่จริง" ไม่ได้ตรวจ "ของใคร") |
+| `amountThb` | ✅ | เงินปันผลรวมที่ได้รับจริง (> 0) — สกุลตามสินทรัพย์ (USD ก็เก็บเป็น USD) |
+| `date` | — | `YYYY-MM-DD` · ไม่ส่ง = วันนี้ตาม Asia/Bangkok · **ห้ามเป็นวันอนาคต** |
+| `quantity` | ✅ | จำนวนหน่วยที่ได้ปันผลนี้ (> 0) — **บังคับกรอกเสมอ ระบบไม่เติมให้** (มติ Founder 24 ส.ค. 2569): จำนวนหน่วยที่ระบบรู้กับที่ได้ปันผลจริงไม่จำเป็นต้องเท่ากัน (ปันผลจ่ายตามยอด ณ วัน XD ซึ่งมักคนละวันกับวันเงินเข้า และผู้ใช้จำนวนมากเพิ่งเริ่มบันทึกกลางทาง ระบบจึงเห็นประวัติไม่ครบ) การเติมให้เองคือ Silent Default ที่จะไหลต่อไปเป็น `dividendPerUnit` ซึ่งผู้ใช้เอาไปเทียบข้ามงวดจริง |
+| `note` | — | ≤ 500 ตัวอักษร · **ห้ามขึ้นต้นด้วย `UNDO_OF:`** (จะปลอมเป็นรายการย้อนได้) |
+
+**Response `201`**
+```json
+{
+  "transaction": {
+    "transactionId": "9f1c2e6a-1234-4bcd-9876-0a1b2c3d4e5f",
+    "type": "dividend",
+    "symbol": "PTT",
+    "amountTotal": 250,
+    "units": 100,
+    "dividendPerUnit": 2.5,
+    "currency": "THB",
+    "date": "2026-02-01"
+  },
+  "heldQuantity": 100,
+  "message": "บันทึกเงินปันผล PTT เรียบร้อยแล้ว (ยอดถือในพอร์ตไม่เปลี่ยนแปลง)"
+}
+```
+
+> ⭐ `heldQuantity` คือยอดถือ **หลัง** บันทึก ซึ่งต้อง **เท่ากับก่อนบันทึกเป๊ะ**
+> (ค่านี้มาจาก `create_transaction_locked` ที่คำนวณใต้ Lock จริง ไม่ใช่ฝั่ง App
+> คำนวณเอง) — Frontend เอาไปแสดงยืนยันกับผู้ใช้ได้ตรงๆ
+
+**ผลต่อตัวเลขในพอร์ต** (ดูตารางเต็มที่ [DATABASE.md](./DATABASE.md) — กฎการคำนวณของแต่ละ `type`)
+
+| | ผล |
+|---|---|
+| จำนวนที่ถือ (`heldQty`) | **ไม่เปลี่ยน** |
+| ต้นทุน (`costBasis`) | **ไม่เปลี่ยน** |
+| กำไรที่รับรู้แล้ว (`realizedPnL`) | **ไม่รวม** (ปันผลเป็นรายได้ คนละก้อนกับกำไรส่วนต่างราคา) |
+| เงินปันผลสะสม (`totalDividendThb`) | **+`amountThb`** |
+
+**Error**
+
+| Code | HTTP | เมื่อไหร่ |
+|---|---|---|
+| `VALIDATION_ERROR` | 400 | `assetId` ไม่ใช่ UUID · `amountThb`/`quantity` ≤ 0 หรือไม่ใช่ตัวเลข · `date` ไม่มีอยู่จริง |
+| `DATE_IN_FUTURE` | 400 | `date` เกินวันนี้ (ปันผลที่ยังไม่เกิดขึ้นห้ามเข้า Ledger) |
+| `NOTE_RESERVED_PREFIX` | 400 | `note` ขึ้นต้นด้วย `UNDO_OF:` |
+| `ASSET_NOT_FOUND` | 400 | ไม่พบสินทรัพย์ หรือไม่ใช่ของผู้ใช้คนนี้ |
+| `NOTHING_TO_RECEIVE_DIVIDEND` | 403 | ไม่ได้ถือสินทรัพย์นี้อยู่ ณ `date` ที่ระบุ |
+
+> ⚠️ **ต่างจาก Design Doc § 4.5 หนึ่งจุดโดยตั้งใจ:** Design Doc ระบุ
+> `ASSET_NOT_FOUND` เป็น **404** — โค้ดจริงตอบ **400** เพราะ `ERROR_STATUS` เป็น
+> ตารางกลางที่ใช้ร่วมกับฝั่งขายซึ่ง Map ตัวนี้เป็น 400 มาตั้งแต่ต้น (Business Rule
+> ที่ผู้ใช้แก้เองได้ = 400 ตาม § 5-6) การให้ Code เดียวกันตอบคนละ Status ตาม
+> Endpoint จะทำให้ Frontend ต้องจำข้อยกเว้นรายเส้นทาง
+
+**การย้อนรายการปันผล** ใช้ `POST /transactions/undo-last` ตัวเดิม — ระบบสร้างแถว
+`dividend_reversal` (ไม่ใช่ `buy`/`sell` และไม่ลบ/ไม่แก้แถวเดิม ตาม Immutable Ledger)
+ยอดถือไม่ขยับทั้งตอนรับปันผลและตอนย้อน สิ่งเดียวที่กลับไปเป็นเหมือนเดิมคือ
+**ยอดเงินปันผลสะสม**
 
 ---
 

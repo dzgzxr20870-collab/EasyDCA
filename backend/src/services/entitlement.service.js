@@ -21,6 +21,18 @@ const FREE_TIER_ASSET_LIMIT = 2;
 // DCA Planner ผูกกับ Asset โดยธรรมชาติ Free จึงตั้งได้ 2 แผน Active เท่าจำนวนสินทรัพย์ที่ถือได้
 const FREE_TIER_DCA_PLAN_LIMIT = 2;
 
+// ═══════════════════════════════════════════════════════════════════════
+// เพดานจำนวนพอร์ต (Stage 8 — Multi-Portfolio)
+// ═══════════════════════════════════════════════════════════════════════
+// Free = 1 พอร์ตเท่านั้น (AI_CONTEXT.md บรรทัด 95: Multiple Portfolio Free ❌)
+// หลัง migration 044 ผู้ใช้ทุกคนมีพอร์ต Default 1 อันเป๊ะอยู่แล้ว → Free จึง
+// "มีพอร์ตอยู่แล้ว 1 อัน แต่สร้างเพิ่มไม่ได้" ไม่ใช่ "ไม่มีพอร์ตเลย"
+const FREE_TIER_PORTFOLIO_LIMIT = 1;
+
+// เพดานของ Premium เป็น Sanity Cap กัน Abuse ไม่ใช่ Monetization Cap
+// (มติ Founder 23 ส.ค. 2569 § 8.1(ข))
+const PORTFOLIO_SANITY_CAP = 50;
+
 // true เมื่อ user เป็น Premium ที่ยังไม่หมดอายุ ณ ขณะนี้
 function isPremiumActive(user) {
   if (!user) return false;
@@ -40,6 +52,73 @@ function getActiveDcaPlanLimit(user) {
   return isPremiumActive(user) ? null : FREE_TIER_DCA_PLAN_LIMIT;
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// getActivePortfolioLimit — "สร้าง/เขียนพอร์ตได้กี่อัน" ณ ขณะนี้
+// ═══════════════════════════════════════════════════════════════════════
+// ⚠️ ต่างจาก getActiveAssetLimit/getActiveDcaPlanLimit ตรงที่ **ไม่มีวันคืน null**
+// เพราะแม้แต่ Premium ก็มี Sanity Cap 50 — Caller จึงไม่ต้องมี Branch
+// "null = ไม่จำกัด" สำหรับพอร์ตเลย
+function getActivePortfolioLimit(user) {
+  return isPremiumActive(user) ? PORTFOLIO_SANITY_CAP : FREE_TIER_PORTFOLIO_LIMIT;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// getWritablePortfolioIds — "Premium หมดอายุ = อ่านได้ เขียนไม่ได้"
+// ═══════════════════════════════════════════════════════════════════════
+// มติ Founder 23 ส.ค. 2569 § 8.1(ก): ผู้ใช้ที่เคยเป็น Premium แล้วสร้างไว้ 3 พอร์ต
+// พอหมดอายุ **ห้ามลบข้อมูลเด็ดขาด** (กฎเหล็กข้อ 2) — พอร์ตส่วนเกินยังเปิดดู
+// ย้อนหลังได้ปกติ · ต่ออายุแล้วกลับมาเขียนได้ทันทีโดยไม่ต้องทำอะไรเพิ่ม
+// (ฟังก์ชันนี้คำนวณสดทุกครั้ง ไม่เก็บลง DB)
+//
+// ⚠️ "เขียนไม่ได้" ในที่นี้หมายถึง **"เพิ่มของใหม่ไม่ได้" เท่านั้น** ไม่ใช่
+// "ทำอะไรไม่ได้เลย" — การขาย / Undo / ย้ายสินทรัพย์ออกไปพอร์ตหลัก **ยังทำได้เสมอ**
+// (มติ Founder 24 ส.ค. 2569 · ดู portfolios.service.assertCanAddToPortfolio)
+//
+// ── ⭐ ตัดสินด้วย is_default ไม่ใช่ created_at เก่าสุด (มติ Founder 24 ส.ค. 2569) ──
+// เดิมใช้ "พอร์ตที่ created_at เก่าสุด = พอร์ตที่ยังเขียนได้" ซึ่ง Deterministic ดี
+// แต่ **มักไม่ใช่พอร์ตที่ผู้ใช้ใช้จริง**: พอร์ตเก่าสุดคือตัวที่ migration 044
+// Backfill สร้างให้อัตโนมัติ (ชื่อ Default ชนิด 'custom' อาจแทบว่างเปล่า) ส่วน
+// พอร์ตที่เขาใช้จริงคือตัวที่สร้างเองทีหลัง → ล็อกผิดตัว ผู้ใช้จะเขียนพอร์ตหลัก
+// ของตัวเองไม่ได้ทั้งที่เขียนพอร์ตร้างได้
+//
+// `is_default` คือ "พอร์ตหลักของผู้ใช้" ตามความหมายอยู่แล้ว และ **ผู้ใช้เปลี่ยนได้เอง**
+// ผ่าน PATCH /portfolios/{id} { isDefault: true } → ไม่ถูกขังอยู่กับพอร์ตที่ระบบ
+// เลือกให้ · DB การันตีว่ามีได้ 1 อันต่อ user เป๊ะ (idx_portfolios_one_default_per_user)
+//
+// ⚠️ **Fallback = created_at + tie-break id ยังต้องอยู่ ห้ามลบทิ้ง** — ใช้เมื่อ
+// is_default หายไป (Invariant ของ migration 044/045 พัง หรือชุดข้อมูลที่ส่งเข้ามา
+// ไม่มีพอร์ต Default เลย) ถ้าไม่มี Fallback ฟังก์ชันจะคืน Set ว่าง = ล็อกผู้ใช้
+// ออกจากทุกพอร์ตพร้อมกัน ซึ่งแย่กว่าการเลือกผิดตัวมาก
+//
+// ⚠️ Tie-break ด้วย id เมื่อ created_at เท่ากันเป๊ะ — จำเป็นจริง ไม่ใช่กันเหนียว:
+// migration 044 Backfill สร้างพอร์ตให้ผู้ใช้ทุกคนใน Transaction เดียว ซึ่ง now()
+// ของ Postgres คงที่ทั้ง Transaction → พอร์ตที่เกิดพร้อมกันจะมี created_at
+// เท่ากันทุกตัวอักษร ถ้าไม่ Tie-break ลำดับจะขึ้นกับ Physical Row Order ของ
+// Postgres ซึ่งเปลี่ยนได้ทุกเมื่อ (หลัง VACUUM/UPDATE)
+//
+// portfolios = รายการพอร์ตทั้งหมดของ user คนนั้น (ไม่ต้องเรียงมาก่อน)
+// คืน Set ของ id ที่ "เขียนได้" — Caller เช็คด้วย .has(portfolioId)
+function getWritablePortfolioIds(user, portfolios) {
+  const limit = getActivePortfolioLimit(user);
+  const list = [...(portfolios ?? [])];
+
+  // เรียงตาม created_at (เก่า→ใหม่) + tie-break ด้วย id — เป็นทั้งลำดับ Fallback
+  // และลำดับของ "พอร์ตที่เหลือ" เมื่อเพดาน > 1 (Premium ที่ชน Sanity Cap 50)
+  list.sort((a, b) => {
+    const at = new Date(a.createdAt ?? 0).getTime();
+    const bt = new Date(b.createdAt ?? 0).getTime();
+    if (at !== bt) return at - bt;
+    return String(a.id).localeCompare(String(b.id));
+  });
+
+  // ⭐ พอร์ตหลัก (is_default) ต้องมาก่อนเสมอ แล้วค่อยตามด้วยพอร์ตอื่นตามลำดับเดิม
+  // → เพดาน 1 (Free/หมดอายุ) จะได้พอร์ต Default เป็นตัวที่เขียนได้
+  // → เพดาน 50 (Premium) ได้ครบทุกพอร์ตอยู่แล้ว ลำดับไม่มีผล
+  const ordered = [...list.filter((p) => p.isDefault), ...list.filter((p) => !p.isDefault)];
+
+  return new Set(ordered.slice(0, limit).map((p) => p.id));
+}
+
 // คำนวณวันหมดอายุใหม่หลังต่ออายุ ตามกติกา Stacking:
 //   - ถ้ายังมีอายุเหลือ (currentExpiresAt อยู่ในอนาคต) → ต่อจากวันหมดอายุเดิม
 //     (ไม่เสียวันที่เหลือ) มิฉะนั้น (ไม่มี/หมดอายุแล้ว) → เริ่มนับจาก now
@@ -54,8 +133,12 @@ function computeRenewalExpiry(currentExpiresAt, billingPeriod, now = new Date())
     throw new Error(`Invalid billingPeriod: ${billingPeriod} (expected 'monthly' or 'yearly')`);
   }
 
+  // เขียนเทียบ null/undefined แยกกันแทน `!= null` เพื่อให้ผ่าน eqeqeq ของ ESLint
+  // (พฤติกรรมเหมือนเดิมเป๊ะ: `x != null` ≡ `x !== null && x !== undefined`)
   const hasRemainingTime =
-    currentExpiresAt != null && new Date(currentExpiresAt).getTime() > now.getTime();
+    currentExpiresAt !== null &&
+    currentExpiresAt !== undefined &&
+    new Date(currentExpiresAt).getTime() > now.getTime();
 
   // ฐานการนับ: วันหมดอายุเดิม (ถ้ายังเหลือ) หรือ now (ถ้าไม่มี/หมดแล้ว)
   const base = hasRemainingTime ? new Date(currentExpiresAt) : new Date(now);
@@ -73,8 +156,12 @@ function computeRenewalExpiry(currentExpiresAt, billingPeriod, now = new Date())
 module.exports = {
   FREE_TIER_ASSET_LIMIT,
   FREE_TIER_DCA_PLAN_LIMIT,
+  FREE_TIER_PORTFOLIO_LIMIT,
+  PORTFOLIO_SANITY_CAP,
   isPremiumActive,
   getActiveAssetLimit,
   getActiveDcaPlanLimit,
+  getActivePortfolioLimit,
+  getWritablePortfolioIds,
   computeRenewalExpiry,
 };

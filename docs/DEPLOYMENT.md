@@ -188,6 +188,31 @@
     ว่าไม่มี Error ผิดปกติในช่วงแรกที่เริ่มรับ Traffic จริง
 ```
 
+### 3.3 ⭐ Feature Flag ของหน้าใหม่ — เปิดทีหลัง ไม่ใช่พร้อม Deploy
+
+> **กฎ: Deploy โค้ดกับเปิด Flag เป็นคนละเหตุการณ์ ห้ามทำพร้อมกัน**
+>
+> ถ้าเปิด Flag พร้อม Deploy แล้วมีปัญหา จะแยกไม่ออกว่าสาเหตุคือ "โค้ดใหม่ทั้งก้อน"
+> หรือ "หน้าใหม่ที่เพิ่งเปิด" — และ Rollback ต้องย้อนโค้ดทั้งหมดแทนที่จะปิดสวิตช์เดียว
+
+| Flag | Deploy รอบแรก | เปิดเมื่อไหร่ |
+|---|---|---|
+| `VITE_ENABLE_MULTIPAGE_APP` (Dashboard แยกหน้า `/app/*` — Stage 9) | **ยังไม่ต้องเปิด** | หลัง Deploy สำเร็จ + **เปิดดูหน้าเว็บด้วยตาบน Production แล้ว** เท่านั้น |
+
+ลำดับที่ถูกต้อง:
+
+```
+[1] Deploy โค้ด (Flag ยังไม่ตั้ง = ปิด) → /dashboard เดิมต้องทำงานปกติทุกอย่าง
+[2] ยืนยันว่า Log สะอาด + /dashboard เดิมไม่มีอะไรเปลี่ยน
+[3] ตั้ง VITE_ENABLE_MULTIPAGE_APP=true ที่ Service ของ React App → Redeploy
+    ⚠️ Vite ฝังค่าตอน Build — ตั้งเฉยๆ ไม่ Redeploy จะไม่มีผลใดๆ
+[4] เปิด /app/dashboard ด้วยตา ตรวจครบทุกหน้า (portfolio / transactions / dca / profile)
+[5] ถ้ามีปัญหา → ลบ Variable ออกแล้ว Redeploy (ไม่ต้อง Revert โค้ด)
+```
+
+⚠️ **ตั้งที่ Service ของ React App เท่านั้น** ไม่ใช่ `backend` / `easydca-worker`
+(ดูรายละเอียดค่าที่รับได้ใน [ENV_VARIABLES.md § Frontend](./ENV_VARIABLES.md))
+
 ---
 
 ## 4. Database Migration Workflow
@@ -390,6 +415,8 @@ Review Checklist ใน [CODING_STANDARD.md § 5](./CODING_STANDARD.md)
 - [ ] ทดสอบ Feature/Fix บน Staging แล้วทำงานถูกต้องตรงตามที่ตั้งใจ
 - [ ] Environment Variables บน Production ตั้งค่าครบและถูกต้องตาม
       หัวข้อ 2 (โดยเฉพาะค่าที่เพิ่งเพิ่มใหม่)
+- [ ] **Feature Flag ของหน้าใหม่ยังปิดอยู่** ตอน Deploy รอบแรก (หัวข้อ 3.3)
+      — เปิดหลัง Verify ด้วยตาแล้วเท่านั้น
 - [ ] ถ้ามี Schema Migration: Backup ก่อน Migration เสร็จแล้ว และทดสอบ
       บน Staging ผ่านตามหัวข้อ 4
 - [ ] RLS Policy ของ Table ใหม่/ที่แก้ไข ทดสอบแล้วว่าใช้งานได้จริงตาม

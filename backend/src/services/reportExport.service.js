@@ -24,6 +24,8 @@ const priceFeedService = require('./priceFeed.service');
 const fxRateService = require('./fxRate.service');
 const transactionRepository = require('../repositories/transaction.repository');
 const userRepository = require('../repositories/user.repository');
+// Stage 6a — แหล่งตัดสิน "ความหมายของ transaction type" ที่เดียวของทั้งระบบ
+const { thaiLabel, directionTone } = require('../utils/transactionType.util');
 const {
   THAI_MONTH_NAMES,
   formatThaiDate,
@@ -526,14 +528,20 @@ function buildPdfReport(data) {
         );
       } else {
         for (const tx of data.transactions) {
-          const isBuy = tx.type === 'buy';
+          // Stage 6a — เดิม `const isBuy = tx.type === 'buy'` แล้วตกทุก type ที่เหลือ
+          // เป็น "ขาย" ทำให้ PDF Export แสดงรายการปันผลผิด (Design Doc § 2)
+          const isPositive =
+            directionTone(tx.type, 'reportExport.pdf') === 'positive';
           y = drawTableRow(
             doc,
             txCols,
             [
               { text: tx.date },
               { text: tx.symbol ?? '-' },
-              { text: isBuy ? 'ซื้อ' : 'ขาย', color: isBuy ? PDF_COLOR.profit : PDF_COLOR.loss },
+              {
+                text: thaiLabel(tx.type, 'reportExport.pdf'),
+                color: isPositive ? PDF_COLOR.profit : PDF_COLOR.loss,
+              },
               { text: formatQty(tx.quantity), align: 'right' },
               { text: formatMoneyCur(tx.pricePerUnit, tx.currency), align: 'right' },
               { text: formatMoneyCur(tx.amountThb, tx.currency), align: 'right' },
@@ -694,9 +702,11 @@ async function buildExcelReport(data) {
         tx.date,
         tx.symbol ?? '-',
         // Multi-Currency (Round 10) — กำกับสกุล USD ที่คอลัมน์ประเภท (THB คงเดิม)
+        // Stage 6a — เดิม `tx.type === 'buy' ? 'ซื้อ' : 'ขาย'` ตกทุก type ที่เหลือ
+        // เป็น "ขาย" ทำให้ Excel Export แสดงรายการปันผลผิด (Design Doc § 2)
         tx.currency === 'USD'
-          ? `${tx.type === 'buy' ? 'ซื้อ' : 'ขาย'} · USD`
-          : tx.type === 'buy' ? 'ซื้อ' : 'ขาย',
+          ? `${thaiLabel(tx.type, 'reportExport.xlsx')} · USD`
+          : thaiLabel(tx.type, 'reportExport.xlsx'),
         tx.quantity,
         tx.pricePerUnit,
         tx.amountThb,

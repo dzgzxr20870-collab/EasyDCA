@@ -22,6 +22,14 @@ router.use(requireConsent);
 
 router.post('/', transactionsController.createTransaction);
 
+// บันทึกเงินปันผลรับ (Stage 6b — migration 047) · Free ทุกแพ็กเกจ ตามมติ Founder Q4.5
+//
+// ⚠️ ต้องประกาศ "ก่อน" Route ที่มี Param ('/:id/slip') เสมอ — Express จับคู่ตามลำดับ
+// ที่ประกาศ ถ้าอยู่หลังกัน Path '/dividend' จะไม่ชนกับ '/:id/slip' อยู่ดี (คนละจำนวน
+// Segment) แต่การวางไว้ข้างบนทำให้ลำดับ "Path คงที่มาก่อน Path ที่มี Param" เป็นกฎ
+// ที่อ่านออกจากไฟล์ได้ตรงๆ ไม่ต้องนั่งนับ Segment ตอนเพิ่ม Route ใหม่ในอนาคต
+router.post('/dividend', transactionsController.createDividend);
+
 // ยกเลิกรายการ "ล่าสุดของตัวเอง" — จงใจไม่มี :id ใน Path (ดู undoTransaction.service:
 // Immutable Ledger ไม่มี DELETE by id และ Service หารายการล่าสุดจาก userId เอง)
 router.post('/undo-last', transactionsController.undoLast);

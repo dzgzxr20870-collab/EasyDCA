@@ -1,5 +1,11 @@
 const portfolioService = require('../services/portfolio.service');
 const profitService = require('../services/profit.service');
+// Stage 5 (migration 046) — assertOwnedBrokerId: ด่านบังคับก่อนเอา brokerId จาก
+// Query String ของผู้ใช้ไปใช้ (FK ตรวจแค่ว่ามีอยู่ ไม่ได้ตรวจว่าเป็นของใคร)
+const brokerService = require('../services/broker.service');
+// assertOwnedPortfolioId — ด่านบังคับก่อนเอา portfolioId จาก Query String ไปใช้
+// (กฎยืนข้อ 4 · คู่แฝดของ assertOwnedBrokerId)
+const portfoliosService = require('../services/portfolios.service');
 const fxRateService = require('../services/fxRate.service');
 const dashboardOverviewService = require('../services/dashboardOverview.service');
 const transactionRepository = require('../repositories/transaction.repository');
@@ -95,9 +101,64 @@ async function getHistory(req, res) {
 // เพราะฝั่ง Web ยังไม่มี Requirement เรื่องข้อความ)
 async function getProfit(req, res) {
   try {
-    const profit = await profitService.getAssetProfit(req.user.id, req.params.symbol.toUpperCase());
+    // Stage 5 (migration 046) — ?brokerId=<uuid|none> เจาะจงว่าหมายถึงสินทรัพย์
+    // แถวไหน เมื่อผู้ใช้ถือ Symbol เดียวกันหลายโบรก
+    //   ไม่ส่งมาเลย = undefined → ถ้ากำกวมจะได้ 409 AMBIGUOUS_ASSET_BROKER กลับไป
+    //                 พร้อม candidates ให้ Frontend เอาไปทำตัวเลือก
+    //   'none'      = เจาะจงแถวที่ไม่ได้ผูกโบรก (null) — ไม่ใช่ "ยังไม่ได้ระบุ"
+    //
+    // ⚠️ ต้องผ่าน assertOwnedBrokerId เสมอ: brokerId มาจาก Query String ที่ผู้ใช้
+    // กำหนดเองได้ 100% (Design Doc § 6.3)
+    const rawBroker = req.query.brokerId;
+    const brokerId =
+      rawBroker === undefined
+        ? undefined
+        : await brokerService.assertOwnedBrokerId(req.user.id, rawBroker === 'none' ? null : rawBroker);
+
+    // ⚠️⚠️ **ห้ามส่ง `null` แบบ Hardcode ตรงนี้** (Stage 8-fix รอบ 4 — 27 ส.ค. 2569)
+    // เดิมบรรทัด portfolioId ส่ง `null` ซึ่งแปลว่า "เจาะจงว่าไม่มีพอร์ต" →
+    // หลัง Backfill ของ 044 ไม่เหลือแถวแบบนั้นเลย → **404 ASSET_NOT_FOUND ทุกครั้ง**
+    //
+    // กติกาเดียวกับ brokerId ข้างบนเป๊ะ (ไม่ใช่ Pattern ใหม่):
+    //   ไม่ส่งมาเลย = undefined → ไม่กรองพอร์ต · กำกวมเมื่อไหร่ได้ 409 พร้อม candidates
+    //   'none'      = เจาะจงแถวที่ไม่ได้สังกัดพอร์ต (null) — โลกก่อน 044
+    //   '<uuid>'    = เจาะจงพอร์ตนั้น
+    //
+    // ⚠️ ต้องผ่าน assertOwnedPortfolioId เสมอ: มาจาก Query String ที่ผู้ใช้กำหนดเอง
+    // ได้ 100% (กฎยืนข้อ 4) — เหตุผลเดียวกับ brokerId
+    const rawPortfolio = req.query.portfolioId;
+    const portfolioId =
+      rawPortfolio === undefined
+        ? undefined
+        : await portfoliosService.assertOwnedPortfolioId(
+            req.user.id,
+            rawPortfolio === 'none' ? null : rawPortfolio
+          );
+
+    const profit = await profitService.getAssetProfit(
+      req.user.id,
+      req.params.symbol.toUpperCase(),
+      portfolioId,
+      {},
+      brokerId
+    );
     return res.status(200).json(profit);
   } catch (err) {
+    // กำกวม = "คำขอยังไม่ครบพอจะตอบได้" ไม่ใช่ "ไม่พบ" — ตอบ 409 พร้อม candidates
+    // ให้ Frontend ถามผู้ใช้ต่อได้ทันทีโดยไม่ต้องยิง Query เพิ่ม
+    // ⚠️ ต้องครอบ **ทั้งสองมิติ** — ถ้าครอบแค่ BROKER มิติพอร์ตจะหลุดไปเป็น
+    // 500 INTERNAL_ERROR ทั้งที่เป็นคำขอที่ถูกต้องแค่ยังไม่ครบพอจะตอบได้
+    if (err?.code === 'AMBIGUOUS_ASSET_BROKER' || err?.code === 'AMBIGUOUS_ASSET_PORTFOLIO') {
+      return res
+        .status(409)
+        .json({ error: err.code, candidates: err.details?.candidates ?? [] });
+    }
+    if (err instanceof portfoliosService.PortfolioServiceError) {
+      return res.status(err.code === 'PORTFOLIO_NOT_FOUND' ? 404 : 400).json({ error: err.code });
+    }
+    if (err instanceof brokerService.BrokerServiceError) {
+      return res.status(err.code === 'BROKER_NOT_FOUND' ? 404 : 400).json({ error: err.code });
+    }
     if (err instanceof profitService.ProfitServiceError) {
       return res.status(404).json({ error: err.code });
     }
@@ -122,6 +183,11 @@ async function getMe(req, res) {
       planExpiresAt: user.planExpiresAt ?? null,
       isPremiumActive: entitlementService.isPremiumActive(user),
       assetLimit: entitlementService.getActiveAssetLimit(user),
+      // Stage 9 — เพดานพอร์ต ณ ตอนนี้ (Free 1 / Premium 50)
+      // ⚠️ ส่งมาจาก Backend เสมอ **ห้าม Frontend Hardcode ตัวเลขเอง** — Demo เดิม
+      // (lib/demo/planEntitlements.js) Hardcode ไว้แล้วต้องมานั่ง grep เทียบกับ
+      // entitlement.service ทุกครั้งที่แก้ ซึ่งเป็นวิธีที่ "สอนผิดจากระบบจริง" ได้ง่าย
+      portfolioLimit: entitlementService.getActivePortfolioLimit(user),
       // role มาจาก JWT (req.user.role) ที่ requireAuth แนบไว้ — Frontend ใช้ตัดสิน
       // ว่าจะเปิด Route /admin ให้ไหม (Source เดียวกับที่ requireAdmin ใช้ ไม่คำนวณซ้ำ)
       role: req.user.role,

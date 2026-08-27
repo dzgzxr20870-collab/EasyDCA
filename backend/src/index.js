@@ -15,6 +15,9 @@ const paymentRoutes = require('./routes/payment.routes');
 const adminRoutes = require('./routes/admin.routes');
 const reportsRoutes = require('./routes/reports.routes');
 const assetsRoutes = require('./routes/assets.routes');
+const brokersRoutes = require('./routes/brokers.routes');
+const portfoliosRoutes = require('./routes/portfolios.routes');
+const portfolioRoutes = require('./routes/portfolio.routes');
 const transactionsRoutes = require('./routes/transactions.routes');
 const dcaPlansRoutes = require('./routes/dcaPlans.routes');
 const supportRoutes = require('./routes/support.routes');
@@ -161,6 +164,20 @@ app.use('/api/v1/dashboard', dashboardRoutes);
 
 // Mount Assets Routes (S8 Round 1a — Dropdown ค้นหาสินทรัพย์บนเว็บ) ที่ /api/v1/assets
 app.use('/api/v1/assets', assetsRoutes);
+
+// Mount Brokers Routes (Stage 1 — โบรก/Exchange ต่อ User, migration 042) ที่
+// /api/v1/brokers — ใช้ผูกกับ assets.broker_id เพื่อทำ Broker Allocation บนเว็บ
+// ทุก Endpoint เป็น Free (ดู brokers.controller.js)
+app.use('/api/v1/brokers', brokersRoutes);
+
+// Mount Portfolios Routes (Stage 8 — Multi-Portfolio, migration 044) ที่
+// /api/v1/portfolios — GET เป็น Free เพราะหลัง Backfill ทุกคนมีพอร์ต Default
+// ตัวคุมสิทธิ์จริงคือ POST (Free สร้างพอร์ตที่ 2 ไม่ได้) ดู portfolios.controller.js
+app.use('/api/v1/portfolios', portfoliosRoutes);
+
+// Mount Portfolio (เอกพจน์) Routes (Stage 8 — Allocation สำหรับกราฟโดนัท) ที่
+// /api/v1/portfolio — Free ทั้งหมด (เป็นการดูพอร์ตของตัวเอง ไม่ใช่ Multi-portfolio)
+app.use('/api/v1/portfolio', portfolioRoutes);
 
 // Mount Transactions Routes (S8 Round 1a — กล่องบันทึก DCA บนเว็บ) ที่ /api/v1/transactions
 // บันทึกผ่าน transaction.service ตัวเดียวกับ LINE ทุกประการ (ดู transactions.controller.js)

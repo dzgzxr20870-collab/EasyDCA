@@ -1,12 +1,20 @@
 const transactionService = require('../services/transaction.service');
 const undoTransactionService = require('../services/undoTransaction.service');
 const symbolRegistry = require('../services/symbolRegistry.service');
+// Stage 5 (migration 046) — assertOwnedBrokerId: ด่านบังคับก่อนเอา brokerId จาก
+// Request Body ไปใช้ (FK ตรวจแค่ว่ามีอยู่จริง ไม่ได้ตรวจว่าเป็นของใคร)
+const brokerService = require('../services/broker.service');
+// Stage 6b (migration 047) — บันทึกเงินปันผลรับ แยก Service ออกจาก transaction.service
+// โดยตั้งใจ (Design Doc § 4.5) เพราะ Payload/กฎการคำนวณต่างกันเชิงความหมายทั้งชุด
+const dividendService = require('../services/dividend.service');
 const dcaStatsService = require('../services/dcaStats.service');
 const transactionRepository = require('../repositories/transaction.repository');
 const entitlementService = require('../services/entitlement.service');
 const storageService = require('../services/storage.service');
 const slipOcrService = require('../services/slipOcr.service');
 const slipOcrAccess = require('../services/slipOcrAccess.service');
+// Stage 6a — แหล่งตัดสิน "ความหมายของ transaction type" ที่เดียวของทั้งระบบ
+const { thaiLabel } = require('../utils/transactionType.util');
 
 // ═══════════════════════════════════════════════════════════════════════════
 // transactions.controller — บันทึก DCA (ซื้อ) และการขาย จากเว็บ (S8 Round 1a)
@@ -74,7 +82,29 @@ const WEB_ERROR_MESSAGES = {
   // แล้ว) แต่ไม่เคยถูก Map ที่ชั้นนี้เลยเพราะเว็บยังไม่มีปุ่มขาย — ถ้าไม่เติม
   // จะตกไป INTERNAL_ERROR 500 ทั้งที่เป็น Business Rule ที่ผู้ใช้แก้เองได้ (400)
   ASSET_NOT_FOUND: 'คุณยังไม่มีสินทรัพย์นี้ในพอร์ต จึงบันทึกการขายไม่ได้',
+  // Stage 5 (migration 046) — ถือ Symbol เดียวกันหลายโบรก แต่คำขอไม่ระบุว่าโบรกไหน
+  // (details.candidates พก assetId/brokerId ไปให้ Frontend ทำตัวเลือกได้ทันที)
+  AMBIGUOUS_ASSET_BROKER:
+    'คุณถือสินทรัพย์นี้อยู่มากกว่า 1 โบรก/Exchange กรุณาเลือกก่อนว่าจะบันทึกรายการนี้ที่ไหน',
+  // Stage 8-fix — ถือ Symbol เดียวกันอยู่หลายพอร์ต แต่คำขอไม่ระบุว่าพอร์ตไหน
+  // ⚠️ ต้อง Reject ไม่ใช่เดาว่าเป็นพอร์ตหลัก (กฎยืนข้อ 11) — การเดาแล้วสร้างแถวใหม่
+  // ในพอร์ตหลักทั้งที่ผู้ใช้ถืออยู่ในพอร์ตอื่น = ประวัติแตกคนละ asset_id
+  AMBIGUOUS_ASSET_PORTFOLIO:
+    'คุณถือสินทรัพย์นี้อยู่ในมากกว่า 1 พอร์ต กรุณาเลือกก่อนว่าจะบันทึกรายการนี้เข้าพอร์ตไหน',
+  BROKER_NOT_FOUND: 'ไม่พบโบรก/Exchange ที่เลือก (อาจถูกลบไปแล้ว) กรุณาเลือกใหม่อีกครั้ง',
+  // Stage 8-fix — พอร์ตส่วนเกินหลัง Premium หมดอายุ (มติ Founder 24 ส.ค. 2569)
+  // ⚠️ ต้องบอกทางออกที่ยังทำได้จริงให้ครบ ไม่ใช่แค่ "อ่านอย่างเดียว" ซึ่งชวนให้
+  // เข้าใจว่าทำอะไรไม่ได้เลย แล้วผู้ใช้จะไม่บันทึกการขายที่เกิดขึ้นจริง
+  PORTFOLIO_READ_ONLY:
+    'พอร์ตนี้เพิ่มรายการใหม่ไม่ได้ เพราะแพ็กเกจ Premium หมดอายุแล้ว — แต่ยังบันทึกการขาย ย้อนรายการล่าสุด และย้ายสินทรัพย์ออกไปพอร์ตหลักได้ตามปกติ ข้อมูลเดิมอยู่ครบทุกรายการ ต่ออายุแล้วกลับมาเพิ่มรายการได้ทันที',
+  PORTFOLIO_NOT_FOUND: 'ไม่พบพอร์ตที่เลือก (อาจถูกลบไปแล้ว)',
   NOTHING_TO_SELL: 'สินทรัพย์นี้ขายออกไปหมดแล้ว ไม่มียอดคงเหลือให้ขาย',
+  // ── Stage 6b (dividend) ────────────────────────────────────────────────────
+  // ข้อความต้องบอก "วันที่" ที่ระบบใช้ตัดสินด้วย เพราะกรณีที่พบบ่อยที่สุดคือผู้ใช้
+  // บันทึกย้อนหลังแล้วใส่วันผิด (ไม่ใช่ "ไม่เคยถือหุ้นตัวนี้") — ถ้าบอกแค่ "ไม่ได้ถือ"
+  // ผู้ใช้จะไม่รู้ว่าต้องไปแก้ช่องวันที่
+  NOTHING_TO_RECEIVE_DIVIDEND:
+    'คุณยังไม่มีสินทรัพย์นี้ในพอร์ต ณ วันที่ระบุ จึงบันทึกเงินปันผลไม่ได้ กรุณาตรวจสอบวันที่ หรือบันทึกรายการซื้อก่อน',
   INSUFFICIENT_QUANTITY: 'ขายเกินจำนวนที่ถืออยู่จริง กรุณาตรวจสอบยอดคงเหลือแล้วลองใหม่',
   SELL_PRICE_REQUIRED: 'กรุณากรอก "ราคาที่ขายได้ต่อหน่วย" ด้วย (หรือกดปุ่ม "ขายทั้งหมด" เพื่อใช้ราคาตลาด)',
   ASSET_LIMIT_REACHED:
@@ -146,7 +176,25 @@ const ERROR_STATUS = {
   // ฝั่งขาย — ทั้ง 4 ตัวเป็น Business Rule ที่ผู้ใช้แก้เองได้ (เลือกสินทรัพย์อื่น /
   // ลดจำนวน / กรอกราคา) จึงเป็น 400 ไม่ใช่ 404/500 ตาม API.md § 5-6
   ASSET_NOT_FOUND: 400,
+  // "คำขอยังไม่ครบพอจะตอบได้" ไม่ใช่ Input ผิดรูป — 409 (Pattern เดียวกับ
+  // ASSET_ALREADY_EXISTS: ขัดกับสถานะปัจจุบันของข้อมูล ไม่ใช่ Validation ล้วน)
+  AMBIGUOUS_ASSET_BROKER: 409,
+  AMBIGUOUS_ASSET_PORTFOLIO: 409,
+  BROKER_NOT_FOUND: 404,
+  // 403 = "แพ็กเกจไม่ให้ทำ" (Pattern เดียวกับ portfolios.controller)
+  PORTFOLIO_READ_ONLY: 403,
+  PORTFOLIO_NOT_FOUND: 404,
   NOTHING_TO_SELL: 400,
+  // ── Stage 6b (dividend) ────────────────────────────────────────────────────
+  // "ไม่ได้ถือสินทรัพย์นี้อยู่ ณ วันที่ระบุ" = สิทธิ์ในการบันทึกรายการนี้ไม่มีจริง
+  // ตามสถานะ Ledger ไม่ใช่ Input ผิดรูป → 403 ตาม Design Doc § 4.5
+  //
+  // ⚠️ Design Doc § 4.5 ระบุ ASSET_NOT_FOUND ของ dividend เป็น 404 — จงใจ "ไม่ทำตาม"
+  // เพราะ ERROR_STATUS เป็นตารางกลางที่ใช้ร่วมกับฝั่งขายซึ่ง Map ตัวนี้เป็น 400 มา
+  // ตั้งแต่ต้น (Business Rule ที่ผู้ใช้แก้เองได้ = 400 ตาม API.md § 5-6) การให้ Code
+  // เดียวกันตอบคนละ Status ตาม Endpoint จะทำให้ Frontend ต้องจำข้อยกเว้นรายเส้นทาง
+  // — ความสม่ำเสมอของ API สำคัญกว่าตัวเลขที่ Design Doc ร่างไว้ก่อนเห็นโค้ดจริง
+  NOTHING_TO_RECEIVE_DIVIDEND: 403,
   INSUFFICIENT_QUANTITY: 400,
   SELL_PRICE_REQUIRED: 400,
   NO_TRANSACTION_TO_UNDO: 400,
@@ -389,8 +437,43 @@ async function createTransaction(req, res) {
     return fail(res, 'PRICE_REQUIRED_FOR_ASSET', { symbol, type });
   }
 
+  // ── 6.5) โบรก/Exchange ที่ทำรายการนี้ (Stage 5 — migration 046) ────────────
+  // ผู้ใช้ถือ Symbol เดียวกันได้หลายโบรกแล้ว "symbol" จึงระบุสินทรัพย์ไม่ได้อีก
+  //   ไม่ส่ง Key มาเลย  = undefined → ถ้ากำกวมจริงจะได้ 409 AMBIGUOUS_ASSET_BROKER
+  //                       พร้อม candidates กลับไปให้ Frontend ถามผู้ใช้ต่อ
+  //   null / 'none'     = เจาะจงว่า "ไม่ระบุโบรก" (แถวที่ broker_id IS NULL)
+  //   '<uuid>'          = โบรกนั้น
+  //
+  // ⚠️ ต้องผ่าน assertOwnedBrokerId ก่อน "ทุกครั้ง" ห้ามส่งค่าดิบจาก Body ต่อ —
+  // FK ระดับ DB ตรวจได้แค่ "โบรกแถวนี้มีอยู่จริง" ไม่ได้ตรวจ "เป็นของใคร" ถ้าข้าม
+  // ขั้นนี้ ผู้ใช้ A จะสร้างสินทรัพย์ที่ผูกกับโบรกของผู้ใช้ B ได้ทันที (Design Doc § 6.3)
+  const hasBrokerKey = Object.prototype.hasOwnProperty.call(body, 'brokerId');
+  let brokerId;
+  if (hasBrokerKey) {
+    const raw = body.brokerId;
+    if (raw !== null && raw !== undefined && typeof raw !== 'string') {
+      return fail(res, 'VALIDATION_ERROR', { field: 'brokerId' });
+    }
+    try {
+      brokerId = await brokerService.assertOwnedBrokerId(
+        req.user.id,
+        raw === 'none' || raw === '' || raw === undefined ? null : raw
+      );
+    } catch (err) {
+      if (err instanceof brokerService.BrokerServiceError) {
+        return fail(res, err.code === 'BROKER_NOT_FOUND' ? 'BROKER_NOT_FOUND' : 'VALIDATION_ERROR', {
+          field: 'brokerId',
+        });
+      }
+      throw err;
+    }
+  }
+
   const params = {
     symbol,
+    // ส่งต่อ "ตามที่เป็น" — ไม่ใส่ Key เลยเมื่อผู้ใช้ไม่ได้ระบุ (undefined = ยังไม่ได้
+    // ถาม ≠ null = ตอบแล้วว่าไม่มีโบรก) ดูหัวไฟล์ assetResolution.service
+    ...(hasBrokerKey ? { brokerId } : {}),
     // type ใช้เฉพาะตอนซื้อ (validateBuy ต้องใช้สร้าง Asset ใหม่) — คำสั่งขายไม่ส่ง
     // เหมือนเส้นทาง LINE เป๊ะ (validateSell หา Asset จาก symbol ที่ผู้ใช้ถืออยู่จริง)
     ...(isSell ? {} : { type }),
@@ -573,6 +656,21 @@ async function createTransaction(req, res) {
       monthSummary: summary,
     });
   } catch (err) {
+    // Stage 5 (migration 046) — ผู้ใช้ถือ Symbol นี้หลายโบรก แต่คำขอไม่ได้บอกว่าโบรก
+    // ไหน: ตอบ 409 พร้อม candidates (assetId + brokerId) ให้ Frontend ถามผู้ใช้แล้ว
+    // ยิงซ้ำพร้อม brokerId — ห้ามเดาให้เองเด็ดขาด (กฎยืนข้อ 11)
+    if (err?.code === 'AMBIGUOUS_ASSET_PORTFOLIO') {
+      return fail(res, 'AMBIGUOUS_ASSET_PORTFOLIO', {
+        symbol: err.details?.symbol,
+        candidates: err.details?.candidates ?? [],
+      });
+    }
+    if (err?.code === 'AMBIGUOUS_ASSET_BROKER') {
+      return fail(res, 'AMBIGUOUS_ASSET_BROKER', {
+        symbol: err.details?.symbol,
+        candidates: err.details?.candidates ?? [],
+      });
+    }
     if (err instanceof transactionService.TransactionServiceError) {
       return fail(res, err.code, err.details ?? {});
     }
@@ -610,7 +708,9 @@ async function undoLast(req, res) {
       // "ย้อน" ไม่ใช่ "ยกเลิก" — รายการนี้บันทึกลง Ledger ไปแล้วจริงก่อนถูกกดย้อน
       // (Pattern เดียวกับ flexMessage.buildUndoMessage ฝั่ง LINE — มติ Founder:
       // ห้ามใช้คำเดียวกับ Pending ที่ยังไม่บันทึก)
-      message: `ย้อนรายการ${result.originalType === 'buy' ? 'ซื้อ' : 'ขาย'} ${result.symbol} เรียบร้อยแล้ว`,
+      // Stage 6a — เดิม `result.originalType === 'buy' ? 'ซื้อ' : 'ขาย'` ตกทุก type
+      // ที่เหลือเป็น "ขาย" ทำให้ข้อความ Undo ของปันผลผิด (Design Doc § 2)
+      message: `ย้อนรายการ${thaiLabel(result.originalType, 'transactions.undoLast')} ${result.symbol} เรียบร้อยแล้ว`,
     });
   } catch (err) {
     if (err instanceof undoTransactionService.UndoTransactionError) {
@@ -618,6 +718,124 @@ async function undoLast(req, res) {
     }
 
     console.error(`[transactions] undoLast failed: ${err.message}`);
+    return fail(res, 'INTERNAL_ERROR');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// POST /api/v1/transactions/dividend — บันทึกเงินปันผลรับ (Stage 6b / migration 047)
+// ═══════════════════════════════════════════════════════════════════════════
+// Body: { assetId, amountThb, date?, quantity?, note? }
+//
+// ── ทำไมเป็น Endpoint แยก ไม่ใช่ side='dividend' ของ POST /transactions ────────
+// Design Doc § 4.5: Payload ต่างกันเชิงความหมายจนแทบไม่มีอะไรร่วมกันเลย —
+// dividend ระบุสินทรัพย์ด้วย assetId ตรงๆ (ไม่ใช่ symbol+broker เพราะผู้ใช้เลือก
+// จากรายการในพอร์ตที่มีอยู่แล้ว จึงไม่มีทางกำกวมและไม่ต้องสร้าง Asset ใหม่),
+// ไม่มีทิศทาง, ไม่มีราคาที่ผู้ใช้กรอก, ไม่แตะ Price Feed / Registry / Asset Limit เลย
+// ถ้ายัดรวมกัน Validation ของ Endpoint เดิม (ยาว ~200 บรรทัด) จะกลายเป็น if-else
+// ตาม type ทุกขั้น ซึ่งเป็นจุดที่พลาดง่ายที่สุดบนเส้นทางเงิน
+//
+// ── Plan: Free (มติ Founder Q4.5) ────────────────────────────────────────────
+// จงใจ "ไม่มี" Premium Gate ที่นี่ — การบันทึกธุรกรรมพื้นฐานเป็นสิทธิ์ของทุกแพ็กเกจ
+// และไม่กระทบเพดานจำนวนสินทรัพย์ด้วย (ปันผลไม่ได้สร้าง Asset ใหม่)
+async function createDividend(req, res) {
+  const body = req.body ?? {};
+
+  // ── 1) assetId ─────────────────────────────────────────────────────────────
+  // ตรวจรูปแบบ UUID ก่อนส่งเข้า Repository — id ผิดรูปทำ Postgres throw 22P02
+  // แล้วตกไป 500 ทั้งที่ความหมายจริงคือ "ไม่พบสินทรัพย์" (Pattern เดียวกับ
+  // uploadTransactionSlip) · การยืนยัน "เป็นของ user คนนี้จริงไหม" อยู่ที่ Service
+  // ผ่าน queryForUser ไม่ใช่ที่นี่
+  if (typeof body.assetId !== 'string' || !UUID_RE.test(body.assetId)) {
+    return fail(res, 'VALIDATION_ERROR', { field: 'assetId' });
+  }
+
+  // ── 2) จำนวนเงินปันผลที่ได้รับจริง ─────────────────────────────────────────
+  const amountThb = toPositiveNumber(body.amountThb);
+  if (amountThb === null) {
+    return fail(res, 'VALIDATION_ERROR', { field: 'amountThb' });
+  }
+
+  // ── 3) จำนวนหน่วยที่ได้ปันผล (**บังคับ** — มติ Founder 24 ส.ค. 2569) ─────────
+  // เดิมเป็น Optional แล้วให้ Service เติมยอดถือ ณ วันนั้นให้ = Silent Default ซึ่ง
+  // ขัดกฎยืนข้อ 11 (เหตุผลเต็มอยู่ใน services/dividend.service.js บล็อกเดียวกัน)
+  //
+  // toPositiveNumber ปฏิเสธ 0 / '' / null / Array / NaN ให้อยู่แล้ว จึงครอบทั้ง
+  // "ไม่ส่งมาเลย" และ "ส่งมาแต่ใช้ไม่ได้" ด้วยเงื่อนไขเดียว
+  const quantity = toPositiveNumber(body.quantity);
+  if (quantity === null) {
+    return fail(res, 'VALIDATION_ERROR', { field: 'quantity' });
+  }
+
+  // ── 4) วันที่ได้รับปันผล (ไม่ส่ง = วันนี้ตาม Asia/Bangkok) ──────────────────
+  // ⚠️ "วันอนาคต" ต้องกันเหมือน POST /transactions เป๊ะ — ปันผลที่ยังไม่เกิดขึ้นจริง
+  // ไม่ควรเข้า Ledger (และจะทำให้ heldQuantityAsOf นับธุรกรรมที่ยังไม่มีด้วย)
+  let date;
+  if (body.date !== undefined && body.date !== null && body.date !== '') {
+    if (!isValidIsoDate(body.date)) {
+      return fail(res, 'VALIDATION_ERROR', { field: 'date' });
+    }
+    if (body.date > transactionService.todayInBangkok()) {
+      return fail(res, 'DATE_IN_FUTURE', {
+        date: body.date,
+        today: transactionService.todayInBangkok(),
+      });
+    }
+    date = body.date;
+  }
+
+  // ── 5) หมายเหตุ ────────────────────────────────────────────────────────────
+  // ⚠️ ต้องกัน Prefix 'UNDO_OF:' เหมือน createTransaction ทุกประการ — ถ้าลืมกันที่นี่
+  // ช่องโหว่ "ปลอมรายการเป็น Reversal" ที่ปิดไปแล้วฝั่งซื้อ/ขาย จะเปิดกลับมาทาง
+  // Endpoint ใหม่นี้แทน (แถวปันผลที่ note ขึ้นต้น UNDO_OF: จะถูก isReversal() นับเป็น
+  // รายการย้อน → ปุ่ม "ย้อนล่าสุด" ตอบ ALREADY_UNDONE ผิดๆ และรายการหายจากสถิติ)
+  let note;
+  if (body.note !== undefined && body.note !== null && body.note !== '') {
+    if (typeof body.note !== 'string') {
+      return fail(res, 'VALIDATION_ERROR', { field: 'note' });
+    }
+    if (body.note.length > MAX_NOTE_LENGTH) {
+      return fail(res, 'VALIDATION_ERROR', { field: 'note', maxLength: MAX_NOTE_LENGTH });
+    }
+    if (body.note.trim().toUpperCase().startsWith(`${undoTransactionService.UNDO_MARKER}:`)) {
+      return fail(res, 'NOTE_RESERVED_PREFIX', { field: 'note' });
+    }
+    note = body.note.trim() === '' ? undefined : body.note.trim();
+  }
+
+  try {
+    const result = await dividendService.recordDividend(
+      req.user.id,
+      { assetId: body.assetId, amountThb, quantity, date, note },
+      // userRecord ต้องส่งไปด้วย — dividend.service ใช้ตัดสินว่าพอร์ตของสินทรัพย์นี้
+      // ยังเขียนได้ไหม (พอร์ตส่วนเกินหลัง Premium หมดอายุ = เพิ่มของใหม่ไม่ได้)
+      { source: 'web', userRecord: req.userRecord }
+    );
+
+    return res.status(201).json({
+      transaction: {
+        transactionId: result.transaction.id,
+        type: result.transaction.type,
+        symbol: result.symbol,
+        amountTotal: Number(result.transaction.amountThb),
+        // จำนวนหน่วยที่ได้ปันผล + ปันผลต่อหน่วย (DPS) — ส่งกลับให้ Frontend ยืนยัน
+        // กับผู้ใช้ได้ว่าระบบเข้าใจตรงกัน (DPS เป็นค่าที่ระบบคำนวณให้ ไม่ใช่ค่าที่กรอก)
+        units: Number(result.transaction.quantity),
+        dividendPerUnit: result.dividendPerUnit,
+        currency: result.transaction.currency,
+        date: result.transaction.date,
+      },
+      // ⭐ ยอดถือต้องเท่าเดิมเป๊ะหลังบันทึกปันผล (Design Doc § 5.3) — ส่งค่าที่ DB
+      // คำนวณใต้ Lock จริงกลับไป ให้ Frontend เอาไปแสดง/เทียบได้โดยไม่ต้องเดา
+      heldQuantity: result.heldQuantity,
+      message: `บันทึกเงินปันผล ${result.symbol} เรียบร้อยแล้ว (ยอดถือในพอร์ตไม่เปลี่ยนแปลง)`,
+    });
+  } catch (err) {
+    if (err instanceof dividendService.DividendServiceError) {
+      return fail(res, err.code, err.details ?? {});
+    }
+
+    console.error(`[transactions] createDividend failed: ${err.message}`);
     return fail(res, 'INTERNAL_ERROR');
   }
 }
@@ -819,4 +1037,10 @@ async function scanSlipWithAi(req, res) {
   }
 }
 
-module.exports = { createTransaction, undoLast, uploadTransactionSlip, scanSlipWithAi };
+module.exports = {
+  createTransaction,
+  createDividend,
+  undoLast,
+  uploadTransactionSlip,
+  scanSlipWithAi,
+};

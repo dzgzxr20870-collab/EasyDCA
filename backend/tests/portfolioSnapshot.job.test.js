@@ -69,9 +69,56 @@ describe('runPortfolioSnapshot', () => {
 
     await runPortfolioSnapshot(DATE);
 
-    expect(profitService.getAssetProfit).toHaveBeenCalledWith('u1', 'AAPL', null, {
-      allowRetry: true,
+    expect(profitService.getAssetProfit).toHaveBeenCalledWith(
+      'u1',
+      'AAPL',
+      null,
+      { allowRetry: true },
+      // Stage 5 (migration 046) — Argument ที่ 5 คือโบรกของ holding แถวนั้น
+      // (holding() ตัวช่วยไม่ได้ผูกโบรก → null = "ไม่ระบุโบรก")
+      null
+    );
+  });
+
+  // ⚠️ Stage 5 (migration 046) — Regression ของบั๊กที่ "เงียบสนิท" ที่สุดในชุดนี้
+  // ถ้า Job ไม่ส่ง holding.brokerId ต่อ ผู้ใช้ที่ถือ Symbol เดียวกัน 2 โบรกจะได้
+  // AMBIGUOUS_ASSET_BROKER ทั้งสองแถว แล้วถูก catch นับเป็น excludedAssetCount →
+  // มูลค่าพอร์ตรายคืนขาด Symbol นั้นไปทั้งก้อนโดยไม่มี Error ให้เห็นเลย
+  // (Red-Green: ถอด `holding.brokerId ?? null` ออกจาก portfolioSnapshot.job → แดง)
+  test('⚠️ ถือ Symbol เดียวกัน 2 โบรก → ส่ง brokerId ของแต่ละ holding ต่อไปให้ครบทั้งคู่', async () => {
+    transactionRepository.findAllUserIdsWithTransactions.mockResolvedValue(['u1']);
+    portfolioService.getPortfolioSummary.mockResolvedValue({
+      holdings: [
+        { ...holding('BTC'), brokerId: 'broker-a' },
+        { ...holding('BTC'), brokerId: 'broker-b' },
+      ],
+      totalInvested: 30000,
+      isEmpty: false,
     });
+    profitService.getAssetProfit.mockResolvedValue(profit({ currentValue: 1000, profitLoss: 100 }));
+
+    await runPortfolioSnapshot(DATE);
+
+    expect(profitService.getAssetProfit).toHaveBeenCalledWith(
+      'u1',
+      'BTC',
+      null,
+      { allowRetry: true },
+      'broker-a'
+    );
+    expect(profitService.getAssetProfit).toHaveBeenCalledWith(
+      'u1',
+      'BTC',
+      null,
+      { allowRetry: true },
+      'broker-b'
+    );
+    // ทั้งสองแถวต้องถูกนับรวมจริง ไม่ใช่ถูกตัดทิ้งเป็น excludedAssetCount
+    // (นี่คือจุดที่บั๊กจะ "เงียบ": ถ้า brokerId ตกหล่น ตัวเลขจะยังถูกเขียนลง DB
+    // ตามปกติ แค่ขาดไปทั้งก้อน โดยมี excludedAssetCount เป็นร่องรอยเดียว)
+    expect(portfolioSnapshotRepository.upsertSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ totalCurrentValue: 2000, excludedAssetCount: 0 })
+    );
   });
 
   test('Holding มีข้อมูล Profit ครบทุกตัว → Snapshot ด้วยค่ารวมถูกต้อง', async () => {

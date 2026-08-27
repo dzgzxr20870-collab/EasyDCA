@@ -80,6 +80,9 @@ const TABLE_REGISTRY = Object.freeze({
   support_requests: { ownedColumn: 'user_id' },
   portfolio_snapshots: { ownedColumn: 'user_id' },
   erasure_logs: { ownedColumn: 'user_id' },
+  // โบรกเกอร์/Exchange ที่ผู้ใช้สร้างเอง (migration 042) — ต่อ User ล้วน ไม่มี
+  // แนวคิด Master List กลาง จึงไม่มีเหตุผลใดที่ Query ตารางนี้จะข้าม User ได้เลย
+  brokers: { ownedColumn: 'user_id' },
   // เอกสารไว้ใน DATABASE.md § 2 แล้ว (มี user_id NOT NULL) แต่ยังไม่มี Repository
   // Code จริงในระบบ — ลงทะเบียนล่วงหน้ากัน Session ในอนาคตเขียน Repository ใหม่
   // แล้วลืมผ่าน Helper (นี่คือเจตนาของข้อ "ครอบทุกตารางที่มีอยู่")

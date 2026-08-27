@@ -58,6 +58,11 @@ describe('create — เรียกผ่าน RPC create_asset_locked (migrat
       p_asset_limit: 2,
       p_proj_id: null,
       p_fund_class_name: null,
+      // Stage 5 (migration 046) — โบรกที่ถือสินทรัพย์ก้อนนี้ (null = ไม่ระบุ
+      // ซึ่งเป็นค่าของทุกแถวเดิมในระบบ) ต้องส่งเป็น null ไม่ใช่ undefined เสมอ
+      // เพราะ PostgREST ตัด Key ที่เป็น undefined ทิ้ง แล้ว RPC จะรับ Argument
+      // ไม่ครบชุดที่ Signature ประกาศไว้
+      p_broker_id: null,
     });
   });
 

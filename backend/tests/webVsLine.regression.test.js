@@ -14,6 +14,11 @@
 //
 // Field ที่ "ตั้งใจให้ต่าง" มีแค่ source ('line' vs 'web') — ตรวจแยกไว้ชัดเจนด้านล่าง
 
+// Stage 8-fix (บั๊ก Asset Resolution) — validateBuy ต้อง Resolve พอร์ต Default
+// ตอนสร้างสินทรัพย์ใหม่ (Invariant migration 044/045: สินทรัพย์ทุกแถวสังกัดพอร์ต)
+// จึงต้อง Mock portfolio.repository ด้วย · Automock คืน undefined = "ยังไม่มีพอร์ต"
+// ซึ่งตรงกับสภาพก่อน Apply 044 พอดี → พฤติกรรมของเทสต์เดิมไม่เปลี่ยน
+jest.mock('../src/repositories/portfolio.repository');
 jest.mock('../src/repositories/transaction.repository');
 jest.mock('../src/repositories/asset.repository');
 jest.mock('../src/repositories/pendingTransaction.repository');
@@ -136,6 +141,23 @@ function insertedRow() {
   return transactionRepository.create.mock.calls[0][0];
 }
 
+// ⚠️ มติ Founder 27 ส.ค. 2569 — ฝั่ง "ซื้อ" ถามพอร์ตเมื่อผู้ใช้มี > 1 พอร์ต
+// ไฟล์นี้จำลอง **ผู้ใช้พอร์ตเดียว** (สภาพของผู้ใช้ Free แทบทั้งหมดของระบบ) จึงต้อง
+// ไม่มีการถามพอร์ตเกิดขึ้นเลย และพฤติกรรมทุกเคสในไฟล์นี้ต้องเหมือนเดิมทุกตัวอักษร
+//
+// ⚠️ ตั้งที่ Module Scope โดยเจตนา ไม่ใช่ใน beforeEach — `jest.clearAllMocks()`
+// ล้างแค่ประวัติการเรียก (mockClear) ไม่ล้าง Implementation ค่านี้จึงอยู่ครบทุกเคส
+// โดยไม่ต้องไปแทรกในทุก beforeEach ของไฟล์ (บางไฟล์มีหลายตัว)
+require('../src/repositories/portfolio.repository').findAllByUser.mockResolvedValue([
+  {
+    id: 'pf-single-0000-4000-8000-000000000001',
+    name: 'พอร์ตของฉัน',
+    type: 'custom',
+    isDefault: true,
+    createdAt: '2026-01-01T00:00:00.000Z',
+  },
+]);
+
 beforeEach(() => {
   jest.clearAllMocks();
 
@@ -151,12 +173,12 @@ beforeEach(() => {
 
   // Asset มีอยู่แล้ว → ทั้งสองช่องทางไม่ต้องสร้าง Asset ใหม่ (ตัดตัวแปร Freemium ออก
   // จากการเทียบ ให้โฟกัสที่ตัวเลขเงินล้วนๆ)
-  assetRepository.findByUserAndSymbol.mockResolvedValue({
+  assetRepository.findAllByUserAndSymbol.mockResolvedValue([{
     id: ASSET_ID,
     symbol: 'AAPL',
     type: 'stock_us',
-  });
-  assetRepository.countActiveByUser.mockResolvedValue(1);
+  }]);
+  assetRepository.findActiveSymbolsByUser.mockResolvedValue(Array.from({ length: 1 }, (_, i) => `__OTHER${i}`));
   assetRepository.findByIds.mockResolvedValue([{ id: ASSET_ID, symbol: 'AAPL' }]);
 
   transactionRepository.create.mockImplementation(async (data) => ({
@@ -186,12 +208,12 @@ describe('ซื้อ AAPL 1000 (ระบบดึงราคาตลาด�
 
     jest.clearAllMocks();
     setupPendingFake();
-    assetRepository.findByUserAndSymbol.mockResolvedValue({
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{
       id: ASSET_ID,
       symbol: 'AAPL',
       type: 'stock_us',
-    });
-    assetRepository.countActiveByUser.mockResolvedValue(1);
+    }]);
+    assetRepository.findActiveSymbolsByUser.mockResolvedValue(Array.from({ length: 1 }, (_, i) => `__OTHER${i}`));
     transactionRepository.findAllByUser.mockResolvedValue([]);
     transactionRepository.create.mockImplementation(async (data) => ({
       ...data,
@@ -243,11 +265,11 @@ describe('ซื้อ PTT ราคาระบุเอง (หุ้นไท
     // หุ้นไทยไม่มี Price Feed — ทั้งสองช่องทางต้องไม่พึ่งราคาตลาดเลย
     priceFeedService.getCurrentPrice.mockResolvedValue(null);
     priceFeedService.getCurrentPriceUsd.mockResolvedValue(null);
-    assetRepository.findByUserAndSymbol.mockResolvedValue({
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{
       id: ASSET_ID,
       symbol: 'PTT',
       type: 'stock_th',
-    });
+    }]);
     assetRepository.findByIds.mockResolvedValue([{ id: ASSET_ID, symbol: 'PTT' }]);
   });
 
@@ -257,11 +279,11 @@ describe('ซื้อ PTT ราคาระบุเอง (หุ้นไท
 
     jest.clearAllMocks();
     setupPendingFake();
-    assetRepository.findByUserAndSymbol.mockResolvedValue({
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{
       id: ASSET_ID,
       symbol: 'PTT',
       type: 'stock_th',
-    });
+    }]);
     transactionRepository.findAllByUser.mockResolvedValue([]);
     transactionRepository.create.mockImplementation(async (data) => ({
       ...data,
@@ -305,11 +327,11 @@ describe('ซื้อ AAPL 100 usd (Multi-Currency)', () => {
 
     jest.clearAllMocks();
     setupPendingFake();
-    assetRepository.findByUserAndSymbol.mockResolvedValue({
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([{
       id: ASSET_ID,
       symbol: 'AAPL',
       type: 'stock_us',
-    });
+    }]);
     transactionRepository.findAllByUser.mockResolvedValue([]);
     transactionRepository.create.mockImplementation(async (data) => ({
       ...data,
@@ -339,7 +361,7 @@ describe('ซื้อ AAPL 100 usd (Multi-Currency)', () => {
 describe('ซื้อสินทรัพย์ที่ยังไม่เคยมี (สร้าง Asset ใหม่)', () => {
   beforeEach(() => {
     priceFeedService.getCurrentPrice.mockResolvedValue(190.5);
-    assetRepository.findByUserAndSymbol.mockResolvedValue(null); // ยังไม่มี Asset
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([]); // ยังไม่มี Asset
     assetRepository.create.mockResolvedValue({ id: ASSET_ID, symbol: 'AAPL', type: 'stock_us' });
   });
 
@@ -349,9 +371,9 @@ describe('ซื้อสินทรัพย์ที่ยังไม่เ�
 
     jest.clearAllMocks();
     setupPendingFake();
-    assetRepository.findByUserAndSymbol.mockResolvedValue(null);
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([]);
     assetRepository.create.mockResolvedValue({ id: ASSET_ID, symbol: 'AAPL', type: 'stock_us' });
-    assetRepository.countActiveByUser.mockResolvedValue(1);
+    assetRepository.findActiveSymbolsByUser.mockResolvedValue(Array.from({ length: 1 }, (_, i) => `__OTHER${i}`));
     transactionRepository.findAllByUser.mockResolvedValue([]);
     transactionRepository.create.mockImplementation(async (data) => ({ ...data, id: 'txn-4' }));
     priceFeedService.getCurrentPrice.mockResolvedValue(190.5);
@@ -399,8 +421,8 @@ function heldHistory(quantity, currency = 'THB') {
 // ที่เคสฝั่งซื้อด้านบนใช้อยู่แล้ว เพิ่มแค่ประวัติยอดคงเหลือที่การขายต้องใช้
 function resetForSecondChannel({ symbol = 'AAPL', type = 'stock_us', history, price, priceUsd }) {
   setupPendingFake();
-  assetRepository.findByUserAndSymbol.mockResolvedValue({ id: ASSET_ID, symbol, type });
-  assetRepository.countActiveByUser.mockResolvedValue(1);
+  assetRepository.findAllByUserAndSymbol.mockResolvedValue([{ id: ASSET_ID, symbol, type }]);
+  assetRepository.findActiveSymbolsByUser.mockResolvedValue(Array.from({ length: 1 }, (_, i) => `__OTHER${i}`));
   transactionRepository.findAllByUser.mockResolvedValue([]);
   transactionRepository.findAllByAsset.mockResolvedValue(history);
   transactionRepository.create.mockImplementation(async (data) => ({

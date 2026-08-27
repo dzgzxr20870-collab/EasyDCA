@@ -2,11 +2,20 @@ jest.mock('../src/repositories/user.repository');
 jest.mock('../src/repositories/payment.repository');
 jest.mock('../src/services/storage.service');
 jest.mock('../src/repositories/erasureLog.repository');
+// PDPA (มติ Founder 27 ส.ค. 2569) — Erasure ล้างชื่อ portfolios/brokers ด้วย
+// ⚠️ ไฟล์นี้เป็น Unit Test ของ "ลำดับการ Orchestrate" จึง Mock สองตัวนี้ทิ้ง
+// ส่วนพฤติกรรมจริง (ชื่อต้องไม่ซ้ำ กันชน uniq_brokers_user_name_ci · Scope ด้วย
+// user_id · Ledger ไม่ถูกแตะ) ถูกครอบด้วยของจริงที่
+// tests/erasureAnonymizeLabels.regression.test.js
+jest.mock('../src/repositories/portfolio.repository');
+jest.mock('../src/repositories/broker.repository');
 
 const userRepository = require('../src/repositories/user.repository');
 const paymentRepository = require('../src/repositories/payment.repository');
 const storageService = require('../src/services/storage.service');
 const erasureLogRepository = require('../src/repositories/erasureLog.repository');
+const portfolioRepository = require('../src/repositories/portfolio.repository');
+const brokerRepository = require('../src/repositories/broker.repository');
 const userErasureService = require('../src/services/userErasure.service');
 
 const USER_ID = 'user-1';
@@ -15,6 +24,8 @@ beforeEach(() => {
   jest.clearAllMocks();
   // Default: การลบสลิปธุรกรรมสำเร็จโดยไม่มีไฟล์ (Test ที่สนใจเรื่องนี้ Override เอง)
   storageService.deleteAllTransactionSlipsForUser.mockResolvedValue(0);
+  portfolioRepository.anonymizeNamesForUser.mockResolvedValue(0);
+  brokerRepository.anonymizeNamesForUser.mockResolvedValue(0);
 });
 
 describe('eraseUserData', () => {
@@ -63,6 +74,9 @@ describe('eraseUserData', () => {
       paymentCount: 2,
       deletedSlipCount: 3,
       deletedTransactionSlipCount: 2,
+      // PDPA (มติ 27 ส.ค. 2569) — Erasure คืนจำนวนชื่อที่ล้างด้วย
+      anonymizedPortfolioCount: 0,
+      anonymizedBrokerCount: 0,
     });
   });
 
@@ -83,6 +97,9 @@ describe('eraseUserData', () => {
       paymentCount: 0,
       deletedSlipCount: 0,
       deletedTransactionSlipCount: 0,
+      // PDPA (มติ 27 ส.ค. 2569) — Erasure คืนจำนวนชื่อที่ล้างด้วย
+      anonymizedPortfolioCount: 0,
+      anonymizedBrokerCount: 0,
     });
   });
 
@@ -112,6 +129,9 @@ describe('eraseUserData', () => {
       paymentCount: 0,
       deletedSlipCount: 0,
       deletedTransactionSlipCount: 0,
+      // PDPA (มติ 27 ส.ค. 2569) — Erasure คืนจำนวนชื่อที่ล้างด้วย
+      anonymizedPortfolioCount: 0,
+      anonymizedBrokerCount: 0,
     });
     expect(userRepository.anonymize).toHaveBeenCalledWith(USER_ID);
   });
@@ -147,6 +167,9 @@ describe('eraseUserData', () => {
       paymentCount: 0,
       deletedSlipCount: 0,
       deletedTransactionSlipCount: 0,
+      // PDPA (มติ 27 ส.ค. 2569) — Erasure คืนจำนวนชื่อที่ล้างด้วย
+      anonymizedPortfolioCount: 0,
+      anonymizedBrokerCount: 0,
     });
   });
 

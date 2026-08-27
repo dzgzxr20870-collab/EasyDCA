@@ -4,6 +4,18 @@ const priceFeedService = require('./priceFeed.service');
 const fxRateService = require('./fxRate.service');
 const symbolRegistry = require('./symbolRegistry.service');
 const entitlement = require('./entitlement.service');
+// Stage 6a — แหล่งตัดสิน "ความหมายของ transaction type" ที่เดียวของทั้งระบบ
+// (แทน Pattern Binary `=== 'buy' ? ... : ...` ที่ตีความ type ใหม่เป็น sell เงียบๆ)
+const { heldQuantitySign } = require('../utils/transactionType.util');
+// Stage 5 (migration 046) — แหล่งตัดสิน "Symbol นี้หมายถึงสินทรัพย์แถวไหน" ที่เดียว
+// ของทั้งระบบ (ตั้งแต่ถือ Symbol เดียวกันได้หลายโบรก Symbol เดียวอาจตรงหลายแถว)
+const assetResolution = require('./assetResolution.service');
+// Stage 8-fix — ด่าน "เพิ่มของใหม่เข้าพอร์ตนี้ได้ไหม" (มติ Founder 24 ส.ค. 2569)
+// ⚠️ ต้องอยู่ใน validateBuy เท่านั้น ห้ามใส่ใน validateSell (ดูเหตุผลที่ validateBuy)
+const portfoliosService = require('./portfolios.service');
+// Resolve พอร์ต Default ตอนสร้างสินทรัพย์ใหม่ (Invariant migration 044/045:
+// สินทรัพย์ทุกแถวต้องสังกัดพอร์ต) — ดู validateBuy
+const portfolioRepository = require('../repositories/portfolio.repository');
 
 // แหล่งราคาจริงตาม Asset Type (Pattern เดียวกับที่ priceFeed.service.js ใช้
 // จัดเส้นทาง Crypto → CoinGecko / หุ้นสหรัฐ → Twelve Data) — priceFeedService
@@ -387,9 +399,14 @@ function calculateHeldQuantity(transactions) {
   // และ resolveQuantityAndPrice ที่ปัด quantity ด้วย roundToEight เสมอ — ห้ามใช้
   // roundToTwo เพราะจะปัด Crypto ยอดน้อย (เช่น BTC 0.00049068) เป็น 0 ทำให้ Asset
   // นั้นหายจากพอร์ต/คำนวณกำไรไม่ได้
+  // Stage 6a — เดิมเขียนแบบ Binary `tx.type === 'buy' ? sum + qty : sum - qty`
+  // ซึ่งแปลว่า "ทุก type ที่ไม่ใช่ buy = หักจำนวนออก" — ถ้า dividend เข้ามาได้
+  // จำนวนที่ถือจะหายไปเท่ากับ quantity ของรายการปันผลทันทีโดยไม่มี Error ใดๆ
+  // ตอนนี้ถามความหมายจาก transactionType.util ที่เดียว (default: throw)
   const held = transactions.reduce((sum, tx) => {
     const qty = Number(tx.quantity);
-    return tx.type === 'buy' ? sum + qty : sum - qty;
+    const sign = heldQuantitySign(tx.type, 'transaction.calculateHeldQuantity');
+    return sum + sign * qty;
   }, 0);
 
   return roundToEight(held);
@@ -413,32 +430,89 @@ async function validateBuy(userId, params, options = {}) {
   // (ปลอดภัยกว่าปล่อยผ่าน) entitlement จะถือว่า premium ที่หมดอายุ/ไม่มีวันหมดอายุ
   // = free โดยอัตโนมัติ
   const { plan = 'free', planExpiresAt = null } = options;
-  const portfolioId = params.portfolioId ?? null;
+  // ⚠️ **ห้ามใส่ `?? null`** — ส่ง params.portfolioId ต่อ "ตามที่เป็น" เหมือน brokerId
+  // undefined = "ไม่ระบุพอร์ต" (ค้นข้ามพอร์ต) · null = "เจาะจงว่าไม่มีพอร์ต"
+  // การใส่ `?? null` คือต้นตอของบั๊กที่บล็อก migration 044 (หลัง Backfill ไม่เหลือ
+  // แถวที่ portfolio_id IS NULL → ค้นไม่เจอ → สร้างแถวซ้ำ → ต้นทุนเฉลี่ยผิดเงียบๆ)
+  const { portfolioId } = params;
 
   // แปลง/ตรวจจำนวนก่อน (อาจ throw PRICE_FEED/VALIDATION) — ยังไม่แตะ DB
   const amounts = await resolveQuantityAndPrice(params);
 
-  const existingAsset = await assetRepository.findByUserAndSymbol(
-    userId,
-    params.symbol,
-    portfolioId
-  );
+  // ⚠️ ส่ง params.brokerId ต่อ "ตามที่เป็น" ห้ามใส่ `?? null` — undefined
+  // (ยังไม่ได้ถามผู้ใช้) กับ null (ผู้ใช้ตอบแล้วว่าไม่ระบุโบรก) เป็นคนละความหมาย
+  // ทั้งคู่มีผลต่อการสร้างสินทรัพย์ซ้ำแถวใหม่ (ดูหัวไฟล์ assetResolution.service)
+  const { asset: existingAsset } = await assetResolution.resolveOwnedAsset(userId, params.symbol, {
+    portfolioId,
+    brokerId: params.brokerId,
+  });
+  // ═══════════════════════════════════════════════════════════════════════
+  // ⭐ ด่าน "อ่านได้ เขียนไม่ได้" ของพอร์ตส่วนเกิน (Stage 8-fix)
+  // ═══════════════════════════════════════════════════════════════════════
+  // ⚠️ **จุดนี้คือคอขวดร่วมของ "การซื้อ" ทุกช่องทาง** จึงวางด่านที่นี่ที่เดียว
+  // แทนการแปะทีละ Controller (ไม่งั้นจะกลับมาเจอปัญหาเดิมคือ "แปะครบ 4 ที่
+  // ลืมที่ 5" — ซึ่งเป็นสาเหตุที่ด่านนี้ตกหล่นมาตั้งแต่ Stage 8 รอบแรก):
+  //   เว็บ        → transactions.controller → processBuyCommand → validateBuy
+  //   LINE        → pendingTransaction.createPending → validateBuy
+  //                 และตอนกดยืนยัน → confirmPending → processBuyCommand → validateBuy
+  //   Bulk Import → bulkImport.service → validateBuy ต่อรายการ
+  //                 และ confirmBatch → confirmPending → processBuyCommand → validateBuy
+  //
+  // ⚠️ ตรวจ "ปลายทางจริงของรายการนี้" ไม่ใช่ params.portfolioId ดิบ — เมื่อซื้อเพิ่ม
+  // ใน Symbol ที่ถืออยู่แล้ว ปลายทางคือพอร์ตของสินทรัพย์แถวนั้น ซึ่งอาจต่างจากที่
+  // Caller ส่งมา (เส้นทาง LINE ไม่เคยส่ง portfolioId มาเลย)
+  //
+  // ⚠️ ห้ามย้ายด่านนี้ไป validateSell เด็ดขาด — การขายคือ "ลดของเดิม/แก้ให้ตรง
+  // ความจริง" ซึ่งต้องทำได้เสมอแม้พอร์ตถูกล็อก (มติ Founder 24 ส.ค. 2569)
+  const targetPortfolioId = existingAsset ? existingAsset.portfolioId ?? null : portfolioId;
+  await portfoliosService.assertCanAddToPortfolio(userId, targetPortfolioId, {
+    plan,
+    planExpiresAt,
+  });
+
   if (existingAsset) {
-    return { asset: existingAsset, assetType: existingAsset.type, newAsset: false, amounts };
+    return {
+      asset: existingAsset,
+      assetType: existingAsset.type,
+      newAsset: false,
+      amounts,
+      // ⚠️ คืน "โบรกที่ Resolve ได้จริง" ไม่ใช่ค่าที่ Caller ส่งมา — pendingTransaction
+      // ต้องเก็บค่านี้ลง DB เพื่อให้ตอนกดยืนยันทีหลังกลับมาเจอสินทรัพย์แถวเดิมเป๊ะ
+      // (ถ้าเก็บค่าที่ Caller ส่งมา ซึ่งเป็น undefined ตอนไม่กำกวม จะกลายเป็น NULL
+      // ใน DB แล้วตอน Confirm จะไปสร้างสินทรัพย์แถวใหม่ "ไม่ระบุโบรก" ซ้ำขึ้นมา
+      // = ประวัติแตกคนละ asset_id ซึ่งคือบั๊กที่ migration 014 เคยแก้)
+      brokerId: existingAsset.brokerId ?? null,
+      // ⚠️ พอร์ตต้องคืนด้วยเหตุผลเดียวกับ brokerId เป๊ะ (Stage 8-fix รอบ 3) —
+      // pendingTransaction ต้องเก็บ "พอร์ตของแถวที่ Resolve ได้จริง" ลง DB ตอน
+      // Preview ไม่ใช่ค่าดิบที่ Caller ส่งมา (เส้นทาง LINE ส่ง undefined เสมอ)
+      // ถ้าเก็บค่าดิบ → กลายเป็น NULL ใน DB → ตอน Confirm ส่ง portfolioId = null
+      // = "เจาะจงว่าไม่มีพอร์ต" → หลัง Apply 044 ไม่เหลือแถว NULL อีกเลย → หาไม่เจอ
+      // → สร้างสินทรัพย์ซ้ำแถวใหม่ = ประวัติแตกคนละ asset_id (บั๊ก migration 014)
+      // และแถวใหม่นั้นยังละเมิด Invariant ของ 045 (ทุกแถวต้องสังกัดพอร์ต) ด้วย
+      portfolioId: existingAsset.portfolioId ?? null,
+    };
   }
 
   // Asset ใหม่ — เช็ค Freemium Limit เฉพาะตอนจะสร้าง Asset ใหม่ (SRS.md § 2.3 [2])
   // ตัดสินสิทธิ์ผ่าน entitlement (แหล่งตัดสินสิทธิ์เดียว) แทนการเทียบ plan ตรงๆ:
   // getActiveAssetLimit คืน null = ไม่จำกัด (Premium ที่ยัง Active) / เลข = เพดาน Free
   // พฤติกรรมเหมือนเดิมทุกอย่าง ต่างแค่ "premium ที่หมดอายุ = ถือเป็น free"
+  //
+  // ⚠️ Stage 5 (migration 046) — เพดาน Free นับ "จำนวน Symbol ที่ต่างกัน" ไม่ใช่
+  // จำนวนแถว (มติ Founder 23 ส.ค. 2569: ถือ BTC ที่ 2 โบรก = 1 สินทรัพย์) และ
+  // ต้อง "ข้ามการเทียบเพดานไปเลย" ถ้า Symbol นี้ถืออยู่แล้ว เพราะกรณีนั้นคือการ
+  // เพิ่มโบรกที่ N ให้สินทรัพย์เดิม ซึ่งไม่ได้เพิ่มจำนวนสินทรัพย์เลยแม้แต่ตัวเดียว
+  // — ผู้ใช้ Free ที่เต็มเพดาน 2 ตัวแล้วต้องยังเพิ่มโบรกให้ของเดิมได้เสมอ
+  // (Logic เดียวกันถูกบังคับซ้ำใต้ Lock ที่ RPC create_asset_locked — migration 046)
   const assetLimit = entitlement.getActiveAssetLimit({ plan, planExpiresAt });
   if (assetLimit !== null) {
-    const activeCount = await assetRepository.countActiveByUser(userId);
-    if (activeCount >= assetLimit) {
+    const activeSymbols = await assetRepository.findActiveSymbolsByUser(userId);
+    const isNewSymbol = !activeSymbols.includes(params.symbol);
+    if (isNewSymbol && activeSymbols.length >= assetLimit) {
       throw new TransactionServiceError(
         'ASSET_LIMIT_REACHED',
         `Free plan is limited to ${assetLimit} active assets`,
-        { limit: assetLimit, current: activeCount }
+        { limit: assetLimit, current: activeSymbols.length }
       );
     }
   }
@@ -456,13 +530,54 @@ async function validateBuy(userId, params, options = {}) {
   // assetLimit ติดไปกับผลลัพธ์ด้วย (ไม่ใช่แค่ใช้ตรวจแล้วทิ้ง) — processBuyCommand
   // ต้องใช้ค่าเดียวกันนี้ส่งต่อให้ assetRepository.create() (RPC create_asset_locked
   // — migration 035) เป็นด่านตัดสินจริงตอน Insert อีกชั้น ไม่คำนวณซ้ำสองที่
-  return { asset: null, assetType: params.type, newAsset: true, amounts, assetLimit };
+  // ── พอร์ตปลายทางของ "สินทรัพย์ใหม่" ────────────────────────────────────
+  // ⚠️ Invariant ของ migration 044/045 บังคับว่า **สินทรัพย์ทุกแถวต้องสังกัดพอร์ต**
+  // ถ้าปล่อยให้สร้างด้วย portfolio_id = NULL หลัง Backfill แล้ว migration 045 ที่ใช้
+  // เป็น Health Check จะ RAISE EXCEPTION ทันที
+  //
+  // ผู้ใช้ไม่ระบุพอร์ต (เส้นทาง LINE ไม่มีคอนเซ็ปต์พอร์ตเลย) → ลงพอร์ต Default
+  // ซึ่งเป็นพฤติกรรมที่ตรงกับก่อน 044 มากที่สุด (ตอนนั้นทุกอย่างอยู่กองเดียวกัน)
+  //
+  // ⚠️ **นี่ไม่ใช่ Silent Default ที่ขัดกฎยืนข้อ 11** เพราะกรณีกำกวมจริง (ถือ Symbol
+  // นี้อยู่แล้วในพอร์ตอื่น) ถูก assetResolution โยน AMBIGUOUS_ASSET_PORTFOLIO ดักไป
+  // ก่อนหน้านี้แล้ว — มาถึงตรงนี้ได้แปลว่า "ยังไม่เคยถือ Symbol นี้ที่ไหนเลย"
+  // ซึ่งไม่มีอะไรให้กำกวม การเลือกพอร์ตหลักจึงเป็นการตัดสินที่มีคำตอบเดียว
+  //
+  // ก่อน 044: ผู้ใช้ยังไม่มีพอร์ตเลย → findDefaultByUser คืน null → ได้ null
+  // เท่ากับพฤติกรรมเดิมทุกประการ (Backward Compatible)
+  let resolvedPortfolioId = portfolioId;
+  if (resolvedPortfolioId === undefined) {
+    const defaultPortfolio = await portfolioRepository.findDefaultByUser(userId);
+    resolvedPortfolioId = defaultPortfolio?.id ?? null;
+  }
+
+  return {
+    asset: null,
+    assetType: params.type,
+    newAsset: true,
+    amounts,
+    assetLimit,
+    // Asset ใหม่ยังไม่มีโบรกใน DB — ใช้ค่าที่ผู้ใช้เลือกมา (null = ไม่ระบุ)
+    brokerId: params.brokerId ?? null,
+    // พอร์ตปลายทางที่ Resolve แล้ว — processBuyCommand ต้องใช้ค่านี้ตอนสร้าง Asset
+    // ไม่ใช่ params.portfolioId ดิบ (ซึ่งเป็น undefined ตอนไม่ระบุ)
+    portfolioId: resolvedPortfolioId,
+  };
 }
 
 async function processBuyCommand(userId, params, options = {}) {
-  const portfolioId = params.portfolioId ?? null;
 
-  const { asset: existingAsset, assetType, newAsset, amounts, assetLimit } = await validateBuy(
+  const {
+    asset: existingAsset,
+    assetType,
+    newAsset,
+    amounts,
+    assetLimit,
+    // ⚠️ ใช้พอร์ตที่ validateBuy Resolve แล้ว ไม่ใช่ params.portfolioId ดิบ —
+    // ตอนไม่ระบุพอร์ต ค่าดิบเป็น undefined แต่สินทรัพย์ใหม่ต้องลงพอร์ต Default
+    // (Invariant migration 044/045) ดู validateBuy
+    portfolioId: resolvedPortfolioId,
+  } = await validateBuy(
     userId,
     params,
     options
@@ -475,14 +590,18 @@ async function processBuyCommand(userId, params, options = {}) {
     try {
       asset = await assetRepository.create(
         userId,
-        portfolioId,
+        // ⚠️ พอร์ตที่ validateBuy Resolve แล้ว ไม่ใช่ค่าดิบ (undefined ตอนไม่ระบุ)
+        resolvedPortfolioId,
         params.symbol,
         params.name ?? params.symbol,
         assetType,
         // กองทุนรวม (Round 7) — เก็บ Class ที่เลือกไว้ถาวรเพื่อ Mark-to-market ตรง Class
         // (สินทรัพย์อื่น projId/fundClassName = undefined → คอลัมน์เป็น null)
         { projId: params.projId, fundClassName: params.fundClassName },
-        assetLimit
+        assetLimit,
+        // Stage 5 — โบรกที่ผู้ใช้เลือก (null = ไม่ระบุ ซึ่งเป็นค่าของทุกแถวเดิม)
+        // ต้องผ่าน brokerService.assertOwnedBrokerId() มาแล้วจากชั้น Controller
+        params.brokerId ?? null
       );
     } catch (err) {
       // ── ด่านจริงของ "เกินเพดาน Free Plan" อยู่ที่ DB (migration 035) ───────────
@@ -551,9 +670,16 @@ async function processBuyCommand(userId, params, options = {}) {
 // ใช้ร่วมกันทั้ง Commit จริงและ Preview เช่นเดียวกับ validateBuy
 // อาจ throw: ASSET_NOT_FOUND / PRICE_FEED_NOT_IMPLEMENTED / INSUFFICIENT_QUANTITY
 async function validateSell(userId, params) {
-  const portfolioId = params.portfolioId ?? null;
+  // ⚠️ ห้ามใส่ `?? null` (ดูเหตุผลใน validateBuy) — ขายต้องหาสินทรัพย์เจอข้ามพอร์ต
+  // ผู้ใช้ไม่ควรต้องรู้ว่าหุ้นอยู่พอร์ตไหนถึงจะขายได้
+  const { portfolioId } = params;
 
-  const asset = await assetRepository.findByUserAndSymbol(userId, params.symbol, portfolioId);
+  // ⚠️ ห้ามใส่ `?? null` ให้ params.brokerId (ดู validateBuy/assetResolution.service)
+  // ขายผิดโบรก = ตัดยอดคงเหลือของโบรกที่ไม่ได้ขายจริง แล้วต้นทุนเฉลี่ยเพี้ยนทั้งคู่
+  const { asset } = await assetResolution.resolveOwnedAsset(userId, params.symbol, {
+    portfolioId,
+    brokerId: params.brokerId,
+  });
   if (!asset) {
     throw new TransactionServiceError('ASSET_NOT_FOUND', `Asset ${params.symbol} not found for this user`, {
       symbol: params.symbol,
@@ -615,7 +741,12 @@ async function validateSell(userId, params) {
     // (coingecko/twelvedata) เพื่อให้ Preview เตือนที่มาของราคา (priceSourceNote)
     allAmounts.priceSource = resolvePriceSource(params.symbol);
 
-    return { asset, amounts: allAmounts, heldQuantity: heldForAll };
+    return {
+      asset,
+      amounts: allAmounts,
+      heldQuantity: heldForAll,
+      brokerId: asset.brokerId ?? null,
+    };
   }
 
   const amounts = await resolveQuantityAndPrice(params, 'sell');
@@ -648,7 +779,15 @@ async function validateSell(userId, params) {
     );
   }
 
-  return { asset, amounts, heldQuantity };
+  // portfolioId คืนคู่กับ brokerId ด้วยเหตุผลเดียวกัน — pendingTransaction ต้อง
+  // Snapshot "ตัวตนของสินทรัพย์" ให้ครบทุกมิติตั้งแต่ Preview (ดู validateBuy)
+  return {
+    asset,
+    amounts,
+    heldQuantity,
+    brokerId: asset.brokerId ?? null,
+    portfolioId: asset.portfolioId ?? null,
+  };
 }
 
 async function processSellCommand(userId, params) {
