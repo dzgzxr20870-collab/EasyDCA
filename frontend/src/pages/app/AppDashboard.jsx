@@ -1,6 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useOutletContext, Link } from 'react-router-dom';
 import { apiGet } from '../../lib/api.js';
+// ⚠️ **Reuse ตัวเดิมของ DashboardHome ห้ามเขียนกราฟใหม่** — Component นี้รับ
+// `overview.monthlyInvested` Shape เดียวกันเป๊ะ (API.md §15.4) และมีเรื่องที่ทำถูกไว้
+// แล้วซึ่งเขียนใหม่แล้วมักพลาด: แยกเส้น THB/USD (ไม่มี Historical FX ให้แปลงย้อนหลัง)
+// · ขึ้น "ยังไม่มีรายการในช่วงเวลานี้" แทนเส้นแบนที่ 0 · Footnote ว่านี่คือ
+// "เงินที่ลงไปสะสม" ไม่ใช่มูลค่าพอร์ตย้อนหลัง
+import InvestedChart from '../../components/dashboard/InvestedChart.jsx';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // AppDashboard — หน้าแดชบอร์ดต่อ API จริง (Stage 9)
@@ -158,6 +164,16 @@ function AppDashboard() {
           unit="เดือน"
         />
       </div>
+
+      {/* ── กราฟเส้นเงินลงทุนสะสม ─────────────────────────────────────────
+          ⚠️ Render เฉพาะเมื่อ Backend ส่ง monthlyInvested มาจริงเป็น Array —
+          InvestedChart เรียก .slice()/.some() ตรงๆ จึงพังทันทีถ้าได้ undefined
+          (Endpoint เก่าที่ยังไม่มี Field นี้ / Response ที่ถูกตัดทอน)
+          ⚠️ **ห้ามใส่ `?? []` แทน** — Array ว่างจะวาดกราฟเปล่าที่ดูเหมือนว่า
+          "ผู้ใช้ไม่เคยลงทุน" ทั้งที่ความจริงคือ "ระบบไม่มีข้อมูลส่วนนี้" */}
+      {Array.isArray(overview?.monthlyInvested) && overview.monthlyInvested.length > 0 && (
+        <InvestedChart monthlyInvested={overview.monthlyInvested} />
+      )}
 
       {/* แผน DCA ที่ถึงรอบวันนี้ — ข้อความเป็นข้อเท็จจริงล้วน ไม่ชี้นำว่าควรซื้อไหม */}
       {Array.isArray(overview?.todayDuePlans) && overview.todayDuePlans.length > 0 && (

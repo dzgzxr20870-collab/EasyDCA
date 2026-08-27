@@ -359,3 +359,162 @@
 }
 .app-locked-banner ul { margin: 4px 0 8px 20px; }
 .app-locked-banner__safety { font-size: 13px; opacity: 0.85; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Stage 9 — Layout / Control / Modal / Donut  (ปิดงานที่ 3)
+   ═══════════════════════════════════════════════════════════════════════
+   ⚠️ ก่อนหน้านี้ Class ชุดนี้ถูกใช้ในทุกหน้าของ Stage 9 (.demo-page,
+   .demo-field, .demo-btn, .demo-modal-*, ...) แต่ **ไม่เคยถูกนิยามที่ใดเลย**
+   หน้าจึงเรนเดอร์ด้วย Default ของเบราว์เซอร์ล้วน — ค้างมาตั้งแต่ b530d2c
+   (Class ที่มีอยู่ในไฟล์นี้เป็นของ .demo-app ซึ่งเป็นคนละ Tree กับ .demo-shell)
+
+   ⚠️ Design Token ถูกประกาศไว้ที่ `.demo-app` เท่านั้น (ไม่ใช่ :root) แต่ Shell
+   ของ Stage 9 ใช้ `.demo-shell` เป็นราก → var(--…) ทุกตัวจึงไม่ Resolve
+   ต้องประกาศซ้ำที่นี่ · **ห้ามย้ายไป :root** เพราะจะรั่วไปทับหน้าอื่นทั้งแอป
+   (Dashboard เดิม / Login / Premium ที่มี Palette ของตัวเอง) */
+.demo-shell {
+  --bg: #F7F9F7; --card: #FFFFFF; --ink: #282D31; --ink2: #545B52; --muted: #8B9587;
+  --line: #EEF1EC; --line2: #E4E8E1;
+  --mint: #7ED47E; --leaf: #22C55E; --leaf-deep: #189146;
+  --cream: #FFF5E6;
+  --red: #DE5050;
+  --r: 20px; --r-sm: 14px;
+  --shadow: 0 1px 2px rgba(40,45,49,.04), 0 14px 32px rgba(40,45,49,.07);
+  --shadow-sm: 0 1px 2px rgba(40,45,49,.05), 0 4px 12px rgba(40,45,49,.05);
+
+  flex-direction: column;
+  align-items: stretch;
+  gap: 18px;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: 'IBM Plex Sans Thai', 'Noto Sans Thai', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+.demo-shell * { box-sizing: border-box; }
+.demo-shell button, .demo-shell select, .demo-shell input { font-family: inherit; }
+
+.demo-topbar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: var(--card); border-radius: var(--r); padding: 14px 18px; box-shadow: var(--shadow-sm);
+}
+.demo-brand { font-weight: 800; font-size: 18px; color: var(--leaf-deep); text-decoration: none; margin-right: auto; }
+
+/* ── ปุ่มมาตรฐาน ─────────────────────────────────────────────────────────
+   ⚠️ ปุ่มที่ถูก disabled ต้องยัง "อ่านออก" อยู่ (opacity ไม่ต่ำเกินไป) เพราะ
+   ปุ่มซื้อที่ถูกล็อกคือสิ่งที่ผู้ใช้ต้องเห็นว่ามีอยู่ ไม่ใช่มองไม่เห็น */
+.demo-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  border: 1px solid var(--line2); background: var(--card); color: var(--ink);
+  border-radius: var(--r-sm); padding: 10px 16px;
+  font-weight: 700; font-size: 14px; cursor: pointer; text-decoration: none;
+}
+.demo-btn:hover:not(:disabled) { border-color: var(--leaf); }
+.demo-btn:disabled, .demo-btn[aria-disabled='true'] { opacity: .55; cursor: not-allowed; }
+.demo-btn--primary {
+  background: linear-gradient(135deg, var(--mint), var(--leaf-deep));
+  border-color: transparent; color: #fff;
+  box-shadow: 0 5px 14px rgba(21,145,70,.24);
+}
+
+.demo-portfolio-switcher {
+  border: 1px solid var(--line2); border-radius: var(--r-sm);
+  padding: 9px 12px; font-size: 14px; font-weight: 700; background: var(--cream); color: var(--ink);
+  max-width: 260px;
+}
+
+/* ── หน้า ────────────────────────────────────────────────────────────── */
+.demo-main { display: flex; flex-direction: column; gap: 18px; }
+.demo-page { display: flex; flex-direction: column; gap: 14px; }
+.demo-page__head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.demo-page__head h1 { margin: 0; font-size: 21px; font-weight: 800; margin-right: auto; }
+
+.demo-card { background: var(--card); border-radius: var(--r); padding: 18px 20px; box-shadow: var(--shadow-sm); }
+.demo-card h2 { margin: 0 0 10px; font-size: 16px; font-weight: 800; }
+
+.demo-field { display: flex; flex-direction: column; gap: 5px; font-size: 13px; }
+.demo-field > span { font-weight: 700; color: var(--ink2); }
+.demo-field input, .demo-field select, .demo-field textarea {
+  border: 1px solid var(--line2); border-radius: var(--r-sm);
+  padding: 10px 12px; font-size: 14px; background: var(--card); color: var(--ink);
+}
+.demo-field input:focus, .demo-field select:focus { outline: 2px solid var(--mint); outline-offset: 1px; }
+
+.demo-form { display: flex; flex-direction: column; gap: 14px; padding: 8px 20px 20px; }
+.demo-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+
+.demo-total { font-size: 15px; margin: 0; }
+.demo-total strong { font-size: 22px; font-weight: 800; color: var(--leaf-deep); }
+
+.demo-alloc-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.demo-alloc-item {
+  display: grid; grid-template-columns: 1fr auto; gap: 2px 12px;
+  background: var(--card); border-radius: var(--r-sm); padding: 12px 14px; box-shadow: var(--shadow-sm);
+}
+.demo-alloc-item__label { font-weight: 700; }
+.demo-alloc-item__value { font-weight: 800; text-align: right; }
+.demo-alloc-item__meta { grid-column: 1 / -1; font-size: 12.5px; color: var(--muted); }
+
+.demo-recent { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.demo-recent li { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: baseline; font-size: 14px; }
+.demo-recent small { color: var(--muted); font-size: 12.5px; }
+
+/* ── Modal ───────────────────────────────────────────────────────────────
+   .demo-modal-* ที่นี่เป็นของ Tree .demo-shell (คนละชุดกับของ .demo-app
+   ซึ่งใช้ Token คนละก้อน) — หน้าตาให้ตรงกัน ครอบทั้ง Record และ CreatePortfolio */
+.demo-modal-backdrop, .app-modal-backdrop {
+  position: fixed; inset: 0; z-index: 60;
+  background: rgba(40,45,49,.5);
+  display: flex; align-items: center; justify-content: center; padding: 16px;
+}
+.demo-shell .demo-modal, .app-modal {
+  background: #fff; border-radius: var(--r, 20px); width: 100%; max-width: 460px;
+  max-height: 88vh; overflow-y: auto; box-shadow: 0 24px 60px rgba(30,40,30,.28);
+}
+.demo-modal__head, .app-modal__head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 18px 20px 6px;
+}
+.demo-modal__head h2, .app-modal__head h2 { margin: 0; font-size: 17px; font-weight: 800; margin-right: auto; }
+.app-modal__close {
+  border: none; background: none; font-size: 18px; line-height: 1; cursor: pointer; color: var(--muted, #8B9587); padding: 4px 6px;
+}
+.app-modal__body { padding: 8px 20px 20px; display: flex; flex-direction: column; gap: 14px; }
+
+/* ── โดนัทสัดส่วนพอร์ต ───────────────────────────────────────────────────
+   ⚠️ .app-donut--empty ต้องสูงพอให้เห็นว่า "มีพื้นที่กราฟอยู่แต่ยังไม่มีข้อมูล"
+   ไม่ใช่ยุบหายจนผู้ใช้ไม่รู้ว่าเคยมีกราฟตรงนี้ */
+.app-donut {
+  background: var(--card, #fff); border-radius: var(--r, 20px); padding: 18px 20px;
+  box-shadow: var(--shadow-sm, 0 4px 12px rgba(40,45,49,.05));
+  display: flex; align-items: center; gap: 22px; flex-wrap: wrap;
+}
+.app-donut--empty { display: grid; place-items: center; min-height: 140px; text-align: center; }
+.app-donut__chart { position: relative; width: 190px; height: 190px; flex: none; }
+.app-donut__center {
+  position: absolute; inset: 0; display: grid; place-content: center; text-align: center; pointer-events: none;
+}
+.app-donut__center strong { display: block; font-size: 20px; font-weight: 800; line-height: 1.2; }
+.app-donut__center small { font-size: 11.5px; color: var(--muted, #8B9587); }
+
+.app-donut__legend { list-style: none; margin: 0; padding: 0; flex: 1; min-width: 200px; display: flex; flex-direction: column; gap: 7px; }
+.app-donut__legend li { display: flex; align-items: center; gap: 9px; font-size: 13.5px; }
+.app-donut__swatch { width: 11px; height: 11px; border-radius: 3px; flex: none; }
+.app-donut__legend-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-donut__legend-value { font-weight: 800; }
+
+/* ── Bottom nav (Stage 9 shell) ───────────────────────────────────────── */
+.demo-shell .demo-bottomnav {
+  display: grid; grid-template-columns: repeat(5, 1fr);
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+  background: #fff; box-shadow: 0 -10px 28px rgba(40,45,49,.09);
+  padding: 7px 6px calc(7px + env(safe-area-inset-bottom));
+}
+.demo-navitem {
+  display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 5px 2px;
+  text-decoration: none; color: var(--muted, #8B9587); font-size: 10.5px; font-weight: 700; border-radius: 10px;
+}
+.demo-navitem--active { color: var(--leaf-deep, #189146); }
+
+@media (max-width: 620px) {
+  .app-donut { flex-direction: column; align-items: stretch; }
+  .app-donut__chart { align-self: center; }
+}

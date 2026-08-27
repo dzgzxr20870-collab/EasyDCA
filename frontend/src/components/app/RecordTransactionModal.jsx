@@ -35,8 +35,17 @@ function todayBangkok() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
 }
 
-function RecordTransactionModal({ selectedPortfolio, onClose, onSaved }) {
-  const [type, setType] = useState('buy');
+// defaultType — แท็บที่เปิดค้างไว้ตอน Modal โผล่ ('buy' | 'sell' | 'dividend')
+//
+// ⚠️ เป็นแค่ **ค่าเริ่มต้น** ไม่ใช่การล็อกโหมด — ผู้ใช้ยังสลับไปแท็บอื่นได้เสมอ
+// การล็อกโหมดจะทำให้ผู้ใช้ที่กด "บันทึกการขาย" แล้วเปลี่ยนใจต้องปิดแล้วเปิดใหม่
+//
+// ⚠️ ห้ามใช้ defaultType เป็นด่านสิทธิ์ — ด่านจริงคือ `blocked` ด้านล่าง ซึ่งอ่านจาก
+// `portfolioWriteState(selectedPortfolio)` และ Backend เป็นคนตัดสินอีกชั้นเสมอ
+function RecordTransactionModal({ selectedPortfolio, onClose, onSaved, defaultType = 'buy' }) {
+  const [type, setType] = useState(
+    TYPES.some((t) => t.value === defaultType) ? defaultType : 'buy'
+  );
   const [assets, setAssets] = useState([]);
   const [brokers, setBrokers] = useState([]);
   const [assetId, setAssetId] = useState('');

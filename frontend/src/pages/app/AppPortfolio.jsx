@@ -1,8 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useOutletContext } from 'react-router-dom';
+import { useOutletContext, useSearchParams } from 'react-router-dom';
 import { getAllocation } from '../../lib/portfolioApi.js';
-import { portfolioWriteState } from '../../lib/entitlements.js';
+import { portfolioWriteState, canCreatePortfolio } from '../../lib/entitlements.js';
 import { ALL_PORTFOLIOS } from '../../components/app/AppShell.jsx';
+import AllocationDonut from '../../components/app/AllocationDonut.jsx';
+import CreatePortfolioModal from '../../components/app/CreatePortfolioModal.jsx';
+import RecordTransactionModal from '../../components/app/RecordTransactionModal.jsx';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // AppPortfolio — หน้า "พอร์ต" ต่อกับ API จริง (Stage 9)
@@ -35,7 +38,27 @@ function formatThb(n) {
 }
 
 function AppPortfolio() {
-  const { portfolioId, selectedPortfolio, loading: shellLoading } = useOutletContext();
+  const {
+    portfolios,
+    portfolioId,
+    selectedPortfolio,
+    entitlements,
+    reload,
+    loading: shellLoading,
+  } = useOutletContext();
+
+  // ── Modal สร้างพอร์ต เปิดผ่าน `?new=1` ────────────────────────────────────
+  // ⚠️ ใช้ Query Param แทน State ภายในโดยเจตนา — ปุ่ม "＋ สร้างพอร์ตใหม่" อยู่บน
+  // Topbar ของ AppShell ซึ่งเป็น **คนละ Component** กับหน้านี้ · ถ้าใช้ State
+  // ภายในจะต้องยก State ขึ้นไปไว้ที่ Shell แล้วส่งลงมาผ่าน Context ซึ่งผูก Shell
+  // เข้ากับรายละเอียดของหน้าลูกโดยไม่จำเป็น · Query Param ยังทำให้ผู้ใช้กด Back
+  // ปิด Modal ได้ตามที่คาด และแชร์ลิงก์ตรงเข้าหน้าสร้างพอร์ตได้ด้วย
+  const [searchParams, setSearchParams] = useSearchParams();
+  const showCreate = searchParams.get('new') === '1';
+
+  // Modal บันทึกรายการ — เก็บ "แท็บที่จะเปิดค้างไว้" ไม่ใช่แค่ boolean
+  // (null = ปิดอยู่) เพื่อให้ปุ่มซื้อ/ขายเปิด Modal เดียวกันคนละแท็บได้
+  const [recordType, setRecordType] = useState(null);
 
   const [groupBy, setGroupBy] = useState('assetType');
   const [allocation, setAllocation] = useState(null);
@@ -65,6 +88,15 @@ function AppPortfolio() {
   }, [load]);
 
   const write = portfolioWriteState(selectedPortfolio);
+  const createGate = canCreatePortfolio(entitlements, portfolios?.length);
+
+  function closeCreate() {
+    // ลบเฉพาะ Key 'new' ทิ้ง ไม่ล้าง Query ทั้งชุด (เผื่อมี Param อื่นในอนาคต)
+    // replace: true — ไม่อยากให้การเปิด/ปิด Modal ทับประวัติการนำทางจริงของผู้ใช้
+    const next = new URLSearchParams(searchParams);
+    next.delete('new');
+    setSearchParams(next, { replace: true });
+  }
 
   return (
     <section className="demo-page">
@@ -132,6 +164,14 @@ function AppPortfolio() {
             มูลค่ารวม <strong>{formatThb(allocation.totalValueThb)}</strong> บาท
           </p>
 
+          {/* ⚠️ โดนัทวาดจาก groups + percent ที่ Backend คำนวณมาแล้ว **ห้ามคำนวณ
+              สัดส่วนเองที่นี่** (กฎยืนข้อ 1) · ไม่มีข้อมูล/ราคาดึงไม่ได้ → ขึ้นข้อความ
+              "ราคาไม่พร้อมใช้งาน" ไม่ใช่วงกลมว่างหรือเลข 0 ที่ดูเหมือนความจริง */}
+          <AllocationDonut
+            groups={allocation.groups}
+            totalValueThb={allocation.totalValueThb}
+          />
+
           <ul className="demo-alloc-list">
             {allocation.groups.map((g) => (
               <li key={g.key ?? '__unspecified'} className="demo-alloc-item">
@@ -155,11 +195,23 @@ function AppPortfolio() {
               **ห้ามซ่อนปุ่มขายเด็ดขาด** ไม่งั้นผู้ใช้จะคิดว่าติดกับ แล้วไม่บันทึก
               การขายที่เกิดขึ้นจริง → ยอดในพอร์ตผิดถาวร */}
           <div className="demo-actions">
-            <button type="button" className="demo-btn demo-btn--primary" disabled={!write.canAdd}>
+            <button
+              type="button"
+              className="demo-btn demo-btn--primary"
+              disabled={!write.canAdd}
+              onClick={() => setRecordType('buy')}
+            >
               ＋ บันทึกรายการซื้อ
             </button>
-            {/* canReduce เป็น true เสมอ — ปุ่มนี้ต้องกดได้ทุกกรณี */}
-            <button type="button" className="demo-btn" disabled={!write.canReduce}>
+            {/* ⭐ canReduce เป็น true เสมอ — ปุ่มนี้ต้องกดได้ทุกกรณี แม้พอร์ตถูกล็อก
+                ถ้าปิดด้วย ผู้ใช้จะคิดว่าติดกับแล้วไม่บันทึกการขายที่เกิดขึ้นจริง
+                → ยอดในพอร์ตผิดถาวร (มติ Founder 24 ส.ค. 2569) */}
+            <button
+              type="button"
+              className="demo-btn"
+              disabled={!write.canReduce}
+              onClick={() => setRecordType('sell')}
+            >
               บันทึกการขาย
             </button>
           </div>
@@ -170,6 +222,50 @@ function AppPortfolio() {
             </p>
           )}
         </>
+      )}
+
+      {/* ── Modal สร้างพอร์ตใหม่ ────────────────────────────────────────────
+          ⚠️ กันเปิดเมื่อไม่มีสิทธิ์ด้วย — ผู้ใช้พิมพ์ `?new=1` เข้ามาตรงๆ ได้
+          (Frontend กันคือ UX · ด่านจริงคือ RPC create_portfolio_locked เสมอ) */}
+      {showCreate && createGate.allowed && (
+        <CreatePortfolioModal
+          onClose={closeCreate}
+          onCreated={async () => {
+            closeCreate();
+            // โหลดรายการพอร์ตใน Shell ใหม่ ไม่งั้น Switcher จะยังไม่เห็นพอร์ตที่เพิ่งสร้าง
+            await reload?.();
+          }}
+        />
+      )}
+
+      {/* ไม่มีสิทธิ์แต่เข้ามาที่ `?new=1` → บอกเหตุผลตรงๆ ไม่ใช่เงียบหายไปเฉยๆ */}
+      {showCreate && !createGate.allowed && (
+        <div className="app-state app-state--warn" role="alert">
+          <strong>สร้างพอร์ตใหม่ไม่ได้ในตอนนี้</strong>
+          <p>
+            {createGate.reason === 'cap'
+              ? 'จำนวนพอร์ตถึงขีดจำกัดของระบบแล้ว กรุณาลบพอร์ตที่ไม่ได้ใช้ก่อน'
+              : createGate.reason === 'limit'
+                ? 'แพ็กเกจ Free ใช้ได้ 1 พอร์ต — อัปเกรดเป็น Premium เพื่อแยกหลายพอร์ตได้'
+                : 'กำลังตรวจสอบสิทธิ์ กรุณารอสักครู่'}
+          </p>
+          <button type="button" className="demo-btn" onClick={closeCreate}>
+            ปิด
+          </button>
+        </div>
+      )}
+
+      {recordType && (
+        <RecordTransactionModal
+          selectedPortfolio={selectedPortfolio}
+          defaultType={recordType}
+          onClose={() => setRecordType(null)}
+          onSaved={async () => {
+            setRecordType(null);
+            // ยอด/สัดส่วนเปลี่ยนแล้ว — โหลดทั้งสัดส่วนหน้านี้และพอร์ตใน Shell ใหม่
+            await Promise.all([load(), reload?.()]);
+          }}
+        />
       )}
     </section>
   );
