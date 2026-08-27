@@ -232,6 +232,47 @@ async function updateByIdForUser(portfolioId, userId, patch) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// anonymizeNamesForUser — ล้างชื่อพอร์ตตอน PDPA Erasure
+// ═══════════════════════════════════════════════════════════════════════════
+// เหตุผลเดียวกับ broker.repository.anonymizeNamesForUser เป๊ะ (มติ Founder
+// 27 ส.ค. 2569): `portfolios.name` เป็นข้อความที่ผู้ใช้พิมพ์เอง อาจมี PII จริง
+// และเป็นป้ายกำกับล้วน ไม่เข้าสูตรเงิน
+//
+// ⚠️ **เปลี่ยนชื่อ ไม่ใช่ DELETE** — ลบพอร์ตจะทำให้ assets.portfolio_id เป็น NULL
+// ซึ่งนอกจากแก้ข้อมูลผู้ใช้แล้ว ยัง **ละเมิด Invariant ของ migration 044/045**
+// (สินทรัพย์ทุกแถวต้องสังกัดพอร์ต) โดยตรง
+//
+// ⚠️ `portfolios` **ไม่มี** UNIQUE บนชื่อ (ตรวจ Schema จริงแล้ว — มีแค่
+// idx_portfolios_one_default_per_user ซึ่งเป็น Partial UNIQUE บน user_id
+// เฉพาะแถว is_default) ชื่อซ้ำกันจึงไม่ชนอะไร **แต่ยังต่อท้ายด้วย id 8 ตัวแรก
+// เหมือน brokers อยู่ดี** เพื่อ (1) ให้ผู้ใช้ยังแยกพอร์ตออกจากกันได้ถ้าเปิดดูทีหลัง
+// และ (2) ถ้าวันหนึ่งมีคนเพิ่ม UNIQUE บนชื่อ Erasure จะไม่ล้มแบบเงียบๆ
+async function anonymizeNamesForUser(userId) {
+  requireUserId(userId, 'portfolio.anonymizeNamesForUser');
+
+  const portfolios = await findAllByUser(userId);
+  let count = 0;
+
+  for (const portfolio of portfolios) {
+    const { error } = await queryForUser('portfolios', userId, (q) =>
+      q
+        .update({
+          name: `พอร์ต ${String(portfolio.id).slice(0, 8)}`,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', portfolio.id)
+    );
+
+    if (error) {
+      throw new Error(`Failed to anonymize portfolio names: ${error.message}`);
+    }
+    count += 1;
+  }
+
+  return count;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // deleteByIdForUser — ลบพอร์ต (ไม่ใช่ลบสินทรัพย์/ธุรกรรม)
 // ═══════════════════════════════════════════════════════════════════════════
 // ⚠️ นี่ไม่ใช่การละเมิดกฎเหล็ก "ห้ามลบข้อมูลผู้ใช้": พอร์ตเป็น "กล่องจัดหมวด"
@@ -284,6 +325,7 @@ module.exports = {
   create,
   setDefaultForUser,
   updateByIdForUser,
+  anonymizeNamesForUser,
   deleteByIdForUser,
   countByUser,
 };

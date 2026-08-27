@@ -133,6 +133,45 @@ async function updateName(brokerId, userId, name) {
   return toBroker(rows[0] ?? null);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// anonymizeNamesForUser — ล้างชื่อโบรกตอน PDPA Erasure
+// ═══════════════════════════════════════════════════════════════════════════
+// `brokers.name` เป็นข้อความที่ผู้ใช้พิมพ์เอง จึงอาจมี PII จริง (เช่น "พอร์ตของสมชาย")
+// และเป็น **ป้ายกำกับล้วน ไม่เข้าสูตรเงินสักสูตร** — เกราะ "Immutable Ledger" ที่ใช้
+// ปกป้อง transactions ไม่ครอบตารางนี้ (มติ Founder 27 ส.ค. 2569)
+//
+// ⚠️ **เปลี่ยนชื่อ ไม่ใช่ DELETE** — ลบแถวจะทำให้ assets.broker_id กลายเป็น NULL
+// (FK ON DELETE SET NULL) ซึ่งเท่ากับแก้ข้อมูลการลงทุนของผู้ใช้ · โครงสร้างต้องอยู่ครบ
+// Pattern เดียวกับที่ userRepository.anonymize ทำกับ users
+//
+// 🔴⚠️ **ห้ามตั้งชื่อซ้ำกันทุกแถวเด็ดขาด** — ตารางนี้มี
+//     uniq_brokers_user_name_ci ON (user_id, lower(name))     [migration 042]
+// ผู้ใช้ที่มี 3 โบรกแล้วเปลี่ยนเป็น "โบรก" เหมือนกันหมด จะ **ชน UNIQUE →
+// Erasure ล้มทั้งก้อน** และคนที่ยื่นคำขอลบข้อมูลตาม PDPA จะลบไม่ได้เลย
+// → ต่อท้ายด้วย 8 ตัวแรกของ id (Hex ไม่ซ้ำกันแน่นอน และไม่ใช่ PII)
+//
+// อัปเดตทีละแถวโดยเจตนา: PostgREST อัปเดตด้วย "นิพจน์ที่อ้างคอลัมน์ของแถวนั้น"
+// ไม่ได้ จึงคำนวณชื่อในชั้น App แล้วยิงทีละแถว (จำนวนโบรกต่อผู้ใช้น้อยมาก)
+async function anonymizeNamesForUser(userId) {
+  requireUserId(userId, 'broker.anonymizeNamesForUser');
+
+  const brokers = await findAllByUser(userId);
+  let count = 0;
+
+  for (const broker of brokers) {
+    const { error } = await queryForUser('brokers', userId, (q) =>
+      q.update({ name: `โบรก ${String(broker.id).slice(0, 8)}` }).eq('id', broker.id)
+    );
+
+    if (error) {
+      throw new Error(`Failed to anonymize broker names: ${error.message}`);
+    }
+    count += 1;
+  }
+
+  return count;
+}
+
 // ลบโบรก — Scope ด้วย user_id เสมอ คืนจำนวนแถวที่ถูกลบจริง (0 = ไม่ใช่ของ user)
 //
 // ⚠️ นี่ไม่ใช่การละเมิดกฎเหล็ก "ห้ามลบข้อมูลผู้ใช้": brokers เป็น "ป้ายกำกับที่
@@ -160,5 +199,6 @@ module.exports = {
   findByIdForUser,
   create,
   updateName,
+  anonymizeNamesForUser,
   deleteByIdForUser,
 };
