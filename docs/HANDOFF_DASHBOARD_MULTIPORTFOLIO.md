@@ -300,16 +300,26 @@ UNIQUE NULLS NOT DISTINCT (user_id, symbol, portfolio_id, broker_id)
 >
 > ### ⛔ เงื่อนไขที่ต้องเป็นจริงครบทุกข้อก่อนไปขั้น 5
 >
-> บั๊กตัวนี้มี **3 หาง อยู่คนละ Commit กัน** และถูกจับได้คนละรอบ — การ Deploy
-> แค่ commit แรกแล้วคิดว่าครบคือกับดักที่เกิดขึ้นจริงมาแล้วรอบหนึ่ง
+> บั๊กตัวนี้มี **5 หาง อยู่คนละ Commit กัน** และถูกจับได้คนละรอบ — การ Deploy
+> แค่บาง Commit แล้วคิดว่าครบคือกับดักที่เกิดขึ้นจริงมาแล้ว **สองรอบ**: รอบแรกคือ
+> Deploy แค่ `6cf6aa1` เดี่ยวๆ · รอบสองคือตารางนี้เองที่เคยจบแค่ 4 แถวแล้วไม่มีใคร
+> กลับมาเพิ่ม `48970c1` (หางที่ 4/5 ซึ่งพบทีหลังจากการ Audit อีกรอบ) เข้าไป
 >
-> | Commit | หาง | จำเป็นต่อความปลอดภัยของ 044 |
+> | Commit | หาง / เนื้อหา | จำเป็นต่อความปลอดภัยของ 044? |
 > |---|---|---|
 > | `6cf6aa1` | หางที่ 1 — `?? null` + Default Parameter + Repository ternary 2 ทาง | ✅ **บังคับ** |
 > | `965dcdb` | หางที่ 2 — branch โบรก `return` ก่อนถึงด่านพอร์ต | ✅ **บังคับ** |
 > | `035c221` | หางที่ 3 — รอยต่อ Preview→Confirm ไม่พก `portfolioId` | ✅ **บังคับ (เส้นทางที่ใช้บ่อยที่สุด)** |
+> | `48970c1` | หางที่ 4/5 — `portfolioSnapshot.job` + `dashboard.controller.getProfit` ยังส่ง `portfolioId = null` แบบ Hardcode นอกเส้นทาง Resolution (พบตอน Audit ทั้งระบบ) | ✅ **บังคับ** — ไม่มีตัวนี้ มูลค่าพอร์ตรายคืนของ**ทุกคน**จะเป็น `null` ทุกคืนแบบไม่มี Error ให้เห็นเลย |
 > | `6e88b5c` | ปุ่มเลือกพอร์ตบน LINE | ✅ **บังคับ** — ไม่มีตัวนี้ ผู้ใช้ที่ถือ Symbol ข้ามพอร์ตจะบันทึกผ่าน LINE ไม่ได้เลยหลัง Backfill |
 > | `4e6f7dc` | Stage 9 Frontend | ❌ ไม่เกี่ยวกับความปลอดภัยของข้อมูล (อยู่หลัง Feature Flag ที่ยังปิด) — Deploy ไปด้วยได้ ไม่ Deploy ก็ไม่กระทบ |
+> | `0eabb3c` | ถามพอร์ตตอนซื้อเมื่อผู้ใช้มีหลายพอร์ต (มติ Founder 27 ส.ค. 2569) | ❌ ไม่ใช่ Safety Fix ของ `044` — **แต่ "ไม่ใช่ Safety Fix" ≠ "ไม่ต้อง Deploy"**: นี่คือมติ Founder ที่ต้องมี ถ้าไม่ Deploy ผู้ใช้ Premium หลายพอร์ตจะได้พฤติกรรมเก่าที่ขัดมติ (ลงพอร์ต Default เงียบๆ) |
+> | `5826ba6` | PDPA: ล้างชื่อ `portfolios`/`brokers` ตอน Erasure | ❌ ไม่เกี่ยวกับ `044` เลย — คนละเรื่อง (Erasure Flow) |
+>
+> ⚠️⚠️ **ตารางนี้เองก็ล้าสมัยได้ทันทีที่มี Commit ใหม่เข้ามา** (เกิดขึ้นจริงแล้ว
+> ตามที่อธิบายด้านบน) **เกณฑ์ที่ไม่มีวันล้าสมัยคือ "Deploy ให้ถึง HEAD ของ branch
+> `feat/dashboard-production-wire`" ไม่ใช่การเทียบกับ SHA ตัวใดตัวหนึ่งที่จำมา**
+> ตารางนี้มีไว้อธิบาย "ทำไม" เท่านั้น — วิธีตรวจจริงอยู่ถัดไป
 >
 > ⚠️ **`6cf6aa1` อย่างเดียวไม่พอ** — หางที่ 3 (`035c221`) อยู่ใน
 > `pendingTransaction.service.js` ซึ่ง **ไม่ถูกแตะเลยใน `6cf6aa1`** ทั้งที่เอกสาร
@@ -318,11 +328,19 @@ UNIQUE NULLS NOT DISTINCT (user_id, symbol, portfolio_id, broker_id)
 >
 > ### ⚠️ ต้องยืนยันด้วยของจริงว่า Container รันโค้ดไหนอยู่
 >
-> **ห้ามเชื่อว่า "Deploy แล้ว"** — ตรวจจริงก่อนเดินต่อ:
+> **ห้ามเชื่อว่า "Deploy แล้ว"** — และ **ห้ามเทียบกับ SHA ตัวใดตัวหนึ่งที่จำหรือ
+> Copy มาจากเอกสาร** (เอกสารนี้เองก็เคยผิดเพราะเหตุผลนี้พอดี) ให้เทียบกับ
+> **HEAD ของ branch ณ ตอนที่ตรวจจริง** เสมอ:
 >
 > ```bash
-> # Railway → Service "backend" และ "easydca-worker" → Deployments
-> # ดู Commit SHA ของ Deployment ที่สถานะ Active อยู่ ต้องเป็น 6e88b5c ขึ้นไป
+> # 1) ดู HEAD ของ branch ที่กำลังจะ Deploy
+> git rev-parse --short HEAD
+> #   (รันบน feat/dashboard-production-wire — ค่าที่ได้คือเกณฑ์จริง ไม่ใช่เลขในเอกสาร)
+>
+> # 2) Railway → Service "backend" และ "easydca-worker" → Deployments
+> #    ดู Commit SHA ของ Deployment ที่สถานะ Active อยู่ ต้องตรงกับค่าจาก (1) เป๊ะ
+> #    ถ้าไม่ตรงเป๊ะแต่สงสัยว่า "ใหม่พอไหม" ให้เช็คว่า Deploy ไปถึงหลัง 48970c1
+> #    และ 6e88b5c บน branch นี้แล้วหรือยัง (ดูตารางด้านบนประกอบ)
 > #
 > # ⚠️ ต้องตรวจ "ทั้งสอง Service" — ทั้งคู่ใช้ backend/railpack.json ร่วมกัน
 > # (DEPLOYMENT.md [8]) แต่ Deploy แยกกัน · worker ที่ค้างโค้ดเก่าจะเขียนข้อมูล
@@ -359,9 +377,11 @@ UNIQUE NULLS NOT DISTINCT (user_id, symbol, portfolio_id, broker_id)
 
 ```
 ขั้น 1   Apply  042 → 043           (ปลอดภัย ไม่แตะข้อมูลเดิม)
-ขั้น 2   ✅ บั๊ก Asset Resolution แก้เสร็จแล้ว (6cf6aa1 · 965dcdb · 035c221 · 6e88b5c)
+ขั้น 2   ✅ บั๊ก Asset Resolution แก้เสร็จแล้วครบ 5 หาง — ดูตารางด้านบน
+         ⚠️ เกณฑ์จริงคือ "Deploy ถึง HEAD ของ branch" ไม่ใช่ SHA ตัวใดตัวหนึ่ง
 ขั้น 3   Merge + Deploy โค้ดที่แก้แล้ว ทั้ง EasyDCA และ easydca-worker
          ⚠️ ยืนยัน Commit SHA ของ Deployment ที่ Active จริงทั้งสอง Service
+         เทียบกับ `git rev-parse --short HEAD` (วิธีตรวจเต็มอยู่ด้านบน)
 ขั้น 4   Verify บน Production **ตามสคริปต์ § 8.1 ด้านล่าง** (ก่อน 044)
 ขั้น 5   จดเลขแถว assets/portfolios/users + สร้าง _backup_044_assets_portfolio
 ขั้น 6   Apply  044 → 045           (044 = ตัวแรกที่แตะข้อมูลเดิมจริง)
