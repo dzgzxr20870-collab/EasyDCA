@@ -67,12 +67,29 @@ function toAsset(row) {
 //
 // เรียงตาม created_at ขึ้น เพื่อให้ลำดับปุ่มที่ผู้ใช้เห็นบน LINE คงที่ทุกครั้ง
 // (ปุ่มสลับที่กันเองระหว่างครั้ง = ผู้ใช้กดผิดโบรกได้ง่ายมาก)
+// ⚠️⚠️ **กติกาของ portfolioId — ต้องแยก 3 ทาง ห้ามยุบเหลือ 2 เด็ดขาด** ⚠️⚠️
+//   undefined = "ยังไม่ระบุ / พอร์ตไหนก็ได้" → **ไม่กรอง portfolio_id เลย**
+//   null      = "เจาะจงว่าไม่มีพอร์ต"        → .is('portfolio_id', null)
+//   '<uuid>'  = เจาะจงพอร์ตนั้น              → .eq('portfolio_id', uuid)
+//
+// เดิมเขียนเป็น ternary 2 ทาง (`portfolioId ? .eq(...) : .is(..., null)`) ซึ่ง
+// **ยุบ undefined กับ null เข้าด้วยกัน** — บั๊กที่บล็อกการ Apply migration 044:
+// หลัง Backfill ไม่เหลือแถวที่ portfolio_id IS NULL อีกเลย → การค้นด้วย
+// .is('portfolio_id', null) จึงคืน [] เสมอ → หาสินทรัพย์เดิมไม่เจอ → ซื้อแล้ว
+// **สร้างแถวซ้ำ** → ประวัติแตกคนละ asset_id → ต้นทุนเฉลี่ย/P&L ผิดแบบเงียบสนิท
+// (Post-mortem: docs/POSTMORTEM_PORTFOLIO_RESOLUTION.md)
+//
+// กติกานี้ **เหมือน brokerId ของ Stage 5 เป๊ะ** ไม่ใช่ Pattern ใหม่ — ดูหัวไฟล์
+// assetResolution.service.js ซึ่งอธิบายเหตุผลของทั้งสองมิติไว้ด้วยกัน
 async function findAllByUserAndSymbol(userId, symbol, portfolioId) {
   const { data, error } = await queryForUser('assets', userId, (q) => {
     const base = q.select('*').eq('symbol', symbol);
-    // portfolio_id เป็น nullable (Free Plan ไม่มี Multiple Portfolio)
+    // ไม่ระบุพอร์ต = ไม่กรองมิตินี้เลย (คืนทุกแถวของ Symbol นั้นข้ามพอร์ต)
+    if (portfolioId === undefined) return base;
     // ต้องใช้ .is() แทน .eq() เมื่อเทียบกับ null ตาม PostgREST
-    return portfolioId ? base.eq('portfolio_id', portfolioId) : base.is('portfolio_id', null);
+    return portfolioId === null
+      ? base.is('portfolio_id', null)
+      : base.eq('portfolio_id', portfolioId);
   }).order('created_at', { ascending: true });
 
   if (error) {

@@ -223,7 +223,10 @@ async function createFundPendingReply(user, { projId, fundClassName, symbol, nam
 //     ให้ createPending throw VALIDATION_ERROR (ไม่รู้จักสินทรัพย์) ตามเดิม
 async function tryResolveFundBuy(user, parsed) {
   const symbol = parsed.params.symbol;
-  const portfolioId = parsed.params.portfolioId ?? null;
+  // ⚠️ ห้ามใส่ `?? null` — undefined ต้องไหลลงไปถึง Repository ตามที่เป็น เพื่อให้
+  // แปลว่า "ไม่กรองพอร์ต" ไม่ใช่ "เจาะจงว่าไม่มีพอร์ต" (ดู assetResolution.service)
+  // เส้นทาง LINE ไม่มีคอนเซ็ปต์พอร์ตเลย จึงเป็น undefined เสมอในทางปฏิบัติ
+  const { portfolioId } = parsed.params;
 
   // 1) ถือกองทุนนี้อยู่แล้ว → Reuse Class เดิม (ไม่ถามซ้ำ) เติม projId/class ให้ parsed
   //

@@ -4,6 +4,42 @@
 
 ## [Unreleased]
 ### Added
+- **🔴 แก้บั๊ก Asset Resolution ที่บล็อกการ Apply migration 044**
+  (Post-mortem เต็ม: [`POSTMORTEM_PORTFOLIO_RESOLUTION.md`](./POSTMORTEM_PORTFOLIO_RESOLUTION.md))
+  - **อาการ:** `044` Backfill ให้สินทรัพย์ทุกแถวมี `portfolio_id` → ไม่เหลือแถวที่
+    `portfolio_id IS NULL` แต่โค้ดค้นหาด้วย `.is('portfolio_id', null)` เสมอ
+    (`resolveOwnedAsset` มี Default `portfolioId = null` + Caller ทุกตัวเขียน
+    `?? null` ตามกันหมด) → **หาสินทรัพย์เดิมไม่เจอทุกครั้ง** พังพร้อมกัน 4 จุด:
+    🔴 **ซื้อ → สร้างแถวซ้ำ → ประวัติแตกคนละ `asset_id` → ต้นทุนเฉลี่ย/P&L ผิด
+    แบบเงียบสนิท (แตะเงินจริง)** · 🟠 ขาย/ดูกำไร/LINE หาไม่เจอ (พังดัง)
+  - **จับได้ก่อน Apply — ไม่มีข้อมูลผู้ใช้เสียหายจริง**
+  - **แก้:** ทำให้ `portfolioId` ใช้กติกาเดียวกับ `brokerId` ของ Stage 5 เป๊ะ
+    (`undefined` = ไม่ระบุ/ไม่กรอง · `null` = เจาะจงว่าไม่มีพอร์ต · `uuid` = พอร์ตนั้น)
+    · ลบ Default `= null` · ลบ `?? null` ทุกจุด · Repository แยก 3 ทาง
+    · เพิ่ม `AMBIGUOUS_ASSET_PORTFOLIO` (409) — ถือหลายพอร์ตแล้วไม่ระบุ = **ถาม/Reject
+    ห้ามเดา** (กฎยืนข้อ 11) ตรวจมิติพอร์ต**ก่อน**มิติโบรกเสมอ
+    · สินทรัพย์ **ใหม่** ที่ไม่ระบุพอร์ต → ลงพอร์ต `is_default` (Invariant 044/045)
+  - **⭐ บทเรียนที่มีค่ากว่าตัวบั๊ก:** ไฟล์ที่เกิดบั๊ก **มีคำเตือนเรื่องนี้เขียนไว้เอง
+    อยู่แล้ว แต่ครอบแค่ `brokerId` ไม่ครอบ `portfolioId`** →
+    **คำเตือนที่ครอบไม่ครบ อันตรายกว่าไม่มีคำเตือน** เพราะคนอ่านเห็นว่ามีคำเตือน
+    แล้วสรุปว่า "ตรวจแล้ว" · ขยายคำเตือนให้ครอบทุกมิติ + กำกับว่าถ้าเพิ่มมิติที่ 3
+    ในอนาคตต้องมาขยายด้วยเสมอ
+  - **⭐ ทำไมเทสต์ 2,624 ตัวจับไม่ได้เลย:** ทุก Fixture จำลอง "โลกก่อน 044"
+    (สินทรัพย์ไม่มี `portfolioId` หรือเป็น null ซึ่งตรงกับที่โค้ดค้นหาพอดี) →
+    **กฎใหม่: Migration ที่เปลี่ยนรูปร่างข้อมูลเดิม ต้องมาพร้อม Fixture ของ
+    "โลกหลัง Migration" เสมอ**
+  - **บทเรียนซ้อน (ซ้ำรอย POSTMORTEM_AMOUNT_CONSISTENCY):** เทสต์ Regression ชุดแรก
+    `jest.mock` ทั้ง Repository ทิ้ง → ย้อนโค้ด Repository กลับเป็นต้นตอแล้ว
+    **ยังเขียว 15/15** · แก้ด้วยการเพิ่ม `assetRepositoryPortfolioFilter.test.js`
+    ที่ใช้ **Repository ตัวจริง** Mock แค่ Query Builder → ย้อนกลับแล้วแดง 3/6
+  - **Red-Green จริง 3 ชุด + Baseline:** Baseline ก่อนแก้ **แดง 9/15** ·
+    ใส่ `?? null` กลับที่ `validateBuy` **แดง 3/15** · ยุบ Repository เหลือ ternary
+    2 ทาง **แดง 3/6** · ใส่ Default `= null` กลับ **แดง 9/15**
+  - Test **131 suites / 2,624 → 133 suites / 2,645 เขียวทั้งหมด** · ESLint 0 error
+  - ⛔ **แปะคำเตือนห้าม Apply 044 ไว้ 2 ที่แล้ว** (HANDOFF § 8 + หัวไฟล์ migration)
+    พร้อมลำดับที่ถูกต้อง: **แก้โค้ด → Deploy → Verify → ค่อย Apply 044**
+    (สลับจากกฎปกติโดยตั้งใจ เพราะ 044 คือตัวที่ทำให้โค้ดเดิมพัง ไม่ใช่โค้ดใหม่ที่รอ Schema)
+
 - **Stage 9 (1/n) — ฐานของ Dashboard แยกหน้า + หน้าพอร์ตต่อ API จริง**
   (Branch `feat/dashboard-production-wire` — ยัง**ไม่ได้ Push/Merge/Deploy**)
   - **Route คู่ขนานที่ `/app/*` หลัง Feature Flag `VITE_ENABLE_MULTIPAGE_APP`**

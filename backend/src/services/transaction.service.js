@@ -13,6 +13,9 @@ const assetResolution = require('./assetResolution.service');
 // Stage 8-fix — ด่าน "เพิ่มของใหม่เข้าพอร์ตนี้ได้ไหม" (มติ Founder 24 ส.ค. 2569)
 // ⚠️ ต้องอยู่ใน validateBuy เท่านั้น ห้ามใส่ใน validateSell (ดูเหตุผลที่ validateBuy)
 const portfoliosService = require('./portfolios.service');
+// Resolve พอร์ต Default ตอนสร้างสินทรัพย์ใหม่ (Invariant migration 044/045:
+// สินทรัพย์ทุกแถวต้องสังกัดพอร์ต) — ดู validateBuy
+const portfolioRepository = require('../repositories/portfolio.repository');
 
 // แหล่งราคาจริงตาม Asset Type (Pattern เดียวกับที่ priceFeed.service.js ใช้
 // จัดเส้นทาง Crypto → CoinGecko / หุ้นสหรัฐ → Twelve Data) — priceFeedService
@@ -427,7 +430,11 @@ async function validateBuy(userId, params, options = {}) {
   // (ปลอดภัยกว่าปล่อยผ่าน) entitlement จะถือว่า premium ที่หมดอายุ/ไม่มีวันหมดอายุ
   // = free โดยอัตโนมัติ
   const { plan = 'free', planExpiresAt = null } = options;
-  const portfolioId = params.portfolioId ?? null;
+  // ⚠️ **ห้ามใส่ `?? null`** — ส่ง params.portfolioId ต่อ "ตามที่เป็น" เหมือน brokerId
+  // undefined = "ไม่ระบุพอร์ต" (ค้นข้ามพอร์ต) · null = "เจาะจงว่าไม่มีพอร์ต"
+  // การใส่ `?? null` คือต้นตอของบั๊กที่บล็อก migration 044 (หลัง Backfill ไม่เหลือ
+  // แถวที่ portfolio_id IS NULL → ค้นไม่เจอ → สร้างแถวซ้ำ → ต้นทุนเฉลี่ยผิดเงียบๆ)
+  const { portfolioId } = params;
 
   // แปลง/ตรวจจำนวนก่อน (อาจ throw PRICE_FEED/VALIDATION) — ยังไม่แตะ DB
   const amounts = await resolveQuantityAndPrice(params);
@@ -515,6 +522,27 @@ async function validateBuy(userId, params, options = {}) {
   // assetLimit ติดไปกับผลลัพธ์ด้วย (ไม่ใช่แค่ใช้ตรวจแล้วทิ้ง) — processBuyCommand
   // ต้องใช้ค่าเดียวกันนี้ส่งต่อให้ assetRepository.create() (RPC create_asset_locked
   // — migration 035) เป็นด่านตัดสินจริงตอน Insert อีกชั้น ไม่คำนวณซ้ำสองที่
+  // ── พอร์ตปลายทางของ "สินทรัพย์ใหม่" ────────────────────────────────────
+  // ⚠️ Invariant ของ migration 044/045 บังคับว่า **สินทรัพย์ทุกแถวต้องสังกัดพอร์ต**
+  // ถ้าปล่อยให้สร้างด้วย portfolio_id = NULL หลัง Backfill แล้ว migration 045 ที่ใช้
+  // เป็น Health Check จะ RAISE EXCEPTION ทันที
+  //
+  // ผู้ใช้ไม่ระบุพอร์ต (เส้นทาง LINE ไม่มีคอนเซ็ปต์พอร์ตเลย) → ลงพอร์ต Default
+  // ซึ่งเป็นพฤติกรรมที่ตรงกับก่อน 044 มากที่สุด (ตอนนั้นทุกอย่างอยู่กองเดียวกัน)
+  //
+  // ⚠️ **นี่ไม่ใช่ Silent Default ที่ขัดกฎยืนข้อ 11** เพราะกรณีกำกวมจริง (ถือ Symbol
+  // นี้อยู่แล้วในพอร์ตอื่น) ถูก assetResolution โยน AMBIGUOUS_ASSET_PORTFOLIO ดักไป
+  // ก่อนหน้านี้แล้ว — มาถึงตรงนี้ได้แปลว่า "ยังไม่เคยถือ Symbol นี้ที่ไหนเลย"
+  // ซึ่งไม่มีอะไรให้กำกวม การเลือกพอร์ตหลักจึงเป็นการตัดสินที่มีคำตอบเดียว
+  //
+  // ก่อน 044: ผู้ใช้ยังไม่มีพอร์ตเลย → findDefaultByUser คืน null → ได้ null
+  // เท่ากับพฤติกรรมเดิมทุกประการ (Backward Compatible)
+  let resolvedPortfolioId = portfolioId;
+  if (resolvedPortfolioId === undefined) {
+    const defaultPortfolio = await portfolioRepository.findDefaultByUser(userId);
+    resolvedPortfolioId = defaultPortfolio?.id ?? null;
+  }
+
   return {
     asset: null,
     assetType: params.type,
@@ -523,13 +551,25 @@ async function validateBuy(userId, params, options = {}) {
     assetLimit,
     // Asset ใหม่ยังไม่มีโบรกใน DB — ใช้ค่าที่ผู้ใช้เลือกมา (null = ไม่ระบุ)
     brokerId: params.brokerId ?? null,
+    // พอร์ตปลายทางที่ Resolve แล้ว — processBuyCommand ต้องใช้ค่านี้ตอนสร้าง Asset
+    // ไม่ใช่ params.portfolioId ดิบ (ซึ่งเป็น undefined ตอนไม่ระบุ)
+    portfolioId: resolvedPortfolioId,
   };
 }
 
 async function processBuyCommand(userId, params, options = {}) {
-  const portfolioId = params.portfolioId ?? null;
 
-  const { asset: existingAsset, assetType, newAsset, amounts, assetLimit } = await validateBuy(
+  const {
+    asset: existingAsset,
+    assetType,
+    newAsset,
+    amounts,
+    assetLimit,
+    // ⚠️ ใช้พอร์ตที่ validateBuy Resolve แล้ว ไม่ใช่ params.portfolioId ดิบ —
+    // ตอนไม่ระบุพอร์ต ค่าดิบเป็น undefined แต่สินทรัพย์ใหม่ต้องลงพอร์ต Default
+    // (Invariant migration 044/045) ดู validateBuy
+    portfolioId: resolvedPortfolioId,
+  } = await validateBuy(
     userId,
     params,
     options
@@ -542,7 +582,8 @@ async function processBuyCommand(userId, params, options = {}) {
     try {
       asset = await assetRepository.create(
         userId,
-        portfolioId,
+        // ⚠️ พอร์ตที่ validateBuy Resolve แล้ว ไม่ใช่ค่าดิบ (undefined ตอนไม่ระบุ)
+        resolvedPortfolioId,
         params.symbol,
         params.name ?? params.symbol,
         assetType,
@@ -621,7 +662,9 @@ async function processBuyCommand(userId, params, options = {}) {
 // ใช้ร่วมกันทั้ง Commit จริงและ Preview เช่นเดียวกับ validateBuy
 // อาจ throw: ASSET_NOT_FOUND / PRICE_FEED_NOT_IMPLEMENTED / INSUFFICIENT_QUANTITY
 async function validateSell(userId, params) {
-  const portfolioId = params.portfolioId ?? null;
+  // ⚠️ ห้ามใส่ `?? null` (ดูเหตุผลใน validateBuy) — ขายต้องหาสินทรัพย์เจอข้ามพอร์ต
+  // ผู้ใช้ไม่ควรต้องรู้ว่าหุ้นอยู่พอร์ตไหนถึงจะขายได้
+  const { portfolioId } = params;
 
   // ⚠️ ห้ามใส่ `?? null` ให้ params.brokerId (ดู validateBuy/assetResolution.service)
   // ขายผิดโบรก = ตัดยอดคงเหลือของโบรกที่ไม่ได้ขายจริง แล้วต้นทุนเฉลี่ยเพี้ยนทั้งคู่

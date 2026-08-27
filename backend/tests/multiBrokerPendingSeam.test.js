@@ -22,6 +22,11 @@
 //   • เปลี่ยน validateBuy ให้คืน `params.brokerId` (ค่าดิบ) แทนค่าที่ Resolve ได้
 //     → แดงที่เคส "ไม่ได้พิมพ์โบรกมา แต่ถืออยู่ที่โบรกเดียว"
 
+// Stage 8-fix (บั๊ก Asset Resolution) — validateBuy ต้อง Resolve พอร์ต Default
+// ตอนสร้างสินทรัพย์ใหม่ (Invariant migration 044/045: สินทรัพย์ทุกแถวสังกัดพอร์ต)
+// จึงต้อง Mock portfolio.repository ด้วย · Automock คืน undefined = "ยังไม่มีพอร์ต"
+// ซึ่งตรงกับสภาพก่อน Apply 044 พอดี → พฤติกรรมของเทสต์เดิมไม่เปลี่ยน
+jest.mock('../src/repositories/portfolio.repository');
 jest.mock('../src/repositories/asset.repository');
 jest.mock('../src/repositories/transaction.repository');
 jest.mock('../src/repositories/pendingTransaction.repository');

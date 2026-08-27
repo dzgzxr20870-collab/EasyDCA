@@ -24,15 +24,27 @@ const assetRepository = require('../repositories/asset.repository');
 // ต้องถามผู้ใช้หรือ Reject ไม่ใช่เดาค่า Default" · Founder ยืนยัน 23 ส.ค. 2569
 // ว่ายอมให้ผู้ใช้กดปุ่มเพิ่ม 1 ครั้ง ดีกว่าปล่อยให้ต้นทุนเฉลี่ยเพี้ยน)
 //
-// ── กติกาของ Argument brokerId (อ่านก่อนแก้โค้ดที่เรียกไฟล์นี้) ──────────────
-//   undefined = "ผู้ใช้ยังไม่ได้ระบุโบรก" → ถ้ากำกวมจะ throw AMBIGUOUS_ASSET_BROKER
-//   null      = "ผู้ใช้ระบุแล้วว่า *ไม่ระบุโบรก*" → เจาะจงแถวที่ broker_id IS NULL
-//   '<uuid>'  = เจาะจงโบรกนั้น
+// ── กติกาของ Argument (อ่านก่อนแก้โค้ดที่เรียกไฟล์นี้) ──────────────────────
+// ⚠️⚠️ **ใช้กับ `brokerId` และ `portfolioId` เหมือนกันทั้งคู่** ⚠️⚠️
+//   undefined = "ผู้ใช้ยังไม่ได้ระบุ"        → ไม่กรองมิตินั้นเลย · กำกวมเมื่อไหร่ throw
+//   null      = "ระบุแล้วว่า *ไม่มี*"        → เจาะจงแถวที่คอลัมน์นั้น IS NULL
+//   '<uuid>'  = เจาะจงค่านั้น
 //
-// ⚠️ ห้ามเขียน `brokerId: params.brokerId ?? null` ที่จุดใดก็ตามก่อนส่งเข้ามา —
-// การทำแบบนั้นเปลี่ยน "ยังไม่ได้ถาม" ให้กลายเป็น "ตอบแล้วว่าไม่มีโบรก" เงียบๆ
-// ซึ่งจะสร้างสินทรัพย์ซ้ำแถวใหม่ (broker = ไม่ระบุ) ทั้งที่ผู้ใช้ถืออยู่ที่โบรกจริง
+// ⚠️ **ห้ามเขียน `?? null` ให้ทั้งสองตัวที่จุดใดก็ตามก่อนส่งเข้ามา** —
+// การทำแบบนั้นเปลี่ยน "ยังไม่ได้ถาม" ให้กลายเป็น "ตอบแล้วว่าไม่มี" เงียบๆ
+// ซึ่งจะสร้างสินทรัพย์ซ้ำแถวใหม่ ทั้งที่ผู้ใช้ถืออยู่จริง
 // → ประวัติแตกคนละ asset_id = บั๊กเดียวกับที่ migration 014 เคยแก้เป๊ะ
+//
+// ── 📌 บทเรียนสำคัญที่สุดของไฟล์นี้ (24 ส.ค. 2569) ─────────────────────────
+// คำเตือนข้างบนนี้ **เคยเขียนครอบแค่ `brokerId` อย่างเดียว** แล้วโค้ดในไฟล์นี้เอง
+// ก็ไปทำผิดแบบเดียวกันเป๊ะกับ `portfolioId` (Default Parameter `portfolioId = null`
+// + Caller ทุกตัวเขียน `?? null` ตามกันหมด) จนกลายเป็นบั๊กที่บล็อกการ Apply
+// migration 044 และแตะเงินจริงแบบเงียบสนิท
+//
+// **คำเตือนที่ครอบไม่ครบ อันตรายกว่าไม่มีคำเตือน** — เพราะคนอ่านเห็นว่ามีคำเตือน
+// เรื่องนี้อยู่แล้ว จึงคิดว่า "ตรวจแล้ว" และไม่เอะใจกับมิติที่คำเตือนไม่ได้พูดถึง
+// ⚠️ ถ้าเพิ่มมิติที่ 3 (เช่น sub-account) ในอนาคต **ต้องมาขยายคำเตือนนี้ด้วยเสมอ**
+// (Post-mortem เต็ม: docs/POSTMORTEM_PORTFOLIO_RESOLUTION.md)
 
 class AssetResolutionError extends Error {
   constructor(code, message, details = {}) {
@@ -59,7 +71,10 @@ function brokerKey(value) {
 //                ปุ่มให้เลือกได้โดยไม่ต้อง Query ซ้ำ
 //
 // throw AMBIGUOUS_ASSET_BROKER เมื่อ (candidates > 1 && brokerId === undefined)
-async function resolveOwnedAsset(userId, symbol, { portfolioId = null, brokerId } = {}) {
+async function resolveOwnedAsset(userId, symbol, { portfolioId, brokerId } = {}) {
+  // ⚠️ **ห้ามใส่ Default `= null` ให้ portfolioId เด็ดขาด** (เคยเป็นแบบนั้นและคือ
+  // ต้นตอของบั๊กที่บล็อก migration 044) — undefined ต้องไหลลงไปถึง Repository
+  // ตามที่เป็น เพื่อให้แปลว่า "ไม่กรองมิตินี้" ไม่ใช่ "เจาะจงว่าไม่มีพอร์ต"
   const candidates = await assetRepository.findAllByUserAndSymbol(userId, symbol, portfolioId);
 
   // ── ผู้ใช้ระบุโบรกมาแล้ว (รวมกรณีระบุว่า "ไม่ระบุโบรก") ─────────────────────
@@ -73,6 +88,32 @@ async function resolveOwnedAsset(userId, symbol, { portfolioId = null, brokerId 
 
   if (candidates.length === 0) return { asset: null, candidates };
   if (candidates.length === 1) return { asset: candidates[0], candidates };
+
+  // ── กำกวมมิติ "พอร์ต" (ตรวจก่อนมิติโบรกเสมอ) ─────────────────────────────
+  // ⚠️ ตรวจพอร์ตก่อนโบรกโดยเจตนา เพราะพอร์ตเป็นมิติที่ "หยาบกว่า" — ถ้าผู้ใช้ถือ
+  // BTC อยู่ทั้งพอร์ต A และพอร์ต B การถามว่า "โบรกไหน" ก่อนจะสับสน เพราะโบรก
+  // เดียวกันอาจมีอยู่ในทั้งสองพอร์ต · ตอบพอร์ตแล้วมิติโบรกมักเหลือทางเดียวเอง
+  //
+  // ⚠️ **ห้ามเดาว่าเป็นพอร์ต Default เงียบๆ เด็ดขาด** (กฎยืนข้อ 11) — ผู้ใช้ที่ถือ
+  // BTC อยู่ในพอร์ตอื่นแล้วเราไปสร้างแถวใหม่ในพอร์ต Default ให้ = บั๊กเดิม
+  // (ประวัติแตกคนละ asset_id) กลับมาในรูปใหม่
+  if (portfolioId === undefined) {
+    const portfolios = new Set(candidates.map((a) => a.portfolioId ?? null));
+    if (portfolios.size > 1) {
+      throw new AssetResolutionError(
+        'AMBIGUOUS_ASSET_PORTFOLIO',
+        `Symbol ${symbol} matches ${candidates.length} assets across different portfolios`,
+        {
+          symbol,
+          candidates: candidates.map((a) => ({
+            assetId: a.id,
+            portfolioId: a.portfolioId ?? null,
+            brokerId: a.brokerId ?? null,
+          })),
+        }
+      );
+    }
+  }
 
   // ── กำกวม: ถือ Symbol นี้อยู่หลายโบรก แต่ยังไม่รู้ว่าหมายถึงโบรกไหน ──────────
   // details.candidates พก assetId + brokerId ไปให้ชั้นบนสร้างปุ่ม/ตัวเลือกได้เลย

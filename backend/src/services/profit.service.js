@@ -61,7 +61,12 @@ function roundToEight(value) {
 // AMBIGUOUS_ASSET_BROKER ให้ชั้นบนไปถามผู้ใช้ว่าหมายถึงโบรกไหน (ห้ามรวมต้นทุนข้าม
 // โบรกให้เองเงียบๆ — นั่นเป็นการเปลี่ยนสูตรต้นทุนเฉลี่ยที่ยังไม่ได้ออกแบบ)
 // ค่าที่ส่งได้: undefined = ยังไม่ระบุ · null = ระบุว่า "ไม่ระบุโบรก" · uuid = โบรกนั้น
-async function getAssetProfit(userId, symbol, portfolioId = null, priceOptions = {}, brokerId) {
+// ⚠️ **ห้ามใส่ Default `= null` ให้ portfolioId** (เคยเป็นแบบนั้นและเป็นส่วนหนึ่ง
+// ของบั๊กที่บล็อก migration 044) — Caller ส่วนใหญ่ไม่ส่งพารามิเตอร์นี้มาเลย
+// ค่าจึงเป็น undefined = "ไม่กรองพอร์ต" ซึ่งถูกต้อง: การดูกำไรต้องหาสินทรัพย์เจอ
+// ไม่ว่ามันจะอยู่พอร์ตไหน · ถ้าใส่ `= null` จะกลายเป็น "เจาะจงว่าไม่มีพอร์ต"
+// แล้วหลัง Backfill ของ 044 จะหาไม่เจอเลยสักตัว
+async function getAssetProfit(userId, symbol, portfolioId, priceOptions = {}, brokerId) {
   const { asset } = await assetResolution.resolveOwnedAsset(userId, symbol, {
     portfolioId,
     brokerId,

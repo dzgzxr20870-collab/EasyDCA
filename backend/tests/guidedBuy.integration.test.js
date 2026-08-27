@@ -12,6 +12,11 @@
 // "ซื้อ BTC 1000") INSERT ทุก Field — พิสูจน์ว่าไม่มี Logic คำนวณเงินคู่ขนานเกิดขึ้น
 // เทสต์นี้ Fail บนโค้ดเก่า (action=gbuy_* ยังไม่มี → ตก default → ไม่มี Transaction เลย)
 
+// Stage 8-fix (บั๊ก Asset Resolution) — validateBuy ต้อง Resolve พอร์ต Default
+// ตอนสร้างสินทรัพย์ใหม่ (Invariant migration 044/045: สินทรัพย์ทุกแถวสังกัดพอร์ต)
+// จึงต้อง Mock portfolio.repository ด้วย · Automock คืน undefined = "ยังไม่มีพอร์ต"
+// ซึ่งตรงกับสภาพก่อน Apply 044 พอดี → พฤติกรรมของเทสต์เดิมไม่เปลี่ยน
+jest.mock('../src/repositories/portfolio.repository');
 jest.mock('../src/repositories/transaction.repository');
 jest.mock('../src/repositories/asset.repository');
 jest.mock('../src/repositories/pendingTransaction.repository');

@@ -13,6 +13,11 @@
 // ถอด `await brokerService.assertOwnedBrokerId(...)` ใน transactions.controller
 // ออก (ส่ง body.brokerId ต่อตรงๆ) → เคส "brokerId ของผู้ใช้อื่น" แดงทันที
 
+// Stage 8-fix (บั๊ก Asset Resolution) — validateBuy ต้อง Resolve พอร์ต Default
+// ตอนสร้างสินทรัพย์ใหม่ (Invariant migration 044/045: สินทรัพย์ทุกแถวสังกัดพอร์ต)
+// จึงต้อง Mock portfolio.repository ด้วย · Automock คืน undefined = "ยังไม่มีพอร์ต"
+// ซึ่งตรงกับสภาพก่อน Apply 044 พอดี → พฤติกรรมของเทสต์เดิมไม่เปลี่ยน
+jest.mock('../src/repositories/portfolio.repository');
 jest.mock('../src/repositories/transaction.repository');
 jest.mock('../src/repositories/asset.repository');
 jest.mock('../src/repositories/broker.repository');
@@ -160,7 +165,15 @@ describe('POST /transactions — portfolioId จาก Body ต้องไม�
     // ไม่ใช่ค่าที่ผู้ใช้ส่งมา
     expect(assetRepository.create.mock.calls[0][1] ?? null).toBeNull();
     // และต้องไม่มีการ Resolve Asset ในพอร์ตของ B ด้วย
-    expect(assetRepository.findAllByUserAndSymbol).toHaveBeenCalledWith(USER_A, 'AAPL', null);
+    //
+    // ⚠️ Stage 8-fix: ค่าที่ส่งเข้า Repository เปลี่ยนจาก null → undefined โดยตั้งใจ
+    //   undefined = "ไม่กรองพอร์ตเลย" (ค้นข้ามพอร์ตของ **ตัวเอง** เท่านั้น เพราะ
+    //               queryForUser บังคับ .eq('user_id', USER_A) ให้อยู่แล้ว)
+    //   null      = "เจาะจงว่าไม่มีพอร์ต" ซึ่งหลัง migration 044 จะไม่เจออะไรเลย
+    // เจตนาของเทสต์ยังเหมือนเดิมเป๊ะ: **ต้องไม่ใช่ PORTFOLIO_OF_B**
+    const [, , passedPortfolioId] = assetRepository.findAllByUserAndSymbol.mock.calls[0];
+    expect(passedPortfolioId).toBeUndefined();
+    expect(passedPortfolioId).not.toBe(PORTFOLIO_OF_B);
   });
 });
 

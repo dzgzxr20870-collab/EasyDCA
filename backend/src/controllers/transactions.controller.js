@@ -86,6 +86,11 @@ const WEB_ERROR_MESSAGES = {
   // (details.candidates พก assetId/brokerId ไปให้ Frontend ทำตัวเลือกได้ทันที)
   AMBIGUOUS_ASSET_BROKER:
     'คุณถือสินทรัพย์นี้อยู่มากกว่า 1 โบรก/Exchange กรุณาเลือกก่อนว่าจะบันทึกรายการนี้ที่ไหน',
+  // Stage 8-fix — ถือ Symbol เดียวกันอยู่หลายพอร์ต แต่คำขอไม่ระบุว่าพอร์ตไหน
+  // ⚠️ ต้อง Reject ไม่ใช่เดาว่าเป็นพอร์ตหลัก (กฎยืนข้อ 11) — การเดาแล้วสร้างแถวใหม่
+  // ในพอร์ตหลักทั้งที่ผู้ใช้ถืออยู่ในพอร์ตอื่น = ประวัติแตกคนละ asset_id
+  AMBIGUOUS_ASSET_PORTFOLIO:
+    'คุณถือสินทรัพย์นี้อยู่ในมากกว่า 1 พอร์ต กรุณาเลือกก่อนว่าจะบันทึกรายการนี้เข้าพอร์ตไหน',
   BROKER_NOT_FOUND: 'ไม่พบโบรก/Exchange ที่เลือก (อาจถูกลบไปแล้ว) กรุณาเลือกใหม่อีกครั้ง',
   // Stage 8-fix — พอร์ตส่วนเกินหลัง Premium หมดอายุ (มติ Founder 24 ส.ค. 2569)
   // ⚠️ ต้องบอกทางออกที่ยังทำได้จริงให้ครบ ไม่ใช่แค่ "อ่านอย่างเดียว" ซึ่งชวนให้
@@ -174,6 +179,7 @@ const ERROR_STATUS = {
   // "คำขอยังไม่ครบพอจะตอบได้" ไม่ใช่ Input ผิดรูป — 409 (Pattern เดียวกับ
   // ASSET_ALREADY_EXISTS: ขัดกับสถานะปัจจุบันของข้อมูล ไม่ใช่ Validation ล้วน)
   AMBIGUOUS_ASSET_BROKER: 409,
+  AMBIGUOUS_ASSET_PORTFOLIO: 409,
   BROKER_NOT_FOUND: 404,
   // 403 = "แพ็กเกจไม่ให้ทำ" (Pattern เดียวกับ portfolios.controller)
   PORTFOLIO_READ_ONLY: 403,
@@ -653,6 +659,12 @@ async function createTransaction(req, res) {
     // Stage 5 (migration 046) — ผู้ใช้ถือ Symbol นี้หลายโบรก แต่คำขอไม่ได้บอกว่าโบรก
     // ไหน: ตอบ 409 พร้อม candidates (assetId + brokerId) ให้ Frontend ถามผู้ใช้แล้ว
     // ยิงซ้ำพร้อม brokerId — ห้ามเดาให้เองเด็ดขาด (กฎยืนข้อ 11)
+    if (err?.code === 'AMBIGUOUS_ASSET_PORTFOLIO') {
+      return fail(res, 'AMBIGUOUS_ASSET_PORTFOLIO', {
+        symbol: err.details?.symbol,
+        candidates: err.details?.candidates ?? [],
+      });
+    }
     if (err?.code === 'AMBIGUOUS_ASSET_BROKER') {
       return fail(res, 'AMBIGUOUS_ASSET_BROKER', {
         symbol: err.details?.symbol,

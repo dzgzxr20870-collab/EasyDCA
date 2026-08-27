@@ -14,6 +14,11 @@
 // ⚠️ ขอบเขต: พิสูจน์ได้ว่าโค้ด App ตอบสนองถูกต้องเมื่อ DB ปฏิเสธ — ตัว SQL FOR UPDATE
 // เองทำงานจริงไหม ทดสอบแยกกับ Postgres จริงบน Production แล้ว (verify035.js)
 
+// Stage 8-fix (บั๊ก Asset Resolution) — validateBuy ต้อง Resolve พอร์ต Default
+// ตอนสร้างสินทรัพย์ใหม่ (Invariant migration 044/045: สินทรัพย์ทุกแถวสังกัดพอร์ต)
+// จึงต้อง Mock portfolio.repository ด้วย · Automock คืน undefined = "ยังไม่มีพอร์ต"
+// ซึ่งตรงกับสภาพก่อน Apply 044 พอดี → พฤติกรรมของเทสต์เดิมไม่เปลี่ยน
+jest.mock('../src/repositories/portfolio.repository');
 jest.mock('../src/config/supabase', () => ({
   supabaseAdmin: { rpc: jest.fn() },
 }));
