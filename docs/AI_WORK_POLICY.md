@@ -266,6 +266,17 @@ Convention ที่ตกลงกันในบทสนทนากับ AI
   ทั้ง 3 หางถูกจับได้ด้วย "คนไปมองตรงนั้นพอดี" ไม่ใช่ด้วยเทสต์ — **จับได้ก่อน
   Apply migration ไม่มีข้อมูลผู้ใช้เสียหายจริง** (ที่มาของ § 3.1 ทั้งหมด ·
   Post-mortem เต็ม: [`POSTMORTEM_PORTFOLIO_RESOLUTION.md`](./POSTMORTEM_PORTFOLIO_RESOLUTION.md))
+- **🔴 ลำดับ Migration/Deploy ทำ LINE ล่มจริงบน Production (2026-08-27–28)** —
+  Deploy โค้ดใหม่แล้ว Apply `042`→`045` ตามลำดับที่วางไว้ → **ทุกคำสั่งซื้อผ่าน
+  LINE พังทันที** เพราะโค้ด Stage 5 ต้องการ `pending_transactions.broker_id` ที่
+  `046` เป็นคนเพิ่ม (อยู่ท้ายลำดับ) · ลำดับเดิมตอบแค่ทิศ *"migration ทำให้โค้ดเดิม
+  พังไหม"* แต่ไม่มีใครถาม *"โค้ดใหม่ต้องการอะไรจาก Schema"*
+  · **เทสต์ 137 suites จับไม่ได้เลยและจะจับไม่ได้ตลอดไป** เพราะทุกตัว Mock
+  Repository จึงไม่แตะ Schema จริง — เคสประเภทนี้ต้องกันด้วย **Checklist ตอน
+  วางแผน Deploy** ไม่ใช่ด้วยเทสต์ (การเสนอเทสต์ที่กันไม่ได้จริง = สร้างความมั่นใจ
+  ปลอมๆ) · พังดัง ไม่แตะ Ledger ไม่มีข้อมูลเสียหาย
+  (Post-mortem + Checklist “ไล่ดูสองทิศ”:
+  [`POSTMORTEM_MIGRATION_ORDER.md`](./POSTMORTEM_MIGRATION_ORDER.md))
 - **Test หลอกที่เขียวตลอดแม้บั๊กยังอยู่** — ระหว่างแก้บั๊ก Slip OCR Assertion
   `not.toContain('หากกด "ยืนยันบันทึก"')` ผ่านตลอดทุกครั้งแม้ยังไม่ได้แก้ เพราะ
   `JSON.stringify` Escape `"` เป็น `\"` ทำให้ไม่มีวัน Match พบได้เพราะทำ
