@@ -482,6 +482,14 @@ async function validateBuy(userId, params, options = {}) {
       // ใน DB แล้วตอน Confirm จะไปสร้างสินทรัพย์แถวใหม่ "ไม่ระบุโบรก" ซ้ำขึ้นมา
       // = ประวัติแตกคนละ asset_id ซึ่งคือบั๊กที่ migration 014 เคยแก้)
       brokerId: existingAsset.brokerId ?? null,
+      // ⚠️ พอร์ตต้องคืนด้วยเหตุผลเดียวกับ brokerId เป๊ะ (Stage 8-fix รอบ 3) —
+      // pendingTransaction ต้องเก็บ "พอร์ตของแถวที่ Resolve ได้จริง" ลง DB ตอน
+      // Preview ไม่ใช่ค่าดิบที่ Caller ส่งมา (เส้นทาง LINE ส่ง undefined เสมอ)
+      // ถ้าเก็บค่าดิบ → กลายเป็น NULL ใน DB → ตอน Confirm ส่ง portfolioId = null
+      // = "เจาะจงว่าไม่มีพอร์ต" → หลัง Apply 044 ไม่เหลือแถว NULL อีกเลย → หาไม่เจอ
+      // → สร้างสินทรัพย์ซ้ำแถวใหม่ = ประวัติแตกคนละ asset_id (บั๊ก migration 014)
+      // และแถวใหม่นั้นยังละเมิด Invariant ของ 045 (ทุกแถวต้องสังกัดพอร์ต) ด้วย
+      portfolioId: existingAsset.portfolioId ?? null,
     };
   }
 
@@ -771,7 +779,15 @@ async function validateSell(userId, params) {
     );
   }
 
-  return { asset, amounts, heldQuantity, brokerId: asset.brokerId ?? null };
+  // portfolioId คืนคู่กับ brokerId ด้วยเหตุผลเดียวกัน — pendingTransaction ต้อง
+  // Snapshot "ตัวตนของสินทรัพย์" ให้ครบทุกมิติตั้งแต่ Preview (ดู validateBuy)
+  return {
+    asset,
+    amounts,
+    heldQuantity,
+    brokerId: asset.brokerId ?? null,
+    portfolioId: asset.portfolioId ?? null,
+  };
 }
 
 async function processSellCommand(userId, params) {

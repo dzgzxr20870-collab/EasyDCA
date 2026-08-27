@@ -99,6 +99,9 @@ async function createPending(userId, parsed, options = {}) {
   let assetType = null;
   // Stage 5 — โบรกที่ "Resolve ได้จริง" ณ ตอนสร้าง Preview (ไม่ใช่ค่าดิบจาก params)
   let brokerId = null;
+  // Stage 8-fix รอบ 3 — พอร์ตที่ "Resolve ได้จริง" ด้วยเหตุผลเดียวกันเป๊ะ
+  // (เส้นทาง LINE ไม่เคยส่ง portfolioId มา → ค่าดิบเป็น undefined เสมอ)
+  let portfolioId = null;
 
   if (command === COMMANDS.BUY) {
     // validateBuy คืน amounts + จำแนกว่าเป็น Asset ใหม่ไหม — เก็บ asset_type
@@ -107,15 +110,23 @@ async function createPending(userId, parsed, options = {}) {
     amounts = result.amounts;
     assetType = result.newAsset ? result.assetType : null;
     brokerId = result.brokerId ?? null;
+    portfolioId = result.portfolioId ?? null;
   } else {
     const result = await transactionService.validateSell(userId, params);
     amounts = result.amounts;
     brokerId = result.brokerId ?? null;
+    portfolioId = result.portfolioId ?? null;
   }
 
   const pending = await pendingRepository.create({
     userId,
-    portfolioId: params.portfolioId ?? null,
+    // ⚠️ **ห้ามเปลี่ยนกลับเป็น `params.portfolioId ?? null`** (Stage 8-fix รอบ 3) —
+    // ต้องเป็นพอร์ตที่ validateBuy/validateSell **Resolve ได้จริง** เหมือน brokerId
+    // เส้นทาง LINE ส่ง params.portfolioId = undefined เสมอ ค่าดิบจึงกลายเป็น NULL
+    // แล้วตอน Confirm จะค้นด้วย portfolio_id IS NULL ซึ่งหลัง Apply 044 ไม่เหลือ
+    // แถวแบบนั้นอีกเลย → หาสินทรัพย์เดิมไม่เจอ → **สร้างแถวซ้ำ** ต้นทุนเฉลี่ยเพี้ยน
+    // (Regression: tests/pendingPortfolioSeam.test.js)
+    portfolioId,
     // Stage 5 (migration 046) — Snapshot โบรกไว้ตั้งแต่ Preview เพื่อให้ตอน Confirm
     // ชี้กลับไปที่สินทรัพย์แถวเดิมได้เป๊ะ แม้ผู้ใช้จะถือ Symbol นี้หลายโบรก
     brokerId,
@@ -267,17 +278,23 @@ async function cancelPending(pendingId, userId) {
 
 // สร้าง Batch ใหม่ — Insert เป็นหลายแถวใน pending_transactions ผูกด้วย batch_id
 // เดียวกัน (migration 008) เพื่อให้ Postback ยืนยัน/ยกเลิกทั้งก้อนใช้ปุ่มเดียวได้
-// validatedItems: [{ params, amounts, assetType }] จาก validateBuy ต่อรายการ —
+// validatedItems: [{ params, amounts, assetType, portfolioId, brokerId }] จาก
+// validateBuy ต่อรายการ — portfolioId/brokerId คือค่าที่ **Resolve ได้จริง** ไม่ใช่
+// ค่าดิบใน params (เหตุผลเดียวกับ createPending — ดู Comment ที่นั่น) ·
 // commandType เป็น 'buy' เสมอ (Bulk Import คือการนำเข้าพอร์ตเริ่มต้น = รายการซื้อ
 // ทั้งหมด ไม่รองรับ 'sell' ในรอบนี้)
 async function createBatch(userId, validatedItems) {
   const batchId = crypto.randomUUID();
 
   const pendings = [];
-  for (const { params, amounts, assetType } of validatedItems) {
+  for (const { params, amounts, assetType, portfolioId, brokerId } of validatedItems) {
     const pending = await pendingRepository.create({
       userId,
-      portfolioId: params.portfolioId ?? null,
+      // ⚠️ ห้ามใช้ `params.portfolioId ?? null` (ดู createPending) — Bulk Import
+      // ไม่มีคอนเซ็ปต์พอร์ต/โบรกใน CSV จึงเป็น undefined ทุกแถว ต้องใช้ค่าที่
+      // validateBuy Resolve ให้ ไม่งั้นตอน Confirm จะสร้างสินทรัพย์ซ้ำทั้ง Batch
+      portfolioId: portfolioId ?? null,
+      brokerId: brokerId ?? null,
       commandType: 'buy',
       assetSymbol: params.symbol,
       assetName: params.name ?? null,

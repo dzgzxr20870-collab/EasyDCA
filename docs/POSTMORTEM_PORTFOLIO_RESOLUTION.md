@@ -214,6 +214,7 @@ return portfolioId ? base.eq('portfolio_id', portfolioId) : base.is('portfolio_i
 | 2 | แก้ Asset Resolution + เทสต์ 2 ชั้น | ✅ `6cf6aa1` |
 | 3 | ขยายคำเตือน Header ให้ครอบทุกมิติ | ✅ `6cf6aa1` |
 | 3b | **ปิดหางของบั๊กเดียวกัน — branch โบรกข้ามด่านพอร์ต** (§ 10) | ✅ รอบนี้ |
+| 3c | **ปิดหางเส้นที่ 3 — รอยต่อ Preview→Confirm ไม่พกพอร์ต** (§ 11) | ✅ รอบนี้ |
 | 4 | ปุ่มเลือก **พอร์ต** บน LINE (ตอนนี้ Reject + บอกให้ใช้เว็บ) | ⏳ รอบหน้า |
 | 5 | Deploy + Verify บน Production ทั้งก่อนและหลัง `044` | ⏳ รอ Founder |
 | 6 | ทบทวน Fixture ของเทสต์เดิมให้ครอบ "โลกหลัง 044" มากขึ้น | ⏳ ทำบางส่วนแล้ว |
@@ -341,3 +342,99 @@ if (brokerId !== undefined) return { asset: matchedByBroker[0] ?? null, candidat
 > `dividend.service.js:127` เรียก `assertCanAddToPortfolio` **นอก** `validateBuy` โดย
 > เขียนเหตุผลกำกับไว้เอง (Endpoint ปันผลแยกตาม Design Doc § 4.5 · รับ `assetId` ตรงๆ
 > จึงไม่มีมิติ Resolution ให้กำกวม) — ไม่ขัดกับคำกล่าวอ้างข้อ 452 ซึ่งพูดถึง "การซื้อ"
+
+---
+
+## 11. 🔴 รอบที่ 3 — หางเส้นที่ 3: รอยต่อ Preview → Confirm ไม่เคยพกพอร์ต
+
+> **นี่คือหางที่อันตรายที่สุดของทั้งสามเส้น** เพราะมันอยู่บน **เส้นทางที่ผู้ใช้ใช้
+> บ่อยที่สุดของทั้งผลิตภัณฑ์** — การซื้อผ่าน LINE แล้วกดปุ่ม "ยืนยัน"
+>
+> พบตอนสำรวจโค้ดเพื่อทำปุ่มเลือกพอร์ตบน LINE (งานที่ 2) — ไม่ได้ตั้งใจหา
+
+### 11.1 บั๊ก
+
+การแก้รอบที่ 1 (`6cf6aa1`) ระบุไว้ใน § 6 ข้อ 3 ว่า *"ลบ `?? null` ของ `portfolioId`
+**ทุกจุด**"* — แต่ `git show --stat 6cf6aa1` พิสูจน์ว่า
+**`pendingTransaction.service.js` ไม่ถูกแตะเลยแม้แต่บรรทัดเดียว** และในไฟล์นั้นยังมี:
+
+```js
+// createPending
+portfolioId: params.portfolioId ?? null,      // <- ค่าดิบ ไม่ใช่ค่าที่ Resolve ได้
+// createBatch
+portfolioId: params.portfolioId ?? null,      // <- เหมือนกัน
+```
+
+เส้นทาง LINE **ไม่เคยส่ง `portfolioId` มาเลย** (undefined เสมอ) →
+เก็บ `NULL` ลง `pending_transactions` ตอน Preview →
+ตอนกดยืนยัน `toCommitParams` ส่ง `portfolioId: null` = **"เจาะจงว่าไม่มีพอร์ต"** →
+หลัง Apply `044` ไม่เหลือแถวที่ `portfolio_id IS NULL` อีกเลย →
+**หาสินทรัพย์เดิมไม่เจอ → สร้างแถวซ้ำ**
+
+ผลกระทบซ้อน: แถวใหม่ถูกสร้างด้วย `portfolio_id = NULL` ซึ่ง **ละเมิด Invariant
+ของ `migration 045`** โดยตรง (สินทรัพย์ทุกแถวต้องสังกัดพอร์ต)
+
+### 11.2 ทำไม `multiBrokerPendingSeam.test.js` จับไม่ได้
+
+ไฟล์นั้นครอบรอยต่อ Preview→Confirm ไว้ถูกจุดแล้ว (ใช้ของจริงทั้งสองฝั่ง) แต่:
+
+```js
+assetRepository.findAllByUserAndSymbol.mockResolvedValue([BTC_AT_A, BTC_AT_B]);
+```
+
+`mockResolvedValue` **ไม่สนใจ Argument `portfolioId` เลย** — คืนแถวเดิมทุกครั้ง
+ไม่ว่าจะถูกค้นด้วยอะไร
+
+> ### บทเรียนข้อ 3 เกิดซ้ำเป็นครั้งที่สอง (คนละรูป)
+>
+> รอบที่ 1 คือ **"Mock ทั้ง Repository จนฟังก์ชันกรองจริงไม่เคยถูกรัน"**
+> รอบนี้คือ **"Mock ที่หลวมกว่าของจริง"** — Mock ถูกรันจริง แต่มันยอมรับ
+> Argument ทุกแบบเหมือนกันหมด ทั้งที่ของจริงแยก 3 ทาง
+>
+> **Mock ที่ไม่บังคับกติกาเดียวกับของจริง = เทสต์ที่พิสูจน์ได้แค่ว่าโค้ดไม่ throw**
+>
+> กฎ: Mock ของ Repository ที่มี Argument ควบคุมการกรอง **ต้องจำลองการกรองนั้นจริง**
+> (`mockImplementation` ไม่ใช่ `mockResolvedValue`) — ไม่งั้นมันคือ Fixture
+> ที่ตอบ "เจอ" เสมอ ซึ่งเป็นคำตอบที่ผ่านทุก Assertion ที่ถามว่า "เจอไหม"
+
+### 11.3 Fix
+
+พก **"ตัวตนของสินทรัพย์ให้ครบทุกมิติ"** ข้ามรอยต่อ — Pattern เดียวกับที่ Stage 5
+ทำกับ `brokerId` เป๊ะ (ไม่ใช่ Pattern ใหม่):
+
+| ไฟล์ | เดิม | ใหม่ |
+|---|---|---|
+| `transaction.validateBuy` (สาขาสินทรัพย์เดิม) | คืนแค่ `brokerId` | คืน `portfolioId` ของแถวที่ Resolve ได้ด้วย |
+| `transaction.validateSell` | คืนแค่ `brokerId` | คืน `portfolioId` ด้วย |
+| `pendingTransaction.createPending` | `params.portfolioId ?? null` | ค่าที่ `validate*` Resolve ได้ |
+| `pendingTransaction.createBatch` | `params.portfolioId ?? null` | `portfolioId`/`brokerId` ต่อรายการ |
+| `bulkImport.validateItems` | ไม่พกต่อ | พก `portfolioId` + `brokerId` ต่อรายการ |
+
+> **`brokerId` ของ Bulk Import ก็ตกหล่นแบบเดียวกัน** — `createBatch` ไม่เคยเก็บ
+> `broker_id` เลย จึงเป็นบั๊กคลาสเดียวกันที่รออยู่ (ยืนยัน Batch แล้วสร้างแถว
+> "ไม่ระบุโบรก" ซ้ำ ทั้งที่ถือของเดิมอยู่ที่โบรก A) — แก้ไปพร้อมกันในรอบนี้
+
+**ผลพลอยได้:** พอร์ต Default ถูก **Snapshot ตั้งแต่ Preview** แล้ว ถ้าผู้ใช้เปลี่ยน
+พอร์ตหลักระหว่างรอกดยืนยัน รายการจะยังลงพอร์ตที่เห็นตอน Preview (Snapshot ชนะ
+การคำนวณใหม่ — Pattern เดียวกับ `amountThb` ใน `POSTMORTEM_AMOUNT_CONSISTENCY`)
+
+### 11.4 Validation (Red-Green รันจริง)
+
+| ชุด | ถอดอะไรออก | แดง | เขียว |
+|---|---|---|---|
+| Baseline | (เขียน `pendingPortfolioSeam.test.js` ยังไม่แก้โค้ด) | **6 / 8** | — |
+| RED-4 | `createPending` กลับไปใช้ `params.portfolioId ?? null` | **5 / 8** | 8/8 |
+| RED-5 | ถอด `portfolioId` ออกจากค่าที่ `validateBuy` คืน | **2 / 8** | 8/8 |
+
+**เทสต์ 133 suites / 2,659 → 134 suites / 2,667 เขียวทั้งหมด**
+
+### 11.5 ✅ ไม่ต้องทำ migration 049
+
+ตรวจ Schema จริงแล้ว: **`pending_transactions.portfolio_id` มีอยู่ตั้งแต่
+`migration 001`** พร้อม `REFERENCES portfolios(id) ON DELETE SET NULL` —
+ตรงกับ Pattern ที่ `046` ใช้กับ `broker_id` เป๊ะ
+
+> คอลัมน์มีมาตลอด **แต่ไม่เคยถูกเขียนค่าที่มีความหมายลงไปเลย** — เป็น Schema
+> ที่พร้อมใช้งานล่วงหน้าตั้งแต่ก่อนมีฟีเจอร์ Multi-Portfolio ด้วยซ้ำ
+> นี่คือเหตุผลที่ต้อง **อ่าน Schema จริงก่อนเขียน Migration ใหม่เสมอ** ไม่ใช่
+> อนุมานจากว่า "ฟีเจอร์นี้เพิ่งมี เลยยังไม่น่ามีคอลัมน์"

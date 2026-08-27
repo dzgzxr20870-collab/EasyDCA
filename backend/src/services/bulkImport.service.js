@@ -59,7 +59,8 @@ async function checkAggregateAssetLimit(userId, items, options) {
 // Validate ทุกรายการผ่าน transactionService.validateBuy เดิม (ไม่เขียน Logic
 // คำนวณ FX/ราคาตลาดใหม่ซ้ำ — Reuse ทั้งหมด) — เก็บ Error "ทุกบรรทัดที่ผิด" ไม่หยุด
 // ที่รายการแรก (Requirement: ต้องรายงานครบทุกบรรทัดที่มีปัญหาพร้อมกัน)
-// คืน { ok:true, validated: [{ line, symbol, params, amounts, assetType }] }
+// คืน { ok:true, validated: [{ line, symbol, params, amounts, assetType,
+//        portfolioId, brokerId }] }
 // หรือ { ok:false, errors }
 async function validateItems(userId, items, options) {
   const limitError = await checkAggregateAssetLimit(userId, items, options);
@@ -96,6 +97,12 @@ async function validateItems(userId, items, options) {
         params,
         amounts: result.amounts,
         assetType: result.newAsset ? result.assetType : null,
+        // ⚠️ พอร์ต/โบรกที่ **Resolve ได้จริง** ต้องพกต่อไปถึง createBatch —
+        // CSV ไม่มีคอลัมน์พอร์ต/โบรก params จึงเป็น undefined ทุกแถว ถ้าไม่พก
+        // ค่านี้ไป ตอนกดยืนยัน Batch จะค้นด้วย NULL แล้วสร้างสินทรัพย์ซ้ำทั้งก้อน
+        // (ดู Comment ใน pendingTransaction.createPending)
+        portfolioId: result.portfolioId ?? null,
+        brokerId: result.brokerId ?? null,
       });
     } catch (err) {
       errors.push({ line: item.line, symbol: item.symbol, code: err.code ?? 'INTERNAL_ERROR' });
