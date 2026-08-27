@@ -141,6 +141,23 @@ function insertedRow() {
   return transactionRepository.create.mock.calls[0][0];
 }
 
+// ⚠️ มติ Founder 27 ส.ค. 2569 — ฝั่ง "ซื้อ" ถามพอร์ตเมื่อผู้ใช้มี > 1 พอร์ต
+// ไฟล์นี้จำลอง **ผู้ใช้พอร์ตเดียว** (สภาพของผู้ใช้ Free แทบทั้งหมดของระบบ) จึงต้อง
+// ไม่มีการถามพอร์ตเกิดขึ้นเลย และพฤติกรรมทุกเคสในไฟล์นี้ต้องเหมือนเดิมทุกตัวอักษร
+//
+// ⚠️ ตั้งที่ Module Scope โดยเจตนา ไม่ใช่ใน beforeEach — `jest.clearAllMocks()`
+// ล้างแค่ประวัติการเรียก (mockClear) ไม่ล้าง Implementation ค่านี้จึงอยู่ครบทุกเคส
+// โดยไม่ต้องไปแทรกในทุก beforeEach ของไฟล์ (บางไฟล์มีหลายตัว)
+require('../src/repositories/portfolio.repository').findAllByUser.mockResolvedValue([
+  {
+    id: 'pf-single-0000-4000-8000-000000000001',
+    name: 'พอร์ตของฉัน',
+    type: 'custom',
+    isDefault: true,
+    createdAt: '2026-01-01T00:00:00.000Z',
+  },
+]);
+
 beforeEach(() => {
   jest.clearAllMocks();
 

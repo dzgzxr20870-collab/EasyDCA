@@ -359,6 +359,30 @@ async function buildBrokerPickerReply(user, commandType, symbol, err, buy) {
 // ⚠️ ต้องยุบพอร์ตซ้ำก่อนเสมอ — candidates เป็นรายการ "แถวสินทรัพย์" ไม่ใช่รายการ
 // พอร์ต ผู้ใช้ที่ถือ BTC ที่ 2 โบรกในพอร์ตเดียวกันจะได้ candidates 2 ตัวที่
 // portfolioId เท่ากัน ถ้าไม่ยุบจะเห็นปุ่มชื่อเดียวกันซ้ำสองปุ่มแล้วกดผิดได้ง่ายมาก
+// ประกอบการ์ดเลือกพอร์ตจาก "รายการ portfolioId ที่เลือกได้" — ใช้ร่วมกันทั้ง
+// เหตุผล 'ambiguous' (ข้อเท็จจริงบังคับ) และ 'choice' (ผู้ใช้มีสิทธิ์เลือก)
+// เพื่อไม่ให้การ Join ชื่อ/ตัดสิน 🔒 แตกเป็นสองชุดที่เพี้ยนจากกันได้
+function buildPortfolioPickerFrom(user, commandType, symbol, portfolioIds, portfolios, buy, reason) {
+  const nameById = new Map(portfolios.map((p) => [p.id, p.name]));
+  // พอร์ตที่ "เพิ่มรายการใหม่ได้" ตามแพ็กเกจปัจจุบัน — ใช้ติด 🔒 ให้ตัวที่เหลือ
+  // (UX เท่านั้น ด่านจริงยังอยู่ที่ validateBuy → assertCanAddToPortfolio)
+  const writable = entitlement.getWritablePortfolioIds(user, portfolios);
+
+  const choices = portfolioIds.map((id) => ({
+    portfolioId: id,
+    // พอร์ตที่หาชื่อไม่เจอไม่ควรเกิดจริง (queryForUser กรองด้วย user_id อยู่แล้ว)
+    // แต่ถ้าเกิด ต้องไม่แสดงเป็น "ไม่ระบุพอร์ต" เพราะจะซ้ำกับตัวเลือกอื่นจนแยกไม่ออก
+    portfolioName: id ? nameById.get(id) ?? `พอร์ต ${id.slice(0, 8)}` : null,
+    locked: id ? !writable.has(id) : false,
+  }));
+
+  return flexMessage.buildPortfolioPickerMessage(commandType, symbol, choices, buy, {
+    reason,
+    // null ได้ (ยังไม่ตั้ง FRONTEND_URL) — ตัวสร้างข้อความรองรับไว้แล้ว
+    manageUrl: buildExternalUrl('/dashboard'),
+  });
+}
+
 async function buildPortfolioPickerReply(user, commandType, symbol, err, buy) {
   const candidates = err?.details?.candidates ?? [];
 
@@ -376,20 +400,70 @@ async function buildPortfolioPickerReply(user, commandType, symbol, err, buy) {
   if (uniquePortfolioIds.length < 2) return null;
 
   const portfolios = await portfolioRepository.findAllByUser(user.id);
-  const nameById = new Map(portfolios.map((p) => [p.id, p.name]));
-  // พอร์ตที่ "เพิ่มรายการใหม่ได้" ตามแพ็กเกจปัจจุบัน — ใช้ติด 🔒 ให้ตัวที่เหลือ
-  // (UX เท่านั้น ด่านจริงยังอยู่ที่ validateBuy → assertCanAddToPortfolio)
-  const writable = entitlement.getWritablePortfolioIds(user, portfolios);
 
-  const choices = uniquePortfolioIds.map((id) => ({
-    portfolioId: id,
-    // พอร์ตที่หาชื่อไม่เจอไม่ควรเกิดจริง (queryForUser กรองด้วย user_id อยู่แล้ว)
-    // แต่ถ้าเกิด ต้องไม่แสดงเป็น "ไม่ระบุพอร์ต" เพราะจะซ้ำกับตัวเลือกอื่นจนแยกไม่ออก
-    portfolioName: id ? nameById.get(id) ?? `พอร์ต ${id.slice(0, 8)}` : null,
-    locked: id ? !writable.has(id) : false,
-  }));
+  return buildPortfolioPickerFrom(
+    user,
+    commandType,
+    symbol,
+    uniquePortfolioIds,
+    portfolios,
+    buy,
+    'ambiguous'
+  );
+}
 
-  return flexMessage.buildPortfolioPickerMessage(commandType, symbol, choices, buy);
+// ═══════════════════════════════════════════════════════════════════════════
+// ⭐ ฝั่ง "ซื้อ": ถามพอร์ตเมื่อผู้ใช้มีมากกว่า 1 พอร์ต (มติ Founder 27 ส.ค. 2569)
+// ═══════════════════════════════════════════════════════════════════════════
+// ⚠️⚠️ **ซื้อกับขายใช้เกณฑ์คนละอันโดยเจตนา — ห้าม "แก้ให้เหมือนกัน"** ⚠️⚠️
+//
+//   ซื้อ → ถามเมื่อ **ผู้ใช้มี > 1 พอร์ต** (ไม่ว่าจะเคยถือ Symbol นี้หรือไม่)
+//          เพราะปลายทางเป็น **ทางเลือกของผู้ใช้เสมอ** — Symbol ใหม่เอี่ยมก็ยัง
+//          เลือกได้ว่าจะเก็บเข้าพอร์ตไหน · เดาเป็นพอร์ต Default ให้ = Silent
+//          Default (กฎยืนข้อ 11) ซึ่งเป็นช่องสุดท้ายที่เหลืออยู่ก่อนมติข้อนี้
+//
+//   ขาย → ถามเมื่อ **Symbol นั้นอยู่หลายพอร์ต** เท่านั้น (ตรรกะเดิมผ่าน
+//          AMBIGUOUS_ASSET_PORTFOLIO) เพราะปลายทางถูกกำหนดโดย **ข้อเท็จจริง**
+//          ไม่ใช่ทางเลือก — ถือ PTT อยู่พอร์ตเดียวแล้วถาม = คำถามที่มีคำตอบเดียว
+//          ให้กด = เพิ่ม Latency เปล่าๆ (กฎยืนข้อ 10)
+//
+// คืน null = ไม่ต้องถาม (ให้ Flow เดิมเดินต่อตามปกติทุกประการ)
+//
+// ── ⚠️ ต้นทุน Query เพิ่ม 1 ครั้งบน Live Path — ทำไมเลี่ยงไม่ได้ ────────────
+// เกณฑ์คือ "ผู้ใช้มีกี่พอร์ต" ซึ่งไม่มี Flow ไหนบนเส้นทางซื้อดึงมาก่อนหน้านี้เลย
+// (validateBuy เรียก assertCanAddToPortfolio ซึ่ง **ไม่ยิง Query เลย** เมื่อ
+// portfolioId เป็น undefined — ดูคอมเมนต์ในฟังก์ชันนั้น)
+//
+// ทางเลือกที่เร็วกว่าคือเดาจาก user.plan ('free' = น่าจะมีพอร์ตเดียว) แต่ **ผิดจริง**
+// สำหรับผู้ใช้ที่เคยเป็น Premium แล้วหมดอายุ (มีพอร์ตส่วนเกินค้างอยู่) — การตัดสิน
+// เรื่องปลายทางของเงินจาก Proxy Signal คือสิ่งที่โปรเจกต์นี้ห้ามไว้ชัดเจน
+// → ยอมจ่าย 1 Query ที่ Index ด้วย user_id ดีกว่าเดาผิดแล้วเงียบ
+//
+// จำกัดขอบเขตให้แคบที่สุดเท่าที่ทำได้: ยิงเฉพาะ **คำสั่งซื้อทาง LINE ที่ยังไม่ได้
+// ระบุพอร์ต** เท่านั้น · ตอบพอร์ตแล้ว (มาจากปุ่ม) ไม่ยิงซ้ำ · คำสั่งขาย/ดูกำไร/
+// คำสั่งอื่นทั้งหมดไม่ได้รับผลกระทบเลยแม้แต่ Query เดียว
+//
+// ⚠️ ถามก่อน Validate โดยเจตนา: ถ้ารอให้ createPending ผ่านก่อนจะมีแถว pending
+// ค้างใน DB ตอนถาม (ผู้ใช้ทิ้ง Flow = ขยะ) · ผลข้างเคียงที่ยอมรับแล้วคือผู้ใช้ที่
+// พิมพ์ Symbol ผิดจะถูกถามพอร์ตก่อนแล้วค่อยเจอ "ไม่รู้จักสินทรัพย์นี้"
+async function buildBuyPortfolioChoiceReply(user, parsed) {
+  // ตอบมาแล้ว (undefined = ยังไม่ได้ถาม · null/uuid = ตอบแล้ว) → ห้ามถามซ้ำ
+  if (parsed.params.portfolioId !== undefined) return null;
+
+  const portfolios = await portfolioRepository.findAllByUser(user.id);
+
+  // ⭐ พอร์ตเดียว (ผู้ใช้ Free แทบทั้งหมดของระบบวันนี้) → ไม่ถาม ไม่เปลี่ยนอะไรเลย
+  if (portfolios.length <= 1) return null;
+
+  return buildPortfolioPickerFrom(
+    user,
+    'buy',
+    parsed.params.symbol,
+    portfolios.map((p) => p.id),
+    portfolios,
+    extractCommandParamsForBrokerPick(parsed.params),
+    'choice'
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -540,6 +614,15 @@ async function routeCommand(user, parsed) {
       //
       // ถือพอร์ต/โบรกเดียว = ไม่กำกวม = ไม่เข้า catch นี้เลย บันทึกตรงเหมือนเดิม
       // ทุกประการ (กฎยืนข้อ 10 — ไม่มี Query หรือคำถามเพิ่มบน Live Path ปกติ)
+
+      // ⭐ มติ Founder 27 ส.ค. 2569 — ฝั่ง "ซื้อ" ถามพอร์ตเมื่อผู้ใช้มี > 1 พอร์ต
+      // (ดูเหตุผลเต็ม + ความไม่สมมาตรกับฝั่งขาย ที่ buildBuyPortfolioChoiceReply)
+      // ผู้ใช้พอร์ตเดียว → คืน null → ไม่มีอะไรเปลี่ยนแม้แต่บรรทัดเดียว
+      if (parsed.command === COMMANDS.BUY) {
+        const choice = await buildBuyPortfolioChoiceReply(user, parsed);
+        if (choice) return choice;
+      }
+
       try {
         const pending = await pendingService.createPending(user.id, parsed, {
           plan: user.plan,

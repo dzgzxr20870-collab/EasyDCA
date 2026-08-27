@@ -44,6 +44,7 @@ jest.mock('../src/services/reportExport.service');
 jest.mock('../src/services/slipOcr.service');
 jest.mock('../src/services/mutualFund.service');
 jest.mock('../src/repositories/asset.repository');
+jest.mock('../src/repositories/portfolio.repository');
 // ⚠️ Mock เฉพาะ "Repository" ของโบรก — คง broker.service ตัวจริงไว้เสมอ เพราะ
 // assertOwnedBrokerId คือด่านกัน Cross-User ที่เทสต์ชุดนี้ต้องพิสูจน์ว่าทำงานจริง
 // (ถ้า Mock Service ทั้งก้อน เทสต์จะพิสูจน์แค่ว่า "เราเรียกฟังก์ชันชื่อนี้" เท่านั้น)
@@ -116,6 +117,23 @@ const TWO_CANDIDATES = [
   { assetId: 'asset-btc-a', brokerId: BROKER_A.id },
   { assetId: 'asset-btc-b', brokerId: BROKER_B.id },
 ];
+
+// ⚠️ มติ Founder 27 ส.ค. 2569 — ฝั่ง "ซื้อ" ถามพอร์ตเมื่อผู้ใช้มี > 1 พอร์ต
+// ไฟล์นี้จำลอง **ผู้ใช้พอร์ตเดียว** (สภาพของผู้ใช้ Free แทบทั้งหมดของระบบ) จึงต้อง
+// ไม่มีการถามพอร์ตเกิดขึ้นเลย และพฤติกรรมทุกเคสในไฟล์นี้ต้องเหมือนเดิมทุกตัวอักษร
+//
+// ⚠️ ตั้งที่ Module Scope โดยเจตนา ไม่ใช่ใน beforeEach — `jest.clearAllMocks()`
+// ล้างแค่ประวัติการเรียก (mockClear) ไม่ล้าง Implementation ค่านี้จึงอยู่ครบทุกเคส
+// โดยไม่ต้องไปแทรกในทุก beforeEach ของไฟล์ (บางไฟล์มีหลายตัว)
+require('../src/repositories/portfolio.repository').findAllByUser.mockResolvedValue([
+  {
+    id: 'pf-single-0000-4000-8000-000000000001',
+    name: 'พอร์ตของฉัน',
+    type: 'custom',
+    isDefault: true,
+    createdAt: '2026-01-01T00:00:00.000Z',
+  },
+]);
 
 beforeEach(() => {
   jest.clearAllMocks();

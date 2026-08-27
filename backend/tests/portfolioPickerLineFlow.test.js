@@ -220,7 +220,15 @@ describe('⭐ คำสั่งกำกวมมิติพอร์ต → �
   });
 
   // ประกอบปุ่มไม่ได้ → ห้ามตอบปุ่มว่างที่กดแล้ววนที่เดิม ต้อง Re-throw เป็นข้อความไทย
-  test('เหลือพอร์ตเดียวหลังยุบซ้ำ → ตอบเป็นข้อความ ไม่ใช่ปุ่มที่กดไม่ได้', async () => {
+  //
+  // ⚠️ ใช้คำสั่ง **ขาย** โดยเจตนา — ตั้งแต่มติ 27 ส.ค. 2569 ฝั่ง "ซื้อ" ถูกถามพอร์ต
+  // ตั้งแต่ก่อน createPending จึงไม่มีวันเดินมาถึงเส้นทาง AMBIGUOUS_ASSET_PORTFOLIO
+  // อีกแล้ว · เส้นทางนั้นเหลือไว้ให้ ขาย/ดูกำไร ซึ่งยังใช้เกณฑ์ "Symbol กำกวม" เดิม
+  test('เหลือพอร์ตเดียวหลังยุบซ้ำ (คำสั่งขาย) → ตอบเป็นข้อความ ไม่ใช่ปุ่มที่กดไม่ได้', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.SELL,
+      params: { symbol: 'BTC', quantity: 1, pricePerUnit: 150 },
+    });
     pendingService.createPending.mockRejectedValue(
       ambiguousPortfolioError([
         { assetId: 'a1', portfolioId: P_LONG.id, brokerId: BROKER_A.id },
@@ -228,7 +236,7 @@ describe('⭐ คำสั่งกำกวมมิติพอร์ต → �
       ])
     );
 
-    await handleEvent(textEvent('ซื้อ BTC 100'));
+    await handleEvent(textEvent('ขาย BTC 1 ที่ 150'));
 
     expect(lastReply().quickReply).toBeUndefined();
   });
@@ -261,13 +269,29 @@ describe('⭐ ผู้ใช้กดปุ่มเลือกพอร์ต
 
   // ⚠️ ไม่มี Key 'pf' เลย = ยังไม่เคยถูกถาม → ต้องเป็น undefined เพื่อให้
   // resolveOwnedAsset "ไม่กรองมิติพอร์ต" (ถ้าเป็น null จะหาสินทรัพย์ไม่เจอหลัง 044)
-  test('ไม่มี Key pf (มาจากปุ่มเลือกโบรกล้วน) → portfolioId เป็น undefined', async () => {
+  //
+  // ⚠️ ใช้คำสั่ง **ขาย** โดยเจตนา — ฝั่งซื้อจะถูกถามพอร์ตก่อนเสมอเมื่อมี > 1 พอร์ต
+  // (ดูเคสถัดไป) จึงไม่มีทางส่ง portfolioId = undefined เข้า createPending ได้อีก
+  test('ไม่มี Key pf (มาจากปุ่มเลือกโบรกล้วน, คำสั่งขาย) → portfolioId เป็น undefined', async () => {
     await handleEvent(
-      postbackEvent(`action=pick_broker&cmd=buy&sym=BTC&broker=${BROKER_A.id}&amt=100`)
+      postbackEvent(`action=pick_broker&cmd=sell&sym=BTC&broker=${BROKER_A.id}&qty=1&price=150`)
     );
 
     const params = pendingService.createPending.mock.calls[0][1].params;
     expect(params.portfolioId).toBeUndefined();
+  });
+
+  // ⭐ ตอบโบรกแล้วแต่ยังไม่ได้ตอบพอร์ต + เป็นคำสั่ง "ซื้อ" → ต้องถามพอร์ตต่อ
+  // และคำตอบเรื่องโบรกของรอบก่อนต้องไม่หาย (ไม่งั้นวนถามโบรกซ้ำไม่รู้จบ)
+  test('⭐ ปุ่มโบรกล้วน + คำสั่งซื้อ → ถามพอร์ตต่อ พร้อมพก broker ของรอบก่อนไปด้วย', async () => {
+    await handleEvent(
+      postbackEvent(`action=pick_broker&cmd=buy&sym=BTC&broker=${BROKER_A.id}&amt=100`)
+    );
+
+    expect(pendingService.createPending).not.toHaveBeenCalled();
+    const data = new URLSearchParams(lastReply().quickReply.items[0].action.data);
+    expect(data.get('action')).toBe('pick_portfolio');
+    expect(data.get('broker')).toBe(BROKER_A.id);
   });
 
   test('cmd=sell → เล่นคำสั่งขายซ้ำพร้อมพอร์ตที่เลือก', async () => {
@@ -371,12 +395,167 @@ describe('⭐ กำกวมทั้งสองมิติ — คำตอ�
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-describe('กฎยืนข้อ 10 — ไม่กำกวมแล้วห้ามถาม', () => {
-  test('ถือ BTC พอร์ตเดียว → บันทึกตรง ตอบ Preview ไม่มีปุ่มให้เลือกพอร์ต', async () => {
+// ═══════════════════════════════════════════════════════════════════════════
+// ⭐⭐ มติ Founder 27 ส.ค. 2569 — เกณฑ์การถามพอร์ตของฝั่ง "ซื้อ"
+// ═══════════════════════════════════════════════════════════════════════════
+// เกณฑ์เปลี่ยนจาก "Symbol กำกวม" เป็น **"ผู้ใช้มีกี่พอร์ต"** เฉพาะฝั่งซื้อ
+//   ซื้อ → ถามเมื่อผู้ใช้มี > 1 พอร์ต (ปลายทางเป็น "ทางเลือก" ของผู้ใช้เสมอ)
+//   ขาย → ถามเมื่อ Symbol อยู่หลายพอร์ต (ปลายทางถูกกำหนดโดย "ข้อเท็จจริง")
+//
+// ⚠️ ความไม่สมมาตรนี้ **ตั้งใจ** — ห้าม "แก้ให้เหมือนกัน"
+describe('⭐ กฎยืนข้อ 10 — ผู้ใช้พอร์ตเดียว (Free แทบทั้งหมด) ต้องไม่ถูกถามอะไรเลย', () => {
+  // ⭐⭐ เคสสำคัญที่สุดของไฟล์นี้ในเชิงผลกระทบ — Free คือผู้ใช้ส่วนใหญ่ของระบบวันนี้
+  // พลาดข้อนี้ = เพิ่มขั้นตอนให้คนทั้งฐานโดยไม่มีใครได้ประโยชน์
+  beforeEach(() => {
+    portfolioRepository.findAllByUser.mockResolvedValue([P_LONG]);
+    userRepository.findByLineUserId.mockResolvedValue({
+      ...USER,
+      plan: 'free',
+      planExpiresAt: null,
+    });
+  });
+
+  test('⭐ Free (พอร์ตเดียว) ซื้อผ่าน LINE → บันทึกตรง ไม่มีปุ่มเลือกพอร์ตเลย', async () => {
     await handleEvent(textEvent('ซื้อ BTC 100'));
 
     expect(pendingService.createPending).toHaveBeenCalled();
     expect(lastReply().quickReply?.items?.[0]?.action?.data ?? '').not.toContain('pick_portfolio');
+  });
+
+  test('⭐ Free (พอร์ตเดียว) ซื้อ Symbol ที่ยังไม่เคยถือ → ก็ยังไม่ถาม', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.BUY,
+      params: { symbol: 'ETH', amountThb: 100 },
+    });
+
+    await handleEvent(textEvent('ซื้อ ETH 100'));
+
+    expect(pendingService.createPending).toHaveBeenCalled();
+    expect(lastReply().quickReply?.items?.[0]?.action?.data ?? '').not.toContain('pick_portfolio');
+  });
+
+  test('⭐ Free (พอร์ตเดียว) ขาย → ไม่ถามเช่นกัน', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.SELL,
+      params: { symbol: 'BTC', quantity: 1, pricePerUnit: 150 },
+    });
+
+    await handleEvent(textEvent('ขาย BTC 1 ที่ 150'));
+
+    expect(pendingService.createPending).toHaveBeenCalled();
+    expect(lastReply().quickReply?.items?.[0]?.action?.data ?? '').not.toContain('pick_portfolio');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+describe('⭐ ฝั่งซื้อ: มีหลายพอร์ต → ถามเสมอ แม้ Symbol จะไม่กำกวมเลย', () => {
+  const P_RETIRE = {
+    id: 'pf-cccc-3333',
+    userId: USER.id,
+    name: 'เกษียณ',
+    isDefault: false,
+    createdAt: '2026-03-01',
+  };
+
+  beforeEach(() => {
+    portfolioRepository.findAllByUser.mockResolvedValue([P_LONG, P_SHORT, P_RETIRE]);
+    // ⚠️ ต้องอัปเดตด่านยืนยันเจ้าของให้รู้จักพอร์ตที่ 3 ด้วย ไม่งั้นเคส "ตอบพอร์ตแล้ว"
+    // จะเขียวเพราะโดน PORTFOLIO_NOT_FOUND ปัดตก ไม่ใช่เพราะ Flow ทำงานถูก
+    portfolioRepository.findByIdForUser.mockImplementation(async (portfolioId, userId) => {
+      if (userId !== USER.id) return null;
+      return [P_LONG, P_SHORT, P_RETIRE].find((p) => p.id === portfolioId) ?? null;
+    });
+  });
+
+  // ⭐⭐ เคสนี้คือ Silent Default ตัวสุดท้ายที่เหลืออยู่ก่อนมติข้อนี้ —
+  // เดิมโค้ดลง "พอร์ต Default" ให้เงียบๆ ทั้งที่ผู้ใช้มีสิทธิ์เลือก (กฎยืนข้อ 11)
+  test('⭐ ซื้อ Symbol ที่ "ยังไม่เคยถือเลย" → ต้องถาม ห้ามลงพอร์ต Default เงียบๆ', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.BUY,
+      params: { symbol: 'ETH', amountThb: 100 },
+    });
+
+    await handleEvent(textEvent('ซื้อ ETH 100'));
+
+    const reply = lastReply();
+    expect(reply.quickReply.items).toHaveLength(3);
+    expect(new URLSearchParams(reply.quickReply.items[0].action.data).get('action')).toBe(
+      'pick_portfolio'
+    );
+    // ⭐ ยังไม่มีอะไรถูกเขียนลง DB เลยจนกว่าผู้ใช้จะตอบ
+    expect(pendingService.createPending).not.toHaveBeenCalled();
+    expect(assetRepository.create).not.toHaveBeenCalled();
+  });
+
+  // ข้อความต้องไม่โกหก — Symbol ใหม่เอี่ยม ห้ามเขียนว่า "คุณถืออยู่มากกว่า 1 พอร์ต"
+  test('ข้อความของเคส "ทางเลือก" ต้องไม่อ้างว่าผู้ใช้ถือ Symbol นั้นอยู่หลายพอร์ต', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.BUY,
+      params: { symbol: 'ETH', amountThb: 100 },
+    });
+
+    await handleEvent(textEvent('ซื้อ ETH 100'));
+
+    expect(lastReply().text).not.toContain('คุณถือ ETH อยู่มากกว่า 1 พอร์ต');
+    expect(lastReply().text).toContain('เลือกพอร์ต');
+  });
+
+  test('ซื้อ Symbol ที่ถืออยู่ในพอร์ตเดียว → ก็ยังต้องถาม (เป็นทางเลือก ไม่ใช่ความกำกวม)', async () => {
+    await handleEvent(textEvent('ซื้อ BTC 100'));
+
+    expect(pendingService.createPending).not.toHaveBeenCalled();
+    expect(lastReply().quickReply.items).toHaveLength(3);
+  });
+
+  // ⚠️ ห้ามมีปุ่ม "สร้างพอร์ตใหม่" — สร้างพอร์ตทำได้บน Dashboard เท่านั้น
+  test('⚠️ ห้ามมีปุ่มสร้างพอร์ตใหม่ใน Quick Reply + ต้องชี้ทางไปหน้าเว็บ', async () => {
+    await handleEvent(textEvent('ซื้อ BTC 100'));
+
+    const reply = lastReply();
+    const actions = reply.quickReply.items.map((i) => i.action.data ?? '');
+    expect(actions.every((d) => d.includes('action=pick_portfolio'))).toBe(true);
+    expect(actions.some((d) => d.includes('create_portfolio'))).toBe(false);
+    expect(reply.text).toContain('หน้าเว็บ');
+  });
+
+  // ── ฝั่งขายต้องไม่เปลี่ยนพฤติกรรม (ความไม่สมมาตรที่ตั้งใจ) ────────────────
+  test('⭐ ขาย Symbol ที่ถืออยู่พอร์ตเดียว → ไม่ถาม บันทึกตรง', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.SELL,
+      params: { symbol: 'BTC', quantity: 1, pricePerUnit: 150 },
+    });
+
+    await handleEvent(textEvent('ขาย BTC 1 ที่ 150'));
+
+    expect(pendingService.createPending).toHaveBeenCalled();
+    expect(lastReply().quickReply?.items?.[0]?.action?.data ?? '').not.toContain('pick_portfolio');
+  });
+
+  test('⭐ ขาย Symbol ที่ถืออยู่ 2 พอร์ต → ถาม (ข้อเท็จจริงบังคับ)', async () => {
+    commandParser.parseCommand.mockReturnValue({
+      command: COMMANDS.SELL,
+      params: { symbol: 'BTC', quantity: 1, pricePerUnit: 150 },
+    });
+    pendingService.createPending.mockRejectedValue(ambiguousPortfolioError(TWO_PORTFOLIOS));
+
+    await handleEvent(textEvent('ขาย BTC 1 ที่ 150'));
+
+    expect(lastReply().quickReply.items).toHaveLength(2);
+  });
+
+  // ตอบพอร์ตแล้วห้ามถามซ้ำ (กฎยืนข้อ 10) — และห้ามยิง Query นับพอร์ตซ้ำด้วย
+  test('ตอบพอร์ตแล้ว → ไม่ถามซ้ำ และเดินต่อเข้า createPending ทันที', async () => {
+    await handleEvent(
+      postbackEvent(`action=pick_portfolio&cmd=buy&sym=BTC&pf=${P_RETIRE.id}&amt=100`)
+    );
+
+    expect(pendingService.createPending).toHaveBeenCalledWith(
+      USER.id,
+      expect.objectContaining({
+        params: expect.objectContaining({ portfolioId: P_RETIRE.id }),
+      }),
+      expect.anything()
+    );
   });
 });
 

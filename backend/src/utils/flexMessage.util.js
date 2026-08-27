@@ -1629,11 +1629,25 @@ function buildBrokerPickerMessage(commandType, symbol, choices, buy = {}) {
 const LOCKED_MARK = '🔒';
 const NO_PORTFOLIO_LABEL = 'ไม่ระบุพอร์ต';
 
+// ═══════════════════════════════════════════════════════════════════════
+// สองเหตุผลที่ถามพอร์ต — ข้อความต้องต่างกัน ไม่งั้นผู้ใช้เข้าใจผิด
+// ═══════════════════════════════════════════════════════════════════════
+//   'ambiguous' = **ข้อเท็จจริงบังคับให้ถาม** — ถือ Symbol นี้อยู่หลายพอร์ตจริง
+//                 ระบบไม่รู้ว่าหมายถึงก้อนไหน (ใช้กับคำสั่งขาย/ดูกำไร)
+//   'choice'    = **ผู้ใช้มีสิทธิ์เลือก** — มีหลายพอร์ตจึงเลือกได้ว่าจะเก็บเข้าที่ไหน
+//                 (ใช้กับคำสั่งซื้อ · มติ Founder 27 ส.ค. 2569)
+//
+// ⚠️ ถ้าใช้ข้อความ 'ambiguous' กับเคส 'choice' ผู้ใช้ที่ซื้อ Symbol ใหม่จะอ่านว่า
+// "คุณถือ XXX อยู่มากกว่า 1 พอร์ต" ทั้งที่ยังไม่เคยถือเลยแม้แต่หน่วยเดียว = โกหก
+
 // commandType = 'buy' | 'sell' | 'profit'
 // choices = [{ portfolioId, portfolioName, locked }] — portfolioId null = แถวที่
 //           ยังไม่สังกัดพอร์ต (โลกก่อน 044)
 // buy = พารามิเตอร์คำสั่งเดิม + มิติที่ตอบไปแล้ว (เช่น brokerId)
-function buildPortfolioPickerMessage(commandType, symbol, choices, buy = {}) {
+// options.reason    = 'ambiguous' | 'choice' (ดูด้านบน · Default 'ambiguous')
+// options.manageUrl = URL หน้าเว็บสำหรับจัดการพอร์ต · null = ไม่ตั้ง FRONTEND_URL
+function buildPortfolioPickerMessage(commandType, symbol, choices, buy = {}, options = {}) {
+  const reason = options.reason === 'choice' ? 'choice' : 'ambiguous';
   // LINE จำกัด 13 items ต่อข้อความ (เหตุผลเดียวกับ Broker Picker)
   const items = choices.slice(0, 13).map((c) => {
     const name = c.portfolioName || NO_PORTFOLIO_LABEL;
@@ -1671,10 +1685,29 @@ function buildPortfolioPickerMessage(commandType, symbol, choices, buy = {}) {
     ? `\n\n${LOCKED_MARK} = พอร์ตที่เพิ่มรายการใหม่ไม่ได้ในแพ็กเกจปัจจุบัน (ยังขายออกได้ตามปกติ)`
     : '';
 
+  // ── "สร้างพอร์ตใหม่ทำได้บนเว็บเท่านั้น" (มติ Founder 27 ส.ค. 2569) ──────────
+  // ⚠️ **ห้ามมีปุ่ม "+ สร้างพอร์ตใหม่" ใน Quick Reply เด็ดขาด** — การสร้างพอร์ตเป็น
+  // งานที่ต้องตั้งชื่อ/เลือกประเภท ซึ่งทำในแชทแล้วได้ Flow หลายขั้นที่พังง่าย
+  // (และเป็นสิทธิ์ Premium ที่ต้องตรวจเพดานใต้ Lock — ดู create_portfolio_locked)
+  //
+  // ⚠️ บอกเป็น "ข้อความ" ไม่ใช่ปุ่ม uri — ถ้า manageUrl เป็น null (ยังไม่ตั้ง
+  // FRONTEND_URL) ปุ่ม uri ที่ว่างจะทำให้ LINE ปฏิเสธ **ทั้งข้อความ** ด้วย 400
+  // ผู้ใช้จะไม่เห็นแม้แต่รายการพอร์ตให้เลือก (Pattern เดียวกับ
+  // buildPdpaConsentRequiredMessage / buildPremiumExpiringSoonMessage)
+  const manageNote = options.manageUrl
+    ? `\n\nสร้าง/จัดการพอร์ตได้ที่หน้าเว็บ: ${options.manageUrl}`
+    : '\n\nสร้าง/จัดการพอร์ตได้ที่หน้าเว็บของ EasyDCA (ในแชททำไม่ได้)';
+
+  // ⚠️ ข้อความต้องตรงกับความจริงของแต่ละเหตุผล (ดูหัวข้อด้านบน)
+  // ห้ามใช้ภาษาชี้นำการลงทุน — บอกแค่ "ระบบต้องรู้อะไร" (กฎเหล็กข้อ 1)
+  const head =
+    reason === 'choice'
+      ? `${symbol} — เลือกพอร์ตที่จะ${verb}ครับ:`
+      : `คุณถือ ${symbol} อยู่มากกว่า 1 พอร์ต กรุณาเลือกก่อนว่าจะ${verb}ของพอร์ตไหนครับ:`;
+
   return {
     type: 'text',
-    text:
-      `คุณถือ ${symbol} อยู่มากกว่า 1 พอร์ต กรุณาเลือกก่อนว่าจะ${verb}ของพอร์ตไหนครับ:\n${lines}${lockedNote}`,
+    text: `${head}\n${lines}${lockedNote}${manageNote}`,
     quickReply: { items },
   };
 }

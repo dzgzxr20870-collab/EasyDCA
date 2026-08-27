@@ -170,6 +170,25 @@ describe('⭐ โลกหลัง 044 — พอร์ตที่ Resolve ไ
       expect.objectContaining({ portfolioId: P2 })
     );
   });
+
+  // ⭐⭐ มติ Founder 27 ส.ค. 2569 — ผู้ใช้กดเลือกพอร์ตจากปุ่มบน LINE แล้วค่านั้น
+  // **ต้องเดินทางถึง Ledger จริง** ไม่ใช่แค่ถูกเก็บลง pending แล้วหายระหว่างทาง
+  // (assert ค่าที่เข้า assetRepository.create ตรงๆ ไม่ใช่ assert ว่า pending ถูกต้อง)
+  test('⭐ พอร์ตที่ผู้ใช้เลือก ต้องรอดถึงตอนบันทึกจริง (ปลายทางใน Ledger)', async () => {
+    assetRepository.create.mockResolvedValue({ ...BTC_IN_P1, id: 'asset-btc-p2', portfolioId: P2 });
+
+    await createPending(USER_ID, buyParsed({ portfolioId: P2 }), PREMIUM);
+    // ผู้ใช้เปลี่ยนพอร์ตหลักระหว่างรอกดยืนยัน — Snapshot ต้องชนะ ไม่ใช่คำนวณใหม่
+    portfolioRepository.findDefaultByUser.mockResolvedValue({ ...DEFAULT_PORTFOLIO, id: P1 });
+
+    await confirmPending(PENDING_ID, USER_ID, PREMIUM);
+
+    // assetRepository.create(userId, portfolioId, symbol, ...) — Argument ที่ 2
+    expect(assetRepository.create.mock.calls[0][1]).toBe(P2);
+    expect(transactionRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ assetId: 'asset-btc-p2', type: 'buy' })
+    );
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
