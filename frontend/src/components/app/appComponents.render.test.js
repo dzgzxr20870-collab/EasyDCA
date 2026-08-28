@@ -120,14 +120,18 @@ describe('RecordTransactionModal — defaultType จากปุ่มหน้�
   const WRITABLE = { id: 'pf-1', name: 'ระยะยาว', canWrite: true };
   const LOCKED = { id: 'pf-2', name: 'ระยะสั้น', canWrite: false };
 
+  // ⚠️ ต้องห่อ Router — Modal ใช้ useNavigate() พาไปหน้า /premium เมื่อเจอ
+  // Error ที่แก้ได้ด้วยการอัพเกรด (OCR_PREMIUM_REQUIRED / OCR_TRIAL_EXHAUSTED)
   function render(props) {
     return renderToStaticMarkup(
-      React.createElement(RecordTransactionModal, {
-        selectedPortfolio: WRITABLE,
-        onClose() {},
-        onSaved() {},
-        ...props,
-      })
+      withRouter(
+        React.createElement(RecordTransactionModal, {
+          selectedPortfolio: WRITABLE,
+          onClose() {},
+          onSaved() {},
+          ...props,
+        })
+      )
     );
   }
 
@@ -156,5 +160,114 @@ describe('RecordTransactionModal — defaultType จากปุ่มหน้�
     // ⭐ ขายต้องเปิดเสมอ — ไม่มี disabled ติดมากับ value="sell" เลย
     expect(html).toContain('checked="" value="sell"');
     expect(html).not.toContain('disabled="" value="sell"');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SlipUploadField — แนบสลิปให้ AI อ่าน (§ 15.8)
+// ═══════════════════════════════════════════════════════════════════════════
+// ⚠️ ครอบเฉพาะ "สิ่งที่ Render ออกมา" — ตรรกะตัดสิน (side null / orderStatus /
+// รูปร่าง Payload) อยู่ที่ `recordTransactionLogic.test.js` ซึ่งทดสอบเข้มกว่า
+// เพราะ assert ตัว Object ที่จะถูกส่งไป Backend ตรงๆ
+import SlipUploadField from './SlipUploadField.jsx';
+import { slipOcrErrorMessage, isSlipOcrUpgradeError } from '../../lib/dcaErrors.js';
+
+describe('SlipUploadField — สถานะต่างๆ ต้อง Render ได้โดยไม่พัง', () => {
+  const base = { scanning: false, onPick() {}, onUpgrade() {} };
+
+  test('สถานะปกติ → มีปุ่มเลือกรูป + บอกว่าแก้ไขได้ก่อนบันทึก', () => {
+    const html = renderToStaticMarkup(React.createElement(SlipUploadField, base));
+
+    expect(html).toContain('เลือกรูปสลิป');
+    // ⚠️ ต้องสื่อชัดว่า AI ไม่ได้บันทึกให้เอง (API.md § 15.8)
+    expect(html).toContain('แก้ไขได้ทุกช่อง');
+    expect(html).toContain('ไม่บันทึกรายการให้อัตโนมัติ');
+  });
+
+  // ⭐ จุดเสียบ GIF ของ Founder — ต้องมี Element ห่อที่ชื่อคงที่ให้สลับทีหลังได้
+  test('⭐ กำลังอ่าน → มี .slip-scan__indicator (จุดเดียวที่ต้องแก้ตอนใส่ GIF)', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(SlipUploadField, { ...base, scanning: true })
+    );
+
+    expect(html).toContain('slip-scan__indicator');
+    expect(html).toContain('กำลังให้ AI อ่านสลิป');
+    // ปุ่มต้องกดซ้ำไม่ได้ระหว่างอ่าน (กันยิงซ้ำกินโควตา)
+    expect(html).toContain('disabled');
+  });
+
+  test('ไม่ได้กำลังอ่าน → ไม่มี Loading Indicator ค้างอยู่', () => {
+    const html = renderToStaticMarkup(React.createElement(SlipUploadField, base));
+
+    expect(html).not.toContain('slip-scan__indicator');
+  });
+
+  // ⭐ Error ทุก Code ของ § 15.8 → ต้องไม่ Crash และต้องเห็นข้อความภาษาคน
+  const OCR_CODES = [
+    'OCR_PREMIUM_REQUIRED',
+    'OCR_TRIAL_EXHAUSTED',
+    'OCR_QUOTA_EXCEEDED',
+    'OCR_CALL_LIMIT_EXCEEDED',
+    'OCR_RATE_LIMITED',
+    'OCR_NOT_A_SLIP',
+    'OCR_MULTIPLE_ITEMS',
+    'OCR_FAILED',
+    'OCR_NOT_CONFIGURED',
+    'INVALID_SLIP_CONTENT_TYPE',
+    'SLIP_TOO_LARGE',
+  ];
+
+  test.each(OCR_CODES)('⭐ Error %s → ไม่ Crash + แสดงข้อความอ่านรู้เรื่อง ไม่โชว์ Code ดิบ', (code) => {
+    const message = slipOcrErrorMessage(code);
+    const html = renderToStaticMarkup(
+      React.createElement(SlipUploadField, {
+        ...base,
+        error: message,
+        showUpgrade: isSlipOcrUpgradeError(code),
+      })
+    );
+
+    expect(html).toContain('app-state--error');
+    // ⚠️ ห้ามให้ Error Code ดิบหลุดถึงสายตาผู้ใช้
+    expect(html).not.toContain(code);
+    expect(message.length).toBeGreaterThan(10);
+  });
+
+  // ปุ่มอัพเกรดต้องโผล่เฉพาะ Error ที่แก้ด้วยการอัพเกรดได้จริง — รูปเบลอ/ส่งถี่
+  // ไม่ควรถูกขายของ
+  test('⭐ ปุ่มอัพเกรดโผล่เฉพาะ OCR_PREMIUM_REQUIRED / OCR_TRIAL_EXHAUSTED', () => {
+    const withUpgrade = renderToStaticMarkup(
+      React.createElement(SlipUploadField, { ...base, error: 'x', showUpgrade: true })
+    );
+    const withoutUpgrade = renderToStaticMarkup(
+      React.createElement(SlipUploadField, { ...base, error: 'x', showUpgrade: false })
+    );
+
+    expect(withUpgrade).toContain('Premium');
+    expect(withoutUpgrade).not.toContain('ดูแพ็กเกจ Premium');
+    expect(isSlipOcrUpgradeError('OCR_PREMIUM_REQUIRED')).toBe(true);
+    expect(isSlipOcrUpgradeError('OCR_RATE_LIMITED')).toBe(false);
+  });
+
+  // ⭐ Banner ของคำสั่งที่ยังไม่เกิดขึ้นจริง (pending/cancelled)
+  test('⭐ warning (orderStatus pending/cancelled) → แสดงเป็น alert ให้เห็นชัด', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(SlipUploadField, {
+        ...base,
+        warning: 'สลิปนี้เป็นคำสั่งที่ "ยังไม่สำเร็จ" (รอจับคู่/รอดำเนินการ)',
+      })
+    );
+
+    expect(html).toContain('app-state--warn');
+    expect(html).toContain('ยังไม่สำเร็จ');
+    expect(html).toContain('role="alert"');
+  });
+
+  test('notice (โควตา) → แสดงได้ไม่พัง', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(SlipUploadField, { ...base, notice: 'โควตาอ่านสลิปเดือนนี้เหลือ 49 ครั้ง' })
+    );
+
+    expect(html).toContain('49');
   });
 });

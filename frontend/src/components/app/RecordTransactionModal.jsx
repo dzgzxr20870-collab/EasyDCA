@@ -1,7 +1,18 @@
 import { useState, useEffect } from 'react';
-import { apiPost } from '../../lib/api.js';
+import { useNavigate } from 'react-router-dom';
+import { apiPost, apiUpload } from '../../lib/api.js';
 import { listAssets, listBrokers } from '../../lib/portfolioApi.js';
 import { portfolioWriteState } from '../../lib/entitlements.js';
+// Reuse ตัวแปลง Error Code → ข้อความไทยของ § 15.8 ที่มีอยู่แล้ว (ครอบครบทุก Code
+// ในตาราง Error ของ API.md) — ห้ามเขียนตารางข้อความใหม่ซ้ำ
+import { slipOcrErrorMessage, isSlipOcrUpgradeError } from '../../lib/dcaErrors.js';
+import SlipUploadField from './SlipUploadField.jsx';
+import {
+  buildSlipPrefill,
+  quotaNotice,
+  buildTransactionPayload,
+  buildDividendPayload,
+} from './recordTransactionLogic.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // RecordTransactionModal — บันทึกซื้อ/ขาย/ปันผล ต่อ API จริง (Stage 9)
@@ -23,6 +34,21 @@ import { portfolioWriteState } from '../../lib/entitlements.js';
 //   เพิ่มของใหม่ (ซื้อ · ปันผล) → ปิดเมื่อ canAdd = false
 //   ลดของเดิม (ขาย)            → **เปิดเสมอ** ห้ามปิดไม่ว่ากรณีใด
 // ถ้าปิดปุ่มขายด้วย ผู้ใช้จะคิดว่าติดกับแล้วไม่บันทึกการขายจริง → ยอดผิดถาวร
+//
+// ── 📄 แนบสลิปให้ AI อ่าน (§ 15.8) ────────────────────────────────────────
+// เลือกรูป → POST /transactions/slip-ocr → เติมค่าลงฟอร์ม → **ผู้ใช้ตรวจ/แก้ได้ทุกช่อง**
+// → กดปุ่ม "บันทึก" เดิม (จุดเดียวที่ยิง § 15.2 จริง)
+// การอ่านสลิป **ไม่สร้างธุรกรรมใดๆ** และค่าจาก AI ไม่มีทางไหลลง Ledger โดยไม่ผ่านตา
+//
+// ⚠️ ตรรกะตัดสินทั้งหมด (side null / orderStatus / รูปร่าง Payload) อยู่ที่
+// `recordTransactionLogic.js` เป็น Pure Function ที่มี Test คลุม — ที่นี่ทำหน้าที่
+// Apply ผลลง State เท่านั้น ไม่ตัดสินใจอะไรเอง
+//
+// ── 🔴 บั๊กที่แก้ไปพร้อมงานนี้: `amountThb` → `amountTotal` ─────────────────
+// § 15.2 อ่าน `body.amountTotal` (controller: toPositiveNumber(body.amountTotal))
+// แต่ฟอร์มเดิมส่ง `amountThb` ซึ่งไม่เคยถูกอ่านเลย → กรอก "จำนวนเงินรวม" อย่างเดียว
+// (เคสซื้อ DCA ปกติที่สุด) ได้ VALIDATION_ERROR ทุกครั้ง
+// ⚠️ Endpoint **ปันผล** ใช้ `amountThb` จริงตาม Contract — ห้ามเปลี่ยนตาม
 
 const TYPES = [
   { value: 'buy', label: 'ซื้อ', kind: 'add' },
@@ -56,10 +82,26 @@ function RecordTransactionModal({ selectedPortfolio, onClose, onSaved, defaultTy
   const [amountThb, setAmountThb] = useState('');
   const [date, setDate] = useState(todayBangkok());
   const [note, setNote] = useState('');
+  // 🔴 สกุลเงิน — จำเป็นเพราะสลิปคืน USD ได้ ถ้าไม่ส่ง currency ไป Backend จะ
+  // Default เป็น 'THB' แล้วยอด USD จะถูกบันทึกเป็นบาท = เงินผิดใน Ledger จริง
+  const [currency, setCurrency] = useState('THB');
 
   const [loadingRefs, setLoadingRefs] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
+
+  // ── สถานะของการอ่านสลิป — แยกจาก submitting โดยสิ้นเชิง (คนละ Action) ──────
+  const [scanning, setScanning] = useState(false);
+  const [slipError, setSlipError] = useState(null);
+  const [slipUpgrade, setSlipUpgrade] = useState(false);
+  const [slipNotice, setSlipNotice] = useState(null);
+  const [slipWarning, setSlipWarning] = useState(null);
+  const [slipFileName, setSlipFileName] = useState(null);
+  // Token รูปที่ Backend เก็บไว้ให้ (Premium เท่านั้น — Free/Trial ได้ null)
+  // ⚠️ null ต้องแปลว่า "ไม่ส่ง Key นี้เลย" ไม่ใช่ส่ง null (ดู buildTransactionPayload)
+  const [slipToken, setSlipToken] = useState(null);
+
+  const navigate = useNavigate();
 
   const write = portfolioWriteState(selectedPortfolio);
   const kind = TYPES.find((t) => t.value === type)?.kind ?? 'add';
@@ -94,6 +136,93 @@ function RecordTransactionModal({ selectedPortfolio, onClose, onSaved, defaultTy
     setSymbol(assets.find((a) => a.id === id)?.symbol ?? '');
   }
 
+  // ── สินทรัพย์จากสลิปที่ "ยังไม่เคยซื้อมาก่อน" ──────────────────────────────
+  // § 15.2 ระบุสินทรัพย์ด้วย `symbol` ตรงๆ (ไม่ใช่ assetId) จึงบันทึกสินทรัพย์ใหม่
+  // ได้เลยโดยไม่ต้องมีในรายการ — แต่ <select> เดิมแสดงได้เฉพาะของที่มีอยู่ เราจึง
+  // เติม Option ชั่วคราวให้ผู้ใช้ "เห็นว่ากำลังจะบันทึกตัวไหน" และเปลี่ยนใจได้
+  //
+  // ⚠️ ห้ามบล็อกเหมือน DcaForm (ที่ตอบ "ระบบยังไม่รองรับสินทรัพย์นี้") — ฟอร์มนั้น
+  // ผูกกับ Registry เพราะใช้ AssetPicker ส่วนฟอร์มนี้ส่ง symbol ตรงๆ ได้อยู่แล้ว
+  const symbolNotInList = Boolean(symbol) && !assets.some((a) => a.symbol === symbol);
+
+  function pickSymbolFromSlip(slipSymbol) {
+    const matched = assets.find((a) => a.symbol === slipSymbol);
+    if (matched) {
+      setAssetId(matched.id);
+      setSymbol(matched.symbol);
+      return;
+    }
+    // ไม่มีในพอร์ต → เคลียร์ assetId แล้วใช้ symbol ดิบจากสลิป
+    setAssetId('');
+    setSymbol(slipSymbol);
+  }
+
+  // ── ให้ AI อ่านสลิปแล้วเติมค่าลงฟอร์ม (§ 15.8) ────────────────────────────
+  // ⚠️ ไม่บันทึกอะไรทั้งสิ้น — แค่เติมช่องกรอกที่ผู้ใช้แก้ได้ (ปุ่ม "บันทึก" เดิม
+  // ยังเป็นจุดเดียวที่ยิง § 15.2)
+  async function handleScanSlip(file) {
+    setSlipError(null);
+    setSlipUpgrade(false);
+    setSlipNotice(null);
+    setSlipWarning(null);
+    setError(null);
+    setSlipFileName(file?.name ?? null);
+    setScanning(true);
+
+    try {
+      const { slip, slipToken: token, quota } = await apiUpload(
+        '/api/v1/transactions/slip-ocr',
+        file
+      );
+
+      // ตรรกะตัดสินทั้งหมดอยู่ใน Pure Function (มี Test คลุม) — ที่นี่แค่ Apply
+      const prefill = buildSlipPrefill(slip);
+
+      // Token เก็บไว้เสมอแม้สลิปจะถูกเตือน (ผู้ใช้อาจแก้ค่าแล้วบันทึกเอง)
+      setSlipToken(token ?? null);
+      setSlipNotice(quotaNotice(quota));
+
+      // ⚠️ คำสั่งที่ "ยังไม่เกิดขึ้นจริง" → **ไม่เติมค่าใดๆ เลย** + เตือนให้ชัด
+      // ไม่ปิดปุ่มบันทึก (Backend เป็นด่านสุดท้าย · ผู้ใช้อาจรู้ว่าจับคู่แล้วทีหลัง)
+      if (prefill.blockReason) {
+        setSlipWarning(
+          prefill.blockReason === 'pending'
+            ? 'สลิปนี้เป็นคำสั่งที่ "ยังไม่สำเร็จ" (รอจับคู่/รอดำเนินการ) ระบบจึงไม่เติมค่าให้ — ถ้าคำสั่งจับคู่แล้ว กรุณากรอกรายการเอง'
+            : 'สลิปนี้เป็นคำสั่งที่ "ถูกยกเลิก/ไม่สำเร็จ" ระบบจึงไม่เติมค่าให้ — ถ้าจะบันทึกจริง กรุณากรอกรายการเอง'
+        );
+        return;
+      }
+
+      // ── Prefill — ทุกค่าที่เติมยังแก้ไขได้ทั้งหมด ────────────────────────
+      // ⚠️ setType เฉพาะตอนรู้ทิศทางจริง — side = null ต้องปล่อยไว้ตามที่ผู้ใช้
+      // เปิดมา **ห้ามเดาให้เด็ดขาด** (เคส BCPG: สลิป "ขาย" เคยถูกบันทึกเป็น "ซื้อ")
+      if (prefill.type) setType(prefill.type);
+      if (prefill.symbol) pickSymbolFromSlip(prefill.symbol);
+      if (prefill.date) setDate(prefill.date);
+      if (prefill.currency) setCurrency(prefill.currency);
+      if (prefill.quantity) setQuantity(prefill.quantity);
+      if (prefill.pricePerUnit) setPricePerUnit(prefill.pricePerUnit);
+      if (prefill.amountTotal) setAmountThb(prefill.amountTotal);
+
+      const warnings = [];
+      if (prefill.sideUnresolved) {
+        warnings.push(
+          '⚠️ อ่านทิศทางรายการ (ซื้อ/ขาย) จากสลิปไม่ได้ — ระบบจึงยังไม่เลือกโหมดและไม่กรอกจำนวนให้ กรุณาเลือกซื้อ/ขายเอง แล้วกรอกตัวเลขจากสลิป'
+        );
+      }
+      if (prefill.lowConfidence) {
+        warnings.push('ความมั่นใจในการอ่านต่ำ กรุณาตรวจตัวเลขทุกช่องก่อนกดบันทึก');
+      }
+      if (warnings.length > 0) setSlipWarning(warnings.join(' · '));
+    } catch (err) {
+      // ⚠️ ห้ามโชว์ Error Code ดิบให้ผู้ใช้ — แปลผ่านตารางกลางที่ครอบครบทุก Code
+      setSlipError(slipOcrErrorMessage(err?.message));
+      setSlipUpgrade(isSlipOcrUpgradeError(err?.message));
+    } finally {
+      setScanning(false);
+    }
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
     setError(null);
@@ -117,25 +246,30 @@ function RecordTransactionModal({ selectedPortfolio, onClose, onSaved, defaultTy
     setSubmitting(true);
     try {
       if (type === 'dividend') {
-        await apiPost('/api/v1/transactions/dividend', {
-          assetId,
-          amountThb: Number(amountThb),
-          quantity: Number(quantity),
-          date,
-          ...(note ? { note } : {}),
-        });
+        // ⚠️ Endpoint นี้ใช้ `amountThb` จริงตาม Contract (คนละตัวกับ § 15.2)
+        await apiPost(
+          '/api/v1/transactions/dividend',
+          buildDividendPayload({ assetId, amountThb, quantity, date, note })
+        );
       } else {
-        await apiPost('/api/v1/transactions', {
-          side: type,
-          symbol,
-          ...(quantity ? { quantity: Number(quantity) } : {}),
-          ...(pricePerUnit ? { pricePerUnit: Number(pricePerUnit) } : {}),
-          ...(amountThb ? { amountThb: Number(amountThb) } : {}),
-          // 'none' = ไม่ระบุโบรก (คนละความหมายกับไม่ส่ง Key มาเลย)
-          ...(brokerId ? { brokerId } : {}),
-          date,
-          ...(note ? { note } : {}),
-        });
+        // ⚠️ รูปร่าง Payload ตัดสินใน Pure Function ที่มี Test คลุม — โดยเฉพาะ
+        // `amountTotal` (ไม่ใช่ amountThb) และ `slipToken` ที่ต้องหายไปทั้ง Key
+        // เมื่อเป็น null (ผู้ใช้ Free/Trial)
+        await apiPost(
+          '/api/v1/transactions',
+          buildTransactionPayload({
+            type,
+            symbol,
+            quantity,
+            pricePerUnit,
+            amountTotal: amountThb,
+            currency,
+            brokerId,
+            date,
+            note,
+            slipToken,
+          })
+        );
       }
       onSaved?.();
     } catch (err) {
@@ -183,6 +317,21 @@ function RecordTransactionModal({ selectedPortfolio, onClose, onSaved, defaultTy
           </div>
 
           {loadingRefs && <p className="app-state app-state--loading">กำลังโหลดรายการสินทรัพย์...</p>}
+
+          {/* ⚠️ ปันผลไม่มี Endpoint อ่านสลิป (API.md § 15.8) — ซ่อนทั้งบล็อก */}
+          {type !== 'dividend' && (
+            <SlipUploadField
+              scanning={scanning}
+              error={slipError}
+              showUpgrade={slipUpgrade}
+              notice={slipNotice}
+              warning={slipWarning}
+              fileName={slipFileName}
+              disabled={loadingRefs || submitting}
+              onPick={handleScanSlip}
+              onUpgrade={() => navigate('/premium')}
+            />
+          )}
 
           {type === 'dividend' ? (
             <>
@@ -234,13 +383,29 @@ function RecordTransactionModal({ selectedPortfolio, onClose, onSaved, defaultTy
                 <select
                   value={assetId}
                   onChange={(e) => pickAsset(e.target.value)}
-                  disabled={assets.length === 0}
+                  disabled={assets.length === 0 && !symbolNotInList}
                 >
+                  {/* สินทรัพย์จากสลิปที่ยังไม่มีในพอร์ต — บันทึกได้เพราะ § 15.2
+                      ระบุด้วย symbol ตรงๆ (value='' = ไม่มี assetId ให้อ้าง) */}
+                  {symbolNotInList && (
+                    <option value="">{symbol} — (จากสลิป · ยังไม่มีในพอร์ต)</option>
+                  )}
                   {assets.map((a) => (
                     <option key={a.id} value={a.id}>
                       {a.symbol} — {a.name}
                     </option>
                   ))}
+                </select>
+              </label>
+
+              {/* 🔴 สกุลเงิน — สลิป USD ต้องไม่ถูกบันทึกเป็นบาท (Backend Default
+                  เป็น THB เมื่อไม่ส่ง Key นี้) · USD ใช้ได้เฉพาะ crypto/stock_us
+                  ซึ่ง Backend ตรวจให้อีกชั้น (§ 15.2.1) */}
+              <label className="demo-field">
+                <span>สกุลเงิน</span>
+                <select value={currency} onChange={(e) => setCurrency(e.target.value)}>
+                  <option value="THB">บาท (THB)</option>
+                  <option value="USD">ดอลลาร์ (USD)</option>
                 </select>
               </label>
 
