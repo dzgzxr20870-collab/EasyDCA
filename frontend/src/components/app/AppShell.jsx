@@ -232,6 +232,10 @@ function AppShell() {
       {showRecord && (
         <RecordTransactionModal
           selectedPortfolio={selected}
+          /* รายการพอร์ตเต็ม — Modal ใช้สร้างช่อง "บันทึกลงพอร์ต" (โหลดมาแล้ว
+             ตั้งแต่ต้น ไม่ต้องยิง GET /portfolios ซ้ำ) · ปุ่มนี้เปิดไม่ได้ตอน
+             loading อยู่แล้ว จึงมั่นใจได้ว่า portfolios ถูกเติมค่าแล้วเสมอ */
+          portfolios={portfolios}
           onClose={() => setShowRecord(false)}
           onSaved={async () => {
             setShowRecord(false);

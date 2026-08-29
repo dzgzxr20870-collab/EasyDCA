@@ -422,3 +422,100 @@ describe('กฎยืนข้อ 10 — โบรกที่ตอบมา�
     expect(asset.brokerId).toBe(BN);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// destinationPortfolioId — ช่อง "บันทึกลงพอร์ต" บนฟอร์มเว็บ (29 ส.ค. 2569)
+// ═══════════════════════════════════════════════════════════════════════════
+// เคสจริงที่ Founder เจอ: สร้างพอร์ตใหม่ → เลือกเป็นปลายทาง → ซื้อสินทรัพย์ใหม่
+// → รายการไปโผล่ "พอร์ตหลัก" แทน เพราะเว็บไม่เคยส่งพอร์ตปลายทางมาเลยสักครั้ง
+//
+// ⚠️⚠️ ไฟล์นี้คือที่ที่เทสต์ชุดนี้ต้องอยู่ — เพราะวิธีแก้ที่ "ตรงตัวที่สุด" (ยัด
+// พอร์ตที่ผู้ใช้เลือกลง params.portfolioId ตรงๆ) จะปลุกบั๊กของไฟล์นี้ขึ้นมาใหม่
+// เป๊ะๆ: portfolioId เป็นขอบเขตการค้นหาด้วย การหดขอบเขตจะทำให้ "หาแถวเดิมไม่เจอ
+// → สร้างแถวซ้ำข้ามพอร์ต" ซึ่งคือ Post-mortem ของไฟล์นี้ทั้งไฟล์
+//
+// ── RED-GREEN ────────────────────────────────────────────────────────────
+//   • เปลี่ยน newAssetPortfolioId กลับเป็น portfolioId เฉยๆ → เคส ⭐ (1) แดง
+//   • ส่ง destinationPortfolioId ลง resolveOwnedAsset ด้วย → เคส ⭐⭐ (2) แดง
+describe('⭐ destinationPortfolioId — เลือกพอร์ตปลายทางจากฟอร์มเว็บ', () => {
+  const P2_PORTFOLIO = { ...DEFAULT_PORTFOLIO, id: P2, name: 'Dime', isDefault: false };
+
+  beforeEach(() => {
+    // ผู้ใช้มี 2 พอร์ต และ **ทั้งคู่เขียนได้** (Premium ที่ยัง Active)
+    portfolioRepository.findAllByUser.mockResolvedValue([DEFAULT_PORTFOLIO, P2_PORTFOLIO]);
+    portfolioRepository.findByIdForUser.mockResolvedValue(P2_PORTFOLIO);
+  });
+
+  const PREMIUM = { plan: 'premium', planExpiresAt: '2099-01-01T00:00:00.000Z' };
+
+  // ⭐ (1) เคสที่ Founder เจอ — สินทรัพย์ใหม่ที่ไม่เคยถือ ต้องลงพอร์ตที่เลือกจริง
+  test('⭐ ซื้อสินทรัพย์ใหม่ + เลือกพอร์ต "Dime" → ลงพอร์ตนั้น ไม่ใช่พอร์ตหลัก', async () => {
+    installRepo([]); // ยังไม่เคยถือ ETH ที่ไหนเลย
+    assetRepository.findActiveSymbolsByUser.mockResolvedValue([]);
+
+    const result = await transactionService.validateBuy(
+      USER_ID,
+      { symbol: 'ETH', quantity: 1, pricePerUnit: 1000, type: 'crypto', destinationPortfolioId: P2 },
+      PREMIUM
+    );
+
+    expect(result.newAsset).toBe(true);
+    expect(result.portfolioId).toBe(P2);
+  });
+
+  // ⭐⭐ (2) หัวใจของการแก้ — ต้องไม่ปลุกบั๊ก "สร้างแถวซ้ำข้ามพอร์ต" ขึ้นมาใหม่
+  // ถือ BTC อยู่พอร์ตหลักแล้ว แต่ผู้ใช้เลือกปลายทางเป็น Dime → ต้อง **รวมเข้า
+  // แถวเดิมที่พอร์ตหลัก** ไม่ใช่สร้าง BTC แถวที่สองใน Dime
+  // (ตรงกับข้อความที่ฟอร์มบอกผู้ใช้ไว้: "ถ้ามีอยู่แล้วในพอร์ตอื่น ระบบจะรวมไว้ที่เดิม")
+  test('⭐⭐ ถือ BTC ที่พอร์ตหลักอยู่แล้ว + เลือกปลายทาง Dime → รวมแถวเดิม ห้ามสร้างซ้ำ', async () => {
+    installRepo([BTC_AFTER_044]);
+
+    const result = await transactionService.validateBuy(
+      USER_ID,
+      { ...BUY, destinationPortfolioId: P2 },
+      PREMIUM
+    );
+
+    expect(result.newAsset).toBe(false);
+    expect(result.asset.id).toBe('asset-btc');
+    // ⚠️ ปลายทางจริงคือพอร์ตของแถวเดิม ไม่ใช่พอร์ตที่ผู้ใช้เลือก
+    expect(result.asset.portfolioId).toBe(P1);
+  });
+
+  test('⭐⭐ processBuyCommand เคสเดียวกัน → ไม่เรียก assetRepository.create เลย', async () => {
+    installRepo([BTC_AFTER_044]);
+
+    await transactionService.processBuyCommand(
+      USER_ID,
+      { ...BUY, destinationPortfolioId: P2 },
+      PREMIUM
+    );
+
+    expect(assetRepository.create).not.toHaveBeenCalled();
+  });
+
+  // ถือกระจายหลายพอร์ต → ยังต้องถามผู้ใช้เหมือนเดิม ห้ามให้ปลายทางที่เลือกมา
+  // "กลบ" ความกำกวมไปเงียบๆ (กฎยืนข้อ 11)
+  test('ถือ BTC กระจาย 2 พอร์ต + เลือกปลายทาง → ยังต้อง AMBIGUOUS_ASSET_PORTFOLIO', async () => {
+    installRepo([BTC_AFTER_044, BTC_IN_P2]);
+
+    await expect(
+      transactionService.validateBuy(USER_ID, { ...BUY, destinationPortfolioId: P2 }, PREMIUM)
+    ).rejects.toMatchObject({ code: 'AMBIGUOUS_ASSET_PORTFOLIO' });
+  });
+
+  // ไม่ส่ง Key มาเลย = เส้นทางเดิมทุกช่องทาง (LINE/Bulk/เว็บก่อนรอบนี้)
+  test('ไม่ส่ง destinationPortfolioId → ลงพอร์ตหลักเหมือนเดิมเป๊ะ (Backward Compat)', async () => {
+    installRepo([]);
+    assetRepository.findActiveSymbolsByUser.mockResolvedValue([]);
+
+    const result = await transactionService.validateBuy(
+      USER_ID,
+      { symbol: 'ETH', quantity: 1, pricePerUnit: 1000, type: 'crypto' },
+      PREMIUM
+    );
+
+    expect(result.newAsset).toBe(true);
+    expect(result.portfolioId).toBe(P1);
+  });
+});

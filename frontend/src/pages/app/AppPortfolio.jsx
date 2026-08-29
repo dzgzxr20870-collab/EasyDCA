@@ -258,6 +258,9 @@ function AppPortfolio() {
       {recordType && (
         <RecordTransactionModal
           selectedPortfolio={selectedPortfolio}
+          /* รายการพอร์ตเต็มมาจาก Context ของ Shell อยู่แล้ว — Modal ใช้สร้าง
+             ช่อง "บันทึกลงพอร์ต" โดยไม่ต้องยิง GET /portfolios ซ้ำ */
+          portfolios={portfolios}
           defaultType={recordType}
           onClose={() => setRecordType(null)}
           onSaved={async () => {

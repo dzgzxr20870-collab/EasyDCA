@@ -176,7 +176,41 @@ export function buildTransactionPayload(form) {
     // ยืนยันว่าไม่มีค่าธรรมเนียม" (0) ไว้คนละความหมาย ฟอร์มนี้ไม่มีช่องยืนยัน 0
     // แยกต่างหาก จึงส่งเฉพาะตอนกรอกค่าจริงมากกว่า 0 เท่านั้น (ตรงกับ numberOrUndefined)
     feeThb: numberOrUndefined(form.feeThb),
+    // ── ⭐ พอร์ตปลายทางที่ผู้ใช้เลือก (มติ Founder 29 ส.ค. 2569) ───────────────
+    // ไม่เลือก/ไม่มีพอร์ตให้เลือก → **ไม่ส่ง Key นี้เลย** = พฤติกรรมเดิมเป๊ะ
+    // (Backend Resolve เป็นพอร์ตหลักให้เหมือนเดิม)
+    //
+    // ⚠️ Backend ใช้ค่านี้เป็น "ปลายทางของสินทรัพย์ใหม่" เท่านั้น — ถ้า Symbol นี้
+    // ถืออยู่แล้วในพอร์ตอื่น รายการจะถูกรวมเข้าแถวเดิมและค่านี้ถูกละเว้นโดยตั้งใจ
+    // (ดู transaction.service.validateBuy — กันสินทรัพย์เดียวกันแตกสองพอร์ต)
+    // ฟอร์มจึงต้องบอกผู้ใช้ให้ชัดว่ากติกานี้มีอยู่ ไม่ใช่ปล่อยให้เดาเอง
+    portfolioId: form.portfolioId || undefined,
   });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// defaultDestinationPortfolioId — ค่าตั้งต้นของช่อง "บันทึกลงพอร์ต"
+// ═══════════════════════════════════════════════════════════════════════════
+// ลำดับการเลือก (Pure — แยกออกมาเพื่อให้ทดสอบได้โดยไม่ต้อง Render):
+//   1. พอร์ตที่ Switcher ด้านบนเลือกอยู่ — ถ้าเขียนได้
+//   2. พอร์ตหลัก (isDefault) ที่เขียนได้ — ใช้เมื่อ Switcher เป็น "ทั้งหมด" (null)
+//      หรือพอร์ตที่เลือกอยู่ถูกล็อก
+//   3. พอร์ตแรกที่เขียนได้
+//   4. null = ไม่มีพอร์ตให้เลือกเลย → Caller ต้องไม่ส่ง portfolioId ไป Backend
+//
+// ⚠️ ข้อ 1 ต้องเช็ค canWrite ด้วย ไม่ใช่หยิบ id มาดื้อๆ — ผู้ใช้เปิด Modal ค้างที่
+// พอร์ตที่ถูกล็อกได้ (ปุ่ม "บันทึกการขาย" เปิดเสมอ) ถ้าตั้งเป็นปลายทางให้เลย
+// ผู้ใช้จะเจอ 403 ทันทีที่สลับไปแท็บ "ซื้อ" ทั้งที่ไม่ได้ตั้งใจเลือกพอร์ตนั้น
+export function defaultDestinationPortfolioId(selectedPortfolio, portfolios) {
+  const writable = (portfolios ?? []).filter((p) => p?.canWrite === true);
+  if (writable.length === 0) return null;
+
+  if (selectedPortfolio?.canWrite === true) {
+    const stillThere = writable.find((p) => p.id === selectedPortfolio.id);
+    if (stillThere) return stillThere.id;
+  }
+
+  return (writable.find((p) => p.isDefault) ?? writable[0]).id;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

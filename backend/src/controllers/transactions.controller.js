@@ -4,6 +4,10 @@ const symbolRegistry = require('../services/symbolRegistry.service');
 // Stage 5 (migration 046) — assertOwnedBrokerId: ด่านบังคับก่อนเอา brokerId จาก
 // Request Body ไปใช้ (FK ตรวจแค่ว่ามีอยู่จริง ไม่ได้ตรวจว่าเป็นของใคร)
 const brokerService = require('../services/broker.service');
+// Stage 9 (มติ Founder 29 ส.ค. 2569) — assertOwnedPortfolioId: ด่านบังคับก่อนเอา
+// portfolioId จาก Request Body ไปใช้ (เหตุผลเดียวกับ assertOwnedBrokerId เป๊ะ) ·
+// PortfolioServiceError: ใช้แยก PORTFOLIO_READ_ONLY/NOT_FOUND ออกจาก 500 ใน catch
+const portfoliosService = require('../services/portfolios.service');
 // Stage 6b (migration 047) — บันทึกเงินปันผลรับ แยก Service ออกจาก transaction.service
 // โดยตั้งใจ (Design Doc § 4.5) เพราะ Payload/กฎการคำนวณต่างกันเชิงความหมายทั้งชุด
 const dividendService = require('../services/dividend.service');
@@ -469,11 +473,52 @@ async function createTransaction(req, res) {
     }
   }
 
+  // ── 6.6) พอร์ตปลายทางที่ผู้ใช้เลือกบนฟอร์ม (มติ Founder 29 ส.ค. 2569) ──────
+  // เดิมเว็บ **ไม่เคยส่ง portfolioId มาเลยสักครั้ง** → validateBuy Resolve เป็น
+  // พอร์ตหลักเสมอ ทำให้ผู้ใช้ที่สร้างพอร์ตใหม่แล้วบันทึกซื้อ เจอรายการไปโผล่พอร์ต
+  // หลักแทน (เคสจริงที่ Founder เจอ 29 ส.ค. 2569)
+  //
+  // ⚠️ ส่งต่อเป็น `destinationPortfolioId` **ไม่ใช่ `portfolioId`** โดยเจตนา —
+  // `params.portfolioId` เป็น "ขอบเขตการค้นหา" ที่ไหลลงไปถึง resolveOwnedAsset
+  // ด้วย ถ้ายัดค่านี้ลงไปตรงๆ การค้นหาจะหดเหลือเฉพาะพอร์ตที่เลือก แล้วสินทรัพย์
+  // ที่ผู้ใช้ถืออยู่ในพอร์ตอื่นจะ "หาไม่เจอ" → สร้างแถวซ้ำข้ามพอร์ต ต้นทุนเฉลี่ย
+  // แตกสองก้อน (ดูคำอธิบายเต็มใน transaction.service.validateBuy)
+  //
+  // ⚠️ ต้องผ่าน assertOwnedPortfolioId ก่อนเสมอ ห้ามส่งค่าดิบจาก Body ต่อ —
+  // เหตุผลเดียวกับ brokerId เป๊ะ (FK ตรวจได้แค่ "พอร์ตนี้มีจริง" ไม่ได้ตรวจว่า
+  // เป็นของใคร) ถ้าข้ามขั้นนี้ ผู้ใช้ A จะบันทึกรายการเข้าพอร์ตของผู้ใช้ B ได้
+  //
+  // ⚠️ ขายไม่รับ Key นี้ — ปลายทางของการขายถูกกำหนดโดยสินทรัพย์ที่ถืออยู่จริง
+  // เสมอ (validateSell) การให้เลือกพอร์ตตอนขายจึงไม่มีความหมาย
+  const hasPortfolioKey =
+    !isSell && Object.prototype.hasOwnProperty.call(body, 'portfolioId');
+  let destinationPortfolioId;
+  if (hasPortfolioKey) {
+    const raw = body.portfolioId;
+    // ต่างจาก brokerId ตรงที่ **ไม่มีคอนเซ็ปต์ 'none'/null** — สินทรัพย์ทุกแถวต้อง
+    // สังกัดพอร์ตเสมอ (Invariant migration 044/045) "ไม่เลือก" = ไม่ส่ง Key มาเลย
+    if (typeof raw !== 'string' || !UUID_RE.test(raw)) {
+      return fail(res, 'VALIDATION_ERROR', { field: 'portfolioId' });
+    }
+    try {
+      // คืน portfolio.id ที่ยืนยันความเป็นเจ้าของแล้ว (ไม่ใช่ค่าดิบจาก Body)
+      destinationPortfolioId = await portfoliosService.assertOwnedPortfolioId(req.user.id, raw);
+    } catch (err) {
+      if (err instanceof portfoliosService.PortfolioServiceError) {
+        return fail(res, err.code, err.details ?? {});
+      }
+      throw err;
+    }
+  }
+
   const params = {
     symbol,
     // ส่งต่อ "ตามที่เป็น" — ไม่ใส่ Key เลยเมื่อผู้ใช้ไม่ได้ระบุ (undefined = ยังไม่ได้
     // ถาม ≠ null = ตอบแล้วว่าไม่มีโบรก) ดูหัวไฟล์ assetResolution.service
     ...(hasBrokerKey ? { brokerId } : {}),
+    // พอร์ตปลายทางของ "สินทรัพย์ใหม่" — ไม่ใส่ Key เลยเมื่อผู้ใช้ไม่ได้เลือก
+    // (undefined = พฤติกรรมเดิมเป๊ะ: ลงพอร์ตหลัก)
+    ...(destinationPortfolioId !== undefined ? { destinationPortfolioId } : {}),
     // type ใช้เฉพาะตอนซื้อ (validateBuy ต้องใช้สร้าง Asset ใหม่) — คำสั่งขายไม่ส่ง
     // เหมือนเส้นทาง LINE เป๊ะ (validateSell หา Asset จาก symbol ที่ผู้ใช้ถืออยู่จริง)
     ...(isSell ? {} : { type }),
@@ -672,6 +717,18 @@ async function createTransaction(req, res) {
       });
     }
     if (err instanceof transactionService.TransactionServiceError) {
+      return fail(res, err.code, err.details ?? {});
+    }
+    // ── พอร์ตปลายทางเขียนไม่ได้/ไม่มีจริง ────────────────────────────────────
+    // 🔴 บั๊กที่เจอตอนทำงานนี้: assertCanAddToPortfolio (เรียกจาก validateBuy)
+    // โยน PortfolioServiceError ซึ่ง **ไม่เคยถูกดักที่นี่เลย** → ตกไปเป็น 500
+    // INTERNAL_ERROR ทั้งที่ตาราง WEB_ERROR_MESSAGES/ERROR_STATUS มีข้อความไทย
+    // และ Status ที่ถูกต้อง (403/404) รออยู่แล้ว
+    //
+    // เกิดได้ตั้งแต่ก่อนรอบนี้ (ไม่ต้องส่ง portfolioId มาก็เจอ): ซื้อเพิ่มใน
+    // สินทรัพย์ที่อยู่ในพอร์ตซึ่งถูกล็อกหลัง Premium หมดอายุ → ผู้ใช้เห็นแค่
+    // "เกิดข้อผิดพลาดภายในระบบ" แทนที่จะรู้ว่าต้องต่ออายุ
+    if (err instanceof portfoliosService.PortfolioServiceError) {
       return fail(res, err.code, err.details ?? {});
     }
 

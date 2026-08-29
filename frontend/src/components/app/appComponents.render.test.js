@@ -176,16 +176,47 @@ describe('RecordTransactionModal — defaultType จากปุ่มหน้�
     expect(html).not.toContain('disabled="" value="dividend"');
   });
 
-  // ⚠️ ข้อความ "พอร์ตปลายทาง" ต้องขึ้นทุกกรณี ไม่ใช่เฉพาะตอนเลือก "ทั้งหมด" —
-  // ฟอร์มนี้ไม่เคยส่ง portfolioId ไป Backend เลย (buildTransactionPayload) พอร์ต
-  // ปลายทางจึงมาจาก Symbol เสมอ ถ้าโชว์เฉพาะบางกรณีผู้ใช้จะเข้าใจผิดว่า Switcher
-  // ด้านบนเป็นตัวกำหนดปลายทาง ซึ่งไม่จริง
-  test('บอกพอร์ตปลายทางเสมอ ทั้งตอนเลือกพอร์ตเจาะจงและตอนดูรวมทุกพอร์ต', () => {
-    for (const selectedPortfolio of [WRITABLE, LOCKED, null]) {
-      const html = render({ selectedPortfolio });
-      expect(html).toContain('พอร์ตที่ถือสินทรัพย์นี้อยู่แล้ว');
-      expect(html).toContain('ไม่ขึ้นกับพอร์ตที่กำลังดูอยู่ด้านบน');
-    }
+  // ═══════════════════════════════════════════════════════════════════════
+  // ⭐ ช่อง "บันทึกลงพอร์ต" (มติ Founder 29 ส.ค. 2569)
+  // ═══════════════════════════════════════════════════════════════════════
+  // ⚠️ เทสต์ชุดก่อนหน้าเคยยืนยันว่าฟอร์ม "บอกเสมอว่าปลายทางไม่ขึ้นกับ Switcher"
+  // ซึ่งจริง **ตอนที่ฟอร์มยังส่ง portfolioId ไม่ได้** · ตอนนี้ผู้ใช้เลือกปลายทาง
+  // ได้จริงแล้ว ข้อความนั้นจึงกลายเป็นเท็จและถูกแทนที่ ไม่ใช่ถูกลบทิ้งเฉยๆ
+  const PORTFOLIOS = [
+    { id: 'pf-1', name: 'ระยะยาว', isDefault: true, canWrite: true },
+    { id: 'pf-2', name: 'ระยะสั้น', isDefault: false, canWrite: false },
+    { id: 'pf-3', name: 'Dime', isDefault: false, canWrite: true },
+  ];
+
+  test('⭐ โหมดซื้อ → มีช่อง "บันทึกลงพอร์ต" พร้อมคำอธิบายกติกา "รวมที่พอร์ตเดิม"', () => {
+    const html = render({ portfolios: PORTFOLIOS, defaultType: 'buy' });
+
+    expect(html).toContain('บันทึกลงพอร์ต');
+    expect(html).toContain('ระบบจะรวมไว้ที่พอร์ตเดิมแทน ไม่สร้างแยกใหม่');
+  });
+
+  // ⭐ พอร์ตที่ถูกล็อกต้องไม่โผล่เป็นตัวเลือกปลายทางของ "ของใหม่"
+  test('⭐ Dropdown แสดงเฉพาะพอร์ตที่ canWrite === true', () => {
+    const html = render({ portfolios: PORTFOLIOS, defaultType: 'buy' });
+
+    expect(html).toContain('ระยะยาว');
+    expect(html).toContain('Dime');
+    expect(html).not.toContain('ระยะสั้น'); // canWrite: false
+  });
+
+  // ขาย/ปันผล ไม่มีคอนเซ็ปต์เลือกพอร์ตปลายทาง (Backend ไม่รับ Key นี้ทั้งคู่)
+  test('⭐ โหมดขาย/ปันผล → ไม่มีช่อง "บันทึกลงพอร์ต" เลย', () => {
+    expect(render({ portfolios: PORTFOLIOS, defaultType: 'sell' })).not.toContain('บันทึกลงพอร์ต');
+    expect(render({ portfolios: PORTFOLIOS, defaultType: 'dividend' })).not.toContain(
+      'บันทึกลงพอร์ต'
+    );
+  });
+
+  // ไม่มีพอร์ตที่เขียนได้เลย → ซ่อนทั้งช่อง (Caller จะไม่ส่ง portfolioId ไป
+  // Backend ด้วย = Fallback กลับพฤติกรรมเดิม) ห้าม Render Dropdown ว่างเปล่า
+  test('ไม่มีพอร์ตที่เขียนได้เลย → ไม่ Render ช่องนี้ (ไม่ใช่ Dropdown ว่าง)', () => {
+    const html = render({ portfolios: [], defaultType: 'buy' });
+    expect(html).not.toContain('บันทึกลงพอร์ต');
   });
 
   // ═══════════════════════════════════════════════════════════════════════

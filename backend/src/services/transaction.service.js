@@ -436,6 +436,43 @@ async function validateBuy(userId, params, options = {}) {
   // แถวที่ portfolio_id IS NULL → ค้นไม่เจอ → สร้างแถวซ้ำ → ต้นทุนเฉลี่ยผิดเงียบๆ)
   const { portfolioId } = params;
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // destinationPortfolioId — "พอร์ตปลายทางของแถวใหม่" แยกจาก portfolioId
+  // ═══════════════════════════════════════════════════════════════════════
+  // เพิ่มเพื่อรองรับช่อง "บันทึกลงพอร์ต" บนฟอร์มเว็บ (มติ Founder 29 ส.ค. 2569)
+  // — Additive ล้วน Caller เดิมทุกตัว (LINE / bulkImport / pendingTransaction)
+  // ไม่ส่ง Key นี้ จึงได้พฤติกรรมเดิมเป๊ะทุกประการ
+  //
+  // ⚠️⚠️ **ทำไมต้องเป็นตัวแปรใหม่ ห้ามยัดลง params.portfolioId เด็ดขาด**
+  // `portfolioId` ไม่ได้แปลว่า "ปลายทาง" อย่างเดียว — มันคือ **ขอบเขตการค้นหา**
+  // ที่ไหลลงไปถึง assetResolution.resolveOwnedAsset →
+  // assetRepository.findAllByUserAndSymbol(userId, symbol, portfolioId)
+  //
+  // ถ้ายัดพอร์ตที่ผู้ใช้เลือกลงไปตรงๆ การค้นหาจะถูกหดเหลือเฉพาะพอร์ตนั้น:
+  // ผู้ใช้ถือ AAPL อยู่ในพอร์ตหลัก แล้วเลือกปลายทางเป็น "Dime" → ค้นใน Dime
+  // ไม่เจอ → candidates ว่าง → **ไม่มีอะไรให้กำกวม** → หลุดมาถึง Branch สร้าง
+  // Asset ใหม่ แล้วสร้างแถว AAPL ที่สองใน Dime เงียบๆ ทั้งที่ถืออยู่แล้ว
+  // = สินทรัพย์เดียวกันกระจายสองพอร์ต ต้นทุนเฉลี่ยแตกเป็นสองก้อน
+  // (บั๊กคลาสเดียวกับ docs/POSTMORTEM_PORTFOLIO_RESOLUTION.md เป๊ะ)
+  //
+  // แยกตัวแปรทำให้ **ขอบเขตการค้นหายังกว้างเท่าเดิม** (undefined = ค้นทุกพอร์ต)
+  // → ถือ Symbol นี้อยู่แล้วที่พอร์ตเดียว = เจอ แล้วรวมเข้าแถวเดิม (ปลายทางที่
+  //   ผู้ใช้เลือกถูกละเว้นโดยตั้งใจ — ตรงกับข้อความที่ฟอร์มบอกผู้ใช้ไว้)
+  // → ถือกระจายหลายพอร์ต = assetResolution โยน AMBIGUOUS_ASSET_PORTFOLIO
+  //   ตามเดิม (ไม่เดาแทนผู้ใช้)
+  // → ยังไม่เคยถือที่ไหนเลย = สร้างแถวใหม่ในพอร์ตที่ผู้ใช้เลือก ✅ (เคสที่แก้)
+  //
+  // ⚠️ Invariant ที่คอมเมนต์ของ Branch "สินทรัพย์ใหม่" ด้านล่างพึ่งพาอยู่ ("มาถึง
+  // ตรงนี้ได้แปลว่ายังไม่เคยถือ Symbol นี้ที่ไหนเลย") จึงยังเป็นจริงอยู่เหมือนเดิม
+  const { destinationPortfolioId } = params;
+
+  // ปลายทางของ "แถวใหม่" — ใช้ค่าที่ผู้ใช้เลือกก่อน ถ้าไม่ได้ส่งมาจึงตกกลับไปใช้
+  // portfolioId เดิม (เส้นทาง LINE/Bulk ที่ไม่มีคอนเซ็ปต์ช่องเลือกพอร์ต)
+  // ⚠️ เทียบ undefined ตรงๆ ไม่ใช้ `??` — null มีความหมายว่า "เจาะจงว่าไม่มีพอร์ต"
+  // ซึ่งต้องไม่ถูกกลืนหายไปเป็น portfolioId (วินัย undefined/null ของไฟล์นี้)
+  const newAssetPortfolioId =
+    destinationPortfolioId !== undefined ? destinationPortfolioId : portfolioId;
+
   // แปลง/ตรวจจำนวนก่อน (อาจ throw PRICE_FEED/VALIDATION) — ยังไม่แตะ DB
   const amounts = await resolveQuantityAndPrice(params);
 
@@ -464,7 +501,9 @@ async function validateBuy(userId, params, options = {}) {
   //
   // ⚠️ ห้ามย้ายด่านนี้ไป validateSell เด็ดขาด — การขายคือ "ลดของเดิม/แก้ให้ตรง
   // ความจริง" ซึ่งต้องทำได้เสมอแม้พอร์ตถูกล็อก (มติ Founder 24 ส.ค. 2569)
-  const targetPortfolioId = existingAsset ? existingAsset.portfolioId ?? null : portfolioId;
+  const targetPortfolioId = existingAsset
+    ? existingAsset.portfolioId ?? null
+    : newAssetPortfolioId;
   await portfoliosService.assertCanAddToPortfolio(userId, targetPortfolioId, {
     plan,
     planExpiresAt,
@@ -545,7 +584,7 @@ async function validateBuy(userId, params, options = {}) {
   //
   // ก่อน 044: ผู้ใช้ยังไม่มีพอร์ตเลย → findDefaultByUser คืน null → ได้ null
   // เท่ากับพฤติกรรมเดิมทุกประการ (Backward Compatible)
-  let resolvedPortfolioId = portfolioId;
+  let resolvedPortfolioId = newAssetPortfolioId;
   if (resolvedPortfolioId === undefined) {
     const defaultPortfolio = await portfolioRepository.findDefaultByUser(userId);
     resolvedPortfolioId = defaultPortfolio?.id ?? null;

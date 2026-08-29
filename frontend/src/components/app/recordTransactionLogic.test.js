@@ -25,6 +25,7 @@ import {
   buildTransactionPayload,
   buildDividendPayload,
   normalizeBrokerName,
+  defaultDestinationPortfolioId,
 } from './recordTransactionLogic.js';
 
 // สลิปตามรูปแบบ Response ของ API.md § 15.8 เป๊ะ
@@ -366,5 +367,89 @@ describe('quotaNotice — แสดงโควตาที่เหลือใ
   // ⚠️ ไม่เดาเลขให้ — Backend ไม่ส่งมาก็ไม่ต้องแสดง (ห้าม Silent Default)
   test.each([null, undefined, {}, { mode: 'premium' }])('quota = %o → คืน null ไม่เดาเลข', (q) => {
     expect(quotaNotice(q)).toBeNull();
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// พอร์ตปลายทาง — ช่อง "บันทึกลงพอร์ต" (มติ Founder 29 ส.ค. 2569)
+// ═══════════════════════════════════════════════════════════════════════════
+// เคสจริง: สร้างพอร์ต "Dime" → เลือกไว้บน Switcher → ซื้อสินทรัพย์ใหม่ → รายการ
+// ไปโผล่พอร์ตหลัก เพราะฟอร์มไม่เคยส่ง portfolioId ไป Backend เลยสักครั้ง
+describe('⭐ portfolioId ใน Payload — พอร์ตปลายทางที่ผู้ใช้เลือก', () => {
+  test('⭐ เลือกพอร์ตปลายทาง → Payload มี portfolioId ตรงกับที่เลือก', () => {
+    const payload = buildTransactionPayload({
+      type: 'buy',
+      symbol: 'BTC',
+      amountTotal: '1000',
+      portfolioId: 'pf-dime',
+    });
+
+    expect(payload.portfolioId).toBe('pf-dime');
+  });
+
+  // ไม่มีพอร์ตให้เลือก (ยังโหลดไม่เสร็จ/ไม่มีพอร์ตที่เขียนได้) → ห้ามส่ง Key นี้
+  // ไปเปล่าๆ ต้อง Fallback กลับพฤติกรรมเดิมคือให้ Backend Resolve ให้
+  test('⭐ ไม่ได้เลือกพอร์ต (null/undefined/ว่าง) → ไม่มี Key "portfolioId" ใน Payload', () => {
+    for (const portfolioId of [null, undefined, '']) {
+      const payload = buildTransactionPayload({
+        type: 'buy',
+        symbol: 'BTC',
+        amountTotal: '1000',
+        portfolioId,
+      });
+      expect('portfolioId' in payload).toBe(false);
+    }
+  });
+
+  // Endpoint ปันผลไม่รับ Key นี้ตาม Contract (dividend.service อ่าน asset.portfolioId)
+  test('⚠️ ปันผลไม่มี "portfolioId" แม้ Caller จะส่งมาก็ตาม', () => {
+    const payload = buildDividendPayload({
+      assetId: 'asset-1',
+      amountThb: '250',
+      quantity: '10',
+      portfolioId: 'pf-dime',
+    });
+
+    expect('portfolioId' in payload).toBe(false);
+  });
+});
+
+describe('defaultDestinationPortfolioId — ค่าตั้งต้นของช่อง "บันทึกลงพอร์ต"', () => {
+  const MAIN = { id: 'pf-1', name: 'หลัก', isDefault: true, canWrite: true };
+  const LOCKED = { id: 'pf-2', name: 'ล็อก', isDefault: false, canWrite: false };
+  const DIME = { id: 'pf-3', name: 'Dime', isDefault: false, canWrite: true };
+  const ALL = [MAIN, LOCKED, DIME];
+
+  test('Switcher เลือกพอร์ตที่เขียนได้อยู่ → ใช้พอร์ตนั้นเป็นค่าตั้งต้น', () => {
+    expect(defaultDestinationPortfolioId(DIME, ALL)).toBe('pf-3');
+  });
+
+  // Switcher = "ทั้งหมด" (null) — เคสเริ่มต้นของทุกครั้งที่เปิด /app
+  test('⭐ Switcher เป็น "ทั้งหมด" (null) → ตกไปที่พอร์ตหลัก', () => {
+    expect(defaultDestinationPortfolioId(null, ALL)).toBe('pf-1');
+  });
+
+  // ⚠️ เปิด Modal ค้างที่พอร์ตที่ถูกล็อกได้ (ปุ่ม "บันทึกการขาย" เปิดเสมอ) —
+  // ถ้าตั้งพอร์ตนั้นเป็นปลายทาง ผู้ใช้จะเจอ 403 ทันทีที่สลับไปแท็บ "ซื้อ"
+  test('⭐ Switcher เลือกพอร์ตที่ถูกล็อก → ห้ามใช้เป็นปลายทาง ตกไปพอร์ตหลักแทน', () => {
+    expect(defaultDestinationPortfolioId(LOCKED, ALL)).toBe('pf-1');
+  });
+
+  test('ไม่มีพอร์ตหลักที่เขียนได้ → ใช้พอร์ตแรกที่เขียนได้', () => {
+    expect(defaultDestinationPortfolioId(null, [LOCKED, DIME])).toBe('pf-3');
+  });
+
+  // ไม่มีพอร์ตที่เขียนได้เลย → null = "อย่าส่ง portfolioId ไป Backend"
+  test('⭐ ไม่มีพอร์ตที่เขียนได้เลย → null (Caller ต้องไม่ส่ง Key นี้)', () => {
+    expect(defaultDestinationPortfolioId(null, [LOCKED])).toBeNull();
+    expect(defaultDestinationPortfolioId(null, [])).toBeNull();
+    expect(defaultDestinationPortfolioId(null, undefined)).toBeNull();
+  });
+
+  // พอร์ตที่เลือกไว้ถูกลบไประหว่างเปิดฟอร์ม → ต้องไม่คืน id ที่ไม่มีอยู่แล้ว
+  test('พอร์ตที่ Switcher เลือกไม่อยู่ในรายการแล้ว → ตกไปพอร์ตหลัก', () => {
+    const ghost = { id: 'pf-gone', isDefault: false, canWrite: true };
+    expect(defaultDestinationPortfolioId(ghost, ALL)).toBe('pf-1');
   });
 });

@@ -13,6 +13,7 @@ import {
   buildTransactionPayload,
   buildDividendPayload,
   normalizeBrokerName,
+  defaultDestinationPortfolioId,
 } from './recordTransactionLogic.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -83,7 +84,15 @@ function todayBangkok() {
 //
 // ⚠️ ห้ามใช้ defaultType เป็นด่านสิทธิ์ — ด่านจริงคือ `blocked` ด้านล่าง ซึ่งอ่านจาก
 // `portfolioWriteState(selectedPortfolio)` และ Backend เป็นคนตัดสินอีกชั้นเสมอ
-function RecordTransactionModal({ selectedPortfolio, onClose, onSaved, defaultType = 'buy' }) {
+function RecordTransactionModal({
+  selectedPortfolio,
+  // รายการพอร์ตเต็มจาก GET /portfolios (Shell โหลดไว้แล้ว ส่งลงมาทาง Prop —
+  // Modal ไม่ยิงเอง) · [] = ยังไม่รู้ → ไม่แสดงช่องเลือกพอร์ต
+  portfolios = [],
+  onClose,
+  onSaved,
+  defaultType = 'buy',
+}) {
   const [type, setType] = useState(
     TYPES.some((t) => t.value === defaultType) ? defaultType : 'buy'
   );
@@ -107,6 +116,15 @@ function RecordTransactionModal({ selectedPortfolio, onClose, onSaved, defaultTy
   // ⭐ ค่าธรรมเนียม (ถ้ามี) — งานที่ 3 · Optional เหมือน note ด้านล่าง ไม่กรอก =
   // ไม่ส่ง Key นี้ไป Backend เลย (ดู buildTransactionPayload)
   const [feeThb, setFeeThb] = useState('');
+  // ── ⭐ พอร์ตปลายทาง (มติ Founder 29 ส.ค. 2569) ────────────────────────────
+  // ค่าตั้งต้นตัดสินใน Pure Function ที่มี Test คลุม (ดู
+  // recordTransactionLogic.defaultDestinationPortfolioId) — ที่นี่แค่เก็บ State
+  //
+  // ⚠️ ใช้ Lazy Initializer: Shell เปิด Modal ได้ก็ต่อเมื่อโหลดพอร์ตเสร็จแล้ว
+  // (ปุ่มถูก disabled ตอน loading) `portfolios` จึงเติมค่าแล้วเสมอตอน mount
+  const [destinationPortfolioId, setDestinationPortfolioId] = useState(() =>
+    defaultDestinationPortfolioId(selectedPortfolio, portfolios)
+  );
   const [date, setDate] = useState(todayBangkok());
   const [note, setNote] = useState('');
   // 🔴 สกุลเงิน — จำเป็นเพราะสลิปคืน USD ได้ ถ้าไม่ส่ง currency ไป Backend จะ
@@ -131,6 +149,9 @@ function RecordTransactionModal({ selectedPortfolio, onClose, onSaved, defaultTy
   const navigate = useNavigate();
 
   const write = portfolioWriteState(selectedPortfolio);
+  // พอร์ตที่เป็นปลายทางของ "ของใหม่" ได้จริง — Backend เป็นคนบอกผ่าน canWrite
+  // (ห้ามคำนวณเองจาก plan · ดู lib/entitlements.js)
+  const writablePortfolios = (portfolios ?? []).filter((p) => p?.canWrite === true);
   const kind = TYPES.find((t) => t.value === type)?.kind ?? 'add';
   const blocked = kind === 'add' && !write.canAdd;
 
@@ -327,6 +348,9 @@ function RecordTransactionModal({ selectedPortfolio, onClose, onSaved, defaultTy
             note,
             slipToken,
             feeThb,
+            // ⚠️ เฉพาะ "ซื้อ" — ขายไม่มีคอนเซ็ปต์เลือกพอร์ตปลายทาง (สินทรัพย์ที่
+            // ถืออยู่เป็นตัวกำหนด) และ Backend ก็ละเว้น Key นี้ตอนขายอยู่แล้ว
+            portfolioId: type === 'buy' ? destinationPortfolioId : undefined,
           })
         );
       }
@@ -375,21 +399,42 @@ function RecordTransactionModal({ selectedPortfolio, onClose, onSaved, defaultTy
             </div>
           </div>
 
-          {/* ── 📌 พอร์ตปลายทางมาจาก "สินทรัพย์" ไม่ใช่ Switcher ด้านบน ──────────
-              ⚠️ ข้อความนี้ต้องขึ้น **ทุกกรณี** ไม่ใช่เฉพาะตอนเลือก "ทั้งหมด" —
-              เพราะฟอร์มนี้ **ไม่เคยส่ง portfolioId ไป Backend เลย** ไม่ว่าจะเลือก
-              พอร์ตไหนค้างไว้ก็ตาม (ดู buildTransactionPayload ใน
-              recordTransactionLogic.js — ไม่มี Key นี้อยู่ในรูปร่าง Payload)
-              Backend เป็นคน Resolve ปลายทางเองจาก Symbol ที่ผู้ใช้กรอก
-              (transaction.service.validateBuy)
+          {/* ── ⭐ พอร์ตปลายทาง (มติ Founder 29 ส.ค. 2569) ────────────────────
+              เดิมฟอร์มนี้ไม่เคยส่ง portfolioId ไป Backend เลย → สินทรัพย์ใหม่ลง
+              พอร์ตหลักเสมอ ผู้ใช้ที่สร้างพอร์ตแยกไว้จึงหารายการไม่เจอ
 
-              ถ้าโชว์เฉพาะตอน "ทั้งหมด" ผู้ใช้จะอนุมานว่า "งั้นเลือกพอร์ตด้านบนก่อน
-              แล้วมันจะลงพอร์ตนั้น" ซึ่ง **ไม่จริง** — เป็นความเข้าใจผิดชนิดเดียวกับ
-              บั๊ก 29 ส.ค. 2569 คือ UI พูดเรื่องที่ตัวเองไม่ได้เป็นคนตัดสิน */}
-          <p className="app-note">
-            📌 รายการนี้จะถูกบันทึกลง<strong>พอร์ตที่ถือสินทรัพย์นี้อยู่แล้ว</strong> — ถ้ายังไม่เคยถือที่ไหนเลย
-            ระบบจะบันทึกเข้า<strong>พอร์ตหลัก</strong>ให้อัตโนมัติ (ไม่ขึ้นกับพอร์ตที่กำลังดูอยู่ด้านบน)
-          </p>
+              ⚠️ เฉพาะโหมด "ซื้อ" เท่านั้น:
+                ขาย   → ปลายทางถูกกำหนดโดยสินทรัพย์ที่ถืออยู่จริง (validateSell)
+                ปันผล → ระบุด้วย assetId ซึ่งผูกกับพอร์ตอยู่แล้ว (dividend.service
+                        อ่าน asset.portfolioId) · Endpoint ไม่รับ Key นี้ด้วยซ้ำ
+              ถ้าโชว์ในสองโหมดนั้นจะเป็นช่องที่กดแล้วไม่มีผล = UI ที่โกหกผู้ใช้
+
+              ⚠️ แสดงเฉพาะพอร์ตที่ canWrite === true — พอร์ตที่ถูกล็อกไม่ควรเป็น
+              ตัวเลือกปลายทางของ "ของใหม่" ตั้งแต่แรก (ลดโอกาสเจอ 403 โดยไม่จำเป็น)
+              แต่ด่านจริงยังอยู่ที่ Backend เสมอ ถ้าพอร์ตเพิ่งถูกล็อกระหว่างกรอกฟอร์ม
+              จะได้ 403 PORTFOLIO_READ_ONLY ซึ่ง catch ด้านล่างแสดงข้อความให้อยู่แล้ว */}
+          {type === 'buy' && writablePortfolios.length > 0 && (
+            <label className="demo-field">
+              <span>บันทึกลงพอร์ต</span>
+              <select
+                value={destinationPortfolioId ?? ''}
+                onChange={(e) => setDestinationPortfolioId(e.target.value)}
+              >
+                {writablePortfolios.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.isDefault ? '⭐' : '🗂️'} {p.name}
+                  </option>
+                ))}
+              </select>
+              {/* ⭐ สื่อสารพฤติกรรมจริงของ Backend — ป้องกันความสับสนแบบที่
+                  Founder เจอ: เลือกพอร์ตไว้แล้วรายการดัน "ไปรวม" ที่พอร์ตอื่น
+                  ⚠️ นี่ไม่ใช่ข้อจำกัดชั่วคราว แต่เป็นกติกาที่ตั้งใจ — กันสินทรัพย์
+                  ตัวเดียวกันแตกเป็นสองแถวสองพอร์ต ซึ่งทำให้ต้นทุนเฉลี่ยเพี้ยน */}
+              <small className="app-note">
+                ถ้าสินทรัพย์นี้มีอยู่แล้วในพอร์ตอื่น ระบบจะรวมไว้ที่พอร์ตเดิมแทน ไม่สร้างแยกใหม่
+              </small>
+            </label>
+          )}
 
           {loadingRefs && <p className="app-state app-state--loading">กำลังโหลดรายการสินทรัพย์...</p>}
 

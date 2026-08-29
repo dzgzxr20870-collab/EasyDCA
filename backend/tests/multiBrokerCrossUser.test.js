@@ -37,7 +37,11 @@ const BROKER_OF_A = 'broker-of-a-0001';
 // โบรกที่ "มีอยู่จริงในระบบ" แต่เป็นของผู้ใช้ B — FK ผ่านฉลุย ด่านเดียวที่กันได้
 // คือ assertOwnedBrokerId ในโค้ดเรา
 const BROKER_OF_B = 'broker-of-b-0002';
-const PORTFOLIO_OF_B = 'portfolio-of-b-0003';
+// พอร์ตที่ "มีอยู่จริงในระบบ" แต่เป็นของผู้ใช้ B — ต้องเป็น UUID ที่ถูกรูปแบบ
+// เพื่อให้ผ่านด่าน Validate รูปแบบไปชนด่าน **ความเป็นเจ้าของ** ซึ่งคือด่านที่
+// เทสต์นี้ต้องการพิสูจน์จริงๆ (ถ้าใช้ค่ามั่วๆ จะถูกปัดตกที่ Regex ก่อน แล้ว
+// ช่องโหว่ Cross-User จริงจะไม่เคยถูกทดสอบเลย)
+const PORTFOLIO_OF_B = 'dddddddd-4444-4444-8444-444444444444';
 
 const USER_RECORD = { id: USER_A, plan: 'premium', planExpiresAt: '2099-01-01T00:00:00.000Z' };
 
@@ -149,28 +153,54 @@ describe('POST /transactions — brokerId จาก Body ต้องยืน�
   });
 });
 
-describe('POST /transactions — portfolioId จาก Body ต้องไม่ถูกนำไปใช้', () => {
-  // Stage 5 ยังไม่เปิด "เลือกพอร์ต" ฝั่งเว็บ (นั่นคือ Stage 8) — สิ่งที่ต้องพิสูจน์
-  // ตอนนี้คือ Controller **ไม่รับ** portfolioId จาก Body ไปใช้แม้แต่นิดเดียว
-  // ไม่ใช่ "รับแล้วลืมตรวจเจ้าของ" ซึ่งเป็นช่องโหว่ Cross-User เต็มรูปแบบ
+describe('POST /transactions — portfolioId จาก Body ต้องผ่านด่านเจ้าของก่อนเสมอ', () => {
+  // ── ประวัติของ describe นี้ (อ่านก่อนแก้) ────────────────────────────────
+  // Stage 5: เว็บยังไม่เปิด "เลือกพอร์ต" — สิ่งที่พิสูจน์ตอนนั้นคือ Controller
+  // **ไม่รับ** portfolioId จาก Body เลย และเทสต์เดิมเขียนโน้ตไว้ว่า "เมื่อ Stage 8
+  // เปิด POST /portfolios แล้ว ต้องกลับมาแก้เทสต์นี้เป็น assertOwnedPortfolioId
+  // ปฏิเสธพอร์ตของคนอื่น — ห้ามลบเทสต์นี้ทิ้งเฉยๆ"
   //
-  // ⚠️ เมื่อ Stage 8 เปิด POST /portfolios แล้ว ต้องกลับมาแก้เทสต์นี้เป็น
-  // "assertOwnedPortfolioId ปฏิเสธพอร์ตของคนอื่น" ห้ามลบเทสต์นี้ทิ้งเฉยๆ
-  test('⚠️ ผู้ใช้ A ส่ง portfolioId ของ B → ต้องถูกเพิกเฉย (ไม่ไหลลง Ledger)', async () => {
+  // ⭐ 29 ส.ค. 2569 = ตอนนั้น: ฟอร์มเว็บมีช่อง "บันทึกลงพอร์ต" แล้ว Controller จึง
+  // **รับ** portfolioId แล้วจริงๆ · คุณสมบัติด้านความปลอดภัยไม่ได้อ่อนลง แต่
+  // เปลี่ยนรูปจาก "เพิกเฉย" เป็น "ปฏิเสธเสียงดัง (404)" ซึ่งแข็งแรงกว่าเดิม
+  // เพราะผู้ใช้ที่พิมพ์ id ผิดจะรู้ตัว แทนที่จะบันทึกสำเร็จเข้าพอร์ตที่ไม่ได้ตั้งใจ
+  //
+  // ── RED-GREEN ────────────────────────────────────────────────────────────
+  // ถอด `await portfoliosService.assertOwnedPortfolioId(...)` ใน
+  // transactions.controller ออก (ส่ง body.portfolioId ต่อตรงๆ) → เคสแรกแดงทันที
+  //
+  // ⚠️ portfolio.repository ถูก Automock ไว้ที่หัวไฟล์ → findByIdForUser คืน
+  // undefined = "ไม่พบพอร์ตนี้ในบัญชีของ USER_A" ซึ่งตรงกับสถานการณ์ที่จำลอง
+  // (พอร์ตของ B มีอยู่จริงในระบบ แต่ Query ที่ Scope ด้วย user_id ของ A หาไม่เจอ)
+  test('⚠️ ผู้ใช้ A ส่ง portfolioId ของ B → 404 ปฏิเสธ ไม่ไหลลง Ledger เด็ดขาด', async () => {
     const res = mockRes();
     await createTransaction(mockReq({ ...BUY_BODY, portfolioId: PORTFOLIO_OF_B }), res);
 
+    expect(statusOf(res)).toBe(404);
+    expect(jsonOf(res).error).toBe('PORTFOLIO_NOT_FOUND');
+    // ⭐ หัวใจเดิมของเทสต์นี้: ห้ามมีอะไรถูกเขียนลง Ledger ด้วยพอร์ตของคนอื่น
+    expect(assetRepository.create).not.toHaveBeenCalled();
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
+
+  // ปัดตกที่ Regex ก่อนยิง Query — ไม่ปล่อยค่าผิดรูปไปถึง Postgres (22P02 → 500)
+  test('portfolioId ผิดรูปแบบ → 400 VALIDATION_ERROR ไม่ใช่ตีความเป็น null เงียบๆ', async () => {
+    const res = mockRes();
+    await createTransaction(mockReq({ ...BUY_BODY, portfolioId: 'portfolio-of-b-0003' }), res);
+
+    expect(statusOf(res)).toBe(400);
+    expect(jsonOf(res).error).toBe('VALIDATION_ERROR');
+    expect(assetRepository.create).not.toHaveBeenCalled();
+  });
+
+  // ⚠️ ไม่ส่ง Key มาเลย = พฤติกรรมเดิมทุกประการ — ขอบเขตการค้นหาต้องยัง
+  // undefined ("ไม่กรองพอร์ต") ไม่ใช่ null ("เจาะจงว่าไม่มีพอร์ต") ซึ่งหลัง
+  // migration 044 จะหาอะไรไม่เจอเลย (ดู portfolioResolution.regression.test.js)
+  test('ไม่ส่ง portfolioId มาเลย → ค้นข้ามพอร์ตของตัวเองตามเดิม (undefined)', async () => {
+    const res = mockRes();
+    await createTransaction(mockReq(BUY_BODY), res);
+
     expect(statusOf(res)).toBe(201);
-    // Argument ตัวที่ 2 ของ create() คือ portfolioId — ต้องเป็น null/undefined
-    // ไม่ใช่ค่าที่ผู้ใช้ส่งมา
-    expect(assetRepository.create.mock.calls[0][1] ?? null).toBeNull();
-    // และต้องไม่มีการ Resolve Asset ในพอร์ตของ B ด้วย
-    //
-    // ⚠️ Stage 8-fix: ค่าที่ส่งเข้า Repository เปลี่ยนจาก null → undefined โดยตั้งใจ
-    //   undefined = "ไม่กรองพอร์ตเลย" (ค้นข้ามพอร์ตของ **ตัวเอง** เท่านั้น เพราะ
-    //               queryForUser บังคับ .eq('user_id', USER_A) ให้อยู่แล้ว)
-    //   null      = "เจาะจงว่าไม่มีพอร์ต" ซึ่งหลัง migration 044 จะไม่เจออะไรเลย
-    // เจตนาของเทสต์ยังเหมือนเดิมเป๊ะ: **ต้องไม่ใช่ PORTFOLIO_OF_B**
     const [, , passedPortfolioId] = assetRepository.findAllByUserAndSymbol.mock.calls[0];
     expect(passedPortfolioId).toBeUndefined();
     expect(passedPortfolioId).not.toBe(PORTFOLIO_OF_B);
