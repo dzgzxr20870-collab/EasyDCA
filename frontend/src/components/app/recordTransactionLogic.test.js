@@ -24,6 +24,7 @@ import {
   quotaNotice,
   buildTransactionPayload,
   buildDividendPayload,
+  normalizeBrokerName,
 } from './recordTransactionLogic.js';
 
 // สลิปตามรูปแบบ Response ของ API.md § 15.8 เป๊ะ
@@ -237,6 +238,63 @@ describe('⭐ Payload ต้องตรง Contract ของ API.md § 15.2', 
     expect('amountTotal' in payload).toBe(false);
     expect('slipToken' in payload).toBe(false);
     expect('currency' in payload).toBe(false);
+  });
+
+  // ⭐⭐ งานที่ 3 (Founder 29 ส.ค. 2569) — ค่าธรรมเนียม Optional ทั้งซื้อ/ขาย
+  test('⭐ กรอกค่าธรรมเนียม → ส่ง feeThb เป็นตัวเลขไปกับ Payload', () => {
+    const payload = buildTransactionPayload({
+      type: 'buy',
+      symbol: 'PTT',
+      amountTotal: '1000',
+      feeThb: '15.50',
+    });
+
+    expect(payload.feeThb).toBe(15.5);
+  });
+
+  // 🔴 Silent Default ของโปรเจกต์: ไม่กรอก = "ไม่รู้ค่า" ต้องไม่มี Key นี้เลย
+  // (Backend แยกความหมาย "ไม่ส่ง Key" (NULL) กับ "ส่ง 0" (ยืนยันว่าไม่มีค่าธรรมเนียม)
+  // ไว้คนละความหมาย — ฟอร์มนี้ไม่มีช่องยืนยัน 0 แยกต่างหาก จึงต้องไม่ส่ง 0 เอง)
+  test('⭐ ไม่กรอกค่าธรรมเนียม (ว่าง/0) → ไม่มี Key "feeThb" ใน Payload เลย', () => {
+    const emptyPayload = buildTransactionPayload({ type: 'buy', symbol: 'PTT', amountTotal: '1000' });
+    const zeroPayload = buildTransactionPayload({
+      type: 'buy',
+      symbol: 'PTT',
+      amountTotal: '1000',
+      feeThb: '0',
+    });
+
+    expect('feeThb' in emptyPayload).toBe(false);
+    expect('feeThb' in zeroPayload).toBe(false);
+  });
+
+  // ⚠️ Endpoint ปันผลไม่มี Field นี้ตาม Contract (§ 15.2 คนละตัว) — ต้องไม่รั่วเข้าไป
+  test('⚠️ ปันผลไม่มี "feeThb" แม้ Caller จะส่งค่ามาก็ตาม', () => {
+    const payload = buildDividendPayload({
+      assetId: 'asset-1',
+      amountThb: '250',
+      quantity: '10',
+      feeThb: '15',
+    });
+
+    expect('feeThb' in payload).toBe(false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+describe('normalizeBrokerName — ชื่อโบรกใหม่ที่พิมพ์ในฟอร์ม (งานที่ 2)', () => {
+  test('ตัดช่องว่างหัวท้ายออกก่อนส่งไป Backend', () => {
+    expect(normalizeBrokerName('  Bitkub  ')).toBe('Bitkub');
+  });
+
+  test('ว่างเปล่า/มีแต่ Whitespace → null (Caller ต้องไม่ยิง API)', () => {
+    expect(normalizeBrokerName('')).toBeNull();
+    expect(normalizeBrokerName('   ')).toBeNull();
+  });
+
+  test('ค่าที่ไม่ใช่ String (undefined/null) → null ไม่ throw', () => {
+    expect(normalizeBrokerName(undefined)).toBeNull();
+    expect(normalizeBrokerName(null)).toBeNull();
   });
 });
 

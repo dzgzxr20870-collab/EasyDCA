@@ -168,7 +168,26 @@ export function buildTransactionPayload(form) {
     // ⚠️ ผู้ใช้ Free/Trial ได้ slipToken = null → **ห้ามส่ง Key นี้เลย**
     // (ส่ง null ไปตรงๆ คนละเรื่องกับไม่ส่ง — API.md § 15.2 ระบุว่าเป็น Optional)
     slipToken: form.slipToken || undefined,
+    // ── ⭐ ค่าธรรมเนียม — งานที่ 3 (Founder 29 ส.ค. 2569) ─────────────────────
+    // Backend รองรับอยู่แล้วทั้งซื้อ/ขาย (migration 041, transactions.controller
+    // บรรทัด 359-365) เป็น Optional Field — ⚠️ ไม่กรอก = "ไม่รู้ค่า" ต้องไม่ส่ง
+    // Key นี้เลย (numberOrUndefined ปัด '' และ 0 เป็น undefined ให้อยู่แล้ว)
+    // **ห้ามส่ง 0 แทนค่าว่าง** — Backend แยกความหมาย "ไม่กรอก" (NULL) กับ "กรอก 0
+    // ยืนยันว่าไม่มีค่าธรรมเนียม" (0) ไว้คนละความหมาย ฟอร์มนี้ไม่มีช่องยืนยัน 0
+    // แยกต่างหาก จึงส่งเฉพาะตอนกรอกค่าจริงมากกว่า 0 เท่านั้น (ตรงกับ numberOrUndefined)
+    feeThb: numberOrUndefined(form.feeThb),
   });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// normalizeBrokerName — ตัดช่องว่างหัวท้ายชื่อโบรกใหม่ก่อนส่งไป Backend (งานที่ 2)
+// ═══════════════════════════════════════════════════════════════════════════
+// คืน null เมื่อว่างเปล่า (พิมพ์แต่ Whitespace/ไม่ได้พิมพ์อะไรเลย) ให้ Caller เช็ค
+// ก่อนยิง POST /api/v1/brokers แทนที่จะพึ่ง `disabled` ของปุ่มอย่างเดียว (กัน Race
+// แปลกๆ จาก Autofill/Paste ที่ทำให้ State กับ DOM ไม่ตรงกันชั่วขณะ)
+export function normalizeBrokerName(raw) {
+  const trimmed = typeof raw === 'string' ? raw.trim() : '';
+  return trimmed ? trimmed : null;
 }
 
 // Body ของ POST /api/v1/transactions/dividend — ⚠️ Endpoint นี้ใช้ `amountThb`

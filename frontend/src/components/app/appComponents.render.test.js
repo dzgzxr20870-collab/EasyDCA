@@ -187,6 +187,36 @@ describe('RecordTransactionModal — defaultType จากปุ่มหน้�
       expect(html).toContain('ไม่ขึ้นกับพอร์ตที่กำลังดูอยู่ด้านบน');
     }
   });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // งาน UI 3 จุด (Founder ทดสอบ /app 29 ส.ค. 2569)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  // งานที่ 1 — Input ไฟล์ต้องยังมี Class Hook เดิมที่ CSS (.slip-scan__input
+  // ใน appShell.css) ใช้ซ่อนมันอยู่ · Regression Guard กันคนแก้ชื่อ Class ใน
+  // Component โดยลืมแก้ CSS คู่กัน แล้ว Input โผล่ซ้อนปุ่มกลับมาแบบเดิม
+  test('⭐ Input เลือกไฟล์สลิปยังมี class="slip-scan__input" (Hook ของ CSS ที่ซ่อนมันไว้)', () => {
+    const html = render({ defaultType: 'buy' });
+    expect(html).toContain('class="slip-scan__input"');
+  });
+
+  // งานที่ 2 — Dropdown โบรกต้องมีตัวเลือก "+ เพิ่มโบรก/Exchange ใหม่" เสมอ
+  // และช่องพิมพ์ชื่อโบรกใหม่ต้อง **ไม่** โผล่มาตั้งแต่เปิด Modal (addingBroker
+  // เริ่มที่ false — โผล่เฉพาะหลังผู้ใช้เลือก Option นี้เท่านั้น)
+  test('⭐ Dropdown โบรกมีตัวเลือก "+ เพิ่มโบรก/Exchange ใหม่" แต่ช่องพิมพ์ชื่อยังไม่โผล่ตอนเปิด', () => {
+    const html = render({ defaultType: 'buy' });
+
+    expect(html).toContain('+ เพิ่มโบรก/Exchange ใหม่');
+    expect(html).not.toContain('ชื่อโบรก/Exchange ใหม่');
+  });
+
+  // งานที่ 3 — ค่าธรรมเนียมเป็น Optional เฉพาะโหมดซื้อ/ขาย ไม่มีในโหมดปันผล
+  // (Endpoint ปันผลไม่มี Field นี้ตาม Contract — ดู recordTransactionLogic.js)
+  test('⭐ โหมดซื้อ/ขาย → มีช่อง "ค่าธรรมเนียม (ถ้ามี)" · โหมดปันผล → ไม่มี', () => {
+    expect(render({ defaultType: 'buy' })).toContain('ค่าธรรมเนียม (ถ้ามี)');
+    expect(render({ defaultType: 'sell' })).toContain('ค่าธรรมเนียม (ถ้ามี)');
+    expect(render({ defaultType: 'dividend' })).not.toContain('ค่าธรรมเนียม (ถ้ามี)');
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -441,6 +441,33 @@
 .demo-form { display: flex; flex-direction: column; gap: 14px; padding: 8px 20px 20px; }
 .demo-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
 
+/* ── ช่องพิมพ์ + ปุ่มยืนยัน/ยกเลิกในบรรทัดเดียว (เพิ่มโบรกใหม่ — งานที่ 2) ──── */
+.demo-inline-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.demo-inline-row input { flex: 1; min-width: 140px; }
+
+/* ── Input ไฟล์ที่ซ่อนไว้เบื้องหลังปุ่ม "📄 เลือกรูปสลิป" (SlipUploadField —
+   งานที่ 1) ──────────────────────────────────────────────────────────────
+   ⚠️ ห้ามใช้ display:none — บาง Browser/Screen Reader มองว่า Element ถูกลบไป
+   จาก DOM เลย แล้ว `inputRef.current?.click()` (SlipUploadField.jsx) อาจไม่
+   เปิด Dialog เลือกไฟล์ในบาง Browser · ใช้ Pattern "Visually Hidden" มาตรฐาน
+   แทน — input ยังอยู่ใน DOM/Accessibility Tree เหมือนเดิมทุกประการ แค่มองไม่
+   เห็นและไม่กินพื้นที่ Layout (ก่อนหน้านี้ไม่มี CSS ซ่อนเลย เบราว์เซอร์จึง
+   Render ปุ่ม "เลือกไฟล์" ของตัวเองซ้อนกับปุ่มด้านบนไปด้วย) */
+.slip-scan__row { position: relative; }
+.slip-scan__input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .demo-total { font-size: 15px; margin: 0; }
 .demo-total strong { font-size: 22px; font-weight: 800; color: var(--leaf-deep); }
 

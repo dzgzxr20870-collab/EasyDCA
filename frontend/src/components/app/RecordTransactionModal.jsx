@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiPost, apiUpload } from '../../lib/api.js';
-import { listAssets, listBrokers } from '../../lib/portfolioApi.js';
+import { listAssets, listBrokers, createBroker } from '../../lib/portfolioApi.js';
 import { portfolioWriteState } from '../../lib/entitlements.js';
 // Reuse ตัวแปลง Error Code → ข้อความไทยของ § 15.8 ที่มีอยู่แล้ว (ครอบครบทุก Code
 // ในตาราง Error ของ API.md) — ห้ามเขียนตารางข้อความใหม่ซ้ำ
@@ -12,6 +12,7 @@ import {
   quotaNotice,
   buildTransactionPayload,
   buildDividendPayload,
+  normalizeBrokerName,
 } from './recordTransactionLogic.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -49,12 +50,26 @@ import {
 // แต่ฟอร์มเดิมส่ง `amountThb` ซึ่งไม่เคยถูกอ่านเลย → กรอก "จำนวนเงินรวม" อย่างเดียว
 // (เคสซื้อ DCA ปกติที่สุด) ได้ VALIDATION_ERROR ทุกครั้ง
 // ⚠️ Endpoint **ปันผล** ใช้ `amountThb` จริงตาม Contract — ห้ามเปลี่ยนตาม
+//
+// ── 🔧 งาน UI 3 จุด (Founder ทดสอบ /app 29 ส.ค. 2569) ───────────────────────
+//   1. Input ไฟล์ของ SlipUploadField ซ่อนด้วย CSS "Visually Hidden" แล้ว (ดู
+//      appShell.css .slip-scan__input) — เคยโผล่ปุ่ม "เลือกไฟล์" ของเบราว์เซอร์
+//      ซ้อนกับปุ่ม "📄 เลือกรูปสลิป" เพราะไม่มี CSS ซ่อน Input ตัวจริงอยู่เลย
+//   2. เพิ่มโบรกใหม่จากในฟอร์มนี้ได้ (state addingBroker/newBrokerName ด้านล่าง)
+//      — Reuse `createBroker` เดิมจาก portfolioApi.js ไม่มี Endpoint ใหม่
+//   3. เพิ่มช่อง "ค่าธรรมเนียม (ถ้ามี)" — Backend รองรับ `feeThb` อยู่แล้วทั้ง
+//      ซื้อ/ขาย (migration 041) เป็น Optional (ดู buildTransactionPayload)
 
 const TYPES = [
   { value: 'buy', label: 'ซื้อ', kind: 'add' },
   { value: 'sell', label: 'ขาย', kind: 'reduce' },
   { value: 'dividend', label: 'เงินปันผล', kind: 'add' },
 ];
+
+// Sentinel Value ของ Option "+ เพิ่มโบรกใหม่" ใน Dropdown โบรก (งานที่ 2) — ต้อง
+// ไม่ชนกับ id จริงของโบรก (UUID) หรือ 'none' ที่มีความหมายอยู่แล้ว
+const NEW_BROKER_OPTION = '__new_broker__';
+const ADD_BROKER_LABEL = '+ เพิ่มโบรก/Exchange ใหม่';
 
 function todayBangkok() {
   // ใช้ en-CA เพราะให้รูปแบบ YYYY-MM-DD ตรงกับที่ Backend รับพอดี
@@ -77,9 +92,21 @@ function RecordTransactionModal({ selectedPortfolio, onClose, onSaved, defaultTy
   const [assetId, setAssetId] = useState('');
   const [symbol, setSymbol] = useState('');
   const [brokerId, setBrokerId] = useState('none');
+  // ── เพิ่มโบรกใหม่จากในฟอร์มนี้ (งานที่ 2) ────────────────────────────────
+  // ⚠️ ตั้งใจ **ไม่** ใช้ Sentinel Value เดียวกับ `brokerId` (เช่นเซ็ต brokerId
+  // เป็น '__new__' ตรงๆ) — ถ้าทำแบบนั้นแล้วผู้ใช้กด "ยกเลิก"/ปิด Modal โดยไม่กด
+  // ยืนยัน brokerId จะค้างเป็นค่าที่ไม่มีจริงและหลุดไปกับ Payload ได้ แยก State
+  // ต่างหากทำให้ brokerId เดิมไม่ถูกแตะเลยจนกว่าจะสร้างโบรกสำเร็จจริง
+  const [addingBroker, setAddingBroker] = useState(false);
+  const [newBrokerName, setNewBrokerName] = useState('');
+  const [creatingBroker, setCreatingBroker] = useState(false);
+  const [brokerError, setBrokerError] = useState(null);
   const [quantity, setQuantity] = useState('');
   const [pricePerUnit, setPricePerUnit] = useState('');
   const [amountThb, setAmountThb] = useState('');
+  // ⭐ ค่าธรรมเนียม (ถ้ามี) — งานที่ 3 · Optional เหมือน note ด้านล่าง ไม่กรอก =
+  // ไม่ส่ง Key นี้ไป Backend เลย (ดู buildTransactionPayload)
+  const [feeThb, setFeeThb] = useState('');
   const [date, setDate] = useState(todayBangkok());
   const [note, setNote] = useState('');
   // 🔴 สกุลเงิน — จำเป็นเพราะสลิปคืน USD ได้ ถ้าไม่ส่ง currency ไป Backend จะ
@@ -134,6 +161,37 @@ function RecordTransactionModal({ selectedPortfolio, onClose, onSaved, defaultTy
   function pickAsset(id) {
     setAssetId(id);
     setSymbol(assets.find((a) => a.id === id)?.symbol ?? '');
+  }
+
+  // ── สร้างโบรกใหม่จาก Dropdown โดยตรง (งานที่ 2) ───────────────────────────
+  // Reuse `createBroker` เดิมจาก portfolioApi.js (ยิง POST /api/v1/brokers จริง)
+  // — ไม่มี Endpoint/State Management ใหม่ที่ซ้อนทับของเดิม
+  //
+  // ⚠️ เพิ่มโบรกที่สร้างสำเร็จเข้า `brokers` ใน State ทันที **ไม่ Refetch
+  // listBrokers() ใหม่ทั้งชุด** (ตามที่ระบุในงาน) — ลด Round-trip โดยไม่จำเป็น
+  // และกันเคส Race ที่ Refetch มาช้ากว่าที่ผู้ใช้กด "บันทึก" ต่อทันที
+  async function handleAddBroker() {
+    const trimmed = normalizeBrokerName(newBrokerName);
+    if (!trimmed) return;
+
+    setCreatingBroker(true);
+    setBrokerError(null);
+    try {
+      const broker = await createBroker(trimmed);
+      if (broker) {
+        setBrokers((prev) => [...prev, broker]);
+        // เลือกโบรกที่เพิ่งสร้างให้อัตโนมัติ — ผู้ใช้ไม่ต้องเปิด Dropdown มาเลือกซ้ำ
+        setBrokerId(broker.id);
+      }
+      setAddingBroker(false);
+      setNewBrokerName('');
+    } catch (err) {
+      // ⚠️ Pattern เดียวกับ handleSubmit ด้านล่าง — โชว์ข้อความจาก Backend ตรงๆ
+      // (ครอบเคส BROKER_NAME_EXISTS ที่ Frontend ไม่รู้ล่วงหน้าว่าชื่อซ้ำ)
+      setBrokerError(err?.message ?? 'เพิ่มโบรกไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+    } finally {
+      setCreatingBroker(false);
+    }
   }
 
   // ── สินทรัพย์จากสลิปที่ "ยังไม่เคยซื้อมาก่อน" ──────────────────────────────
@@ -268,6 +326,7 @@ function RecordTransactionModal({ selectedPortfolio, onClose, onSaved, defaultTy
             date,
             note,
             slipToken,
+            feeThb,
           })
         );
       }
@@ -427,15 +486,72 @@ function RecordTransactionModal({ selectedPortfolio, onClose, onSaved, defaultTy
 
               <label className="demo-field">
                 <span>โบรก/Exchange</span>
-                <select value={brokerId} onChange={(e) => setBrokerId(e.target.value)}>
+                <select
+                  value={addingBroker ? NEW_BROKER_OPTION : brokerId}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === NEW_BROKER_OPTION) {
+                      // ⚠️ ไม่แตะ brokerId ที่นี่ — คงค่าที่เลือกไว้เดิมจนกว่าจะ
+                      // สร้างโบรกใหม่สำเร็จจริง (ดูเหตุผลตรง State ด้านบน)
+                      setAddingBroker(true);
+                      setBrokerError(null);
+                    } else {
+                      setAddingBroker(false);
+                      setBrokerId(v);
+                    }
+                  }}
+                >
                   <option value="none">ไม่ระบุ</option>
                   {brokers.map((b) => (
                     <option key={b.id} value={b.id}>
                       {b.name}
                     </option>
                   ))}
+                  <option value={NEW_BROKER_OPTION}>{ADD_BROKER_LABEL}</option>
                 </select>
               </label>
+
+              {/* ── ช่องพิมพ์ชื่อโบรกใหม่ — โผล่เฉพาะตอนเลือก "+ เพิ่มโบรก..." ──── */}
+              {addingBroker && (
+                <div className="demo-field">
+                  <span>ชื่อโบรก/Exchange ใหม่</span>
+                  <div className="demo-inline-row">
+                    <input
+                      type="text"
+                      value={newBrokerName}
+                      onChange={(e) => setNewBrokerName(e.target.value)}
+                      placeholder="เช่น Bitkub, บัวหลวง"
+                      disabled={creatingBroker}
+                      autoFocus
+                    />
+                    <button
+                      type="button"
+                      className="demo-btn"
+                      disabled={creatingBroker || !normalizeBrokerName(newBrokerName)}
+                      onClick={handleAddBroker}
+                    >
+                      {creatingBroker ? 'กำลังเพิ่ม...' : 'ยืนยัน'}
+                    </button>
+                    <button
+                      type="button"
+                      className="demo-btn"
+                      disabled={creatingBroker}
+                      onClick={() => {
+                        setAddingBroker(false);
+                        setNewBrokerName('');
+                        setBrokerError(null);
+                      }}
+                    >
+                      ยกเลิก
+                    </button>
+                  </div>
+                  {brokerError && (
+                    <p className="app-state app-state--error" role="alert">
+                      {brokerError}
+                    </p>
+                  )}
+                </div>
+              )}
 
               <label className="demo-field">
                 <span>จำนวนหน่วย</span>
@@ -467,6 +583,19 @@ function RecordTransactionModal({ selectedPortfolio, onClose, onSaved, defaultTy
                   min="0"
                   value={amountThb}
                   onChange={(e) => setAmountThb(e.target.value)}
+                />
+              </label>
+
+              {/* ⭐ ค่าธรรมเนียม — งานที่ 3 · Optional ทั้งซื้อ/ขาย ไม่มีในโหมด
+                  ปันผล (Endpoint ปันผลไม่มี Field นี้ตาม Contract) */}
+              <label className="demo-field">
+                <span>ค่าธรรมเนียม (ถ้ามี)</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={feeThb}
+                  onChange={(e) => setFeeThb(e.target.value)}
                 />
               </label>
             </>
