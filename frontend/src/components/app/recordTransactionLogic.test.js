@@ -26,6 +26,7 @@ import {
   buildDividendPayload,
   normalizeBrokerName,
   defaultDestinationPortfolioId,
+  needsSymbolFetch,
 } from './recordTransactionLogic.js';
 
 // สลิปตามรูปแบบ Response ของ API.md § 15.8 เป๊ะ
@@ -451,5 +452,58 @@ describe('defaultDestinationPortfolioId — ค่าตั้งต้นขอ
   test('พอร์ตที่ Switcher เลือกไม่อยู่ในรายการแล้ว → ตกไปพอร์ตหลัก', () => {
     const ghost = { id: 'pf-gone', isDefault: false, canWrite: true };
     expect(defaultDestinationPortfolioId(ghost, ALL)).toBe('pf-1');
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ⭐ ค่าธรรมเนียมจากสลิป (Founder 29 ส.ค. 2569)
+// ═══════════════════════════════════════════════════════════════════════════
+// Backend อ่านมาให้อยู่แล้ว (`slip.feeTotal`) แต่เดิมฟอร์มทิ้งค่านี้ไปเฉยๆ
+//
+// ── RED-GREEN ────────────────────────────────────────────────────────────
+//   • ถอด `feeThb: inputOrNull(slip?.feeTotal)` ออกจาก base → เคส ⭐ แดง
+//   • เปลี่ยนเป็น `slip?.feeTotal ?? 0` → เคส "สลิปไม่ระบุ" แดง
+describe('⭐ buildSlipPrefill — ค่าธรรมเนียมจากสลิป', () => {
+  test('⭐ สลิประบุค่าธรรมเนียม → เติมลงช่อง feeThb ตรงค่า', () => {
+    const prefill = buildSlipPrefill({ ...SLIP_BUY, feeTotal: 15.5 });
+
+    expect(prefill.feeThb).toBe('15.5');
+  });
+
+  // 🔴 กฎยืนข้อ 11: "ไม่รู้" ต้องไม่ถูกแปลงเป็น 0 เงียบๆ — ผู้ใช้ที่เห็น 0 ในช่อง
+  // จะเข้าใจว่าสลิปยืนยันแล้วว่าไม่มีค่าธรรมเนียม ทั้งที่สลิปแค่ไม่ได้ระบุ
+  test('⭐ สลิปไม่ระบุ (feeTotal: null) → ต้องเป็น null ห้ามเป็น 0', () => {
+    const prefill = buildSlipPrefill({ ...SLIP_BUY, feeTotal: null });
+
+    expect(prefill.feeThb).toBeNull();
+    expect(prefill.feeThb).not.toBe('0');
+  });
+
+  test('feeTotal เป็น 0 → ถือว่าไม่มีค่าให้เติม (ไม่แตะช่อง)', () => {
+    expect(buildSlipPrefill({ ...SLIP_BUY, feeTotal: 0 }).feeThb).toBeNull();
+  });
+
+  // ค่าที่เติมมาต้องไหลลง Payload ได้ตามปกติ และผู้ใช้แก้ทับได้ (ค่าที่แก้ต้องชนะ)
+  test('⭐ ค่าที่ AI เติม → ส่งลง Payload ได้ · ผู้ใช้แก้ทับแล้วค่าที่แก้ต้องชนะ', () => {
+    const prefill = buildSlipPrefill({ ...SLIP_BUY, feeTotal: 15.5 });
+
+    expect(buildTransactionPayload({ type: 'buy', symbol: 'BTC', feeThb: prefill.feeThb }).feeThb).toBe(15.5);
+    expect(buildTransactionPayload({ type: 'buy', symbol: 'BTC', feeThb: '9' }).feeThb).toBe(9);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+describe('needsSymbolFetch — Lazy Load รายการสินทรัพย์จาก Registry', () => {
+  test('ยังไม่เคยโหลด (null/undefined) → ต้องโหลด', () => {
+    expect(needsSymbolFetch(null)).toBe(true);
+    expect(needsSymbolFetch(undefined)).toBe(true);
+  });
+
+  // ⭐ กดเปิด/ปิด "+ สินทรัพย์ใหม่" หลายรอบต้องไม่ยิงซ้ำ
+  test('⭐ โหลดแล้ว → ไม่ยิงซ้ำ (รวมกรณี Registry ว่างจริงๆ)', () => {
+    expect(needsSymbolFetch([{ symbol: 'BTC' }])).toBe(false);
+    // [] = "โหลดแล้วและว่างจริง" ถ้าคืน true จะยิงซ้ำไม่รู้จบ
+    expect(needsSymbolFetch([])).toBe(false);
   });
 });

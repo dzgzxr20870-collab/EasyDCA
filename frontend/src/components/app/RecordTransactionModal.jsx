@@ -7,6 +7,11 @@ import { portfolioWriteState } from '../../lib/entitlements.js';
 // ในตาราง Error ของ API.md) — ห้ามเขียนตารางข้อความใหม่ซ้ำ
 import { slipOcrErrorMessage, isSlipOcrUpgradeError } from '../../lib/dcaErrors.js';
 import SlipUploadField from './SlipUploadField.jsx';
+// ⚠️ Reuse ของเดิมทั้งชุด **ห้ามเขียน Dropdown ค้นหาสินทรัพย์ใหม่** — AssetPicker
+// (ค้นหา/Keyboard Nav/Chips หมวด) + symbolsCache (Cache ระดับ Module) ถูกใช้งาน
+// จริงอยู่แล้วใน DcaForm ของหน้าเก่า
+import AssetPicker from '../dashboard/AssetPicker.jsx';
+import { getAssetSymbols } from '../../lib/symbolsCache.js';
 import {
   buildSlipPrefill,
   quotaNotice,
@@ -14,6 +19,7 @@ import {
   buildDividendPayload,
   normalizeBrokerName,
   defaultDestinationPortfolioId,
+  needsSymbolFetch,
 } from './recordTransactionLogic.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -72,6 +78,11 @@ const TYPES = [
 const NEW_BROKER_OPTION = '__new_broker__';
 const ADD_BROKER_LABEL = '+ เพิ่มโบรก/Exchange ใหม่';
 
+// Sentinel ของ Option "+ สินทรัพย์ใหม่" ใน Dropdown สินทรัพย์ — ต้องไม่ชนกับ
+// assets.id (UUID) หรือ '' ที่ใช้แทน "symbol จากสลิปที่ยังไม่มีในพอร์ต"
+const NEW_ASSET_OPTION = '__new_asset__';
+const NEW_ASSET_LABEL = '+ สินทรัพย์ใหม่ (พิมพ์เอง)';
+
 function todayBangkok() {
   // ใช้ en-CA เพราะให้รูปแบบ YYYY-MM-DD ตรงกับที่ Backend รับพอดี
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
@@ -116,6 +127,13 @@ function RecordTransactionModal({
   // ⭐ ค่าธรรมเนียม (ถ้ามี) — งานที่ 3 · Optional เหมือน note ด้านล่าง ไม่กรอก =
   // ไม่ส่ง Key นี้ไป Backend เลย (ดู buildTransactionPayload)
   const [feeThb, setFeeThb] = useState('');
+  // ── ซื้อสินทรัพย์ที่ยังไม่เคยถือ (Founder 29 ส.ค. 2569) ────────────────────
+  // เดิม Dropdown แสดงได้เฉพาะของที่ถืออยู่ (listAssets) → ทางเดียวที่จะซื้อของ
+  // ใหม่คือต้องอ่านสลิปเท่านั้น ทั้งที่ § 15.2 รับ `symbol` ตรงๆ อยู่แล้ว
+  const [pickingNewAsset, setPickingNewAsset] = useState(false);
+  const [registrySymbols, setRegistrySymbols] = useState(null); // null = ยังไม่โหลด
+  const [loadingSymbols, setLoadingSymbols] = useState(false);
+  const [symbolsError, setSymbolsError] = useState(null);
   // ── ⭐ พอร์ตปลายทาง (มติ Founder 29 ส.ค. 2569) ────────────────────────────
   // ค่าตั้งต้นตัดสินใน Pure Function ที่มี Test คลุม (ดู
   // recordTransactionLogic.defaultDestinationPortfolioId) — ที่นี่แค่เก็บ State
@@ -215,7 +233,7 @@ function RecordTransactionModal({
     }
   }
 
-  // ── สินทรัพย์จากสลิปที่ "ยังไม่เคยซื้อมาก่อน" ──────────────────────────────
+  // ── สินทรัพย์ที่ "ยังไม่เคยซื้อมาก่อน" ─────────────────────────────────────
   // § 15.2 ระบุสินทรัพย์ด้วย `symbol` ตรงๆ (ไม่ใช่ assetId) จึงบันทึกสินทรัพย์ใหม่
   // ได้เลยโดยไม่ต้องมีในรายการ — แต่ <select> เดิมแสดงได้เฉพาะของที่มีอยู่ เราจึง
   // เติม Option ชั่วคราวให้ผู้ใช้ "เห็นว่ากำลังจะบันทึกตัวไหน" และเปลี่ยนใจได้
@@ -224,16 +242,42 @@ function RecordTransactionModal({
   // ผูกกับ Registry เพราะใช้ AssetPicker ส่วนฟอร์มนี้ส่ง symbol ตรงๆ ได้อยู่แล้ว
   const symbolNotInList = Boolean(symbol) && !assets.some((a) => a.symbol === symbol);
 
-  function pickSymbolFromSlip(slipSymbol) {
-    const matched = assets.find((a) => a.symbol === slipSymbol);
+  // ⭐ ใช้ร่วมกัน **2 ทาง** ที่เป็นสถานการณ์เดียวกันเป๊ะ ("รู้ symbol แต่ยังไม่รู้
+  // assetId"): อ่านสลิป · เลือกเองจาก AssetPicker — จึงไม่เขียน Logic คู่ขนานใหม่
+  // (เดิมชื่อ pickSymbolFromSlip ตอนที่มีทางเข้าเดียว)
+  function pickSymbol(nextSymbol) {
+    const matched = assets.find((a) => a.symbol === nextSymbol);
     if (matched) {
+      // บังเอิญตรงกับของที่ถืออยู่แล้ว → ผูก assetId ให้เลย ผู้ใช้ไม่ต้องรู้ตัว
       setAssetId(matched.id);
       setSymbol(matched.symbol);
       return;
     }
-    // ไม่มีในพอร์ต → เคลียร์ assetId แล้วใช้ symbol ดิบจากสลิป
+    // ยังไม่มีในพอร์ต → เคลียร์ assetId แล้วใช้ symbol ดิบ
     setAssetId('');
-    setSymbol(slipSymbol);
+    setSymbol(nextSymbol);
+  }
+
+  // ── เปิดโหมด "สินทรัพย์ใหม่" + โหลด Registry แบบ Lazy ─────────────────────
+  // ⚠️ โหลดเฉพาะตอนกดจริง ไม่ใช่ตอนเปิด Modal — กรณีส่วนใหญ่คือซื้อของที่ถืออยู่
+  // แล้ว การยิง /assets/symbols ทุกครั้งที่เปิดฟอร์มจึงเป็นคำขอที่เสียเปล่า
+  //
+  // กันยิงซ้ำ 2 ชั้น: needsSymbolFetch (ไม่เรียกซ้ำตั้งแต่ต้น) + Cache ระดับ
+  // Module ใน symbolsCache.js เอง (เผื่อฟอร์มอื่นโหลดไปแล้ว)
+  async function openNewAssetPicker() {
+    setPickingNewAsset(true);
+    setSymbolsError(null);
+    if (!needsSymbolFetch(registrySymbols)) return;
+
+    setLoadingSymbols(true);
+    try {
+      setRegistrySymbols(await getAssetSymbols());
+    } catch (err) {
+      // ⚠️ ห้ามกลืนเงียบ — ถ้าโหลดรายการไม่ได้ ผู้ใช้ต้องรู้ว่าทำไมช่องค้นหาว่าง
+      setSymbolsError(err?.message ?? 'โหลดรายการสินทรัพย์ไม่สำเร็จ');
+    } finally {
+      setLoadingSymbols(false);
+    }
   }
 
   // ── ให้ AI อ่านสลิปแล้วเติมค่าลงฟอร์ม (§ 15.8) ────────────────────────────
@@ -276,12 +320,15 @@ function RecordTransactionModal({
       // ⚠️ setType เฉพาะตอนรู้ทิศทางจริง — side = null ต้องปล่อยไว้ตามที่ผู้ใช้
       // เปิดมา **ห้ามเดาให้เด็ดขาด** (เคส BCPG: สลิป "ขาย" เคยถูกบันทึกเป็น "ซื้อ")
       if (prefill.type) setType(prefill.type);
-      if (prefill.symbol) pickSymbolFromSlip(prefill.symbol);
+      if (prefill.symbol) pickSymbol(prefill.symbol);
       if (prefill.date) setDate(prefill.date);
       if (prefill.currency) setCurrency(prefill.currency);
       if (prefill.quantity) setQuantity(prefill.quantity);
       if (prefill.pricePerUnit) setPricePerUnit(prefill.pricePerUnit);
       if (prefill.amountTotal) setAmountThb(prefill.amountTotal);
+      // ⭐ ค่าธรรมเนียมจากสลิป — null (สลิปไม่ระบุ) จะไม่เข้าเงื่อนไขนี้ ช่องจึง
+      // ว่างไว้เหมือนเดิม ไม่ถูกเติมเป็น 0 · ค่าที่เติมแล้วผู้ใช้ยังแก้ได้ทุกเมื่อ
+      if (prefill.feeThb) setFeeThb(prefill.feeThb);
 
       const warnings = [];
       if (prefill.sideUnresolved) {
@@ -500,22 +547,71 @@ function RecordTransactionModal({
             <>
               <label className="demo-field">
                 <span>สินทรัพย์</span>
-                <select
-                  value={assetId}
-                  onChange={(e) => pickAsset(e.target.value)}
-                  disabled={assets.length === 0 && !symbolNotInList}
-                >
-                  {/* สินทรัพย์จากสลิปที่ยังไม่มีในพอร์ต — บันทึกได้เพราะ § 15.2
-                      ระบุด้วย symbol ตรงๆ (value='' = ไม่มี assetId ให้อ้าง) */}
-                  {symbolNotInList && (
-                    <option value="">{symbol} — (จากสลิป · ยังไม่มีในพอร์ต)</option>
-                  )}
-                  {assets.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.symbol} — {a.name}
-                    </option>
-                  ))}
-                </select>
+                {/* ⭐ โหมด "สินทรัพย์ใหม่" → สลับไปใช้ AssetPicker ที่ค้นจาก
+                    Registry เต็ม (ไม่ใช่แค่ของที่ถืออยู่) · โหมดปกติ → Dropdown เดิม
+                    ⚠️ เฉพาะซื้อเท่านั้น — ขายเลือกได้แค่ของที่ถืออยู่จริง ซึ่งถูกต้อง
+                    อยู่แล้วและ validateSell หา Asset จาก Ledger ไม่ใช่ Registry */}
+                {pickingNewAsset && type === 'buy' ? (
+                  <>
+                    {loadingSymbols && (
+                      <p className="app-state app-state--loading">กำลังโหลดรายการสินทรัพย์...</p>
+                    )}
+                    {symbolsError && (
+                      <p className="app-state app-state--error" role="alert">
+                        {symbolsError}
+                      </p>
+                    )}
+                    <AssetPicker
+                      symbols={registrySymbols ?? []}
+                      value={(registrySymbols ?? []).find((x) => x.symbol === symbol) ?? null}
+                      onChange={(picked) => picked?.symbol && pickSymbol(picked.symbol)}
+                      disabled={loadingSymbols || submitting}
+                    />
+                    <button
+                      type="button"
+                      className="demo-btn"
+                      onClick={() => {
+                        setPickingNewAsset(false);
+                        setSymbolsError(null);
+                      }}
+                    >
+                      ← เลือกจากสินทรัพย์ที่ถืออยู่
+                    </button>
+                  </>
+                ) : (
+                  <select
+                    value={assetId}
+                    /* ⚠️ ยัง Disable เมื่อ "ไม่มีอะไรให้เลือกจริงๆ" เหมือนเดิม —
+                       แต่ **เฉพาะโหมดขาย** เพราะโหมดซื้อมี "+ สินทรัพย์ใหม่"
+                       เป็นตัวเลือกเสมอ ถ้า Disable ไปด้วยจะปิดทางเดียวที่เหลือ
+                       ของผู้ใช้ใหม่ (ยังไม่ถืออะไรเลย) = บั๊กที่กำลังแก้อยู่นี่เอง */
+                    disabled={type !== 'buy' && assets.length === 0 && !symbolNotInList}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v === NEW_ASSET_OPTION) {
+                        openNewAssetPicker();
+                        return;
+                      }
+                      pickAsset(v);
+                    }}
+                  >
+                    {/* สินทรัพย์ที่ยังไม่มีในพอร์ต (จากสลิป/เพิ่งเลือกเอง) — บันทึกได้
+                        เพราะ § 15.2 ระบุด้วย symbol ตรงๆ (value='' = ไม่มี assetId) */}
+                    {symbolNotInList && (
+                      <option value="">{symbol} — (ยังไม่มีในพอร์ต)</option>
+                    )}
+                    {assets.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.symbol} — {a.name}
+                      </option>
+                    ))}
+                    {/* ⭐ ทางเข้า "ซื้อของที่ยังไม่เคยถือ" — เดิมทำได้ทางเดียวคือ
+                        ต้องอ่านสลิปเท่านั้น ทั้งที่ Backend รองรับมาตลอด */}
+                    {type === 'buy' && (
+                      <option value={NEW_ASSET_OPTION}>{NEW_ASSET_LABEL}</option>
+                    )}
+                  </select>
+                )}
               </label>
 
               {/* 🔴 สกุลเงิน — สลิป USD ต้องไม่ถูกบันทึกเป็นบาท (Backend Default

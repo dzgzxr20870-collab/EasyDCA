@@ -72,6 +72,17 @@ export function buildSlipPrefill(slip) {
     // (Backend Default เป็น 'THB' เมื่อไม่ส่ง currency มา — controller บรรทัด 369)
     currency: slip?.currency === 'USD' ? 'USD' : null,
     date: null,
+    // ── ⭐ ค่าธรรมเนียมจากสลิป (Founder 29 ส.ค. 2569) ────────────────────────
+    // Backend อ่านมาให้อยู่แล้ว (transactions.controller: `feeTotal: ocr.feeTotal`)
+    // แต่เดิมฟอร์มทิ้งค่านี้ไปเฉยๆ ผู้ใช้ต้องพิมพ์เองทั้งที่ AI อ่านมาแล้ว
+    //
+    // ⚠️ อยู่ใน `base` คู่กับ currency โดยเจตนา — ค่าธรรมเนียม **ไม่ขึ้นกับทิศทาง**
+    // (ซื้อก็มี ขายก็มี) ต่างจาก quantity/amountTotal ที่ความหมายเปลี่ยนตาม side
+    //
+    // ⚠️ inputOrNull ปัด 0 และค่าที่ไม่ใช่จำนวนบวกเป็น null → "สลิปไม่ระบุ
+    // ค่าธรรมเนียม" (feeTotal: null) จะ **ไม่แตะช่องนี้เลย** ไม่ใช่เติม 0 ให้
+    // (0 = "ยืนยันว่าไม่มีค่าธรรมเนียม" คนละความหมายกับ "ไม่รู้" — กฎยืนข้อ 11)
+    feeThb: inputOrNull(slip?.feeTotal),
     lowConfidence: slip?.confidence === 'low',
   };
 
@@ -211,6 +222,21 @@ export function defaultDestinationPortfolioId(selectedPortfolio, portfolios) {
   }
 
   return (writable.find((p) => p.isDefault) ?? writable[0]).id;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// needsSymbolFetch — "ต้องโหลดรายการสินทรัพย์จาก Registry อีกไหม"
+// ═══════════════════════════════════════════════════════════════════════════
+// ใช้กับปุ่ม "+ สินทรัพย์ใหม่ (พิมพ์เอง)" ซึ่งโหลด `GET /assets/symbols` แบบ Lazy
+// (กรณีส่วนใหญ่คือซื้อของที่ถืออยู่แล้ว จึงไม่ควรยิงตอนเปิด Modal ทุกครั้ง)
+//
+// null/undefined = ยังไม่เคยโหลด · Array = โหลดแล้ว (รวมกรณี [] ที่ Registry ว่าง
+// จริงๆ — ต้องไม่ยิงซ้ำไม่รู้จบ) กัน "กดเปิด/ปิดหลายรอบแล้วยิงซ้ำทุกรอบ"
+//
+// ⚠️ นี่เป็นด่านที่ **สอง** — `lib/symbolsCache.js` มี Cache ระดับ Module + กัน
+// Fetch ซ้อน (inFlight) อยู่แล้ว ด่านนี้ทำให้ไม่ต้องเรียกฟังก์ชันนั้นซ้ำตั้งแต่ต้น
+export function needsSymbolFetch(loadedSymbols) {
+  return !Array.isArray(loadedSymbols);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
