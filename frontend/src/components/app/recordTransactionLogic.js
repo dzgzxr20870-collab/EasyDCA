@@ -196,6 +196,18 @@ export function buildTransactionPayload(form) {
     // (ดู transaction.service.validateBuy — กันสินทรัพย์เดียวกันแตกสองพอร์ต)
     // ฟอร์มจึงต้องบอกผู้ใช้ให้ชัดว่ากติกานี้มีอยู่ ไม่ใช่ปล่อยให้เดาเอง
     portfolioId: form.portfolioId || undefined,
+    // ── ⭐ คำตอบของผู้ใช้เมื่อถือ Symbol นี้อยู่ในพอร์ตอื่นแล้ว ────────────────
+    //   undefined = ยังไม่ได้ถาม → Backend จะตอบ 409 ASSET_EXISTS_IN_OTHER_PORTFOLIO
+    //   true      = "แยกเป็นอีกแถวในพอร์ตที่เลือก"
+    //   false     = "รวมเข้าพอร์ตเดิม" (พฤติกรรมเดิม)
+    //
+    // ⚠️ **ห้ามใช้ `|| undefined`** เหมือน Field อื่นในไฟล์นี้ — `false` เป็นคำตอบ
+    // ที่มีความหมายจริง ถ้าถูกปัดเป็น undefined ผู้ใช้ที่เลือก "รวมพอร์ตเดิม" จะ
+    // โดนถามซ้ำไม่รู้จบ (Backend แยก false ออกจาก undefined โดยตั้งใจ)
+    confirmSeparatePortfolio:
+      typeof form.confirmSeparatePortfolio === 'boolean'
+        ? form.confirmSeparatePortfolio
+        : undefined,
   });
 }
 

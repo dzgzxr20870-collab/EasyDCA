@@ -146,6 +146,87 @@ describe('⭐ POST /transactions — portfolioId จากฟอร์มเว�
     expect(assetRepository.create).not.toHaveBeenCalled();
   });
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // ⭐ ถือ Symbol เดียวกันแยกหลายพอร์ต (มติ Founder 29 ส.ค. 2569)
+  // ═══════════════════════════════════════════════════════════════════════
+  describe('ASSET_EXISTS_IN_OTHER_PORTFOLIO — ต้องยืนยันก่อนแยกพอร์ต', () => {
+    beforeEach(() => {
+      // ถือ BTC อยู่ที่พอร์ตหลักแล้ว
+      assetRepository.findAllByUserAndSymbol.mockResolvedValue([
+        {
+          id: 'asset-btc',
+          userId: USER_ID,
+          symbol: 'BTC',
+          type: 'crypto',
+          portfolioId: MAIN.id,
+          brokerId: null,
+        },
+      ]);
+      assetRepository.findActiveSymbolsByUser.mockResolvedValue(['BTC']);
+    });
+
+    test('⭐ เลือกพอร์ต Dime + ยังไม่ตอบ → 409 พร้อมบอกว่าของเดิมอยู่พอร์ตไหน', async () => {
+      const res = mockRes();
+      await createTransaction(mockReq({ ...BUY, portfolioId: DIME.id }), res);
+
+      expect(statusOf(res)).toBe(409);
+      expect(jsonOf(res).error).toBe('ASSET_EXISTS_IN_OTHER_PORTFOLIO');
+      // UI ต้องประกอบประโยคถามผู้ใช้ได้จาก details นี้
+      expect(jsonOf(res).details).toMatchObject({
+        symbol: 'BTC',
+        existingPortfolioId: MAIN.id,
+        destinationPortfolioId: DIME.id,
+      });
+      // ⚠️ ห้ามเขียนอะไรลง Ledger ระหว่างรอคำตอบ
+      expect(assetRepository.create).not.toHaveBeenCalled();
+      expect(transactionRepository.create).not.toHaveBeenCalled();
+    });
+
+    test('⭐ ตอบ "แยกพอร์ต" (true) → สร้างแถวใหม่ใน Dime สำเร็จ', async () => {
+      const res = mockRes();
+      await createTransaction(
+        mockReq({ ...BUY, portfolioId: DIME.id, confirmSeparatePortfolio: true }),
+        res
+      );
+
+      expect(statusOf(res)).toBe(201);
+      expect(assetRepository.create.mock.calls[0][1]).toBe(DIME.id);
+    });
+
+    test('⭐ ตอบ "รวมพอร์ตเดิม" (false) → รวมแถวเดิม ไม่สร้างใหม่ ไม่ถามซ้ำ', async () => {
+      const res = mockRes();
+      await createTransaction(
+        mockReq({ ...BUY, portfolioId: DIME.id, confirmSeparatePortfolio: false }),
+        res
+      );
+
+      expect(statusOf(res)).toBe(201);
+      expect(assetRepository.create).not.toHaveBeenCalled();
+    });
+
+    // ⚠️ ค่าผิดชนิดต้องถูกเมินทิ้ง = "ยังไม่ตอบ" ไม่ใช่ตีความเป็น true เงียบๆ
+    // (การแยกแถวกระทบต้นทุนเฉลี่ยที่ผู้ใช้จะเห็นต่อไป ต้องมาจากการกดยืนยันจริง)
+    test('⚠️ confirmSeparatePortfolio เป็นสตริง "true" → ถือว่ายังไม่ตอบ (409)', async () => {
+      const res = mockRes();
+      await createTransaction(
+        mockReq({ ...BUY, portfolioId: DIME.id, confirmSeparatePortfolio: 'true' }),
+        res
+      );
+
+      expect(statusOf(res)).toBe(409);
+      expect(assetRepository.create).not.toHaveBeenCalled();
+    });
+
+    // เส้นทาง LINE/Bulk ไม่ส่ง portfolioId มาเลย → ต้องไม่ถูกถามเด็ดขาด
+    test('ไม่ส่ง portfolioId (เส้นทาง LINE/เดิม) → รวมตามปกติ ไม่ถาม', async () => {
+      const res = mockRes();
+      await createTransaction(mockReq(BUY), res);
+
+      expect(statusOf(res)).toBe(201);
+      expect(assetRepository.create).not.toHaveBeenCalled();
+    });
+  });
+
   // ขายไม่มีคอนเซ็ปต์ "เลือกพอร์ตปลายทาง" — ปลายทางถูกกำหนดโดยสินทรัพย์ที่ถืออยู่
   test('ขาย → portfolioId ที่หลุดมาใน Body ต้องถูกละเว้น ไม่กลายเป็นด่านใหม่', async () => {
     assetRepository.findAllByUserAndSymbol.mockResolvedValue([

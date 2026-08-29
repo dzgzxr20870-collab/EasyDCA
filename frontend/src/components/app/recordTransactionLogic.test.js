@@ -507,3 +507,56 @@ describe('needsSymbolFetch — Lazy Load รายการสินทรัพ
     expect(needsSymbolFetch([])).toBe(false);
   });
 });
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ⭐ confirmSeparatePortfolio — คำตอบ "แยก vs รวมพอร์ต" (มติ Founder 29 ส.ค. 2569)
+// ═══════════════════════════════════════════════════════════════════════════
+// สามสถานะ ไม่ใช่ boolean ธรรมดา:
+//   undefined = ยังไม่ได้ถาม → Backend ตอบ 409 ASSET_EXISTS_IN_OTHER_PORTFOLIO
+//   true      = แยกเป็นอีกแถวในพอร์ตที่เลือก
+//   false     = รวมเข้าพอร์ตเดิม
+//
+// ── RED-GREEN ────────────────────────────────────────────────────────────
+//   • เปลี่ยนเป็น `form.confirmSeparatePortfolio || undefined` → เคส false แดง
+describe('⭐ confirmSeparatePortfolio ใน Payload', () => {
+  const BASE = { type: 'buy', symbol: 'BTC', amountTotal: '1000' };
+
+  test('ยังไม่ได้ถาม (undefined) → ไม่มี Key นี้ใน Payload', () => {
+    expect('confirmSeparatePortfolio' in buildTransactionPayload(BASE)).toBe(false);
+  });
+
+  test('⭐ ตอบ "แยกพอร์ต" → ส่ง true', () => {
+    const payload = buildTransactionPayload({ ...BASE, confirmSeparatePortfolio: true });
+    expect(payload.confirmSeparatePortfolio).toBe(true);
+  });
+
+  // 🔴 จุดตายที่สุด: false ต้อง **ไม่** ถูกปัดทิ้งเหมือน Field อื่นในไฟล์นี้
+  // ถ้าหายไป Backend จะอ่านว่า "ยังไม่ได้ตอบ" แล้วถามซ้ำไม่รู้จบ
+  test('⭐⭐ ตอบ "รวมพอร์ตเดิม" (false) → ต้องส่ง false ไปจริง ห้ามถูกปัดทิ้ง', () => {
+    const payload = buildTransactionPayload({ ...BASE, confirmSeparatePortfolio: false });
+
+    expect('confirmSeparatePortfolio' in payload).toBe(true);
+    expect(payload.confirmSeparatePortfolio).toBe(false);
+  });
+
+  // ค่าผิดชนิดต้องถือว่า "ยังไม่ตอบ" ไม่ใช่ตีความเป็นคำตอบเงียบๆ
+  test('ค่าที่ไม่ใช่ boolean → ถือว่ายังไม่ตอบ (ไม่มี Key)', () => {
+    for (const v of ['true', 1, null]) {
+      expect(
+        'confirmSeparatePortfolio' in buildTransactionPayload({ ...BASE, confirmSeparatePortfolio: v })
+      ).toBe(false);
+    }
+  });
+
+  // ⚠️ ปันผลไม่มีคอนเซ็ปต์นี้ (ระบุด้วย assetId ซึ่งผูกพอร์ตอยู่แล้ว)
+  test('⚠️ ปันผลไม่มี Key นี้แม้ Caller จะส่งมา', () => {
+    const payload = buildDividendPayload({
+      assetId: 'a1',
+      amountThb: '100',
+      quantity: '1',
+      confirmSeparatePortfolio: true,
+    });
+    expect('confirmSeparatePortfolio' in payload).toBe(false);
+  });
+});

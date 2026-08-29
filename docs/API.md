@@ -740,7 +740,23 @@ Check ใน [SRS.md § 2.3 [2]](./SRS.md)
 |---|---|
 | `brokerId` | `<uuid>` · `null` / `"none"` = ล้างโบรก (กลับเป็น "ไม่ระบุ") |
 | `sector` | `<ชื่อ ≤ 60 ตัวอักษร>` · `null` / `""` = ล้างค่า · **คงตัวพิมพ์ตามที่ผู้ใช้พิมพ์** (`SET50` ไม่กลายเป็น `Set50`) |
-| `portfolioId` | `<uuid>` เท่านั้น — **ล้างเป็น `null` ไม่ได้** (ดูกล่องเตือน) |
+| `portfolioId` | `<uuid>` เท่านั้น — **ล้างเป็น `null` ไม่ได้** (ดูกล่องเตือน) · ⭐ **นี่คือกลไก "ย้ายสินทรัพย์ข้ามพอร์ต"** ที่หน้าเว็บใช้ (ปุ่ม "ย้ายพอร์ต" ในตาราง Holdings) |
+
+> ### ⭐ ย้ายสินทรัพย์ข้ามพอร์ต — ใช้ Endpoint นี้ ไม่มี Endpoint แยก
+>
+> **การย้ายพอร์ตไม่ใช่การซื้อ/ขาย** — ไม่มีแถวใหม่ใน `transactions` (Immutable
+> Ledger) แม้แต่แถวเดียว · `heldQuantity` / ต้นทุนเฉลี่ย / `brokerId` **ไม่เปลี่ยน
+> เลย** เปลี่ยนแค่ `assets.portfolio_id` ซึ่งเป็นมิติสำหรับจัดกลุ่ม/แสดงผลล้วน
+>
+> ด่านที่ทำงานให้อยู่แล้ว: `assertCanAddToPortfolio` ตรวจ **ปลายทาง** (ไม่ใช่ต้นทาง)
+> = ยืนยันเจ้าของพอร์ต (กัน IDOR) **และ** เช็คสิทธิ์เขียน — ย้าย **เข้า** พอร์ตที่
+> ถูกล็อกไม่ได้ แต่ย้าย **ออก** ได้เสมอ (ไม่ขังสินทรัพย์เป็นตัวประกันค่าสมาชิก)
+>
+> ⚠️ **ปลายทางมี Symbol+โบรก เดียวกันอยู่แล้ว → `409 ASSET_ALREADY_EXISTS`**
+> (UNIQUE `(user_id, symbol, portfolio_id, broker_id)`) · **ระบบไม่รวมสองแถวให้
+> อัตโนมัติโดยเจตนา** เพราะการรวมคือการรวมต้นทุนเฉลี่ยสองก้อน = แตะเงินจริง ซึ่ง
+> `POSTMORTEM_PORTFOLIO_RESOLUTION.md` ระบุว่า "ห้าม AI ตัดสินเอง" (เหตุผลเดียว
+> กับที่ `deletePortfolio` ปฏิเสธด้วย `PORTFOLIO_HAS_CONFLICTING_ASSETS`)
 
 > ### ⚠️ แก้ Spec เดิม: `isActive` ถูกถอดออกจาก Endpoint นี้
 >
@@ -922,6 +938,25 @@ Section 4 ร่างไว้ว่า Error ต้องเป็น `{ succe
 | `date` | string `YYYY-MM-DD` | — | Default = วันนี้ (Asia/Bangkok) — ย้อนหลังได้, **อนาคตไม่ได้** |
 | `note` | string | — | ≤ 500 ตัวอักษร — ห้ามขึ้นต้นด้วย `UNDO_OF:` (Marker ของระบบ) |
 | `slipToken` | string | — | Token ของรูปสลิปที่อัปโหลดไว้แล้วตอนเรียก § 15.8 (`/slip-ocr`) — Backend จะแนบรูปนั้นเข้ารายการที่เพิ่งสร้าง **แบบ Best-effort** (แนบพลาดไม่ Rollback ธุรกรรม) · ต้องเป็น Premium เท่านั้น มิฉะนั้นถูกเพิกเฉย · Path ประกอบจาก `userId` ใน JWT เสมอ ไม่ใช่ค่าจาก Body |
+| `portfolioId` | `<uuid>` | — | **พอร์ตปลายทางของ "สินทรัพย์ใหม่"** (เฉพาะ `side: "buy"` — ฝั่งขายเพิกเฉย) · ไม่ส่ง = ลงพอร์ตหลักเหมือนเดิม · ต้องเป็นพอร์ตของผู้ใช้เอง (`assertOwnedPortfolioId` → `404 PORTFOLIO_NOT_FOUND`) · ⚠️ **ไม่ใช่ตัวกรองการค้นหา** — ถ้าถือ Symbol นี้อยู่แล้วที่พอร์ตอื่น ระบบจะหยุดถามก่อนด้วย `409 ASSET_EXISTS_IN_OTHER_PORTFOLIO` (ดูด้านล่าง) |
+| `confirmSeparatePortfolio` | boolean | — | คำตอบของผู้ใช้ต่อ `ASSET_EXISTS_IN_OTHER_PORTFOLIO` · **สามสถานะ:** ไม่ส่ง = ยังไม่ได้ถาม (จะได้ 409) · `true` = แยกเป็นอีกแถวในพอร์ตที่เลือก · `false` = รวมเข้าแถวเดิมในพอร์ตที่ถืออยู่ · ⚠️ รับเฉพาะ boolean แท้ๆ ค่าผิดชนิดถือว่า "ยังไม่ตอบ" |
+
+> ### ⚠️ `ASSET_EXISTS_IN_OTHER_PORTFOLIO` — Confirm-Required ไม่ใช่ Error ที่บล็อกถาวร
+>
+> เกิดเมื่อ **ครบทั้ง 3 ข้อ**: เป็นคำสั่งซื้อ · ส่ง `portfolioId` มา · ถือ Symbol นี้
+> อยู่แล้วในพอร์ต**อื่น** ที่ไม่ใช่พอร์ตปลายทาง · และยังไม่ส่ง `confirmSeparatePortfolio`
+>
+> **Client ต้องถามผู้ใช้แล้วยิงซ้ำพร้อมคำตอบ** — ไม่ใช่แสดงเป็น Error แดงๆ เพราะ
+> ผู้ใช้ยังไม่ได้ทำอะไรผิด · `details` แนบ `symbol` / `existingPortfolioId` /
+> `destinationPortfolioId` มาให้ประกอบประโยคถามได้ครบ
+>
+> ⚠️ **ทำไมต้องถาม ไม่เลือกให้เอง:** "รวม" กับ "แยก" ให้ผลต่อ**ต้นทุนเฉลี่ย**ที่
+> ผู้ใช้จะเห็นต่อไปคนละแบบสิ้นเชิง (รวม = ถัวเฉลี่ยรวมกัน · แยก = สองก้อนแยกกัน)
+> การเดาแทนผู้ใช้คือบั๊กคลาสเดียวกับ `POSTMORTEM_PORTFOLIO_RESOLUTION.md`
+>
+> ⚠️ **ไม่ชนกับ `AMBIGUOUS_ASSET_PORTFOLIO`** — ตัวนั้นเกิดเมื่อ Symbol กระจายอยู่
+> **มากกว่า 1 พอร์ต** และผู้ใช้ยังไม่ระบุพอร์ต (ถูกโยนก่อนถึงด่านนี้) ส่วนตัวนี้
+> เกิดเมื่อเหลือแถวเดียวชัดเจนแล้วแต่ **อยู่คนละพอร์ตกับที่เลือก**
 
 #### 15.2.1 `side: "buy"` (Default) — บันทึก DCA
 
@@ -1057,6 +1092,9 @@ Section 4 ร่างไว้ว่า Error ต้องเป็น `{ succe
 | `NOTHING_TO_SELL` | 400 | **ขาย**: `sellAll` แต่ยอดคงเหลือ = 0 (เคยมีแต่ขายหมดแล้ว) |
 | `INSUFFICIENT_QUANTITY` | 400 | **ขาย**: เกินยอดคงเหลือจริง — `details: { requested, held }` |
 | `ASSET_LIMIT_REACHED` | 403 | Free Plan ครบ 2 สินทรัพย์ แล้วจะสร้างตัวใหม่ (**ฝั่งซื้อเท่านั้น** — การขายไม่สร้าง Asset จึงไม่โดน Gate) |
+| `PORTFOLIO_NOT_FOUND` | 404 | `portfolioId` ที่ส่งมาไม่มีจริงหรือเป็นของผู้ใช้คนอื่น (`assertOwnedPortfolioId`) |
+| `PORTFOLIO_READ_ONLY` | 403 | พอร์ตปลายทางเพิ่มรายการใหม่ไม่ได้ (Premium หมดอายุ) — **ขายยังทำได้เสมอ** |
+| `ASSET_EXISTS_IN_OTHER_PORTFOLIO` | 409 | **Confirm-Required ไม่ใช่ Error ถาวร** — ซื้อ + ส่ง `portfolioId` + ถือ Symbol นี้อยู่ในพอร์ตอื่น + ยังไม่ตอบ · ยิงซ้ำพร้อม `confirmSeparatePortfolio` (`true` = แยก / `false` = รวม) · `details: { symbol, existingPortfolioId, destinationPortfolioId }` |
 | `PRICE_FEED_NOT_IMPLEMENTED` / `MARKET_PRICE_UNAVAILABLE` / `GOLD_PRICE_UNAVAILABLE` | 503 | ดึงราคาตลาดไม่ได้ (ไม่เดาราคา ไม่บันทึก) — ฝั่งขายเจอได้เฉพาะเส้นทาง `sellAll` |
 
 > ⚠️ **Race Condition ที่ยังเหลืออยู่ (ไม่ได้เกิดจากรอบนี้)** — การตรวจ

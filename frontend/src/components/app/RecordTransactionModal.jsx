@@ -134,6 +134,9 @@ function RecordTransactionModal({
   const [registrySymbols, setRegistrySymbols] = useState(null); // null = ยังไม่โหลด
   const [loadingSymbols, setLoadingSymbols] = useState(false);
   const [symbolsError, setSymbolsError] = useState(null);
+  // ── ⭐ ถือ Symbol นี้อยู่พอร์ตอื่นแล้ว → ถามก่อนว่าจะแยกหรือรวม ────────────
+  // null = ยังไม่ถูกถาม · object = details ที่ Backend ส่งมา (409)
+  const [separatePrompt, setSeparatePrompt] = useState(null);
   // ── ⭐ พอร์ตปลายทาง (มติ Founder 29 ส.ค. 2569) ────────────────────────────
   // ค่าตั้งต้นตัดสินใน Pure Function ที่มี Test คลุม (ดู
   // recordTransactionLogic.defaultDestinationPortfolioId) — ที่นี่แค่เก็บ State
@@ -369,7 +372,14 @@ function RecordTransactionModal({
       }
     }
 
+    await submitTransaction();
+  }
+
+  // ── ยิงจริง — แยกออกมาเพื่อ "ยิงซ้ำพร้อมคำตอบ" ได้โดยไม่ Validate ใหม่ ────────
+  // confirmSeparate: undefined = ยังไม่ถาม · true = แยกพอร์ต · false = รวมพอร์ตเดิม
+  async function submitTransaction(confirmSeparate) {
     setSubmitting(true);
+    setError(null);
     try {
       if (type === 'dividend') {
         // ⚠️ Endpoint นี้ใช้ `amountThb` จริงตาม Contract (คนละตัวกับ § 15.2)
@@ -398,17 +408,108 @@ function RecordTransactionModal({
             // ⚠️ เฉพาะ "ซื้อ" — ขายไม่มีคอนเซ็ปต์เลือกพอร์ตปลายทาง (สินทรัพย์ที่
             // ถืออยู่เป็นตัวกำหนด) และ Backend ก็ละเว้น Key นี้ตอนขายอยู่แล้ว
             portfolioId: type === 'buy' ? destinationPortfolioId : undefined,
+            confirmSeparatePortfolio: confirmSeparate,
           })
         );
       }
+      setSeparatePrompt(null);
       onSaved?.();
     } catch (err) {
+      // ⭐ **ไม่ใช่ Error ที่บล็อกถาวร** — Backend กำลังถามว่าจะแยกหรือรวมพอร์ต
+      // เปิด Dialog ให้ผู้ใช้ตอบ แล้วยิงซ้ำพร้อมคำตอบ (ห้ามโชว์เป็น Error แดงๆ
+      // เพราะผู้ใช้ยังไม่ได้ทำอะไรผิด)
+      if (err?.message === 'ASSET_EXISTS_IN_OTHER_PORTFOLIO') {
+        setSeparatePrompt(err?.details ?? {});
+        return;
+      }
       // ⚠️ แสดงข้อความจาก Backend ตรงๆ — มันถูกเขียนมาให้ผู้ใช้อ่านรู้เรื่องแล้ว
       // และครอบเคสที่ Frontend ไม่รู้ (พอร์ตถูกล็อก · กำกวมข้ามพอร์ต/โบรก · เพดาน)
       setError(err?.message ?? 'บันทึกไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
     } finally {
       setSubmitting(false);
     }
+  }
+
+  // ชื่อพอร์ตจาก id — ใช้ประกอบประโยคใน Dialog ให้ผู้ใช้เห็น "ชื่อ" ไม่ใช่ UUID
+  const portfolioName = (id) =>
+    (portfolios ?? []).find((p) => p.id === id)?.name ?? 'พอร์ตอื่น';
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // ⭐ Dialog: ถือ Symbol นี้อยู่พอร์ตอื่นแล้ว — แยก หรือ รวม?
+  // ═══════════════════════════════════════════════════════════════════════
+  // ⚠️ **ห้ามเลือกให้เองไม่ว่าทางไหน** — สองทางนี้ให้ผลต่อ "ต้นทุนเฉลี่ย" ที่ผู้ใช้
+  // จะเห็นต่อไปคนละแบบสิ้นเชิง (รวม = ถัวเฉลี่ยรวมกัน · แยก = สองก้อนแยกกัน)
+  // การเดาแทนผู้ใช้คือบั๊กคลาสเดียวกับ POSTMORTEM_PORTFOLIO_RESOLUTION.md
+  if (separatePrompt) {
+    const fromName = portfolioName(separatePrompt.existingPortfolioId);
+    const toName = portfolioName(separatePrompt.destinationPortfolioId);
+
+    return (
+      <div
+        className="demo-modal-backdrop"
+        role="dialog"
+        aria-modal="true"
+        aria-label="เลือกพอร์ตปลายทาง"
+      >
+        <div className="demo-modal">
+          <header className="demo-modal__head">
+            <h2>มีสินทรัพย์นี้อยู่ในพอร์ตอื่นแล้ว</h2>
+          </header>
+
+          <div className="app-modal__body">
+            <p>
+              คุณมี <strong>{separatePrompt.symbol ?? symbol}</strong> อยู่ในพอร์ต{' '}
+              <strong>{fromName}</strong> อยู่แล้ว
+            </p>
+            <p>ต้องการบันทึกรายการนี้อย่างไร?</p>
+
+            {/* ⚠️ อธิบายผลของแต่ละทางให้ชัด — ผู้ใช้ต้องตัดสินใจได้โดยไม่ต้องเดา
+                ว่าตัวเลือกไหนทำอะไรกับตัวเลขของตัวเอง */}
+            <ul className="app-note">
+              <li>
+                <strong>แยกพอร์ต</strong> — สร้างเป็นอีกรายการในพอร์ต {toName} ต้นทุนเฉลี่ยแยกจากของเดิม
+              </li>
+              <li>
+                <strong>รวมพอร์ตเดิม</strong> — รวมเข้ารายการที่มีอยู่ในพอร์ต {fromName} ถัวเฉลี่ยต้นทุนด้วยกัน
+              </li>
+            </ul>
+
+            {error && (
+              <p className="app-state app-state--error" role="alert">
+                {error}
+              </p>
+            )}
+
+            <div className="demo-actions">
+              <button
+                type="button"
+                className="demo-btn demo-btn--primary"
+                disabled={submitting}
+                onClick={() => submitTransaction(true)}
+              >
+                แยกพอร์ต ({toName})
+              </button>
+              <button
+                type="button"
+                className="demo-btn"
+                disabled={submitting}
+                onClick={() => submitTransaction(false)}
+              >
+                รวมพอร์ตเดิม ({fromName})
+              </button>
+              <button
+                type="button"
+                className="demo-btn"
+                disabled={submitting}
+                onClick={() => setSeparatePrompt(null)}
+              >
+                ย้อนกลับไปแก้ฟอร์ม
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (

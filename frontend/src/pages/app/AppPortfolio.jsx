@@ -7,6 +7,7 @@ import CreatePortfolioModal from '../../components/app/CreatePortfolioModal.jsx'
 import RecordTransactionModal from '../../components/app/RecordTransactionModal.jsx';
 import PortfolioCards from '../../components/app/PortfolioCards.jsx';
 import PortfolioHoldingsTable from '../../components/app/PortfolioHoldingsTable.jsx';
+import MoveAssetPortfolioDialog from '../../components/app/MoveAssetPortfolioDialog.jsx';
 import {
   fetchAllocationCached,
   fetchProfitsForPortfolio,
@@ -115,6 +116,8 @@ function AppPortfolio() {
   const opened = (portfolios ?? []).find((p) => p.id === openedId) ?? null;
 
   const [recordType, setRecordType] = useState(null);
+  // สินทรัพย์ที่กำลังจะย้ายพอร์ต (null = ไม่ได้เปิด Dialog)
+  const [movingHolding, setMovingHolding] = useState(null);
   const [groupBy, setGroupBy] = useState('assetType');
 
   // ── Cache ข้าม Render/ข้ามการสลับพอร์ต ─────────────────────────────────────
@@ -327,6 +330,7 @@ function AppPortfolio() {
             profitCapped={profitCapped}
             loadingProfit={loadingProfit}
             onLoadProfit={handleLoadProfit}
+            onMove={setMovingHolding}
           />
 
           {/* ⭐ พอร์ตถูกล็อก → เพิ่มไม่ได้ แต่ **ห้ามซ่อนปุ่มขายเด็ดขาด**
@@ -404,6 +408,21 @@ function AppPortfolio() {
             ปิด
           </button>
         </div>
+      )}
+
+      {movingHolding && (
+        <MoveAssetPortfolioDialog
+          holding={movingHolding}
+          portfolios={portfolios ?? []}
+          currentPortfolioId={openedId}
+          onClose={() => setMovingHolding(null)}
+          onMoved={async () => {
+            // สินทรัพย์เปลี่ยนพอร์ตแล้ว — ยอด/สัดส่วนของ **ทั้งสองพอร์ต** เปลี่ยน
+            // จึงล้าง Cache ทั้งชุด ไม่ใช่แค่พอร์ตที่เปิดอยู่
+            cacheRef.current.clear();
+            await Promise.all([load(), reload?.()]);
+          }}
+        />
       )}
 
       {recordType && (

@@ -479,10 +479,64 @@ async function validateBuy(userId, params, options = {}) {
   // ⚠️ ส่ง params.brokerId ต่อ "ตามที่เป็น" ห้ามใส่ `?? null` — undefined
   // (ยังไม่ได้ถามผู้ใช้) กับ null (ผู้ใช้ตอบแล้วว่าไม่ระบุโบรก) เป็นคนละความหมาย
   // ทั้งคู่มีผลต่อการสร้างสินทรัพย์ซ้ำแถวใหม่ (ดูหัวไฟล์ assetResolution.service)
-  const { asset: existingAsset } = await assetResolution.resolveOwnedAsset(userId, params.symbol, {
+  const { asset: resolvedAsset } = await assetResolution.resolveOwnedAsset(userId, params.symbol, {
     portfolioId,
     brokerId: params.brokerId,
   });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // ⭐ ถือ Symbol เดียวกันแยกหลายพอร์ตได้ — แต่ต้อง "ยืนยันชัดเจน" เท่านั้น
+  // ═══════════════════════════════════════════════════════════════════════
+  // มติ Founder 29 ส.ค. 2569: เดิมถ้าเคยถือ Symbol นี้อยู่แล้วที่พอร์ตไหนก็ตาม
+  // ระบบจะ **รวมเข้าแถวเดิมเสมอ** โดยไม่สนพอร์ตปลายทางที่ผู้ใช้เลือกในฟอร์ม
+  // (เคสจริง: เลือกพอร์ต "Dime" แล้วรายการไปโผล่พอร์ตหลัก) — ตอนนี้แยกได้จริง
+  //
+  // ⚠️⚠️ **การเปลี่ยนนี้ไม่ได้ยกเลิกกฎของ POSTMORTEM_PORTFOLIO_RESOLUTION.md**
+  // บั๊กในเอกสารนั้นคือ "สร้างแถวซ้ำ **เงียบๆ** โดยผู้ใช้ไม่รู้ตัว" เพราะค้นหา
+  // ไม่เจอแถวเดิม → ต้นทุนเฉลี่ยแตกสองก้อนโดยไม่มีใครรู้
+  // ที่นี่ตรงกันข้าม: **ค้นเจอแถวเดิมครบเหมือนเดิมทุกประการ** (ขอบเขตการค้นหา
+  // ยังกว้างเท่าเดิม) แล้ว **หยุดถามผู้ใช้ก่อน** การแยกจึงเกิดได้เฉพาะเมื่อ
+  // ผู้ใช้ยืนยันมาเองเท่านั้น — "เจตนา" คือเส้นแบ่งระหว่างฟีเจอร์กับบั๊ก
+  //
+  // ⚠️ ไม่ชนกับ AMBIGUOUS_ASSET_PORTFOLIO: ตัวนั้นถูกโยนใน resolveOwnedAsset
+  // **ก่อน** มาถึงบรรทัดนี้ เมื่อ Symbol กระจายอยู่ >1 พอร์ตและยังไม่ระบุพอร์ต
+  // มาถึงตรงนี้ได้แปลว่าเหลือแถวเดียวชัดเจนแล้ว จึงไม่มีทางเกิด Error ซ้อนกัน
+  // ── สามสถานะ ไม่ใช่ boolean ธรรมดา ────────────────────────────────────
+  //   undefined = **ยังไม่ได้ถามผู้ใช้** → หยุดถามก่อน (โยน Confirm-Required)
+  //   true      = ผู้ใช้ตอบว่า "แยกเป็นอีกแถวในพอร์ตที่เลือก"
+  //   false     = ผู้ใช้ตอบว่า "รวมเข้าพอร์ตเดิม" → พฤติกรรมเดิมทุกประการ
+  //
+  // ⚠️ ถ้ายุบ false กับ undefined เข้าด้วยกัน (เขียน `!== true` เฉยๆ) ผู้ใช้ที่
+  // เลือก "รวมพอร์ตเดิม" จะโดนถามซ้ำไม่รู้จบ เพราะคำตอบของเขาแยกไม่ออกจาก
+  // "ยังไม่ได้ตอบ" — วินัย undefined/null/ค่าจริง ชุดเดียวกับ portfolioId/brokerId
+  const separateAnswered = params.confirmSeparatePortfolio !== undefined;
+  const separateConfirmed = params.confirmSeparatePortfolio === true;
+  const existingPortfolioId = resolvedAsset ? resolvedAsset.portfolioId ?? null : null;
+  // "อยู่คนละพอร์ตกับที่ผู้ใช้เลือก" — เช็คเฉพาะตอนผู้ใช้ระบุปลายทางมาจริงเท่านั้น
+  // (เส้นทาง LINE/Bulk ไม่ส่ง destinationPortfolioId → ไม่กระทบเลยแม้แต่นิดเดียว)
+  const inAnotherPortfolio =
+    Boolean(resolvedAsset) &&
+    destinationPortfolioId !== undefined &&
+    destinationPortfolioId !== null &&
+    existingPortfolioId !== destinationPortfolioId;
+
+  if (inAnotherPortfolio && !separateAnswered) {
+    // ⚠️ **ไม่ใช่ Error ที่บล็อกถาวร** — เป็น "ต้องยืนยันก่อน" (Confirm-Required)
+    // Client ยิงซ้ำพร้อม confirmSeparatePortfolio ตามที่ผู้ใช้เลือก
+    throw new TransactionServiceError(
+      'ASSET_EXISTS_IN_OTHER_PORTFOLIO',
+      `${params.symbol} already exists in another portfolio`,
+      {
+        symbol: params.symbol,
+        existingPortfolioId,
+        destinationPortfolioId,
+      }
+    );
+  }
+
+  // ยืนยันแยกพอร์ตแล้ว → ปฏิบัติกับรอบนี้เหมือน "สินทรัพย์ใหม่" เพื่อให้สร้างแถว
+  // ใหม่ในพอร์ตปลายทาง · แถวเดิมในพอร์ตอื่น **ไม่ถูกแตะเลยแม้แต่ฟิลด์เดียว**
+  const existingAsset = inAnotherPortfolio && separateConfirmed ? null : resolvedAsset;
   // ═══════════════════════════════════════════════════════════════════════
   // ⭐ ด่าน "อ่านได้ เขียนไม่ได้" ของพอร์ตส่วนเกิน (Stage 8-fix)
   // ═══════════════════════════════════════════════════════════════════════

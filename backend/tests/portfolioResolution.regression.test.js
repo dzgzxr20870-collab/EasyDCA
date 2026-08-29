@@ -467,31 +467,106 @@ describe('⭐ destinationPortfolioId — เลือกพอร์ตปลา
   // ถือ BTC อยู่พอร์ตหลักแล้ว แต่ผู้ใช้เลือกปลายทางเป็น Dime → ต้อง **รวมเข้า
   // แถวเดิมที่พอร์ตหลัก** ไม่ใช่สร้าง BTC แถวที่สองใน Dime
   // (ตรงกับข้อความที่ฟอร์มบอกผู้ใช้ไว้: "ถ้ามีอยู่แล้วในพอร์ตอื่น ระบบจะรวมไว้ที่เดิม")
-  test('⭐⭐ ถือ BTC ที่พอร์ตหลักอยู่แล้ว + เลือกปลายทาง Dime → รวมแถวเดิม ห้ามสร้างซ้ำ', async () => {
+  // ⚠️⚠️ **มติ Founder 29 ส.ค. 2569 เปลี่ยนพฤติกรรมตรงนี้โดยตั้งใจ**
+  // เดิม: ถือ Symbol นี้อยู่พอร์ตอื่น + เลือกปลายทางใหม่ → **รวมเข้าแถวเดิมเงียบๆ**
+  // ใหม่: **หยุดถามผู้ใช้ก่อน** แล้วให้เลือกเองว่าจะแยกหรือรวม
+  //
+  // ⭐ นี่ไม่ใช่การย้อนกลับไปสร้างบั๊กของไฟล์นี้ — บั๊กเดิมคือ "สร้างแถวซ้ำเงียบๆ
+  // เพราะค้นหาไม่เจอแถวเดิม" ที่นี่ **ค้นเจอครบเหมือนเดิมทุกประการ** (เทสต์
+  // ด้านล่างยืนยันว่ายังเจอ asset-btc) แล้วหยุดถาม · เส้นแบ่งคือ "เจตนาของผู้ใช้"
+  test('⭐⭐ ถือ BTC ที่พอร์ตหลัก + เลือกปลายทาง Dime + ยังไม่ตอบ → ต้องหยุดถามก่อน', async () => {
+    installRepo([BTC_AFTER_044]);
+
+    await expect(
+      transactionService.validateBuy(USER_ID, { ...BUY, destinationPortfolioId: P2 }, PREMIUM)
+    ).rejects.toMatchObject({
+      code: 'ASSET_EXISTS_IN_OTHER_PORTFOLIO',
+      // ต้องบอกได้ว่า "ของเดิมอยู่พอร์ตไหน" เพื่อให้ UI ประกอบประโยคถามผู้ใช้ได้
+      details: { symbol: 'BTC', existingPortfolioId: P1, destinationPortfolioId: P2 },
+    });
+  });
+
+  test('⭐⭐ ยังไม่ตอบ → ห้ามเขียนอะไรลง DB เลยแม้แต่แถวเดียว', async () => {
+    installRepo([BTC_AFTER_044]);
+
+    await expect(
+      transactionService.processBuyCommand(USER_ID, { ...BUY, destinationPortfolioId: P2 }, PREMIUM)
+    ).rejects.toMatchObject({ code: 'ASSET_EXISTS_IN_OTHER_PORTFOLIO' });
+
+    expect(assetRepository.create).not.toHaveBeenCalled();
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
+
+  // ⭐ ตอบว่า "รวมพอร์ตเดิม" (false) → พฤติกรรมเดิมทุกประการ
+  // ⚠️ false ต้องแยกจาก undefined ให้ขาด ไม่งั้นผู้ใช้ที่เลือกรวมจะโดนถามซ้ำไม่รู้จบ
+  test('⭐⭐ ตอบว่า "รวมพอร์ตเดิม" → รวมแถวเดิม ห้ามสร้างซ้ำ (พฤติกรรมเดิม)', async () => {
     installRepo([BTC_AFTER_044]);
 
     const result = await transactionService.validateBuy(
       USER_ID,
-      { ...BUY, destinationPortfolioId: P2 },
+      { ...BUY, destinationPortfolioId: P2, confirmSeparatePortfolio: false },
       PREMIUM
     );
 
     expect(result.newAsset).toBe(false);
     expect(result.asset.id).toBe('asset-btc');
-    // ⚠️ ปลายทางจริงคือพอร์ตของแถวเดิม ไม่ใช่พอร์ตที่ผู้ใช้เลือก
+    // ปลายทางจริงคือพอร์ตของแถวเดิม ไม่ใช่พอร์ตที่ผู้ใช้เลือก
     expect(result.asset.portfolioId).toBe(P1);
   });
 
-  test('⭐⭐ processBuyCommand เคสเดียวกัน → ไม่เรียก assetRepository.create เลย', async () => {
+  test('⭐⭐ ตอบว่า "รวมพอร์ตเดิม" → processBuyCommand ไม่เรียก create เลย', async () => {
     installRepo([BTC_AFTER_044]);
 
     await transactionService.processBuyCommand(
       USER_ID,
-      { ...BUY, destinationPortfolioId: P2 },
+      { ...BUY, destinationPortfolioId: P2, confirmSeparatePortfolio: false },
       PREMIUM
     );
 
     expect(assetRepository.create).not.toHaveBeenCalled();
+  });
+
+  // ⭐⭐ ตอบว่า "แยกพอร์ต" (true) → สร้างแถวใหม่ในพอร์ตปลายทางจริง
+  test('⭐⭐ ตอบว่า "แยกพอร์ต" → สร้างแถวใหม่ใน Dime (แถวเดิมที่พอร์ตหลักไม่ถูกแตะ)', async () => {
+    installRepo([BTC_AFTER_044]);
+
+    const result = await transactionService.validateBuy(
+      USER_ID,
+      { ...BUY, destinationPortfolioId: P2, confirmSeparatePortfolio: true },
+      PREMIUM
+    );
+
+    expect(result.newAsset).toBe(true);
+    expect(result.portfolioId).toBe(P2);
+  });
+
+  test('⭐⭐ ตอบว่า "แยกพอร์ต" → create ถูกเรียกด้วยพอร์ตปลายทาง และไม่แตะแถวเดิม', async () => {
+    installRepo([BTC_AFTER_044]);
+
+    await transactionService.processBuyCommand(
+      USER_ID,
+      { ...BUY, destinationPortfolioId: P2, confirmSeparatePortfolio: true },
+      PREMIUM
+    );
+
+    // Argument ที่ 2 ของ create คือพอร์ตที่แถวใหม่จะไปสังกัด
+    expect(assetRepository.create.mock.calls[0][1]).toBe(P2);
+    // ⚠️ แถวเดิมต้องไม่ถูกแก้ไขเลย — การแยกคือ "เพิ่มแถวใหม่" ไม่ใช่ "ย้ายของเดิม"
+    expect(assetRepository.updateMetaByIdForUser).not.toHaveBeenCalled();
+  });
+
+  // ⚠️ ปลายทาง = พอร์ตเดียวกับที่ถืออยู่แล้ว → ไม่ใช่เคส "คนละพอร์ต" ห้ามถาม
+  test('ปลายทางตรงกับพอร์ตที่ถืออยู่แล้ว → รวมตามปกติ ไม่ต้องถาม', async () => {
+    installRepo([BTC_AFTER_044]);
+
+    const result = await transactionService.validateBuy(
+      USER_ID,
+      { ...BUY, destinationPortfolioId: P1 },
+      PREMIUM
+    );
+
+    expect(result.newAsset).toBe(false);
+    expect(result.asset.id).toBe('asset-btc');
   });
 
   // ถือกระจายหลายพอร์ต → ยังต้องถามผู้ใช้เหมือนเดิม ห้ามให้ปลายทางที่เลือกมา

@@ -14,6 +14,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import PortfolioCards from './PortfolioCards.jsx';
 import PortfolioHoldingsTable from './PortfolioHoldingsTable.jsx';
+import MoveAssetPortfolioDialog from './MoveAssetPortfolioDialog.jsx';
 import { profitCacheKey } from './portfolioDetailData.js';
 
 const P1 = 'aaaaaaaa-1111-4111-8111-111111111111';
@@ -155,5 +156,86 @@ describe('PortfolioHoldingsTable — ตารางสินทรัพย์�
 
     expect(html).toContain('โหลดกำไร/ขาดทุน');
     expect(html).toContain('BTC'); // แถวยังอยู่ครบ
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ⭐ ย้ายสินทรัพย์ข้ามพอร์ต (มติ Founder 29 ส.ค. 2569)
+// ═══════════════════════════════════════════════════════════════════════════
+const HOLDING = { assetId: 'a-1', symbol: 'BTC', brokerId: null, heldQuantity: 0.5, totalInvested: 1000 };
+
+describe('⭐ ปุ่ม "ย้ายพอร์ต" ในตาราง Holdings', () => {
+  test('⭐ ส่ง onMove มา → มีปุ่มย้ายพอร์ตต่อแถว', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(PortfolioHoldingsTable, {
+        rows: ROWS,
+        portfolioId: P1,
+        profitBySymbol: {},
+        onMove() {},
+      })
+    );
+
+    expect(html).toContain('ย้ายพอร์ต');
+  });
+
+  // ไม่ส่ง onMove → ตารางเดิมไม่มีคอลัมน์เกิน (Additive ล้วน ไม่กระทบผู้เรียกเดิม)
+  test('ไม่ส่ง onMove → ตารางเหมือนเดิม ไม่มีคอลัมน์ปุ่ม', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(PortfolioHoldingsTable, {
+        rows: ROWS,
+        portfolioId: P1,
+        profitBySymbol: {},
+      })
+    );
+
+    expect(html).not.toContain('ย้ายพอร์ต');
+  });
+});
+
+describe('⭐ MoveAssetPortfolioDialog', () => {
+  function renderDialog(props) {
+    return renderToStaticMarkup(
+      React.createElement(MoveAssetPortfolioDialog, {
+        holding: HOLDING,
+        portfolios: PORTFOLIOS,
+        currentPortfolioId: P1,
+        onClose() {},
+        onMoved() {},
+        ...props,
+      })
+    );
+  }
+
+  // ⭐ ต้องบอกให้ชัดว่านี่ไม่ใช่การซื้อขาย — กันผู้ใช้เข้าใจผิดว่าตัวเลขจะเปลี่ยน
+  test('⭐ บอกชัดว่าย้ายพอร์ตไม่ใช่การซื้อ/ขาย และตัวเลขไม่เปลี่ยน', () => {
+    const html = renderDialog();
+
+    expect(html).toContain('ไม่ใช่การซื้อหรือขาย');
+    expect(html).toContain('ต้นทุน');
+  });
+
+  // ⚠️ พอร์ตที่ถูกล็อกเป็นปลายทางไม่ได้ (จะโดน PORTFOLIO_READ_ONLY อยู่ดี)
+  // และพอร์ตปัจจุบันก็ไม่ควรอยู่ในตัวเลือก
+  test('⭐ ตัวเลือกปลายทาง = พอร์ตอื่นที่เขียนได้เท่านั้น', () => {
+    const html = renderDialog();
+
+    // P2 (Dime) canWrite:false → ต้องไม่เป็นตัวเลือก
+    expect(html).not.toContain('Dime');
+    // พอร์ตปัจจุบัน (P1) ก็ต้องไม่อยู่ในตัวเลือกปลายทาง
+    expect(html).toContain('ยังไม่มีพอร์ตปลายทางให้ย้าย');
+  });
+
+  test('มีพอร์ตปลายทางที่เขียนได้ → แสดงตัวเลือกและปุ่มย้าย', () => {
+    const html = renderDialog({
+      portfolios: [
+        ...PORTFOLIOS,
+        { id: 'pf-3', name: 'ระยะยาว', isDefault: false, canWrite: true },
+      ],
+    });
+
+    expect(html).toContain('ระยะยาว');
+    expect(html).toContain('ย้ายพอร์ต');
+    expect(html).not.toContain('ยังไม่มีพอร์ตปลายทางให้ย้าย');
   });
 });

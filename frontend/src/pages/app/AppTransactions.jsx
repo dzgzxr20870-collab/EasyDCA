@@ -2,6 +2,9 @@ import { useState, useEffect, useCallback } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { apiGet, apiPost } from '../../lib/api.js';
 import { portfolioWriteState } from '../../lib/entitlements.js';
+// ⚠️ api.js โยน Error(message = **Error Code ดิบ**) ไม่ใช่ข้อความไทย — ต้องแปลผ่าน
+// ตารางกลางเสมอ ไม่งั้นผู้ใช้จะเห็น "ALREADY_UNDONE" โต้งๆ บนหน้าจอ
+import { undoErrorMessage } from '../../lib/dcaErrors.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // AppTransactions — ประวัติธุรกรรมต่อ API จริง (Stage 9)
@@ -68,7 +71,10 @@ function AppTransactions() {
       await load();
       await reload?.();
     } catch (err) {
-      setError(err?.message ?? 'ย้อนรายการไม่สำเร็จ');
+      // 🔴 เดิมโชว์ err.message ตรงๆ ซึ่งเป็น Error Code ดิบ — กดย้อนซ้ำรายการที่
+      // ย้อนไปแล้วจึงขึ้นคำว่า "ALREADY_UNDONE" แทนที่จะเป็นข้อความที่อ่านรู้เรื่อง
+      // (Backend มีข้อความไทยรออยู่แล้ว และ lib/dcaErrors ก็มีตารางเดียวกัน)
+      setError(undoErrorMessage(err?.message));
     } finally {
       setUndoing(false);
     }
