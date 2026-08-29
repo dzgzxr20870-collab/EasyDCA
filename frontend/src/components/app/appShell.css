@@ -506,6 +506,77 @@
 }
 .app-modal__body { padding: 8px 20px 20px; display: flex; flex-direction: column; gap: 14px; }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   หน้าพอร์ตแบบ 2 ระดับ (เฟส 1) — การ์ดพอร์ต + ตารางสินทรัพย์
+   ═══════════════════════════════════════════════════════════════════════ */
+.app-section-title { margin: 4px 0 0; font-size: 16px; font-weight: 800; }
+
+/* auto-fit + minmax = 1 คอลัมน์บนมือถือ, หลายคอลัมน์บนจอกว้าง โดยไม่ต้องมี
+   Media Query แยก (การ์ดยืดเต็มความกว้างที่เหลือเสมอ ไม่มีช่องโหว่ท้ายแถว) */
+.app-pf-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+}
+
+/* ทั้งใบเป็นปุ่ม — reset ค่า default ของ <button> ให้ดูเป็นการ์ดจริงๆ */
+.app-pf-card {
+  display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
+  text-align: left; font: inherit; cursor: pointer;
+  background: var(--card, #fff); color: var(--ink, #282D31);
+  border: 1px solid var(--line2, #E4E8E1); border-radius: var(--r, 20px);
+  padding: 16px 18px; box-shadow: var(--shadow-sm, 0 4px 12px rgba(40,45,49,.05));
+}
+.app-pf-card:hover { border-color: var(--leaf, #22C55E); }
+.app-pf-card__head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; width: 100%; }
+.app-pf-card__name { font-size: 15px; font-weight: 800; }
+.app-pf-card__flag {
+  font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px;
+  background: var(--cream, #FFF5E6); color: var(--leaf-deep, #189146);
+}
+.app-pf-card__value { font-size: 20px; font-weight: 800; color: var(--leaf-deep, #189146); }
+.app-pf-card__meta { font-size: 12.5px; color: var(--muted, #8B9587); }
+
+/* ⚠️ พอร์ตที่ถูกล็อกต้องยัง "อ่านออก" และกดเข้าไปดูได้ตามปกติ — ล็อกแปลว่า
+   "เพิ่มของใหม่ไม่ได้" ไม่ใช่ "เปิดดูไม่ได้" (มติ Founder 24 ส.ค. 2569) */
+.app-pf-card--locked { background: #fffbeb; border-color: #fde68a; }
+.app-pf-card__locked { font-size: 12px; font-weight: 700; color: #92400e; }
+
+.app-pf-card--new {
+  align-items: center; justify-content: center; text-align: center;
+  border-style: dashed; color: var(--ink2, #545B52); font-weight: 700;
+}
+.app-pf-card__plus { font-size: 22px; font-weight: 800; color: var(--leaf-deep, #189146); }
+
+/* ── ตารางสินทรัพย์รายพอร์ต ──────────────────────────────────────────────
+   ⚠️ ตารางกว้างเกินจอมือถือได้ → ให้เลื่อนในกล่องตัวเอง ไม่ดันทั้งหน้าให้
+   เลื่อนแนวนอน (ซึ่งทำให้ Bottom Nav เพี้ยนตามไปด้วย) */
+.app-table-scroll {
+  overflow-x: auto;
+  background: var(--card, #fff); border-radius: var(--r, 20px);
+  box-shadow: var(--shadow-sm, 0 4px 12px rgba(40,45,49,.05));
+}
+.app-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.app-table th, .app-table td {
+  padding: 11px 14px; text-align: left; border-bottom: 1px solid var(--line, #EEF1EC);
+  white-space: nowrap;
+}
+.app-table thead th {
+  font-size: 12px; font-weight: 800; color: var(--ink2, #545B52);
+  background: var(--bg, #F7F9F7);
+}
+.app-table tbody tr:last-child td { border-bottom: none; }
+.app-table__num { text-align: right; }
+.app-table td small { color: var(--muted, #8B9587); font-size: 11.5px; }
+
+/* กำไร/ขาดทุน — สีต้องสื่อความหมายแต่ห้ามเป็นตัวชี้นำการลงทุน (กฎเหล็กข้อ 1)
+   ใช้แค่บอกทิศทางของตัวเลขที่บันทึกไว้จริง ไม่มีข้อความแนะนำใดๆ */
+.app-pnl { font-weight: 800; }
+.app-pnl--up { color: #157F3C; }
+.app-pnl--down { color: var(--red, #DE5050); }
+.app-pnl--flat { color: var(--ink2, #545B52); }
+.app-pnl small { font-weight: 700; opacity: .85; }
+
 /* ── โดนัทสัดส่วนพอร์ต ───────────────────────────────────────────────────
    ⚠️ .app-donut--empty ต้องสูงพอให้เห็นว่า "มีพื้นที่กราฟอยู่แต่ยังไม่มีข้อมูล"
    ไม่ใช่ยุบหายจนผู้ใช้ไม่รู้ว่าเคยมีกราฟตรงนี้ */

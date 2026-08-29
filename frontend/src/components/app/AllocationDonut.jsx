@@ -78,7 +78,23 @@ function AllocationDonut({ groups, totalValueThb }) {
           data={chartData}
           options={{
             cutout: '68%',
-            plugins: { legend: { display: false } },
+            plugins: {
+              legend: { display: false },
+              // ── ชี้เมาส์แล้วเห็น "ชื่อกลุ่ม + เปอร์เซ็นต์" (มติ Founder) ──────
+              // ⚠️⚠️ percent ต้องอ่านจาก `list[i].percent` ที่ Backend ส่งมา
+              // **ห้ามให้ Chart.js คำนวณเองจาก data** — Chart.js จะหารสัดส่วนจาก
+              // ตัวเลขดิบที่ปัดแล้ว ซึ่งอาจไม่ตรงกับ percent ที่ Backend คำนวณ
+              // → Tooltip กับ Legend ใต้กราฟจะโชว์เลขไม่ตรงกันบนหน้าจอเดียวกัน
+              // (เหตุผลเดียวกับที่ Legend ตัวนี้เขียนเองแทนของ Chart.js — ดูข้างล่าง)
+              tooltip: {
+                callbacks: {
+                  label: (ctx) => {
+                    const g = list[ctx.dataIndex];
+                    return `${g?.label ?? ''} ${g?.percent ?? 0}%`;
+                  },
+                },
+              },
+            },
           }}
         />
         <div className="app-donut__center">

@@ -1,28 +1,42 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useOutletContext, useSearchParams } from 'react-router-dom';
-import { getAllocation } from '../../lib/portfolioApi.js';
+import { getPortfolioHoldings } from '../../lib/portfolioApi.js';
 import { portfolioWriteState, canCreatePortfolio } from '../../lib/entitlements.js';
-import { ALL_PORTFOLIOS } from '../../components/app/AppShell.jsx';
 import AllocationDonut from '../../components/app/AllocationDonut.jsx';
 import CreatePortfolioModal from '../../components/app/CreatePortfolioModal.jsx';
 import RecordTransactionModal from '../../components/app/RecordTransactionModal.jsx';
+import PortfolioCards from '../../components/app/PortfolioCards.jsx';
+import PortfolioHoldingsTable from '../../components/app/PortfolioHoldingsTable.jsx';
+import {
+  fetchAllocationCached,
+  fetchProfitsForPortfolio,
+  holdingsForPortfolio,
+  assetCountByPortfolio,
+  MAX_CARD_VALUE_FETCH,
+} from '../../components/app/portfolioDetailData.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
-// AppPortfolio — หน้า "พอร์ต" ต่อกับ API จริง (Stage 9)
+// AppPortfolio — หน้า "พอร์ต" แบบ 2 ระดับ (Stage 9 เฟส 1 · Founder 29 ส.ค. 2569)
 // ═══════════════════════════════════════════════════════════════════════════
-// Port มาจาก `pages/demo/DemoPortfolio.jsx` — ต่อกับ
-// `GET /api/v1/portfolio/allocation` ของจริงแทน `mockPortfolioMath`
+//   ระดับ 1 (ไม่มี ?portfolio=) → โดนัทของทุกพอร์ตรวม + การ์ดพอร์ตให้กดเข้า
+//   ระดับ 2 (?portfolio=<uuid>) → ตารางสินทรัพย์ + โดนัทของ **พอร์ตนั้นตัวเดียว**
 //
-// ── ธงจาก Backend ที่ Demo ไม่มีเลย และ **ห้ามตกหล่น** ────────────────────
-//   fxUnavailableForUsd  → **ห้ามรวมยอดข้ามสกุลเงิน** ต้องเตือน ไม่ใช่โชว์ยอดที่
-//                          ขาดส่วน USD ไปเงียบๆ (API.md ระบุไว้ชัด)
-//   fxStale              → เรตเก่า ต้องติดหมายเหตุ
-//   priceUnavailableCount → กลุ่มนั้น "ตีมูลค่าที่ต้นทุน" ไม่ใช่ราคาตลาด
-//   isEmpty              → ยังไม่มีสินทรัพย์ → Empty State ไม่ใช่กราฟว่างเปล่า
+// ⚠️ ใช้ Query Param แทน State ภายใน (Pattern เดียวกับ `?new=1` ที่มีอยู่เดิม) —
+// กด Back ย้อนกลับหน้ารวมได้ตามที่คาด และแชร์ลิงก์ตรงเข้าพอร์ตหนึ่งได้
 //
-// ⚠️ ทุกตัวเลขบนหน้านี้มาจาก Backend ล้วน **ห้ามคำนวณสัดส่วน/ยอดรวมเองใน Frontend**
-// (กฎยืนข้อ 1 — Single Source of Truth ต่อ 1 สูตรเงิน) ถ้าคำนวณเอง วันหนึ่งเลข
-// บนกราฟโดนัทจะไม่ตรงกับการ์ดสรุปแล้วหาสาเหตุไม่เจอ
+// ── ⚠️ กติกาเรื่องตัวเลข (กฎยืนข้อ 1 — Single Source of Truth) ──────────────
+// **ห้ามคำนวณมูลค่า/กำไร/สัดส่วนเองในไฟล์นี้เด็ดขาด** ทุกตัวเลขมาจาก Backend:
+//   มูลค่ารวมรายพอร์ต    ← /portfolio/allocation?portfolioId= → totalValueThb
+//   จำนวนที่ถือ / ต้นทุน  ← /dashboard/portfolio → holdings[]
+//   กำไร/ขาดทุน          ← /dashboard/profit/:symbol
+// สิ่งเดียวที่ทำเองคือ **กรองแถวตาม holding.portfolioId ที่ Backend ประทับมาให้**
+// และ **นับจำนวนแถว** ซึ่งไม่ใช่การคำนวณเงิน
+//
+// ── ❌ ไม่อยู่ในเฟสนี้: กราฟความเติบโตรายพอร์ตตามเวลา ─────────────────────
+// `portfolio_snapshots` เก็บ 1 แถวต่อ (user, วัน) รวมทุกพอร์ตเป็นก้อนเดียว
+// **ยังไม่มีคอลัมน์ portfolio_id** จึงแยกรายพอร์ตย้อนหลังไม่ได้เลย ต้องมี migration
+// ใหม่ + Backfill ก่อน (เฟส 2) — ทางลัดเดียวที่พอมีคือเดาย้อนหลังจากธุรกรรม
+// ซึ่งจะได้กราฟที่ผิดแบบเงียบๆ จึงห้ามทำ
 
 const GROUP_BY_OPTIONS = [
   { value: 'assetType', label: 'ประเภทสินทรัพย์' },
@@ -37,71 +51,200 @@ function formatThb(n) {
   }).format(Number(n ?? 0));
 }
 
+// แถบเตือนเรื่องเรต/ราคา — ใช้ร่วมกันทั้งสองระดับ (Logic เดิมของหน้านี้ ไม่เขียนใหม่)
+function AllocationNotices({ allocation }) {
+  return (
+    <>
+      {/* ── ⚠️ ห้ามรวมยอดข้ามสกุลเมื่อดึงเรตไม่ได้ ─────────────────────────
+          ต้องเตือนก่อนโชว์ยอดรวม ไม่ใช่แสดงยอดที่ขาดส่วน USD ไปเงียบๆ */}
+      {allocation.fxUnavailableForUsd && (
+        <div className="app-state app-state--warn" role="alert">
+          <strong>ยอดรวมยังไม่รวมสินทรัพย์สกุล USD</strong>
+          <p>
+            ตอนนี้ดึงอัตราแลกเปลี่ยน USD→THB ไม่ได้ ระบบจึงไม่รวมยอดข้ามสกุลเงินให้
+            — ตัวเลขด้านล่างเป็นเฉพาะส่วนที่เป็นบาท
+          </p>
+        </div>
+      )}
+
+      {allocation.fxStale && !allocation.fxUnavailableForUsd && (
+        <p className="app-note">
+          ⏱️ อัตราแลกเปลี่ยนที่ใช้เป็นข้อมูลของวันที่ {allocation.fxAsOf} (ไม่ใช่เรตล่าสุด)
+        </p>
+      )}
+    </>
+  );
+}
+
+function AllocationBreakdown({ allocation }) {
+  return (
+    <ul className="demo-alloc-list">
+      {allocation.groups.map((g) => (
+        <li key={g.key ?? '__unspecified'} className="demo-alloc-item">
+          <span className="demo-alloc-item__label">{g.label}</span>
+          <span className="demo-alloc-item__value">
+            {formatThb(g.valueThb)} บาท ({g.percent}%)
+          </span>
+          <span className="demo-alloc-item__meta">
+            {g.assetCount} สินทรัพย์
+            {/* ⚠️ ต้องบอกเมื่อตัวเลขไม่ใช่ราคาตลาด — ไม่งั้นผู้ใช้จะเข้าใจว่า
+                หุ้นไทยมีราคาสดทั้งที่ระบบตีที่ต้นทุนให้ */}
+            {g.priceUnavailableCount > 0 && (
+              <em> · {g.priceUnavailableCount} รายการคิดที่ราคาทุน (ยังไม่มีราคาตลาด)</em>
+            )}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function AppPortfolio() {
   const {
     portfolios,
-    portfolioId,
     selectedPortfolio,
     entitlements,
     reload,
     loading: shellLoading,
   } = useOutletContext();
 
-  // ── Modal สร้างพอร์ต เปิดผ่าน `?new=1` ────────────────────────────────────
-  // ⚠️ ใช้ Query Param แทน State ภายในโดยเจตนา — ปุ่ม "＋ สร้างพอร์ตใหม่" อยู่บน
-  // Topbar ของ AppShell ซึ่งเป็น **คนละ Component** กับหน้านี้ · ถ้าใช้ State
-  // ภายในจะต้องยก State ขึ้นไปไว้ที่ Shell แล้วส่งลงมาผ่าน Context ซึ่งผูก Shell
-  // เข้ากับรายละเอียดของหน้าลูกโดยไม่จำเป็น · Query Param ยังทำให้ผู้ใช้กด Back
-  // ปิด Modal ได้ตามที่คาด และแชร์ลิงก์ตรงเข้าหน้าสร้างพอร์ตได้ด้วย
   const [searchParams, setSearchParams] = useSearchParams();
   const showCreate = searchParams.get('new') === '1';
+  // ระดับ 2 — id ของพอร์ตที่กำลังเปิดดู (null = อยู่หน้ารวม)
+  const openedId = searchParams.get('portfolio');
+  const opened = (portfolios ?? []).find((p) => p.id === openedId) ?? null;
 
-  // Modal บันทึกรายการ — เก็บ "แท็บที่จะเปิดค้างไว้" ไม่ใช่แค่ boolean
-  // (null = ปิดอยู่) เพื่อให้ปุ่มซื้อ/ขายเปิด Modal เดียวกันคนละแท็บได้
   const [recordType, setRecordType] = useState(null);
-
   const [groupBy, setGroupBy] = useState('assetType');
+
+  // ── Cache ข้าม Render/ข้ามการสลับพอร์ต ─────────────────────────────────────
+  // useRef ไม่ใช่ useState โดยเจตนา: การเติม Cache ไม่ควร Trigger Render เอง
+  // (ค่าที่ได้ถูกยัดลง State ของหน้าอยู่แล้ว) · ผลลัพธ์คือกดเข้า-ออกพอร์ตเดิม
+  // ไปมาไม่ยิง API ซ้ำเลย ซึ่งจำเป็นจริงเพราะ Rate Limiter 300 req/15 นาที
+  const cacheRef = useRef(new Map());
+
   const [allocation, setAllocation] = useState(null);
+  const [holdings, setHoldings] = useState([]);
+  const [valueByPortfolio, setValueByPortfolio] = useState({});
+  const [profitBySymbol, setProfitBySymbol] = useState({});
+  const [profitCapped, setProfitCapped] = useState(false);
+  const [loadingProfit, setLoadingProfit] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  const rows = holdingsForPortfolio(holdings, openedId);
+
+  // ── โหลดข้อมูลของ "ระดับที่กำลังดูอยู่" ────────────────────────────────────
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await getAllocation({
-        groupBy,
-        // 'all' ไม่ใช่ id จริง — ไม่ส่ง portfolioId ไปเลยเมื่อดูรวมทุกพอร์ต
-        portfolioId: portfolioId === ALL_PORTFOLIOS ? undefined : portfolioId,
-      });
-      setAllocation(data);
+      const cache = cacheRef.current;
+
+      // holdings ชุดเดียวใช้ได้กับทุกพอร์ต (แต่ละแถวมี portfolioId ติดมา) —
+      // จำไว้ใน Cache เหมือนกันเพื่อไม่ยิงซ้ำทุกครั้งที่สลับพอร์ต
+      let holdingList = cache.get('holdings');
+      if (!holdingList) {
+        const summary = await getPortfolioHoldings();
+        holdingList = summary?.holdings ?? [];
+        cache.set('holdings', holdingList);
+      }
+      setHoldings(holdingList);
+
+      // โดนัท: หน้ารวม = ทุกพอร์ต (ไม่ส่ง portfolioId) · ระดับ 2 = พอร์ตนั้นตัวเดียว
+      const alloc = await fetchAllocationCached(cache, { portfolioId: openedId, groupBy });
+      setAllocation(alloc);
+
+      if (openedId) {
+        const detailRows = holdingsForPortfolio(holdingList, openedId);
+        const { profitBySymbol: profits, capped } = await fetchProfitsForPortfolio(cache, {
+          portfolioId: openedId,
+          rows: detailRows,
+        });
+        setProfitBySymbol(profits);
+        setProfitCapped(capped);
+      } else {
+        // ── มูลค่ารายพอร์ตสำหรับการ์ด ────────────────────────────────────────
+        // ⚠️ ต้องยิง allocation ทีละพอร์ต เพราะ groupBy รองรับแค่
+        // broker/sector/assetType — **ไม่มี 'portfolio'** (ตรวจแล้วที่
+        // allocation.service.GROUP_BY_OPTIONS) จึงไม่มีทางได้มูลค่ารายพอร์ต
+        // ครบทุกใบในคำขอเดียว
+        //
+        // จำกัดจำนวนไว้กัน Rate Limit: Premium สร้างได้ถึง 50 พอร์ต (Sanity Cap)
+        // ถ้ามีมากกว่าเพดาน การ์ดที่เหลือจะแสดง "จำนวนสินทรัพย์" อย่างเดียว
+        // (มาจาก holdings คำขอเดียว) แล้วมูลค่าไปดูในระดับ 2 แทน — ดีกว่ายิง 50
+        // คำขอทุกครั้งที่เปิดหน้า
+        const list = (portfolios ?? []).slice(0, MAX_CARD_VALUE_FETCH);
+        const entries = await Promise.all(
+          list.map((p) =>
+            fetchAllocationCached(cache, { portfolioId: p.id, groupBy: 'assetType' })
+              .then((a) => [p.id, a?.totalValueThb])
+              .catch(() => [p.id, undefined])
+          )
+        );
+        setValueByPortfolio(Object.fromEntries(entries));
+      }
     } catch (err) {
-      setError(err?.message ?? 'โหลดสัดส่วนพอร์ตไม่สำเร็จ');
+      setError(err?.message ?? 'โหลดข้อมูลพอร์ตไม่สำเร็จ');
       setAllocation(null);
     } finally {
       setLoading(false);
     }
-  }, [groupBy, portfolioId]);
+  }, [groupBy, openedId, portfolios]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  const write = portfolioWriteState(selectedPortfolio);
+  // ผู้ใช้กดโหลดกำไร/ขาดทุนเองเมื่อพอร์ตใหญ่เกินเพดาน
+  async function handleLoadProfit() {
+    setLoadingProfit(true);
+    try {
+      const { profitBySymbol: profits } = await fetchProfitsForPortfolio(cacheRef.current, {
+        portfolioId: openedId,
+        rows,
+        force: true,
+      });
+      setProfitBySymbol(profits);
+      setProfitCapped(false);
+    } finally {
+      setLoadingProfit(false);
+    }
+  }
+
+  // ⚠️ ระดับ 2: สิทธิ์เขียนต้องดูจาก **พอร์ตที่เปิดอยู่** ไม่ใช่ Switcher ด้านบน
+  const write = portfolioWriteState(opened ?? selectedPortfolio);
   const createGate = canCreatePortfolio(entitlements, portfolios?.length);
 
-  function closeCreate() {
-    // ลบเฉพาะ Key 'new' ทิ้ง ไม่ล้าง Query ทั้งชุด (เผื่อมี Param อื่นในอนาคต)
-    // replace: true — ไม่อยากให้การเปิด/ปิด Modal ทับประวัติการนำทางจริงของผู้ใช้
+  function setParam(mutate) {
     const next = new URLSearchParams(searchParams);
-    next.delete('new');
+    mutate(next);
     setSearchParams(next, { replace: true });
   }
+
+  const openPortfolio = (id) => setParam((n) => n.set('portfolio', id));
+  const backToOverview = () => setParam((n) => n.delete('portfolio'));
+  const openCreate = () => setParam((n) => n.set('new', '1'));
+  const closeCreate = () => setParam((n) => n.delete('new'));
+
+  const busy = loading || shellLoading;
 
   return (
     <section className="demo-page">
       <header className="demo-page__head">
-        <h1>สัดส่วนพอร์ต</h1>
+        {opened ? (
+          <>
+            <button type="button" className="demo-btn" onClick={backToOverview}>
+              ← พอร์ตทั้งหมด
+            </button>
+            <h1>
+              {opened.isDefault ? '⭐ ' : '🗂️ '}
+              {opened.name}
+            </h1>
+          </>
+        ) : (
+          <h1>พอร์ตของฉัน</h1>
+        )}
 
         <label className="demo-field">
           <span>จัดกลุ่มตาม</span>
@@ -115,15 +258,27 @@ function AppPortfolio() {
         </label>
       </header>
 
-      {(loading || shellLoading) && (
+      {/* ⚠️ ผู้ใช้เปิดลิงก์ ?portfolio=<id> ที่ไม่ใช่ของตัวเอง/ถูกลบไปแล้วได้ —
+          ต้องบอกตรงๆ ไม่ใช่แสดงหน้ารวมเงียบๆ ให้เข้าใจว่าพอร์ตยังอยู่ */}
+      {openedId && !opened && !shellLoading && (
+        <div className="app-state app-state--empty">
+          <strong>ไม่พบพอร์ตนี้</strong>
+          <p>พอร์ตอาจถูกลบไปแล้ว หรือลิงก์ไม่ถูกต้อง</p>
+          <button type="button" className="demo-btn" onClick={backToOverview}>
+            กลับไปหน้าพอร์ตทั้งหมด
+          </button>
+        </div>
+      )}
+
+      {busy && (
         <div className="app-state app-state--loading" role="status">
-          กำลังคำนวณสัดส่วนพอร์ต...
+          กำลังโหลดข้อมูลพอร์ต...
         </div>
       )}
 
       {error && !loading && (
         <div className="app-state app-state--error" role="alert">
-          <strong>โหลดสัดส่วนพอร์ตไม่สำเร็จ</strong>
+          <strong>โหลดข้อมูลพอร์ตไม่สำเร็จ</strong>
           <p>{error}</p>
           <button type="button" className="demo-btn" onClick={load}>
             ลองใหม่อีกครั้ง
@@ -131,69 +286,52 @@ function AppPortfolio() {
         </div>
       )}
 
-      {/* ⚠️ Empty State ต้องแยกจาก Error ให้ชัด — "ยังไม่มีสินทรัพย์" กับ
-          "โหลดไม่สำเร็จ" เป็นคนละเรื่อง ถ้ารวมกันผู้ใช้ใหม่จะคิดว่าระบบพัง */}
-      {!loading && !error && allocation?.isEmpty && (
-        <div className="app-state app-state--empty">
-          <strong>ยังไม่มีสินทรัพย์ในพอร์ตนี้</strong>
-          <p>เมื่อบันทึกรายการซื้อแล้ว สัดส่วนพอร์ตจะแสดงที่นี่</p>
-        </div>
+      {!busy && !error && allocation && (
+        <>
+          <AllocationNotices allocation={allocation} />
+
+          {/* ⚠️ Empty State ต้องแยกจาก Error ให้ชัด — "ยังไม่มีสินทรัพย์" กับ
+              "โหลดไม่สำเร็จ" เป็นคนละเรื่อง ถ้ารวมกันผู้ใช้ใหม่จะคิดว่าระบบพัง */}
+          {allocation.isEmpty ? (
+            <div className="app-state app-state--empty">
+              <strong>{opened ? 'ยังไม่มีสินทรัพย์ในพอร์ตนี้' : 'ยังไม่มีสินทรัพย์'}</strong>
+              <p>เมื่อบันทึกรายการซื้อแล้ว สัดส่วนพอร์ตจะแสดงที่นี่</p>
+            </div>
+          ) : (
+            <>
+              <p className="demo-total">
+                มูลค่ารวม <strong>{formatThb(allocation.totalValueThb)}</strong> บาท
+              </p>
+
+              {/* ⚠️ โดนัทวาดจาก groups + percent ที่ Backend คำนวณมาแล้ว
+                  **ห้ามคำนวณสัดส่วนเองที่นี่** (กฎยืนข้อ 1) */}
+              <AllocationDonut
+                groups={allocation.groups}
+                totalValueThb={allocation.totalValueThb}
+              />
+
+              <AllocationBreakdown allocation={allocation} />
+            </>
+          )}
+        </>
       )}
 
-      {!loading && !error && allocation && !allocation.isEmpty && (
+      {/* ═══ ระดับ 2 — ตารางสินทรัพย์ในพอร์ตนี้ ═══════════════════════════ */}
+      {!busy && !error && opened && (
         <>
-          {/* ── ⚠️ ห้ามรวมยอดข้ามสกุลเมื่อดึงเรตไม่ได้ ─────────────────────
-              ต้องเตือนก่อนโชว์ยอดรวม ไม่ใช่แสดงยอดที่ขาดส่วน USD ไปเงียบๆ */}
-          {allocation.fxUnavailableForUsd && (
-            <div className="app-state app-state--warn" role="alert">
-              <strong>ยอดรวมยังไม่รวมสินทรัพย์สกุล USD</strong>
-              <p>
-                ตอนนี้ดึงอัตราแลกเปลี่ยน USD→THB ไม่ได้ ระบบจึงไม่รวมยอดข้ามสกุลเงินให้
-                — ตัวเลขด้านล่างเป็นเฉพาะส่วนที่เป็นบาท
-              </p>
-            </div>
-          )}
-
-          {allocation.fxStale && !allocation.fxUnavailableForUsd && (
-            <p className="app-note">
-              ⏱️ อัตราแลกเปลี่ยนที่ใช้เป็นข้อมูลของวันที่ {allocation.fxAsOf} (ไม่ใช่เรตล่าสุด)
-            </p>
-          )}
-
-          <p className="demo-total">
-            มูลค่ารวม <strong>{formatThb(allocation.totalValueThb)}</strong> บาท
-          </p>
-
-          {/* ⚠️ โดนัทวาดจาก groups + percent ที่ Backend คำนวณมาแล้ว **ห้ามคำนวณ
-              สัดส่วนเองที่นี่** (กฎยืนข้อ 1) · ไม่มีข้อมูล/ราคาดึงไม่ได้ → ขึ้นข้อความ
-              "ราคาไม่พร้อมใช้งาน" ไม่ใช่วงกลมว่างหรือเลข 0 ที่ดูเหมือนความจริง */}
-          <AllocationDonut
-            groups={allocation.groups}
-            totalValueThb={allocation.totalValueThb}
+          <h2 className="app-section-title">สินทรัพย์ในพอร์ตนี้</h2>
+          <PortfolioHoldingsTable
+            rows={rows}
+            portfolioId={openedId}
+            profitBySymbol={profitBySymbol}
+            profitCapped={profitCapped}
+            loadingProfit={loadingProfit}
+            onLoadProfit={handleLoadProfit}
           />
 
-          <ul className="demo-alloc-list">
-            {allocation.groups.map((g) => (
-              <li key={g.key ?? '__unspecified'} className="demo-alloc-item">
-                <span className="demo-alloc-item__label">{g.label}</span>
-                <span className="demo-alloc-item__value">
-                  {formatThb(g.valueThb)} บาท ({g.percent}%)
-                </span>
-                <span className="demo-alloc-item__meta">
-                  {g.assetCount} สินทรัพย์
-                  {/* ⚠️ ต้องบอกเมื่อตัวเลขไม่ใช่ราคาตลาด — ไม่งั้นผู้ใช้จะเข้าใจว่า
-                      หุ้นไทยมีราคาสดทั้งที่ระบบตีที่ต้นทุนให้ */}
-                  {g.priceUnavailableCount > 0 && (
-                    <em> · {g.priceUnavailableCount} รายการคิดที่ราคาทุน (ยังไม่มีราคาตลาด)</em>
-                  )}
-                </span>
-              </li>
-            ))}
-          </ul>
-
-          {/* ⭐ พอร์ตถูกล็อก → ต้องเห็นชัดว่า "เพิ่มไม่ได้ แต่ยังขาย/ย้ายออกได้"
-              **ห้ามซ่อนปุ่มขายเด็ดขาด** ไม่งั้นผู้ใช้จะคิดว่าติดกับ แล้วไม่บันทึก
-              การขายที่เกิดขึ้นจริง → ยอดในพอร์ตผิดถาวร */}
+          {/* ⭐ พอร์ตถูกล็อก → เพิ่มไม่ได้ แต่ **ห้ามซ่อนปุ่มขายเด็ดขาด**
+              ไม่งั้นผู้ใช้จะคิดว่าติดกับ แล้วไม่บันทึกการขายที่เกิดขึ้นจริง
+              → ยอดในพอร์ตผิดถาวร (มติ Founder 24 ส.ค. 2569) */}
           <div className="demo-actions">
             <button
               type="button"
@@ -203,9 +341,6 @@ function AppPortfolio() {
             >
               ＋ บันทึกรายการซื้อ
             </button>
-            {/* ⭐ canReduce เป็น true เสมอ — ปุ่มนี้ต้องกดได้ทุกกรณี แม้พอร์ตถูกล็อก
-                ถ้าปิดด้วย ผู้ใช้จะคิดว่าติดกับแล้วไม่บันทึกการขายที่เกิดขึ้นจริง
-                → ยอดในพอร์ตผิดถาวร (มติ Founder 24 ส.ค. 2569) */}
             <button
               type="button"
               className="demo-btn"
@@ -224,6 +359,21 @@ function AppPortfolio() {
         </>
       )}
 
+      {/* ═══ ระดับ 1 — การ์ดพอร์ต ═════════════════════════════════════════ */}
+      {!busy && !openedId && (
+        <>
+          <h2 className="app-section-title">พอร์ตทั้งหมด</h2>
+          <PortfolioCards
+            portfolios={portfolios ?? []}
+            valueByPortfolio={valueByPortfolio}
+            assetCountByPortfolio={assetCountByPortfolio(holdings)}
+            onOpen={openPortfolio}
+            onCreate={openCreate}
+            createGate={createGate}
+          />
+        </>
+      )}
+
       {/* ── Modal สร้างพอร์ตใหม่ ────────────────────────────────────────────
           ⚠️ กันเปิดเมื่อไม่มีสิทธิ์ด้วย — ผู้ใช้พิมพ์ `?new=1` เข้ามาตรงๆ ได้
           (Frontend กันคือ UX · ด่านจริงคือ RPC create_portfolio_locked เสมอ) */}
@@ -232,7 +382,8 @@ function AppPortfolio() {
           onClose={closeCreate}
           onCreated={async () => {
             closeCreate();
-            // โหลดรายการพอร์ตใน Shell ใหม่ ไม่งั้น Switcher จะยังไม่เห็นพอร์ตที่เพิ่งสร้าง
+            // พอร์ตใหม่เพิ่งเกิด → Cache เดิมไม่มีมัน ต้องล้างก่อนโหลดใหม่
+            cacheRef.current.clear();
             await reload?.();
           }}
         />
@@ -257,15 +408,16 @@ function AppPortfolio() {
 
       {recordType && (
         <RecordTransactionModal
-          selectedPortfolio={selectedPortfolio}
-          /* รายการพอร์ตเต็มมาจาก Context ของ Shell อยู่แล้ว — Modal ใช้สร้าง
-             ช่อง "บันทึกลงพอร์ต" โดยไม่ต้องยิง GET /portfolios ซ้ำ */
+          selectedPortfolio={opened ?? selectedPortfolio}
           portfolios={portfolios}
           defaultType={recordType}
           onClose={() => setRecordType(null)}
           onSaved={async () => {
             setRecordType(null);
-            // ยอด/สัดส่วนเปลี่ยนแล้ว — โหลดทั้งสัดส่วนหน้านี้และพอร์ตใน Shell ใหม่
+            // ยอด/สัดส่วน/กำไรเปลี่ยนแล้ว — ล้าง Cache ทั้งชุดแล้วโหลดใหม่
+            // (ไม่ล้างเฉพาะพอร์ตเดียว เพราะสินทรัพย์อาจไปรวมที่พอร์ตอื่นได้
+            //  เมื่อ Symbol นั้นถืออยู่ที่อื่นแล้ว — ดู validateBuy)
+            cacheRef.current.clear();
             await Promise.all([load(), reload?.()]);
           }}
         />

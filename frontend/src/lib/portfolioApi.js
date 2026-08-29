@@ -66,6 +66,43 @@ export async function getAllocation({ groupBy = 'assetType', portfolioId } = {})
   return apiGet(`${BASE}/portfolio/allocation?${params.toString()}`);
 }
 
+// ── Holdings + กำไร/ขาดทุนรายสินทรัพย์ (Stage 9 — หน้าพอร์ตแบบ 2 ระดับ) ────
+
+// GET /dashboard/portfolio — คืน holdings[] ของ **ทุกพอร์ตรวมกัน** ในคำขอเดียว
+//
+// ⭐ ทำไมใช้ตัวนี้แทน GET /assets?portfolioId= สำหรับตารางสินทรัพย์รายพอร์ต:
+//   1. แต่ละ holding **มี portfolioId ติดมาด้วยอยู่แล้ว** → กรองฝั่ง UI ได้ทันที
+//      คำขอเดียวจึงใช้ได้กับทุกพอร์ต ไม่ต้องยิงซ้ำต่อพอร์ต
+//   2. มี heldQuantity / totalInvested / averageCost / currency มาให้ครบ (มาจาก
+//      สูตรเดียวกับคำสั่ง LINE "พอต" — portfolio.service.getPortfolioSummary)
+//      ส่วน /assets คืนแค่ป้ายกำกับ (symbol/name/type/sector) ไม่มีตัวเลขเลย
+//   3. ตัดสินทรัพย์ที่ขายหมดแล้ว (heldQuantity <= 0) ออกให้แล้ว — /assets ยังคืนมา
+//      ซึ่งจะทำให้ยิง /profit แล้วได้ 404 NO_HOLDING_TO_CALCULATE_PROFIT เปล่าๆ
+//
+// ⚠️ **ไม่รองรับ ?portfolioId=** (ตรวจแล้วที่ dashboard.controller.getPortfolio —
+// เรียก getPortfolioSummary(userId) ล้วน) การกรองจึงต้องทำฝั่ง UI ด้วย
+// holding.portfolioId ที่ Backend ประทับมาให้ — เป็นการ "กรองแถว" ไม่ใช่คำนวณเงิน
+export async function getPortfolioHoldings() {
+  const data = await apiGet(`${BASE}/dashboard/portfolio`);
+  return data ?? null;
+}
+
+// GET /dashboard/profit/:symbol — กำไร/ขาดทุนของสินทรัพย์ตัวเดียว (ต้องมีราคาสด)
+//
+// ⚠️ **ส่ง brokerId ไปด้วยเสมอเมื่อรู้** — ตั้งแต่ migration 046 ผู้ใช้ถือ Symbol
+// เดียวกันได้หลายโบรก "symbol" จึงระบุแถวไม่ได้อีก ถ้าไม่ส่งจะได้ 409
+// AMBIGUOUS_ASSET_BROKER แล้วแถวนั้น "ตกหล่นเงียบๆ" (ดูคำเตือนใน
+// portfolio.service.getPortfolioSummary ที่ระบุเคสนี้ไว้ตรงๆ)
+//   null → 'none' = "เจาะจงว่าไม่ระบุโบรก" ซึ่งคนละความหมายกับไม่ส่ง Key มาเลย
+export async function getAssetProfit(symbol, { portfolioId, brokerId } = {}) {
+  const params = new URLSearchParams();
+  if (portfolioId) params.set('portfolioId', portfolioId);
+  if (brokerId !== undefined) params.set('brokerId', brokerId === null ? 'none' : brokerId);
+
+  const qs = params.toString();
+  return apiGet(`${BASE}/dashboard/profit/${encodeURIComponent(symbol)}${qs ? `?${qs}` : ''}`);
+}
+
 // ── Assets ────────────────────────────────────────────────────────────────
 
 // GET /assets — Free · Filter brokerId / sector / portfolioId ('none' = ไม่ระบุ)
