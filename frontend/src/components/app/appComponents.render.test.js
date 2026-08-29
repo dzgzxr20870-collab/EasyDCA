@@ -161,6 +161,32 @@ describe('RecordTransactionModal — defaultType จากปุ่มหน้�
     expect(html).toContain('checked="" value="sell"');
     expect(html).not.toContain('disabled="" value="sell"');
   });
+
+  // ⭐⭐ Regression (บั๊ก 29 ส.ค. 2569): Switcher เลือก "ทั้งหมด" → selectedPortfolio
+  // เป็น null (AppShell.jsx: portfolioId === ALL_PORTFOLIOS ? null : ...) ซึ่งเป็น
+  // **ค่าเริ่มต้นตอนเปิด /app** — portfolioWriteState(null).canAdd จึงเป็น false
+  // แล้ว Modal ขึ้นว่า "แพ็กเกจ Premium หมดอายุแล้ว" ทั้งที่ผู้ใช้เป็น Premium Active
+  // อยู่จริง (และเกิดกับ Free ที่เขียนพอร์ต Default ได้ด้วย) — "ไม่ได้เลือกพอร์ต"
+  // ไม่ใช่ "พอร์ตถูกล็อก" ห้ามอ้างเหตุผลเรื่องแพ็กเกจหมดอายุเด็ดขาด
+  test('⭐ ยังไม่ได้เลือกพอร์ต (ทั้งหมด) → ห้ามอ้างว่า Premium หมดอายุ และห้ามปิดปุ่มซื้อ', () => {
+    const html = render({ selectedPortfolio: null });
+
+    expect(html).not.toContain('แพ็กเกจ Premium หมดอายุแล้ว');
+    expect(html).not.toContain('disabled="" value="buy"');
+    expect(html).not.toContain('disabled="" value="dividend"');
+  });
+
+  // ⚠️ ข้อความ "พอร์ตปลายทาง" ต้องขึ้นทุกกรณี ไม่ใช่เฉพาะตอนเลือก "ทั้งหมด" —
+  // ฟอร์มนี้ไม่เคยส่ง portfolioId ไป Backend เลย (buildTransactionPayload) พอร์ต
+  // ปลายทางจึงมาจาก Symbol เสมอ ถ้าโชว์เฉพาะบางกรณีผู้ใช้จะเข้าใจผิดว่า Switcher
+  // ด้านบนเป็นตัวกำหนดปลายทาง ซึ่งไม่จริง
+  test('บอกพอร์ตปลายทางเสมอ ทั้งตอนเลือกพอร์ตเจาะจงและตอนดูรวมทุกพอร์ต', () => {
+    for (const selectedPortfolio of [WRITABLE, LOCKED, null]) {
+      const html = render({ selectedPortfolio });
+      expect(html).toContain('พอร์ตที่ถือสินทรัพย์นี้อยู่แล้ว');
+      expect(html).toContain('ไม่ขึ้นกับพอร์ตที่กำลังดูอยู่ด้านบน');
+    }
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

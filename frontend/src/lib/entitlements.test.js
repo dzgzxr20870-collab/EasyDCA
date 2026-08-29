@@ -110,6 +110,27 @@ describe('⭐ portfolioWriteState — "ขายได้เสมอ" ห้า
     });
   });
 
+  // ⭐⭐ Regression (บั๊ก 29 ส.ค. 2569) — สาเหตุที่ Premium ที่ยัง Active เจอข้อความ
+  // "แพ็กเกจ Premium หมดอายุแล้ว" ตอนเปิด /app: Switcher ค่าเริ่มต้นคือ "ทั้งหมด"
+  // ซึ่ง AppShell แปลงเป็น null แล้วเดิมถูกนับเป็น "เขียนไม่ได้" เหมือนพอร์ตที่ถูกล็อก
+  //
+  // null ≠ undefined โดยเจตนา: null = "เลือกดูรวมทุกพอร์ต" (Backend เลือกปลายทางเอง
+  // และบังคับด่านเอง) · undefined = "ยังไม่รู้สถานะ" (ปิดไว้ก่อน)
+  test('⭐ null = ดูรวมทุกพอร์ต → เพิ่มได้ และ **ห้าม** ถือว่าถูกล็อก', () => {
+    expect(portfolioWriteState(null)).toEqual({
+      canAdd: true,
+      canReduce: true,
+      isLocked: false,
+    });
+  });
+
+  // ⚠️ ด่านจริงของ "พอร์ตถูกล็อก" ต้องไม่ถูกผ่อนตามไปด้วย — ข้อนี้คือหลักประกัน
+  // ว่าการแก้บั๊กด้านบนไม่ได้เปิดช่องให้ผู้ใช้ Free เขียนพอร์ตส่วนเกินได้
+  test('⚠️ แก้บั๊ก null แล้ว พอร์ตที่ถูกล็อกจริงต้องยังปิดเหมือนเดิมเป๊ะ', () => {
+    expect(portfolioWriteState({ id: 'pf-2', canWrite: false }).canAdd).toBe(false);
+    expect(portfolioWriteState({ id: 'pf-2', canWrite: false }).isLocked).toBe(true);
+  });
+
   // ⚠️ canWrite ต้องมาจาก Backend เท่านั้น ห้ามคำนวณเองจาก plan
   test('⚠️ ไม่สนใจ plan ของผู้ใช้เลย — ดูแค่ canWrite ที่ Backend ส่งมา', () => {
     expect(portfolioWriteState({ canWrite: true, plan: 'free' }).canAdd).toBe(true);
