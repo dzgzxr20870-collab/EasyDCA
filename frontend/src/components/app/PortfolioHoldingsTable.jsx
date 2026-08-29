@@ -3,7 +3,7 @@ import { profitCacheKey } from './portfolioDetailData.js';
 // ═══════════════════════════════════════════════════════════════════════════
 // PortfolioHoldingsTable — ตารางสินทรัพย์ในพอร์ตหนึ่งใบ (Stage 9 เฟส 1)
 // ═══════════════════════════════════════════════════════════════════════════
-// คอลัมน์: Symbol · จำนวนที่ถือ · ต้นทุน · กำไร/ขาดทุน
+// คอลัมน์: Symbol · โบรก/Exchange · จำนวนที่ถือ · ต้นทุน · กำไร/ขาดทุน
 //
 // ⚠️⚠️ **ห้ามคำนวณเงินในไฟล์นี้แม้แต่บรรทัดเดียว** (กฎยืนข้อ 1) — ทุกตัวเลขมาจาก
 // Backend ตรงๆ:
@@ -14,6 +14,26 @@ import { profitCacheKey } from './portfolioDetailData.js';
 // ⚠️ **ห้ามรวมยอดข้ามสกุลเงินเอง** — แต่ละแถวแสดงสกุลของตัวเอง (THB/USD) ตามที่
 // Backend ระบุมาใน holding.currency · ยอดรวมของพอร์ตใช้ allocation.totalValueThb
 // ซึ่ง Backend แปลงและตรวจ fxUnavailableForUsd ให้แล้ว
+//
+// ── ⭐ คอลัมน์ "โบรก/Exchange" (Founder 30 ส.ค. 2569) ────────────────────────
+// เหตุผล: EOSE ที่ดูเหมือนถือซ้ำ 2 แถว (106 USD จากสลิป, 600 USD จากกรอกเอง)
+// ในพอร์ตเดียวกัน แท้จริงคือคนละโบรก (migration 046 — ถือ Symbol เดียวกันได้
+// หลายโบรก) ซึ่งเป็นพฤติกรรมที่ถูกต้อง แต่ตารางไม่เคยบอกว่าแถวไหนเป็นของโบรก
+// ไหน ทำให้ดูเหมือนข้อมูลซ้ำ/ผิดพลาด
+//
+// ⚠️ GET /dashboard/portfolio คืนแค่ `brokerId` **ไม่มีชื่อโบรก** (ตรวจแล้วที่
+// portfolio.service.getPortfolioSummary — holding.brokerId ดิบ ไม่ join ชื่อ)
+// ต้อง Join กับ `brokers` (มาจาก GET /brokers ที่ AppPortfolio.jsx โหลดมาให้ทาง
+// Prop) เอง — brokerId: null = "ไม่ระบุ" (ผู้ใช้ไม่เลือกโบรกตอนบันทึก ไม่ใช่ Error)
+// ⚠️ Fallback 'ไม่ระบุ' เมื่อหาไม่เจอในลิสต์ (บรรทัดสุดท้าย) เกิดได้ทางทฤษฎีเท่านั้น
+// ถ้า `brokers` ยังโหลดไม่เสร็จตอน Render — ปกติจะไม่เกิดเพราะ AppPortfolio.jsx
+// โหลด brokers ในกระบวนการ load() เดียวกับ holdings ก่อน Render ตารางนี้เสมอ ·
+// broker ที่ถูกลบจริงจะทำให้ brokerId เป็น null จาก FK ON DELETE SET NULL อยู่แล้ว
+// (broker.service.deleteBroker) จึงไม่มีทาง "มี brokerId แต่หาไม่เจอ" ค้างอยู่จริง
+function brokerLabel(brokerId, brokers) {
+  if (!brokerId) return 'ไม่ระบุ';
+  return (brokers ?? []).find((b) => b?.id === brokerId)?.name ?? 'ไม่ระบุ';
+}
 
 function fmtQty(n) {
   const num = Number(n);
@@ -58,6 +78,7 @@ function ProfitCell({ profit }) {
 function PortfolioHoldingsTable({
   rows = [],
   portfolioId,
+  brokers = [],
   profitBySymbol = {},
   profitCapped = false,
   onLoadProfit,
@@ -93,6 +114,10 @@ function PortfolioHoldingsTable({
           <thead>
             <tr>
               <th>สินทรัพย์</th>
+              {/* ⭐ จอแคบ (≤620px) ซ่อนคอลัมน์นี้แล้วโชว์เป็นบรรทัดรองใต้ชื่อ
+                  สินทรัพย์แทน (.app-table__broker-inline ใน td แรก) — CSS ล้วน
+                  ไม่ต้องตรวจความกว้างจอด้วย JS (ดู appShell.css) */}
+              <th className="app-table__broker">โบรก/Exchange</th>
               <th className="app-table__num">จำนวนที่ถือ</th>
               <th className="app-table__num">ต้นทุน</th>
               <th className="app-table__num">กำไร/ขาดทุน</th>
@@ -110,7 +135,13 @@ function PortfolioHoldingsTable({
                 <td>
                   <strong>{h.symbol}</strong>
                   {h.name && h.name !== h.symbol && <small> {h.name}</small>}
+                  {/* ⭐ จอแคบเท่านั้น — คู่กับคอลัมน์ .app-table__broker ที่ซ่อน
+                      อยู่ (สลับกันด้วย CSS ไม่ใช่ JS) กันข้อมูลหายไปทั้งสองทาง */}
+                  <small className="app-table__broker-inline">
+                    🏦 {brokerLabel(h.brokerId, brokers)}
+                  </small>
                 </td>
+                <td className="app-table__broker">{brokerLabel(h.brokerId, brokers)}</td>
                 <td className="app-table__num">{fmtQty(h.heldQuantity)}</td>
                 <td className="app-table__num">
                   {fmtMoney(h.totalInvested)}{' '}

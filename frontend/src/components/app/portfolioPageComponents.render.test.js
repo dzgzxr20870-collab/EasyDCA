@@ -159,6 +159,64 @@ describe('PortfolioHoldingsTable — ตารางสินทรัพย์�
   });
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ⭐ คอลัมน์ "โบรก/Exchange" (Founder 30 ส.ค. 2569)
+// ═══════════════════════════════════════════════════════════════════════════
+// เคสจริง: EOSE ดูเหมือนถือซ้ำ 2 แถวในพอร์ตเดียวกัน (106 USD จากสลิป, 600 USD
+// จากกรอกเอง) — แท้จริงคือคนละโบรก (migration 046 ถือ Symbol เดียวกันได้หลาย
+// โบรก) ซึ่งถูกต้องแล้ว แต่ตารางไม่เคยบอกว่าแถวไหนเป็นของโบรกไหน
+const BROKERS = [
+  { id: 'bk-1', name: 'Bitkub' },
+  { id: 'bk-2', name: 'Binance' },
+];
+
+describe('⭐ คอลัมน์ "โบรก/Exchange" ในตาราง Holdings', () => {
+  test('⭐ แถวที่มี brokerId → แสดงชื่อโบรกที่ Join มาจากลิสต์ที่ส่งมา', () => {
+    const html = renderTable({ brokers: BROKERS });
+
+    expect(html).toContain('Bitkub');
+  });
+
+  // holding.brokerId ดิบไม่มีชื่อติดมา (ตรวจแล้วที่ portfolio.service) — ต้อง Join
+  // เอง ถ้า Join ไม่ได้ ต้องไม่ throw หรือแสดงค่าว่างเปล่า
+  test('⭐ แถวที่ brokerId: null → แสดง "ไม่ระบุ" ไม่ใช่ช่องว่าง', () => {
+    const html = renderTable({ brokers: BROKERS }); // AAPL ใน ROWS มี brokerId: null
+
+    expect(html).toContain('ไม่ระบุ');
+  });
+
+  // ⭐⭐ เคสของ Founder โดยตรง — Symbol เดียวกันคนละโบรกต้องแยกแยะได้ชัดเจน
+  // ไม่ใช่แค่ "ไม่ทับกัน" (React key) แต่ต้อง "อ่านออกว่าเป็นคนละโบรก" ด้วยตา
+  test('⭐⭐ Symbol เดียวกันคนละโบรก (เคส EOSE) → ชื่อโบรกต่างกันชัดเจน ไม่ดูเหมือนซ้ำ', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(PortfolioHoldingsTable, {
+        rows: [
+          { symbol: 'EOSE', brokerId: 'bk-1', heldQuantity: 10, totalInvested: 106, currency: 'USD' },
+          { symbol: 'EOSE', brokerId: 'bk-2', heldQuantity: 50, totalInvested: 600, currency: 'USD' },
+        ],
+        portfolioId: P1,
+        brokers: BROKERS,
+        profitBySymbol: {},
+      })
+    );
+
+    expect(html).toContain('Bitkub');
+    expect(html).toContain('Binance');
+    // ทั้งสองแถวต้องมีอยู่จริง (ไม่ถูก React รวมเป็นแถวเดียวเพราะ key ชนกัน)
+    expect((html.match(/EOSE/g) ?? []).length).toBeGreaterThanOrEqual(2);
+  });
+
+  // ⚠️ ไม่ส่ง brokers เลย (Prop เป็น Optional) → ต้องไม่พัง ตกไปที่ "ไม่ระบุ" เสมอ
+  test('ไม่ส่ง brokers มาเลย → ไม่พัง แสดง "ไม่ระบุ" แทนการ Crash', () => {
+    expect(() => renderTable({ brokers: undefined })).not.toThrow();
+    expect(renderTable({ brokers: undefined })).toContain('ไม่ระบุ');
+  });
+
+  test('มีคอลัมน์หัวตาราง "โบรก/Exchange"', () => {
+    expect(renderTable({ brokers: BROKERS })).toContain('โบรก/Exchange');
+  });
+});
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ⭐ ย้ายสินทรัพย์ข้ามพอร์ต (มติ Founder 29 ส.ค. 2569)

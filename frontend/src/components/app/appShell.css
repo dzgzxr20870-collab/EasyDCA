@@ -569,6 +569,16 @@
 .app-table__num { text-align: right; }
 .app-table td small { color: var(--muted, #8B9587); font-size: 11.5px; }
 
+/* ── คอลัมน์ "โบรก/Exchange" — เดสก์ท็อป = คอลัมน์แยก, มือถือ = บรรทัดรอง ──────
+   ⚠️ สลับกันด้วย CSS ล้วน (ไม่ใช้ JS ตรวจความกว้างจอ) กันเห็นข้อมูลซ้ำ/หายพร้อมกัน
+   ทั้งสองทาง — .app-table__broker-inline อยู่ใน DOM เสมอแต่ถูกซ่อนด้วย
+   display:none บนจอกว้าง แล้วสลับบทบาทกับคอลัมน์ที่ ≤620px */
+.app-table__broker-inline { display: none; }
+@media (max-width: 620px) {
+  .app-table__broker { display: none; }
+  .app-table td .app-table__broker-inline { display: block; }
+}
+
 /* กำไร/ขาดทุน — สีต้องสื่อความหมายแต่ห้ามเป็นตัวชี้นำการลงทุน (กฎเหล็กข้อ 1)
    ใช้แค่บอกทิศทางของตัวเลขที่บันทึกไว้จริง ไม่มีข้อความแนะนำใดๆ */
 .app-pnl { font-weight: 800; }

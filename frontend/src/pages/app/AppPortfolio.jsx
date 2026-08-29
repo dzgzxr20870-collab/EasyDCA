@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useOutletContext, useSearchParams } from 'react-router-dom';
-import { getPortfolioHoldings } from '../../lib/portfolioApi.js';
+import { getPortfolioHoldings, listBrokers } from '../../lib/portfolioApi.js';
 import { portfolioWriteState, canCreatePortfolio } from '../../lib/entitlements.js';
 import AllocationDonut from '../../components/app/AllocationDonut.jsx';
 import CreatePortfolioModal from '../../components/app/CreatePortfolioModal.jsx';
@@ -128,6 +128,9 @@ function AppPortfolio() {
 
   const [allocation, setAllocation] = useState(null);
   const [holdings, setHoldings] = useState([]);
+  // ชื่อโบรกสำหรับตาราง Holdings ระดับ 2 (holding.brokerId ดิบไม่มีชื่อติดมา —
+  // ต้อง Join เอง) โหลดแบบ Lazy เฉพาะตอนเปิดดูรายละเอียดพอร์ตครั้งแรก
+  const [brokers, setBrokers] = useState([]);
   const [valueByPortfolio, setValueByPortfolio] = useState({});
   const [profitBySymbol, setProfitBySymbol] = useState({});
   const [profitCapped, setProfitCapped] = useState(false);
@@ -166,6 +169,17 @@ function AppPortfolio() {
         });
         setProfitBySymbol(profits);
         setProfitCapped(capped);
+
+        // ── ชื่อโบรกสำหรับคอลัมน์ "โบรก/Exchange" ──────────────────────────
+        // ⚠️ GET /dashboard/portfolio คืนแค่ brokerId ไม่มีชื่อ (ตรวจแล้วที่
+        // portfolio.service) ต้องยิง GET /brokers แยก — จำไว้ใน Cache เดียวกัน
+        // (คำขอเดียวจบตลอดอายุหน้า ไม่ยิงซ้ำตอนสลับพอร์ตไปมา)
+        let brokerList = cache.get('brokers');
+        if (!brokerList) {
+          brokerList = await listBrokers();
+          cache.set('brokers', brokerList);
+        }
+        setBrokers(brokerList);
       } else {
         // ── มูลค่ารายพอร์ตสำหรับการ์ด ────────────────────────────────────────
         // ⚠️ ต้องยิง allocation ทีละพอร์ต เพราะ groupBy รองรับแค่
@@ -326,6 +340,7 @@ function AppPortfolio() {
           <PortfolioHoldingsTable
             rows={rows}
             portfolioId={openedId}
+            brokers={brokers}
             profitBySymbol={profitBySymbol}
             profitCapped={profitCapped}
             loadingProfit={loadingProfit}
