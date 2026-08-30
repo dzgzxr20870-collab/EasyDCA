@@ -30,6 +30,7 @@ import {
   assetOptionLabel,
   assetListParams,
   sellAllErrorText,
+  buyErrorText,
 } from './recordTransactionLogic.js';
 
 // สลิปตามรูปแบบ Response ของ API.md § 15.8 เป๊ะ
@@ -779,5 +780,43 @@ describe('⭐ sellAllErrorText', () => {
   test('⚠️ AMBIGUOUS_ASSET_BROKER/PORTFOLIO (กันเหนียว) → ไม่หลุดเป็นโค้ดดิบ', () => {
     expect(sellAllErrorText('AMBIGUOUS_ASSET_BROKER')).not.toBe('AMBIGUOUS_ASSET_BROKER');
     expect(sellAllErrorText('AMBIGUOUS_ASSET_PORTFOLIO')).not.toBe('AMBIGUOUS_ASSET_PORTFOLIO');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ⭐ buyErrorText — ข้อความไทยของ Error ฝั่ง "ซื้อ" ด้วยยอดรวมอย่างเดียว (บั๊ก
+// Founder ทดสอบ 30 ส.ค. 2569: ซื้อเจอ PRICE_FEED_NOT_IMPLEMENTED แล้วโดนบอกให้
+// "เลือกขายทั้งหมด" ทั้งที่กำลังซื้อ ปุ่มนั้นไม่มีในโหมดซื้อเลย)
+// ═══════════════════════════════════════════════════════════════════════════
+describe('⭐ buyErrorText', () => {
+  test('⭐⭐ PRICE_FEED_NOT_IMPLEMENTED → บอกให้กรอกจำนวน/ราคาเอง ไม่พูดถึง "ขายทั้งหมด" เลย', () => {
+    const text = buyErrorText('PRICE_FEED_NOT_IMPLEMENTED');
+    expect(text).toContain('กรอกจำนวนหน่วยและราคาต่อหน่วยเองแทน');
+    expect(text).not.toContain('ขายทั้งหมด');
+    expect(text).not.toBe('PRICE_FEED_NOT_IMPLEMENTED');
+  });
+
+  test('MARKET_PRICE_UNAVAILABLE → ข้อความเดียวกับ PRICE_FEED_NOT_IMPLEMENTED ไม่พูดถึง "ขายทั้งหมด"', () => {
+    const text = buyErrorText('MARKET_PRICE_UNAVAILABLE');
+    expect(text).toBe(buyErrorText('PRICE_FEED_NOT_IMPLEMENTED'));
+    expect(text).not.toContain('ขายทั้งหมด');
+  });
+
+  test('GOLD_PRICE_UNAVAILABLE → บอกให้กรอกจำนวน/ราคาเอง ไม่พูดถึง "ขายทั้งหมด"', () => {
+    const text = buyErrorText('GOLD_PRICE_UNAVAILABLE');
+    expect(text).toContain('ราคาทองคำ');
+    expect(text).not.toContain('ขายทั้งหมด');
+  });
+
+  test('ASSET_NOT_FOUND / AMBIGUOUS_ASSET_* → ใช้ข้อความ Generic เดียวกับ sellAllErrorText', () => {
+    expect(buyErrorText('ASSET_NOT_FOUND')).toBe(sellAllErrorText('ASSET_NOT_FOUND'));
+    expect(buyErrorText('AMBIGUOUS_ASSET_BROKER')).toBe(sellAllErrorText('AMBIGUOUS_ASSET_BROKER'));
+    expect(buyErrorText('AMBIGUOUS_ASSET_PORTFOLIO')).toBe(sellAllErrorText('AMBIGUOUS_ASSET_PORTFOLIO'));
+  });
+
+  test('Code ที่ไม่รู้จัก หรือ Code เฉพาะฝั่งขาย (NOTHING_TO_SELL) → คืน null', () => {
+    expect(buyErrorText('SOME_OTHER_CODE')).toBeNull();
+    expect(buyErrorText(undefined)).toBeNull();
+    expect(buyErrorText('NOTHING_TO_SELL')).toBeNull();
   });
 });

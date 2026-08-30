@@ -23,6 +23,7 @@ import {
   assetOptionLabel,
   assetListParams,
   sellAllErrorText,
+  buyErrorText,
 } from './recordTransactionLogic.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -523,10 +524,14 @@ function RecordTransactionModal({
       // ⚠️ แสดงข้อความจาก Backend ตรงๆ — มันถูกเขียนมาให้ผู้ใช้อ่านรู้เรื่องแล้ว
       // และครอบเคสที่ Frontend ไม่รู้ (พอร์ตถูกล็อก · กำกวมข้ามพอร์ต/โบรก · เพดาน)
       //
-      // ⭐ 2 Code ที่ปุ่ม "ขายทั้งหมด" คาดว่าจะเจอจริง (ปัญหาที่ 3) แปลเป็นข้อความ
-      // ไทยที่ชี้ทางออกก่อนเสมอ — err.message ของ lib/api.js เป็น Error Code ดิบ
-      // (ดู sellAllErrorText) ไม่ใช่ข้อความไทยจริงๆ ต่างจากที่คอมเมนต์เดิมด้านบนว่าไว้
-      setError(sellAllErrorText(err?.message) ?? err?.message ?? 'บันทึกไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+      // ⭐ Code บางตัว (เช่น PRICE_FEED_NOT_IMPLEMENTED) throw ได้จากทั้งซื้อและ
+      // ขาย แต่ทางออกที่ถูกต้องต่างกันคนละแบบ (Founder เจอบั๊ก 30 ส.ค. 2569: ซื้อ
+      // ด้วยยอดรวมแล้วโดนบอกให้ "เลือกขายทั้งหมด" ทั้งที่กำลังซื้อ) — เลือก Mapper
+      // ตาม `type` เสมอ ห้ามใช้ sellAllErrorText() กับ Error ฝั่งซื้อเด็ดขาด
+      // err.message ของ lib/api.js เป็น Error Code ดิบ (ดู sellAllErrorText/
+      // buyErrorText) ไม่ใช่ข้อความไทยจริงๆ ต่างจากที่คอมเมนต์เดิมด้านบนว่าไว้
+      const contextErrorText = type === 'sell' ? sellAllErrorText : buyErrorText;
+      setError(contextErrorText(err?.message) ?? err?.message ?? 'บันทึกไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
     } finally {
       setSubmitting(false);
     }
