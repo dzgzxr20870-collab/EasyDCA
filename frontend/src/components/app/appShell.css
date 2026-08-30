@@ -414,6 +414,12 @@
   border-color: transparent; color: #fff;
   box-shadow: 0 5px 14px rgba(21,145,70,.24);
 }
+/* ⚠️ ใช้เฉพาะ Action ที่ย้อนกลับไม่ได้ (เช่น ลบพอร์ต) — ต้องแยกจากปุ่มปกติให้
+   เห็นชัดว่าเป็นคนละระดับความเสี่ยงกัน */
+.demo-btn--danger {
+  background: #fef2f2; border-color: #fecaca; color: #991b1b;
+}
+.demo-btn--danger:hover:not(:disabled) { border-color: #dc2626; background: #fee2e2; }
 
 .demo-portfolio-switcher {
   border: 1px solid var(--line2); border-radius: var(--r-sm);
@@ -505,6 +511,8 @@
   border: none; background: none; font-size: 18px; line-height: 1; cursor: pointer; color: var(--muted, #8B9587); padding: 4px 6px;
 }
 .app-modal__body { padding: 8px 20px 20px; display: flex; flex-direction: column; gap: 14px; }
+.app-modal__body section + section { border-top: 1px solid var(--line2); padding-top: 14px; }
+.app-settings__section-title { margin: 0 0 8px; font-size: 14px; font-weight: 800; }
 
 /* ═══════════════════════════════════════════════════════════════════════
    หน้าพอร์ตแบบ 2 ระดับ (เฟส 1) — การ์ดพอร์ต + ตารางสินทรัพย์

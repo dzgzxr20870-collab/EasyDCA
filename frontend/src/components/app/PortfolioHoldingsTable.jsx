@@ -83,7 +83,6 @@ function PortfolioHoldingsTable({
   profitCapped = false,
   onLoadProfit,
   loadingProfit = false,
-  onMove,
 }) {
   if (rows.length === 0) {
     return (
@@ -121,10 +120,6 @@ function PortfolioHoldingsTable({
               <th className="app-table__num">จำนวนที่ถือ</th>
               <th className="app-table__num">ต้นทุน</th>
               <th className="app-table__num">กำไร/ขาดทุน</th>
-              {/* ⭐ ย้ายพอร์ต — แยกเป็นปุ่มของตัวเองต่อแถว หาเจอง่าย ไม่ฝังอยู่ใน
-                  ฟอร์มบันทึกซื้อ/ขาย (มติ Founder: "บันทึกซื้อขาย" กับ "ย้ายพอร์ต"
-                  เป็นคนละเรื่องกัน) */}
-              {onMove && <th aria-label="จัดการ" />}
             </tr>
           </thead>
           <tbody>
@@ -150,13 +145,6 @@ function PortfolioHoldingsTable({
                 <td className="app-table__num">
                   <ProfitCell profit={profitBySymbol[profitCacheKey(portfolioId, h.symbol, h.brokerId)]} />
                 </td>
-                {onMove && (
-                  <td className="app-table__num">
-                    <button type="button" className="demo-btn" onClick={() => onMove(h)}>
-                      ย้ายพอร์ต
-                    </button>
-                  </td>
-                )}
               </tr>
             ))}
           </tbody>

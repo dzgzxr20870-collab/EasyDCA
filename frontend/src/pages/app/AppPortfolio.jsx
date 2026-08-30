@@ -8,6 +8,7 @@ import RecordTransactionModal from '../../components/app/RecordTransactionModal.
 import PortfolioCards from '../../components/app/PortfolioCards.jsx';
 import PortfolioHoldingsTable from '../../components/app/PortfolioHoldingsTable.jsx';
 import MoveAssetPortfolioDialog from '../../components/app/MoveAssetPortfolioDialog.jsx';
+import PortfolioSettingsPanel from '../../components/app/PortfolioSettingsPanel.jsx';
 import {
   fetchAllocationCached,
   fetchProfitsForPortfolio,
@@ -118,6 +119,8 @@ function AppPortfolio() {
   const [recordType, setRecordType] = useState(null);
   // สินทรัพย์ที่กำลังจะย้ายพอร์ต (null = ไม่ได้เปิด Dialog)
   const [movingHolding, setMovingHolding] = useState(null);
+  // เมนู "ตั้งค่าพอร์ต" — เปิดได้เฉพาะระดับ 2 (มีพอร์ตเปิดอยู่) เท่านั้น
+  const [showSettings, setShowSettings] = useState(false);
   const [groupBy, setGroupBy] = useState('assetType');
 
   // ── Cache ข้าม Render/ข้ามการสลับพอร์ต ─────────────────────────────────────
@@ -258,6 +261,11 @@ function AppPortfolio() {
               {opened.isDefault ? '⭐ ' : '🗂️ '}
               {opened.name}
             </h1>
+            {/* ⚠️ ต้องอยู่เฉพาะระดับ 2 (เปิดพอร์ตอยู่เท่านั้น) — ห้ามโผล่ที่หน้า
+                การ์ดรวม /app/portfolio (มติ Founder 30 ส.ค. 2569) */}
+            <button type="button" className="demo-btn" onClick={() => setShowSettings(true)}>
+              ⚙️ ตั้งค่าพอร์ต
+            </button>
           </>
         ) : (
           <h1>พอร์ตของฉัน</h1>
@@ -345,7 +353,6 @@ function AppPortfolio() {
             profitCapped={profitCapped}
             loadingProfit={loadingProfit}
             onLoadProfit={handleLoadProfit}
-            onMove={setMovingHolding}
           />
 
           {/* ⭐ พอร์ตถูกล็อก → เพิ่มไม่ได้ แต่ **ห้ามซ่อนปุ่มขายเด็ดขาด**
@@ -423,6 +430,34 @@ function AppPortfolio() {
             ปิด
           </button>
         </div>
+      )}
+
+      {showSettings && opened && (
+        <PortfolioSettingsPanel
+          portfolio={opened}
+          holdings={rows}
+          brokers={brokers}
+          onClose={() => setShowSettings(false)}
+          onRenamed={async () => {
+            // ชื่อพอร์ตอยู่ใน outletContext.portfolios (ของ AppShell) ไม่ใช่ Cache
+            // ของหน้านี้ — reload() พอ ไม่ต้องล้าง cacheRef (ตัวเลข/holdings ไม่เปลี่ยน)
+            setShowSettings(false);
+            await reload?.();
+          }}
+          onMoveAsset={(holding) => {
+            // ปิด Settings แล้วเปิด Flow เดิมของ MoveAssetPortfolioDialog ต่อทันที
+            setShowSettings(false);
+            setMovingHolding(holding);
+          }}
+          onDeleted={async () => {
+            // พอร์ตหายไปแล้ว + สินทรัพย์ (ถ้ามี) ย้ายเข้าพอร์ตหลัก — ล้าง Cache
+            // ทั้งชุดเหมือน onMoved ด้านล่าง แล้วกลับไปหน้าการ์ดรวม
+            setShowSettings(false);
+            cacheRef.current.clear();
+            backToOverview();
+            await reload?.();
+          }}
+        />
       )}
 
       {movingHolding && (

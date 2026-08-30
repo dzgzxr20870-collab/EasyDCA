@@ -219,33 +219,25 @@ describe('⭐ คอลัมน์ "โบรก/Exchange" ในตารา�
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ⭐ ย้ายสินทรัพย์ข้ามพอร์ต (มติ Founder 29 ส.ค. 2569)
+// ⭐ ย้ายสินทรัพย์ข้ามพอร์ต (มติ Founder 29 ส.ค. 2569 → ย้ายเข้าเมนู "ตั้งค่าพอร์ต"
+// 30 ส.ค. 2569 — ดู PortfolioSettingsPanel.render.test.js)
 // ═══════════════════════════════════════════════════════════════════════════
 const HOLDING = { assetId: 'a-1', symbol: 'BTC', brokerId: null, heldQuantity: 0.5, totalInvested: 1000 };
 
-describe('⭐ ปุ่ม "ย้ายพอร์ต" ในตาราง Holdings', () => {
-  test('⭐ ส่ง onMove มา → มีปุ่มย้ายพอร์ตต่อแถว', () => {
-    const html = renderToStaticMarkup(
-      React.createElement(PortfolioHoldingsTable, {
-        rows: ROWS,
-        portfolioId: P1,
-        profitBySymbol: {},
-        onMove() {},
-      })
-    );
+// ⭐ Regression: ปุ่ม "ย้ายพอร์ต" ต่อแถวถูกย้ายเข้าเมนู "ตั้งค่าพอร์ต" ทั้งหมดแล้ว
+// (มติ Founder 30 ส.ค. 2569) — ตารางต้อง **ไม่มี** ปุ่มนี้อีกต่อไปไม่ว่า Prop ใดจะส่งมา
+describe('⭐ ตาราง Holdings ต้องไม่มีปุ่ม "ย้ายพอร์ต" ต่อแถวอีกต่อไป', () => {
+  test('⭐ ไม่มีข้อความ "ย้ายพอร์ต" ปรากฏในตารางเลย (ทางเข้าใหม่คือเมนูตั้งค่าเท่านั้น)', () => {
+    const html = renderTable();
 
-    expect(html).toContain('ย้ายพอร์ต');
+    expect(html).not.toContain('ย้ายพอร์ต');
   });
 
-  // ไม่ส่ง onMove → ตารางเดิมไม่มีคอลัมน์เกิน (Additive ล้วน ไม่กระทบผู้เรียกเดิม)
-  test('ไม่ส่ง onMove → ตารางเหมือนเดิม ไม่มีคอลัมน์ปุ่ม', () => {
-    const html = renderToStaticMarkup(
-      React.createElement(PortfolioHoldingsTable, {
-        rows: ROWS,
-        portfolioId: P1,
-        profitBySymbol: {},
-      })
-    );
+  // ⭐⭐ Regression Guard จริง — ต้องพิสูจน์ว่า Component **ไม่รับ** onMove อีกต่อไป
+  // ไม่ใช่แค่ "ไม่มีใครส่ง onMove มา" (ถ้าทดสอบแบบนั้น เทสต์นี้จะเขียวได้แม้กลับไป
+  // เพิ่ม onMove ใน AppPortfolio.jsx อีกครั้ง เพราะไม่เคยเรียกใช้พารามิเตอร์นี้เอง)
+  test('⭐⭐ ส่ง onMove มาด้วย (จำลอง Caller เก่า/พลาดกลับมาต่อสาย) → ต้องยังไม่มีปุ่มโผล่มา', () => {
+    const html = renderTable({ onMove: () => {} });
 
     expect(html).not.toContain('ย้ายพอร์ต');
   });
