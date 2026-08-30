@@ -577,6 +577,13 @@
 .app-table__num { text-align: right; }
 .app-table td small { color: var(--muted, #8B9587); font-size: 11.5px; }
 
+/* ── โลโก้สินทรัพย์ (AssetAvatar) ในคอลัมน์แรก — เชื่อมเข้าหน้าใหม่ 30 ส.ค. 2569 ──
+   .app-table__asset-text เป็น inline-block (ไม่ใช่ flex) โดยเจตนา — ต้องคง
+   Behavior เดิมที่ strong/name/broker-inline ซ้อนกันเป็นบรรทัดตามปกติ (ไม่ใช่
+   เรียงแถวแบบ Flex) มีแค่ Avatar เท่านั้นที่อยู่นอกกลุ่มนี้ */
+.app-table__asset { display: flex; align-items: center; gap: 8px; }
+.app-table__asset-text { display: inline-block; min-width: 0; }
+
 /* ── คอลัมน์ "โบรก/Exchange" — เดสก์ท็อป = คอลัมน์แยก, มือถือ = บรรทัดรอง ──────
    ⚠️ สลับกันด้วย CSS ล้วน (ไม่ใช้ JS ตรวจความกว้างจอ) กันเห็นข้อมูลซ้ำ/หายพร้อมกัน
    ทั้งสองทาง — .app-table__broker-inline อยู่ใน DOM เสมอแต่ถูกซ่อนด้วย
@@ -655,3 +662,31 @@
   .app-donut { flex-direction: column; align-items: stretch; }
   .app-donut__chart { align-self: center; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   AssetAvatar (components/dashboard/AssetAvatar.jsx) — เชื่อมเข้าหน้าใหม่
+   ═══════════════════════════════════════════════════════════════════════
+   ⚠️ Component เก่าฝัง className="dh-avatar" ไว้ตรงๆ (ห้ามแก้ — จะกระทบหน้าเก่าที่
+   ผู้ใช้จริงใช้อยู่) ปกติสไตล์มาจาก `pages/DashboardHome.css` แต่ไฟล์นั้น**ไม่ได้ถูก
+   Import เข้าหน้าใหม่ (/app/*) เลย** — ไม่ใช่ปัญหา "ชนกัน" แต่เป็น "ไม่มีสไตล์อะไร
+   เลย" (Class ว่างเปล่า) จึงต้อง Copy กฎเดิมมา Scope ไว้ที่นี่แทน (ค่าตรงกันเป๊ะกับ
+   DashboardHome.css — ถ้าจะแก้หน้าตา Avatar ต้องแก้ทั้งสองที่ให้ตรงกันเสมอ) */
+.dh-avatar { width: 30px; height: 30px; border-radius: 99px; display: grid; place-items: center; font-size: 11px; font-weight: 800; color: #fff; flex: none; overflow: hidden; }
+.dh-avatar img { width: 100%; height: 100%; object-fit: contain; background: #fff; }
+
+/* ── รายการล่าสุด (AppDashboard) — คอลัมน์แรกของ .demo-recent li (grid 1fr auto auto)
+   เปลี่ยนจากข้อความล้วนเป็น Avatar+Symbol โดยยังอยู่ใน Track เดิม ─────────────── */
+.demo-recent__asset { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+
+/* ── แผน DCA ที่ถึงรอบวันนี้ (AppDashboard) — เดิมเป็น <ul><li> ไม่มี Class/Style
+   เลย (Bullet เริ่มต้นของ Browser) — เพิ่ม Class นี้เพื่อวาง Avatar เรียงแถวกับ
+   ข้อความได้ ไม่ใช่การปรับดีไซน์ทั้งลิสต์ ─────────────────────────────────── */
+.app-dueplan-item { display: flex; align-items: center; gap: 8px; list-style: none; }
+
+/* ── ประวัติธุรกรรม (AppTransactions) — .demo-txitem ไม่เคยมี CSS นิยามไว้เลยมาก่อน
+   (ตรวจแล้วทั้ง Repo) ต้องเพิ่มโครง Flex ขั้นต่ำ ไม่งั้น Avatar (Grid Box) จะดีดตัวเอง
+   ขึ้นบรรทัดใหม่แยกจากข้อความที่เหลือ — ไม่ใช่การปรับดีไซน์ทั้งหน้า Transactions
+   (ยังไม่มี Padding/เส้นคั่นแถว ฯลฯ เหมือนเดิม) ถ้าต้องการดีไซน์เต็มรูปแบบทีหลัง
+   ต้องเป็นงานแยก */
+.demo-txitem { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.demo-txitem__symbol { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; }

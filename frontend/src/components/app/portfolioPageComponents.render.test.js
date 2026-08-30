@@ -8,13 +8,24 @@
 // `portfolioDetailData.test.js` ซึ่งเข้มกว่า เพราะ assert Argument จริงของ API
 // (Effect ไม่ทำงานใต้ renderToStaticMarkup จึงทดสอบจากตรงนี้ไม่ได้)
 
-import { describe, test, expect } from 'vitest';
+import { describe, test, expect, vi } from 'vitest';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+
+// ⭐ เชื่อมโลโก้สินทรัพย์เข้าหน้าใหม่ (30 ส.ค. 2569) — Mock ตัวจริงของ AssetAvatar
+// ทิ้ง (มันมี useEffect ยิง CoinGecko/localStorage ซึ่งไม่ทำงานใต้ renderToStaticMarkup
+// อยู่แล้ว และมีเทสต์คุมพฤติกรรมของตัวเองอยู่แล้วในหน้าเก่า — ที่นี่พิสูจน์แค่ว่า
+// "PortfolioHoldingsTable ส่ง symbol/type ที่ถูกต้องเข้าไปจริง" ไม่ใช่ Logo Resolution)
+vi.mock('../dashboard/AssetAvatar.jsx', () => ({
+  default: vi.fn(({ symbol, type }) =>
+    React.createElement('span', { 'data-avatar-symbol': symbol, 'data-avatar-type': type ?? '' })
+  ),
+}));
 
 import PortfolioCards from './PortfolioCards.jsx';
 import PortfolioHoldingsTable from './PortfolioHoldingsTable.jsx';
 import MoveAssetPortfolioDialog from './MoveAssetPortfolioDialog.jsx';
+import AssetAvatar from '../dashboard/AssetAvatar.jsx';
 import { profitCacheKey } from './portfolioDetailData.js';
 
 const P1 = 'aaaaaaaa-1111-4111-8111-111111111111';
@@ -240,6 +251,75 @@ describe('⭐ ตาราง Holdings ต้องไม่มีปุ่ม "
     const html = renderTable({ onMove: () => {} });
 
     expect(html).not.toContain('ย้ายพอร์ต');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ⭐ เชื่อมโลโก้สินทรัพย์ (AssetAvatar) เข้าตาราง Holdings (30 ส.ค. 2569)
+// ═══════════════════════════════════════════════════════════════════════════
+// holding.type มากับ GET /dashboard/portfolio ตรงๆ อยู่แล้ว (portfolio.service
+// .getPortfolioSummary → holdings.push({ type: asset.type })) — ต่างจาก
+// AppDashboard/AppTransactions ที่ไม่มี type ติดมาต้อง Flatten allocation เอง
+describe('⭐ AssetAvatar ในตาราง Holdings — ต้องได้ symbol/type ที่ถูกต้องต่อแถว', () => {
+  test('⭐ ส่ง symbol และ type ของแต่ละแถวเข้า AssetAvatar ตรงๆ (toHaveBeenCalledWith)', () => {
+    AssetAvatar.mockClear();
+    renderToStaticMarkup(
+      React.createElement(PortfolioHoldingsTable, {
+        rows: [
+          { symbol: 'BTC', brokerId: 'bk-1', type: 'crypto', heldQuantity: 0.5, totalInvested: 1000 },
+          { symbol: 'PTT', brokerId: null, type: 'stock_th', heldQuantity: 100, totalInvested: 3400 },
+        ],
+        portfolioId: P1,
+        profitBySymbol: {},
+      })
+    );
+
+    expect(AssetAvatar).toHaveBeenCalledWith(
+      expect.objectContaining({ symbol: 'BTC', type: 'crypto' }),
+      expect.anything()
+    );
+    expect(AssetAvatar).toHaveBeenCalledWith(
+      expect.objectContaining({ symbol: 'PTT', type: 'stock_th' }),
+      expect.anything()
+    );
+  });
+
+  // ⭐⭐ เคส EOSE เดิม (Symbol เดียวกันคนละโบรก) — ต้องได้ Avatar คนละตัว ไม่ใช่แค่
+  // "ไม่ชนกัน" (React key) แต่ต้อง Render จริงทั้งสองแถวพร้อม type ที่ถูกต้อง
+  test('⭐⭐ Symbol เดียวกันคนละโบรก (เคส EOSE) → AssetAvatar ถูกเรียก 2 ครั้งพร้อม type เดียวกัน', () => {
+    AssetAvatar.mockClear();
+    renderToStaticMarkup(
+      React.createElement(PortfolioHoldingsTable, {
+        rows: [
+          { symbol: 'EOSE', brokerId: 'bk-1', type: 'stock_us', heldQuantity: 10, totalInvested: 106 },
+          { symbol: 'EOSE', brokerId: 'bk-2', type: 'stock_us', heldQuantity: 50, totalInvested: 600 },
+        ],
+        portfolioId: P1,
+        profitBySymbol: {},
+      })
+    );
+
+    const eoseCalls = AssetAvatar.mock.calls.filter(([props]) => props.symbol === 'EOSE');
+    expect(eoseCalls).toHaveLength(2);
+    expect(eoseCalls.every(([props]) => props.type === 'stock_us')).toBe(true);
+  });
+
+  // holding.type ที่ไม่มีค่า (Backend เก่า/แถวที่ Type หาย) → ส่ง undefined ต่อไปตรงๆ
+  // AssetAvatar มี Fallback เป็นตัวอักษรย่อ+สีอยู่แล้ว (ห้ามเดา Type เอง)
+  test('ไม่มี type (undefined) → ส่ง undefined เข้า AssetAvatar ตรงๆ ไม่เดาเอง', () => {
+    AssetAvatar.mockClear();
+    renderToStaticMarkup(
+      React.createElement(PortfolioHoldingsTable, {
+        rows: [{ symbol: 'BTC', brokerId: null, heldQuantity: 0.5, totalInvested: 1000 }],
+        portfolioId: P1,
+        profitBySymbol: {},
+      })
+    );
+
+    expect(AssetAvatar).toHaveBeenCalledWith(
+      expect.objectContaining({ symbol: 'BTC', type: undefined }),
+      expect.anything()
+    );
   });
 });
 

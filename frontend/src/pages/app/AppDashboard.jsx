@@ -7,6 +7,9 @@ import { apiGet } from '../../lib/api.js';
 // · ขึ้น "ยังไม่มีรายการในช่วงเวลานี้" แทนเส้นแบนที่ 0 · Footnote ว่านี่คือ
 // "เงินที่ลงไปสะสม" ไม่ใช่มูลค่าพอร์ตย้อนหลัง
 import InvestedChart from '../../components/dashboard/InvestedChart.jsx';
+// ⭐ เชื่อมโลโก้สินทรัพย์เข้าหน้าใหม่ (30 ส.ค. 2569) — Import ตรงจากตำแหน่งเดิม
+// ที่ DashboardHome ใช้อยู่แล้ว ห้าม Copy Logic ไปสร้างไฟล์ซ้ำใน components/app/
+import AssetAvatar from '../../components/dashboard/AssetAvatar.jsx';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // AppDashboard — หน้าแดชบอร์ดต่อ API จริง (Stage 9)
@@ -93,6 +96,18 @@ function AppDashboard() {
   }
 
   const p = overview?.portfolio ?? { isEmpty: true };
+
+  // ── Flatten allocation[].assets → Map<symbol,type> สำหรับ AssetAvatar ──────
+  // Pattern เดียวกับ DashboardHome.jsx เป๊ะ — `todayDuePlans[]`/`recent[]` ของ
+  // overview ไม่มี Field type ติดมาเอง (dashboardOverview.service.buildRecent /
+  // dcaReminder.service.toPlanView ไม่ส่ง type) ต้อง Flatten จาก allocation
+  // (ซึ่งมี type ต่อกลุ่มอยู่แล้ว) แทน — ไม่ยิง API เพิ่ม ใช้ overview ก้อนเดียวกัน
+  const assetTypeBySymbol = new Map();
+  for (const group of overview?.allocation ?? []) {
+    for (const asset of group.assets ?? []) {
+      assetTypeBySymbol.set(asset.symbol, group.type);
+    }
+  }
 
   return (
     <section className="demo-page">
@@ -181,8 +196,11 @@ function AppDashboard() {
           <h2>วันนี้ถึงรอบ DCA ของคุณ</h2>
           <ul>
             {overview.todayDuePlans.map((plan) => (
-              <li key={plan.id ?? plan.symbol}>
-                {plan.symbol} · {formatThb(plan.amountTotal)} {plan.currency ?? 'บาท'}
+              <li key={plan.id ?? plan.symbol} className="app-dueplan-item">
+                <AssetAvatar symbol={plan.symbol} type={assetTypeBySymbol.get(plan.symbol)} />
+                <span>
+                  {plan.symbol} · {formatThb(plan.amountTotal)} {plan.currency ?? 'บาท'}
+                </span>
               </li>
             ))}
           </ul>
@@ -200,7 +218,10 @@ function AppDashboard() {
           <ul className="demo-recent">
             {overview.recent.map((tx) => (
               <li key={tx.id}>
-                <span>{tx.symbol}</span>
+                <span className="demo-recent__asset">
+                  <AssetAvatar symbol={tx.symbol} type={assetTypeBySymbol.get(tx.symbol)} />
+                  {tx.symbol}
+                </span>
                 <span>{formatThb(tx.amountTotal)} {tx.currency ?? 'บาท'}</span>
                 <small>{tx.date}</small>
               </li>

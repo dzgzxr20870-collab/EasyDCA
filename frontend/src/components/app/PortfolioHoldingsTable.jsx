@@ -1,4 +1,10 @@
 import { profitCacheKey } from './portfolioDetailData.js';
+// ⭐ เชื่อมโลโก้สินทรัพย์เข้าหน้าใหม่ (30 ส.ค. 2569) — Component เดิมที่ใช้อยู่ใน
+// หน้าเก่า (DashboardHome ฯลฯ) ทำงานถูกต้องอยู่แล้ว งานนี้แค่ "เชื่อม" ไม่ใช่สร้างใหม่
+// (ห้าม Copy Logic ไปสร้างไฟล์ซ้ำ) — holding.type มากับ /dashboard/portfolio อยู่แล้ว
+// (portfolio.service.getPortfolioSummary → holdings.push({ type: asset.type })) จึง
+// ไม่ต้อง Map/ยิง API เพิ่ม
+import AssetAvatar from '../dashboard/AssetAvatar.jsx';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PortfolioHoldingsTable — ตารางสินทรัพย์ในพอร์ตหนึ่งใบ (Stage 9 เฟส 1)
@@ -128,13 +134,20 @@ function PortfolioHoldingsTable({
               // (migration 046) ถ้าใช้ symbol อย่างเดียว React จะรวมสองแถวเป็นใบเดียว
               <tr key={`${h.symbol}|${h.brokerId ?? 'none'}`}>
                 <td>
-                  <strong>{h.symbol}</strong>
-                  {h.name && h.name !== h.symbol && <small> {h.name}</small>}
-                  {/* ⭐ จอแคบเท่านั้น — คู่กับคอลัมน์ .app-table__broker ที่ซ่อน
-                      อยู่ (สลับกันด้วย CSS ไม่ใช่ JS) กันข้อมูลหายไปทั้งสองทาง */}
-                  <small className="app-table__broker-inline">
-                    🏦 {brokerLabel(h.brokerId, brokers)}
-                  </small>
+                  {/* ⭐ h.type มากับ holding ตรงๆ อยู่แล้ว (ดู Comment หัวไฟล์)
+                      — ไม่ต้องสร้าง assetTypeBySymbol Map เหมือนหน้าที่ไม่มี type ติดมา */}
+                  <span className="app-table__asset">
+                    <AssetAvatar symbol={h.symbol} type={h.type} />
+                    <span className="app-table__asset-text">
+                      <strong>{h.symbol}</strong>
+                      {h.name && h.name !== h.symbol && <small> {h.name}</small>}
+                      {/* ⭐ จอแคบเท่านั้น — คู่กับคอลัมน์ .app-table__broker ที่ซ่อน
+                          อยู่ (สลับกันด้วย CSS ไม่ใช่ JS) กันข้อมูลหายไปทั้งสองทาง */}
+                      <small className="app-table__broker-inline">
+                        🏦 {brokerLabel(h.brokerId, brokers)}
+                      </small>
+                    </span>
+                  </span>
                 </td>
                 <td className="app-table__broker">{brokerLabel(h.brokerId, brokers)}</td>
                 <td className="app-table__num">{fmtQty(h.heldQuantity)}</td>

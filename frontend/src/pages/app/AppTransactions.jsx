@@ -5,6 +5,17 @@ import { portfolioWriteState } from '../../lib/entitlements.js';
 // ⚠️ api.js โยน Error(message = **Error Code ดิบ**) ไม่ใช่ข้อความไทย — ต้องแปลผ่าน
 // ตารางกลางเสมอ ไม่งั้นผู้ใช้จะเห็น "ALREADY_UNDONE" โต้งๆ บนหน้าจอ
 import { undoErrorMessage } from '../../lib/dcaErrors.js';
+// ⭐ เชื่อมโลโก้สินทรัพย์เข้าหน้าใหม่ (30 ส.ค. 2569) — Import ตรงจากตำแหน่งเดิม
+// ห้าม Copy Logic ไปสร้างไฟล์ซ้ำใน components/app/
+//
+// ⚠️ **หน้านี้หา type ไม่ได้จริง** — GET /dashboard/history (transaction.repository
+// .findAllByUser) Join แค่ `assets(symbol)` ไม่ได้ Join `type` มาด้วย และหน้านี้ไม่ได้
+// ยิง /portfolio/allocation หรือ /dashboard/portfolio เลย (คนละหน้ากับ AppPortfolio/
+// AppDashboard) จึงไม่มี type ให้ Flatten แบบ Pattern เดิม — ส่ง `undefined` ไปเฉยๆ
+// ตามที่ Prompt อนุญาต (AssetAvatar Fallback เป็นตัวอักษรย่อ+สีได้เองอยู่แล้ว)
+// ห้ามยิง Endpoint เพิ่มเพื่อเอา type มาเฉพาะจุดนี้ — รายงานให้ Founder ตัดสินใจแทน
+// ว่าจะเพิ่ม Field type ที่ Backend (GET /dashboard/history) ทีหลังไหม
+import AssetAvatar from '../../components/dashboard/AssetAvatar.jsx';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // AppTransactions — ประวัติธุรกรรมต่อ API จริง (Stage 9)
@@ -157,7 +168,10 @@ function AppTransactions() {
                     ซึ่งเป็นบั๊กเดียวกับที่ Stage 6a ไล่แก้ทั้ง 8 จุด */}
                 {TYPE_LABEL[tx.side ?? tx.type] ?? (tx.side ?? tx.type)}
               </span>
-              <span className="demo-txitem__symbol">{tx.symbol}</span>
+              <span className="demo-txitem__symbol">
+                <AssetAvatar symbol={tx.symbol} type={undefined} />
+                {tx.symbol}
+              </span>
               <span className="demo-txitem__amount">
                 {formatAmount(tx.amountTotal ?? tx.amountThb)} {tx.currency ?? 'บาท'}
               </span>
