@@ -163,12 +163,28 @@ function compact(obj) {
 // ยอดที่บันทึกลง Ledger ต้องเท่ากับยอดที่ผู้ใช้เห็นตอนกดบันทึก (มติ Founder)
 // Service ยังตรวจ resolveAgreedAmount (±2%) ให้อีกชั้นอยู่แล้ว
 export function buildTransactionPayload(form) {
+  // ⭐ ขายทั้งหมด (ปัญหาที่ 3, Founder ทดสอบฟอร์มขาย 30 ส.ค. 2569) — Backend
+  // คำนวณจำนวน/ราคาเอง ต้อง **ไม่** ส่งจำนวน/ราคา/ยอดเงินไปเลยแม้ State ของฟอร์ม
+  // จะมีค่าค้างอยู่ (เช่น ผู้ใช้เคยพิมพ์ไว้ก่อนติ๊กปุ่มนี้) — Backend เองก็เมิน
+  // Field พวกนี้อยู่แล้วตอน sellAll แต่กันความสับสนไว้ตั้งแต่ Payload เลยดีกว่า
+  const isSellAll = form.type === 'sell' && form.sellAll === true;
+
   return compact({
     side: form.type,
     symbol: form.symbol,
-    quantity: numberOrUndefined(form.quantity),
-    pricePerUnit: numberOrUndefined(form.pricePerUnit),
-    amountTotal: numberOrUndefined(form.amountTotal),
+    // ⭐ assetId — Fast-Path Resolution ฝั่งขาย (ปัญหาที่ 4: AMBIGUOUS_ASSET_PORTFOLIO
+    // ทั้งที่เลือกสินทรัพย์เจาะจงจาก Dropdown แล้ว) — ส่งเฉพาะตอนรู้แน่ชัดว่าเป็น
+    // แถวไหนจริง (ผู้ใช้เลือกจาก Dropdown ที่มี assetId) ไม่ส่งตอนพิมพ์ Symbol ใหม่
+    // ที่ยังไม่เคยถือ (ไม่มี assetId ให้ส่งอยู่แล้วในเคสนั้น) — Backend อ่านค่านี้
+    // เฉพาะฝั่งขาย ส่งไปตอนซื้อก็ไม่มีผลอะไร (เมินทิ้งเงียบๆ)
+    assetId: form.assetId || undefined,
+    // ⭐ ขายทั้งหมด — รับเฉพาะ `true` แท้ๆ (ไม่ใช่ Truthy อื่น) ให้ตรงกับที่ Backend
+    // รับ (`body.sellAll === true` Strict Boolean) — กัน Client ส่งค่าผิดชนิดแล้ว
+    // กลายเป็นขายยกพอร์ตโดยไม่ตั้งใจ
+    sellAll: isSellAll ? true : undefined,
+    quantity: isSellAll ? undefined : numberOrUndefined(form.quantity),
+    pricePerUnit: isSellAll ? undefined : numberOrUndefined(form.pricePerUnit),
+    amountTotal: isSellAll ? undefined : numberOrUndefined(form.amountTotal),
     // 'THB' เป็นค่าเริ่มต้นของ Backend อยู่แล้ว แต่ส่งไปตรงๆ เพื่อให้ Payload
     // อ่านแล้วรู้ทันทีว่ากำลังบันทึกสกุลไหน (สลิป USD ต้องไม่กลายเป็นบาทเงียบๆ)
     currency: form.currency === 'USD' ? 'USD' : 'THB',
@@ -289,6 +305,28 @@ export function assetOptionLabel(asset, brokers) {
 // เหมือนเดิมทุกประการ — ห้ามบังคับกรองจนพัง Use Case เดิม
 export function assetListParams(scopePortfolioId) {
   return scopePortfolioId ? { portfolioId: scopePortfolioId } : {};
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// sellAllErrorText — ข้อความไทยสำหรับ Error ที่มาจากปุ่ม "ขายทั้งหมด" (ปัญหาที่ 3)
+// ═══════════════════════════════════════════════════════════════════════════
+// ⚠️ `err.message` ของ lib/api.js เก็บ **Error Code ดิบจาก Backend** ไม่ใช่ข้อความ
+// ไทย (ดู buildApiError ใน lib/api.js — ตั้งใจเก็บโค้ดไว้ที่ `.message` ให้ Caller
+// เทียบ === ได้ตรงๆ) Catch-all เดิมของฟอร์มนี้จึงโชว์โค้ดดิบให้ผู้ใช้เห็นสำหรับ
+// Error ที่ไม่ได้ถูก Map ไว้เฉพาะ — เป็นพฤติกรรมเดิมที่มีอยู่ก่อนงานนี้ (นอกขอบเขต
+// ที่จะแก้ทั้งหมด) ที่นี่ Map ให้เฉพาะ 2 Code ที่ปุ่ม "ขายทั้งหมด" คาดว่าจะเจอจริง
+//
+// คืน null เมื่อไม่รู้จัก Code นี้ — Caller ต้อง Fallback เป็นพฤติกรรมเดิม (โชว์
+// err.message ดิบ) เอง ไม่ใช่ปั้นข้อความเดาสุ่มจากที่นี่
+export function sellAllErrorText(code) {
+  const MAP = {
+    NOTHING_TO_SELL: 'สินทรัพย์นี้ขายออกไปหมดแล้ว ไม่มียอดคงเหลือให้ขาย',
+    // หุ้นไทยอย่าง EOSE ไม่มี Price Feed อัตโนมัติ — ต้องบอกทางออกจริงที่ทำได้
+    // (กรอกจำนวน/ราคาเอง) ไม่ใช่แค่บอกว่า "ดึงราคาไม่ได้" เฉยๆ
+    MARKET_PRICE_UNAVAILABLE:
+      'ระบบดึงราคาตลาดปัจจุบันของสินทรัพย์นี้ไม่ได้ (เช่น หุ้นไทยที่ยังไม่มีราคาสดอัตโนมัติ) — กรุณายกเลิก "ขายทั้งหมด" แล้วกรอกจำนวนหน่วยและราคาที่ขายได้เองแทน',
+  };
+  return MAP[code] ?? null;
 }
 
 // Body ของ POST /api/v1/transactions/dividend — ⚠️ Endpoint นี้ใช้ `amountThb`

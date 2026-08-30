@@ -22,6 +22,7 @@ import {
   needsSymbolFetch,
   assetOptionLabel,
   assetListParams,
+  sellAllErrorText,
 } from './recordTransactionLogic.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -133,6 +134,10 @@ function RecordTransactionModal({
   const [quantity, setQuantity] = useState('');
   const [pricePerUnit, setPricePerUnit] = useState('');
   const [amountThb, setAmountThb] = useState('');
+  // ── ⭐ ขายทั้งหมด (Founder ทดสอบฟอร์มขาย 30 ส.ค. 2569 — ปัญหาที่ 3) ─────────
+  // true → ไม่ส่งจำนวน/ราคา/ยอดเงินไปเลย Backend ดึงยอดคงเหลือ + ราคาตลาด ณ
+  // ตอนนี้มาคำนวณเอง (validateSell params.sellAll) — เฉพาะโหมดขายเท่านั้น
+  const [sellAll, setSellAll] = useState(false);
   // ⭐ ค่าธรรมเนียม (ถ้ามี) — งานที่ 3 · Optional เหมือน note ด้านล่าง ไม่กรอก =
   // ไม่ส่ง Key นี้ไป Backend เลย (ดู buildTransactionPayload)
   const [feeThb, setFeeThb] = useState('');
@@ -214,7 +219,15 @@ function RecordTransactionModal({
 
   function pickAsset(id) {
     setAssetId(id);
-    setSymbol(assets.find((a) => a.id === id)?.symbol ?? '');
+    const found = assets.find((a) => a.id === id);
+    setSymbol(found?.symbol ?? '');
+    // ⭐ Sync ช่องโบรกให้ตรงกับสินทรัพย์ที่เลือกเสมอ (ปัญหาที่ 1 — ช่องโบรกเดิม
+    // เป็น State อิสระ ไม่เคยตามสินทรัพย์ที่เลือกจาก Dropdown เลย) **เฉพาะโหมด
+    // ขาย** เท่านั้น — โหมดซื้อ/ปันผลผู้ใช้ยังต้องเลือกโบรกเองได้ตามเดิมทุกประการ
+    // (เลือก "EOSE" ที่ถืออยู่แล้วแต่กำลังจะซื้อเพิ่มที่โบรกอื่นเป็นกรณีปกติ)
+    if (type === 'sell') {
+      setBrokerId(found?.brokerId ?? 'none');
+    }
   }
 
   // ── สร้างโบรกใหม่จาก Dropdown โดยตรง (งานที่ 2) ───────────────────────────
@@ -379,7 +392,8 @@ function RecordTransactionModal({
       }
     } else {
       if (!symbol) return setError('กรุณาเลือกสินทรัพย์');
-      if (!(Number(quantity) > 0) && !(Number(amountThb) > 0)) {
+      // ⭐ "ขายทั้งหมด" ไม่ต้องกรอกอะไรเลย — Backend คำนวณจำนวน/ราคาเอง
+      if (!(type === 'sell' && sellAll) && !(Number(quantity) > 0) && !(Number(amountThb) > 0)) {
         return setError('กรุณากรอกจำนวนหน่วย หรือจำนวนเงินรวม อย่างน้อยหนึ่งอย่าง');
       }
     }
@@ -408,6 +422,10 @@ function RecordTransactionModal({
           buildTransactionPayload({
             type,
             symbol,
+            // ⭐ Fast-Path Resolution ฝั่งขาย (ปัญหาที่ 4) — ส่งเฉพาะตอนรู้ assetId
+            // แน่ชัดจริง (เลือกจาก Dropdown) ว่างเปล่าเมื่อพิมพ์ Symbol ใหม่ที่ยัง
+            // ไม่เคยถือ (assetId ถูกเคลียร์เป็น '' โดย pickSymbol อยู่แล้วในเคสนั้น)
+            assetId,
             quantity,
             pricePerUnit,
             amountTotal: amountThb,
@@ -421,6 +439,8 @@ function RecordTransactionModal({
             // ถืออยู่เป็นตัวกำหนด) และ Backend ก็ละเว้น Key นี้ตอนขายอยู่แล้ว
             portfolioId: type === 'buy' ? destinationPortfolioId : undefined,
             confirmSeparatePortfolio: confirmSeparate,
+            // ⭐ ขายทั้งหมด (ปัญหาที่ 3) — เฉพาะโหมดขายเท่านั้น
+            sellAll: type === 'sell' && sellAll,
           })
         );
       }
@@ -436,7 +456,11 @@ function RecordTransactionModal({
       }
       // ⚠️ แสดงข้อความจาก Backend ตรงๆ — มันถูกเขียนมาให้ผู้ใช้อ่านรู้เรื่องแล้ว
       // และครอบเคสที่ Frontend ไม่รู้ (พอร์ตถูกล็อก · กำกวมข้ามพอร์ต/โบรก · เพดาน)
-      setError(err?.message ?? 'บันทึกไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+      //
+      // ⭐ 2 Code ที่ปุ่ม "ขายทั้งหมด" คาดว่าจะเจอจริง (ปัญหาที่ 3) แปลเป็นข้อความ
+      // ไทยที่ชี้ทางออกก่อนเสมอ — err.message ของ lib/api.js เป็น Error Code ดิบ
+      // (ดู sellAllErrorText) ไม่ใช่ข้อความไทยจริงๆ ต่างจากที่คอมเมนต์เดิมด้านบนว่าไว้
+      setError(sellAllErrorText(err?.message) ?? err?.message ?? 'บันทึกไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
     } finally {
       setSubmitting(false);
     }
@@ -549,7 +573,13 @@ function RecordTransactionModal({
                       value={t.value}
                       checked={type === t.value}
                       disabled={disabled}
-                      onChange={() => setType(t.value)}
+                      onChange={() => {
+                        setType(t.value);
+                        // สลับออกจากโหมดขาย → เคลียร์ "ขายทั้งหมด" กันค้างเป็น true
+                        // เงียบๆ แล้วกลับมาขายอีกทีโดยไม่ตั้งใจ (ช่องถูกซ่อนไปแล้ว
+                        // ตอนไม่ใช่โหมดขาย ผู้ใช้จะไม่เห็นว่ายังติ๊กค้างอยู่)
+                        if (t.value !== 'sell') setSellAll(false);
+                      }}
                     />
                     {t.label}
                     {disabled ? ' (พอร์ตนี้เพิ่มรายการใหม่ไม่ได้)' : ''}
@@ -738,107 +768,138 @@ function RecordTransactionModal({
                 </select>
               </label>
 
-              <label className="demo-field">
-                <span>โบรก/Exchange</span>
-                <select
-                  value={addingBroker ? NEW_BROKER_OPTION : brokerId}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    if (v === NEW_BROKER_OPTION) {
-                      // ⚠️ ไม่แตะ brokerId ที่นี่ — คงค่าที่เลือกไว้เดิมจนกว่าจะ
-                      // สร้างโบรกใหม่สำเร็จจริง (ดูเหตุผลตรง State ด้านบน)
-                      setAddingBroker(true);
-                      setBrokerError(null);
-                    } else {
-                      setAddingBroker(false);
-                      setBrokerId(v);
-                    }
-                  }}
-                >
-                  <option value="none">ไม่ระบุ</option>
-                  {brokers.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.name}
-                    </option>
-                  ))}
-                  <option value={NEW_BROKER_OPTION}>{ADD_BROKER_LABEL}</option>
-                </select>
-              </label>
-
-              {/* ── ช่องพิมพ์ชื่อโบรกใหม่ — โผล่เฉพาะตอนเลือก "+ เพิ่มโบรก..." ──── */}
-              {addingBroker && (
-                <div className="demo-field">
-                  <span>ชื่อโบรก/Exchange ใหม่</span>
-                  <div className="demo-inline-row">
-                    <input
-                      type="text"
-                      value={newBrokerName}
-                      onChange={(e) => setNewBrokerName(e.target.value)}
-                      placeholder="เช่น Bitkub, บัวหลวง"
-                      disabled={creatingBroker}
-                      autoFocus
-                    />
-                    <button
-                      type="button"
-                      className="demo-btn"
-                      disabled={creatingBroker || !normalizeBrokerName(newBrokerName)}
-                      onClick={handleAddBroker}
-                    >
-                      {creatingBroker ? 'กำลังเพิ่ม...' : 'ยืนยัน'}
-                    </button>
-                    <button
-                      type="button"
-                      className="demo-btn"
-                      disabled={creatingBroker}
-                      onClick={() => {
-                        setAddingBroker(false);
-                        setNewBrokerName('');
-                        setBrokerError(null);
+              {/* ⭐ ช่องโบรก — ซ่อนทั้งช่องตอนขาย (ปัญหาที่ 1) — เลือกสินทรัพย์จาก
+                  Dropdown ที่กำกับชื่อโบรกไว้แล้ว (เช่น "EOSE — Weblue") ก็รู้โบรก
+                  ในตัวอยู่แล้ว ช่องแยกต่างหากที่ไม่เคย Sync กันมีแต่จะสับสน/พาให้
+                  เลือกโบรกผิดจากที่ตั้งใจ — brokerId ภายในยัง Sync ถูกต้องเสมอผ่าน
+                  pickAsset ด้านบน แม้ผู้ใช้จะไม่เห็นช่องนี้เลยก็ตาม */}
+              {type !== 'sell' && (
+                <>
+                  <label className="demo-field">
+                    <span>โบรก/Exchange</span>
+                    <select
+                      value={addingBroker ? NEW_BROKER_OPTION : brokerId}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (v === NEW_BROKER_OPTION) {
+                          // ⚠️ ไม่แตะ brokerId ที่นี่ — คงค่าที่เลือกไว้เดิมจนกว่าจะ
+                          // สร้างโบรกใหม่สำเร็จจริง (ดูเหตุผลตรง State ด้านบน)
+                          setAddingBroker(true);
+                          setBrokerError(null);
+                        } else {
+                          setAddingBroker(false);
+                          setBrokerId(v);
+                        }
                       }}
                     >
-                      ยกเลิก
-                    </button>
-                  </div>
-                  {brokerError && (
-                    <p className="app-state app-state--error" role="alert">
-                      {brokerError}
-                    </p>
+                      <option value="none">ไม่ระบุ</option>
+                      {brokers.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.name}
+                        </option>
+                      ))}
+                      <option value={NEW_BROKER_OPTION}>{ADD_BROKER_LABEL}</option>
+                    </select>
+                  </label>
+
+                  {/* ── ช่องพิมพ์ชื่อโบรกใหม่ — โผล่เฉพาะตอนเลือก "+ เพิ่มโบรก..." ── */}
+                  {addingBroker && (
+                    <div className="demo-field">
+                      <span>ชื่อโบรก/Exchange ใหม่</span>
+                      <div className="demo-inline-row">
+                        <input
+                          type="text"
+                          value={newBrokerName}
+                          onChange={(e) => setNewBrokerName(e.target.value)}
+                          placeholder="เช่น Bitkub, บัวหลวง"
+                          disabled={creatingBroker}
+                          autoFocus
+                        />
+                        <button
+                          type="button"
+                          className="demo-btn"
+                          disabled={creatingBroker || !normalizeBrokerName(newBrokerName)}
+                          onClick={handleAddBroker}
+                        >
+                          {creatingBroker ? 'กำลังเพิ่ม...' : 'ยืนยัน'}
+                        </button>
+                        <button
+                          type="button"
+                          className="demo-btn"
+                          disabled={creatingBroker}
+                          onClick={() => {
+                            setAddingBroker(false);
+                            setNewBrokerName('');
+                            setBrokerError(null);
+                          }}
+                        >
+                          ยกเลิก
+                        </button>
+                      </div>
+                      {brokerError && (
+                        <p className="app-state app-state--error" role="alert">
+                          {brokerError}
+                        </p>
+                      )}
+                    </div>
                   )}
-                </div>
+                </>
               )}
 
-              <label className="demo-field">
-                <span>จำนวนหน่วย</span>
-                <input
-                  type="number"
-                  step="0.00000001"
-                  min="0"
-                  value={quantity}
-                  onChange={(e) => setQuantity(e.target.value)}
-                />
-              </label>
+              {/* ⭐ ขายทั้งหมด (ปัญหาที่ 3) — ไม่ต้องกรอกจำนวน/ราคา/ยอดเงินเลย
+                  Backend ดึงยอดคงเหลือ + ราคาตลาด ณ ตอนนี้มาคำนวณให้เอง (ใช้ Price
+                  Feed เดียวกับที่ระบบมีอยู่แล้ว — ครอบคลุมเฉพาะ Crypto/หุ้นสหรัฐ
+                  หุ้นไทยอย่าง EOSE ยังไม่มีราคาสด กดปุ่มนี้แล้วจะได้ Error ที่บอก
+                  ให้กรอกจำนวน/ราคาเองแทน ดู sellAllErrorText) */}
+              {type === 'sell' && (
+                <label className="demo-field">
+                  <span>
+                    <input
+                      type="checkbox"
+                      checked={sellAll}
+                      onChange={(e) => setSellAll(e.target.checked)}
+                    />{' '}
+                    ขายทั้งหมด (ระบบคำนวณจำนวน + ราคาตลาดปัจจุบันให้อัตโนมัติ)
+                  </span>
+                </label>
+              )}
 
-              <label className="demo-field">
-                <span>ราคาต่อหน่วย</span>
-                <input
-                  type="number"
-                  step="0.00000001"
-                  min="0"
-                  value={pricePerUnit}
-                  onChange={(e) => setPricePerUnit(e.target.value)}
-                />
-              </label>
+              {!(type === 'sell' && sellAll) && (
+                <>
+                  <label className="demo-field">
+                    <span>จำนวนหน่วย</span>
+                    <input
+                      type="number"
+                      step="0.00000001"
+                      min="0"
+                      value={quantity}
+                      onChange={(e) => setQuantity(e.target.value)}
+                    />
+                  </label>
 
-              <label className="demo-field">
-                <span>จำนวนเงินรวม</span>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={amountThb}
-                  onChange={(e) => setAmountThb(e.target.value)}
-                />
-              </label>
+                  <label className="demo-field">
+                    <span>ราคาต่อหน่วย</span>
+                    <input
+                      type="number"
+                      step="0.00000001"
+                      min="0"
+                      value={pricePerUnit}
+                      onChange={(e) => setPricePerUnit(e.target.value)}
+                    />
+                  </label>
+
+                  <label className="demo-field">
+                    <span>จำนวนเงินรวม</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={amountThb}
+                      onChange={(e) => setAmountThb(e.target.value)}
+                    />
+                  </label>
+                </>
+              )}
 
               {/* ⭐ ค่าธรรมเนียม — งานที่ 3 · Optional ทั้งซื้อ/ขาย ไม่มีในโหมด
                   ปันผล (Endpoint ปันผลไม่มี Field นี้ตาม Contract) */}

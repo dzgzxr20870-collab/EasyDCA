@@ -329,6 +329,33 @@ describe('RecordTransactionModal — defaultType จากปุ่มหน้�
     expect(render({ defaultType: 'sell' })).toContain('ค่าธรรมเนียม (ถ้ามี)');
     expect(render({ defaultType: 'dividend' })).not.toContain('ค่าธรรมเนียม (ถ้ามี)');
   });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // Founder ทดสอบฟอร์มขาย 30 ส.ค. 2569 — 4 ปัญหา (ปัญหาที่ 1 และ 3 ตรวจได้จาก
+  // Render โดยตรง เพราะขึ้นกับ `type` state ล้วนๆ ไม่ต้องรอ Effect โหลดข้อมูล —
+  // ปัญหาที่ 2/4 อยู่ที่การคำนวณ/ Payload จริง ดู transactions.controller.test.js
+  // (Backend) และ recordTransactionLogic.test.js (buildTransactionPayload)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  // ⭐ ปัญหาที่ 1 — ซ่อนช่องโบรกทั้งช่องตอนขาย (เลือกสินทรัพย์จาก Dropdown ที่
+  // กำกับชื่อโบรกไว้แล้วก็รู้โบรกในตัวอยู่แล้ว ช่องแยกที่ไม่เคย Sync มีแต่จะสับสน)
+  test('⭐ โหมดขาย → ไม่มีช่องเลือกโบรกเลย', () => {
+    expect(render({ defaultType: 'sell' })).not.toContain('โบรก/Exchange');
+  });
+
+  test('โหมดซื้อ → ยังมีช่องเลือกโบรกเหมือนเดิม (ผู้ใช้ยังต้องเลือกเองได้)', () => {
+    expect(render({ defaultType: 'buy' })).toContain('โบรก/Exchange');
+  });
+
+  // ⭐ ปัญหาที่ 3 — ปุ่ม "ขายทั้งหมด" เฉพาะโหมดขายเท่านั้น
+  test('⭐ โหมดขาย → มีตัวเลือก "ขายทั้งหมด"', () => {
+    expect(render({ defaultType: 'sell' })).toContain('ขายทั้งหมด');
+  });
+
+  test('โหมดซื้อ/ปันผล → ไม่มีตัวเลือก "ขายทั้งหมด" (จำกัดเฉพาะฝั่งขาย)', () => {
+    expect(render({ defaultType: 'buy' })).not.toContain('ขายทั้งหมด');
+    expect(render({ defaultType: 'dividend' })).not.toContain('ขายทั้งหมด');
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

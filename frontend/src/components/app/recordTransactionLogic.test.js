@@ -29,6 +29,7 @@ import {
   needsSymbolFetch,
   assetOptionLabel,
   assetListParams,
+  sellAllErrorText,
 } from './recordTransactionLogic.js';
 
 // สลิปตามรูปแบบ Response ของ API.md § 15.8 เป๊ะ
@@ -629,5 +630,119 @@ describe('⭐ assetListParams — เปิดจากพอร์ตเจา�
 
   test('scopePortfolioId เป็น null → ไม่กรองเช่นกัน (ไม่ใช่ค่า id จริง)', () => {
     expect(assetListParams(null)).toEqual({});
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ⭐ buildTransactionPayload — assetId + sellAll (Founder ทดสอบฟอร์มขาย
+// 30 ส.ค. 2569 — ปัญหาที่ 3 และ 4)
+// ═══════════════════════════════════════════════════════════════════════════
+// ── RED-GREEN ────────────────────────────────────────────────────────────
+//   • ลบ `assetId: form.assetId || undefined,` ออก → เคส assetId ทั้งชุดแดง
+//   • เปลี่ยน `isSellAll ? undefined : numberOrUndefined(...)` กลับเป็น
+//     `numberOrUndefined(...)` เฉยๆ (ไม่เช็ค isSellAll) → เคส "ไม่ส่งจำนวน/ราคา/
+//     ยอดเงินตอนขายทั้งหมด" แดง (ยังหลุดค่าเก่าที่ค้างใน State ไปด้วย)
+describe('⭐ buildTransactionPayload — assetId (ปัญหาที่ 4: Fast-Path Resolution ฝั่งขาย)', () => {
+  const BASE = { type: 'sell', symbol: 'EOSE', quantity: '10', pricePerUnit: '5' };
+
+  test('⭐ รู้ assetId แน่ชัด (เลือกจาก Dropdown) → ส่งไปด้วย', () => {
+    const payload = buildTransactionPayload({ ...BASE, assetId: 'asset-eose-a' });
+    expect(payload.assetId).toBe('asset-eose-a');
+  });
+
+  test('ไม่รู้ assetId (พิมพ์ Symbol ใหม่ที่ยังไม่เคยถือ) → ไม่มี Key นี้เลย', () => {
+    const payload = buildTransactionPayload({ ...BASE, assetId: '' });
+    expect('assetId' in payload).toBe(false);
+  });
+
+  test('assetId เป็น undefined (ไม่ส่งมาเลย) → ไม่มี Key นี้เช่นกัน', () => {
+    const payload = buildTransactionPayload(BASE);
+    expect('assetId' in payload).toBe(false);
+  });
+});
+
+describe('⭐ buildTransactionPayload — sellAll (ปัญหาที่ 3: ปุ่ม "ขายทั้งหมด")', () => {
+  test('⭐ ขายทั้งหมด (type=sell, sellAll=true) → ส่ง sellAll:true ไม่ส่งจำนวน/ราคา/ยอดเงินเลย', () => {
+    const payload = buildTransactionPayload({
+      type: 'sell',
+      symbol: 'BTC',
+      sellAll: true,
+      // จำลอง State ที่ยังค้างจากก่อนติ๊กปุ่มนี้ — ต้องถูกตัดทิ้งทั้งหมด
+      quantity: '0.5',
+      pricePerUnit: '2000000',
+      amountTotal: '1000000',
+    });
+
+    expect(payload.sellAll).toBe(true);
+    expect('quantity' in payload).toBe(false);
+    expect('pricePerUnit' in payload).toBe(false);
+    expect('amountTotal' in payload).toBe(false);
+  });
+
+  // ⚠️ Backend รับเฉพาะ `true` แท้ๆ (Strict Boolean) — ต้องไม่ส่งค่า Truthy อื่น
+  test('sellAll = false → ไม่มี Key นี้เลย (ไม่ใช่ส่ง false ไปตรงๆ)', () => {
+    const payload = buildTransactionPayload({
+      type: 'sell',
+      symbol: 'BTC',
+      sellAll: false,
+      quantity: '1',
+      pricePerUnit: '100',
+    });
+
+    expect('sellAll' in payload).toBe(false);
+    // ไม่ได้ขายทั้งหมด → จำนวน/ราคาต้องยังส่งไปตามปกติ (Regression)
+    expect(payload.quantity).toBe(1);
+    expect(payload.pricePerUnit).toBe(100);
+  });
+
+  // ⭐⭐ Regression สำคัญที่สุด — ซื้อ/ปันผลต้องไม่ได้รับผลกระทบแม้ State sellAll
+  // จะเผลอเป็น true ค้างมาจากตอนอยู่โหมดขาย (เช่น ยังไม่ทัน Reset)
+  test('⭐⭐ type ไม่ใช่ sell (เช่น buy) แม้ sellAll จะเป็น true ค้างมา → เมินทิ้ง ไม่ส่ง sellAll', () => {
+    const payload = buildTransactionPayload({
+      type: 'buy',
+      symbol: 'BTC',
+      sellAll: true,
+      amountTotal: '1000',
+    });
+
+    expect('sellAll' in payload).toBe(false);
+    // ซื้อยังต้องส่งยอดเงินตามปกติ ไม่ถูกตัดทิ้งเพราะ sellAll ค้าง
+    expect(payload.amountTotal).toBe(1000);
+  });
+
+  test('ไม่ส่ง sellAll มาเลย (Payload เดิม) → พฤติกรรมเดิมทุกประการ', () => {
+    const payload = buildTransactionPayload({
+      type: 'sell',
+      symbol: 'AAPL',
+      quantity: '4',
+      pricePerUnit: '250',
+    });
+
+    expect('sellAll' in payload).toBe(false);
+    expect(payload.quantity).toBe(4);
+    expect(payload.pricePerUnit).toBe(250);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ⭐ sellAllErrorText — ข้อความไทยของ Error จากปุ่ม "ขายทั้งหมด" (ปัญหาที่ 3)
+// ═══════════════════════════════════════════════════════════════════════════
+describe('⭐ sellAllErrorText', () => {
+  test('⭐ NOTHING_TO_SELL → ข้อความไทยอ่านรู้เรื่อง ไม่ใช่โค้ดดิบ', () => {
+    expect(sellAllErrorText('NOTHING_TO_SELL')).toBe(
+      'สินทรัพย์นี้ขายออกไปหมดแล้ว ไม่มียอดคงเหลือให้ขาย'
+    );
+  });
+
+  // ⭐⭐ เคสหลักที่ Founder ถามถึง — หุ้นไทยอย่าง EOSE ไม่มี Price Feed
+  test('⭐⭐ MARKET_PRICE_UNAVAILABLE → บอกทางออกจริง (กรอกจำนวน/ราคาเอง) ไม่ใช่แค่บอกว่าดึงราคาไม่ได้', () => {
+    const text = sellAllErrorText('MARKET_PRICE_UNAVAILABLE');
+    expect(text).toContain('กรอกจำนวนหน่วยและราคาที่ขายได้เองแทน');
+    expect(text).not.toBe('MARKET_PRICE_UNAVAILABLE');
+  });
+
+  test('Code ที่ไม่รู้จัก → คืน null (Caller ต้อง Fallback เอง ไม่ใช่ปั้นข้อความเดา)', () => {
+    expect(sellAllErrorText('SOME_OTHER_CODE')).toBeNull();
+    expect(sellAllErrorText(undefined)).toBeNull();
   });
 });

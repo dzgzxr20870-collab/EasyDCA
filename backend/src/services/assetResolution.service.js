@@ -186,7 +186,35 @@ async function resolveOwnedAsset(userId, symbol, { portfolioId, brokerId } = {})
 }
 
 
+// ═══════════════════════════════════════════════════════════════════════════
+// resolveOwnedAssetById — Fast-Path เมื่อรู้ assetId ตรงๆ (เว็บ: เลือกจาก Dropdown)
+// ═══════════════════════════════════════════════════════════════════════════
+// Founder ทดสอบฟอร์มขาย 30 ส.ค. 2569 — ปัญหาที่ 4: ผู้ใช้เลือกสินทรัพย์เจาะจงจาก
+// Dropdown แล้ว (เช่น "EOSE — Weblue") แต่ยังเจอ AMBIGUOUS_ASSET_PORTFOLIO เพราะ
+// resolveOwnedAsset ด้านบนตัดสินจาก Symbol+Broker Heuristic เท่านั้น — ถ้าช่องโบรก
+// ไม่ Sync กับสินทรัพย์ที่เลือกจริง (บั๊กคนละจุดที่แก้พร้อมกันฝั่ง Frontend) การกรอง
+// จะไม่แคบพอ เหลือ >1 พอร์ต แล้วโยนกำกวมทั้งที่ผู้ใช้เลือกเจาะจงด้วยตาแล้ว
+//
+// ⚠️ ต่างจาก resolveOwnedAsset ตรงที่ **ไม่มีความกำกวมให้ตัดสินเลย** — ผู้ใช้ระบุ
+// แถวที่แน่นอนมาแล้ว (ไม่ใช่แค่ Symbol) จึงข้าม Broker/Portfolio Heuristic ทั้งหมด
+// ไม่มีทาง throw AMBIGUOUS_ASSET_BROKER/AMBIGUOUS_ASSET_PORTFOLIO ในเส้นทางนี้
+//
+// คืน asset row หรือ null เมื่อ:
+//   - ไม่พบ id นี้เลย
+//   - เป็นของผู้ใช้คนอื่น (findByIdForUser กรองด้วย user_id ในตัวอยู่แล้ว — กัน
+//     IDOR Pattern เดียวกับ assertOwnedBrokerId/assertOwnedPortfolioId — Caller
+//     ต้องแปลง null เป็น ASSET_NOT_FOUND ธรรมดา ไม่ใช่ยืนยันว่า id นี้มีอยู่จริง)
+//   - Symbol ไม่ตรงกับที่ Caller คาดไว้ (กัน assetId ผิด Symbol หลุดมาโดยไม่ตั้งใจ —
+//     เช่น Client แก้ symbol ในฟอร์มแต่ลืมเคลียร์ assetId เดิมที่เลือกไว้ก่อนหน้า)
+async function resolveOwnedAssetById(userId, assetId, symbol) {
+  const asset = await assetRepository.findByIdForUser(assetId, userId);
+  if (!asset) return null;
+  if (symbol && asset.symbol !== symbol) return null;
+  return asset;
+}
+
 module.exports = {
   AssetResolutionError,
   resolveOwnedAsset,
+  resolveOwnedAssetById,
 };

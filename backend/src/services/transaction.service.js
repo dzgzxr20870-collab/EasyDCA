@@ -767,12 +767,25 @@ async function validateSell(userId, params) {
   // ผู้ใช้ไม่ควรต้องรู้ว่าหุ้นอยู่พอร์ตไหนถึงจะขายได้
   const { portfolioId } = params;
 
+  // ⭐ Fast-Path (เว็บ, Founder ทดสอบฟอร์มขาย 30 ส.ค. 2569 — ปัญหาที่ 4): ผู้ใช้
+  // เลือกสินทรัพย์จาก Dropdown ที่มี assetId ตรงๆ อยู่แล้ว — ข้าม Symbol/Broker/
+  // Portfolio Heuristic ทั้งหมด ไม่มีทางกำกวมอีก (resolveOwnedAssetById ไม่มีวัน
+  // throw AMBIGUOUS_ASSET_*) แม้ถือ Symbol เดียวกันหลายโบรก/พอร์ตพร้อมกัน
+  //
+  // ⚠️ Path เดิม (ไม่มี assetId — LINE พิมพ์ Symbol ไม่มีทางมี assetId เลย) ยัง
+  // ทำงานเหมือนเดิมทุกประการผ่าน resolveOwnedAsset ด้านล่าง — นี่คือ Fast-Path
+  // เพิ่มเติม ไม่ใช่การแทนที่ของเดิม
+  //
   // ⚠️ ห้ามใส่ `?? null` ให้ params.brokerId (ดู validateBuy/assetResolution.service)
   // ขายผิดโบรก = ตัดยอดคงเหลือของโบรกที่ไม่ได้ขายจริง แล้วต้นทุนเฉลี่ยเพี้ยนทั้งคู่
-  const { asset } = await assetResolution.resolveOwnedAsset(userId, params.symbol, {
-    portfolioId,
-    brokerId: params.brokerId,
-  });
+  const asset = params.assetId
+    ? await assetResolution.resolveOwnedAssetById(userId, params.assetId, params.symbol)
+    : (
+        await assetResolution.resolveOwnedAsset(userId, params.symbol, {
+          portfolioId,
+          brokerId: params.brokerId,
+        })
+      ).asset;
   if (!asset) {
     throw new TransactionServiceError('ASSET_NOT_FOUND', `Asset ${params.symbol} not found for this user`, {
       symbol: params.symbol,

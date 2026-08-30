@@ -325,6 +325,9 @@ async function createTransaction(req, res) {
   // ── 2) จำนวน — คนละความหมายตามทิศทาง ───────────────────────────────────────
   //   ซื้อ: amountTotal = "จำนวนเงินรวม" (Service หารเป็นหน่วยให้)
   //   ขาย: quantity = "จำนวนหน่วยที่ขาย" (ไม่ใช่เงิน) — ยกเว้น sellAll ที่ไม่ต้องส่ง
+  //        **หรือ** amountTotal = "จำนวนเงินที่ขายได้" (Service ดึงราคาตลาดมาหาร
+  //        จำนวนหน่วยให้เอง — แก้ปัญหาที่ 2: เดิมบังคับ quantity เปล่าๆ เสมอ ทั้งที่
+  //        resolveQuantityAndPrice รองรับ Branch นี้อยู่แล้วเหมือนฝั่งซื้อทุกประการ)
   let amountTotal = null;
   let sellQuantity = null;
   // ── ซื้อด้วย "จำนวนหน่วย + ราคาต่อหน่วยที่รู้จริง" (มาจากสลิป) ────────────────
@@ -342,8 +345,20 @@ async function createTransaction(req, res) {
   let buyQuantity = null;
   if (isSell) {
     if (!sellAll) {
-      sellQuantity = toPositiveNumber(body.quantity);
-      if (sellQuantity === null) {
+      // ⭐ quantity เป็น Optional สำหรับฝั่งขายแล้ว (แก้ปัญหาที่ 2) — Pattern เดียว
+      // กับ buyQuantity ด้านล่าง: ส่งมาก็ต่อเมื่อรู้จำนวนหน่วยจริง ไม่บังคับเปล่าๆ
+      sellQuantity = body.quantity === undefined || body.quantity === null || body.quantity === ''
+        ? null
+        : toPositiveNumber(body.quantity);
+      if (body.quantity !== undefined && body.quantity !== null && body.quantity !== '' && sellQuantity === null) {
+        return fail(res, 'VALIDATION_ERROR', { field: 'quantity' });
+      }
+
+      amountTotal = toPositiveNumber(body.amountTotal);
+      // amountTotal บังคับเหมือนฝั่งซื้อ "ยกเว้น" กรณีที่ส่งจำนวนหน่วยมาแล้ว —
+      // Payload เดิมทุกตัวที่ส่ง quantity มา (ไม่ส่ง amountTotal) จึงยังทำงาน
+      // เหมือนเดิมทุกประการ (Additive ล้วน ไม่ใช่การแทนที่)
+      if (amountTotal === null && sellQuantity === null) {
         return fail(res, 'VALIDATION_ERROR', { field: 'quantity' });
       }
     }
@@ -436,7 +451,14 @@ async function createTransaction(req, res) {
     // ขายแบบระบุจำนวนหน่วย ต้องมีราคาที่ขายได้เสมอ — Service รองรับ "จำนวนหน่วย
     // อย่างเดียว" ไม่ได้ (resolveQuantityAndPrice จะโยน VALIDATION_ERROR ที่ความหมาย
     // ไม่ตรงกับปัญหาจริง) ตอบ Code เฉพาะที่นี่เพื่อให้ข้อความบอกทางออกได้ตรง
-    if (!sellAll && !hasPrice) {
+    //
+    // ⭐ sellQuantity === null (amount-only, แก้ปัญหาที่ 2) → **ไม่** บังคับราคา —
+    // ปล่อยให้ Service ดึงราคาตลาดเองผ่าน resolveQuantityAndPrice (Branch เดียวกับ
+    // ที่ฝั่งซื้อใช้ ส่ง side='sell' ไปด้วยแล้วโดย validateSell) ถ้าดึงไม่ได้ (หุ้นไทย
+    // ไม่มี Price Feed) จะโยน PRICE_FEED_NOT_IMPLEMENTED ที่มีข้อความไทยชวนกรอกราคา
+    // เองอยู่แล้ว (WEB_ERROR_MESSAGES) ไม่ต้องดักซ้ำที่นี่เหมือนฝั่งซื้อ (ซื้อรู้ type
+    // แน่นอนเสมอจาก Registry แต่ขายอาจไม่รู้ type เลยก็ได้ — ดู Dynamic Symbol)
+    if (!sellAll && sellQuantity !== null && !hasPrice) {
       return fail(res, 'SELL_PRICE_REQUIRED', { symbol });
     }
   } else if (buyQuantity !== null && !hasPrice) {
@@ -520,8 +542,27 @@ async function createTransaction(req, res) {
     }
   }
 
+  // ── 6.7) assetId — Fast-Path Resolution ฝั่งขาย (แก้ปัญหาที่ 4) ─────────────
+  // Founder ทดสอบฟอร์มขาย 30 ส.ค. 2569: เลือกสินทรัพย์เจาะจงจาก Dropdown แล้ว
+  // (เช่น "EOSE — Weblue") แต่ยังเจอ AMBIGUOUS_ASSET_PORTFOLIO เพราะช่องโบรกแยก
+  // อิสระไม่เคย Sync กับสินทรัพย์ที่เลือกจริง (Frontend Symbol+Broker Heuristic
+  // กรองไม่แคบพอ) — ส่ง assetId ตรงๆ ข้ามความกำกวมทั้งหมด (ดู
+  // assetResolution.resolveOwnedAssetById + transaction.service.validateSell)
+  //
+  // ⚠️ เฉพาะฝั่งขาย — ซื้อยังไม่มี Concept "ระบุด้วย assetId" (อาจเป็นสินทรัพย์
+  // ใหม่ที่ยังไม่มี assetId เลยด้วยซ้ำ) แค่ตรวจรูปแบบ UUID ที่นี่เท่านั้น — ความเป็น
+  // เจ้าของ + Symbol ตรงกันไหม ตรวจใน Service (กัน Query ซ้ำที่ Controller)
+  let assetId;
+  if (isSell && body.assetId !== undefined && body.assetId !== null && body.assetId !== '') {
+    if (typeof body.assetId !== 'string' || !UUID_RE.test(body.assetId)) {
+      return fail(res, 'VALIDATION_ERROR', { field: 'assetId' });
+    }
+    assetId = body.assetId;
+  }
+
   const params = {
     symbol,
+    ...(assetId !== undefined ? { assetId } : {}),
     // ส่งต่อ "ตามที่เป็น" — ไม่ใส่ Key เลยเมื่อผู้ใช้ไม่ได้ระบุ (undefined = ยังไม่ได้
     // ถาม ≠ null = ตอบแล้วว่าไม่มีโบรก) ดูหัวไฟล์ assetResolution.service
     ...(hasBrokerKey ? { brokerId } : {}),
@@ -566,11 +607,18 @@ async function createTransaction(req, res) {
       // Service หา heldQuantity จาก Ledger + ราคาตลาด ณ ตอนนี้ให้เอง (เส้นทางเดียว
       // กับคำสั่ง "ขาย BTC ทั้งหมด" ใน LINE) — Controller ไม่คำนวณจำนวนใดๆ ทั้งสิ้น
       params.sellAll = true;
-    } else {
+    } else if (sellQuantity !== null) {
       // ผู้ใช้กรอก "จำนวนหน่วย" มาตรงๆ อยู่แล้ว (ต่างจากซื้อที่กรอกเป็นเงิน) จึงส่ง
       // เข้า Service ในรูปแบบเดิมของมันได้เลย ไม่ต้องแปลงหน่วย/หารอะไรที่ชั้นนี้
       params.quantity = sellQuantity;
       params.pricePerUnit = pricePerUnit;
+    } else {
+      // ⭐ ขายด้วย "จำนวนเงินรวมที่ขายได้" อย่างเดียว (แก้ปัญหาที่ 2) — ส่ง amountThb
+      // ตรงๆ ให้ resolveQuantityAndPrice ดึงราคาตลาด ณ ตอนนี้มาหารจำนวนหน่วยให้เอง
+      // (Branch เดียวกับที่ฝั่งซื้อใช้ ต่างกันแค่ validateSell เรียกด้วย side='sell'
+      // อยู่แล้ว — ราคา/จำนวนที่คำนวณออกมายังต้องผ่านด่าน INSUFFICIENT_QUANTITY
+      // เดิมเหมือนทุกเส้นทางขาย ไม่มีทางขายเกินยอดคงเหลือได้จากเส้นทางนี้)
+      params.amountThb = amountTotal;
     }
   } else if (buyQuantity !== null) {
     // ── ซื้อด้วยตัวเลขจากสลิป: รู้ทั้งจำนวนหน่วยและราคาที่ได้จริง ─────────────

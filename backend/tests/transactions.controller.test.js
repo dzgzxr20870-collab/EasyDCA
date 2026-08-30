@@ -887,6 +887,183 @@ describe('POST /transactions (side=sell) — บันทึกสำเร็�
   });
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ⭐ ขายด้วย "จำนวนเงินรวม" อย่างเดียว (Founder ทดสอบฟอร์มขาย 30 ส.ค. 2569 —
+// ปัญหาที่ 2: เดิมบังคับ quantity เปล่าๆ เสมอ ทั้งที่ resolveQuantityAndPrice
+// รองรับ Branch นี้อยู่แล้วเหมือนฝั่งซื้อทุกประการ)
+// ═══════════════════════════════════════════════════════════════════════════
+// ── RED-GREEN ────────────────────────────────────────────────────────────
+//   • คืน `sellQuantity = toPositiveNumber(body.quantity)` แบบเดิม (บังคับเสมอ)
+//     → เคส "ขายด้วยยอดรวมอย่างเดียว" ทั้งชุดแดง (VALIDATION_ERROR field quantity)
+//   • ถอด `if (!sellAll && sellQuantity !== null && !hasPrice)` กลับเป็น
+//     `if (!sellAll && !hasPrice)` → เคส Crypto ยอดรวมอย่างเดียวแดง (ติด
+//     SELL_PRICE_REQUIRED ทั้งที่ไม่ควรบังคับราคา)
+describe('POST /transactions (side=sell) — ขายด้วยยอดเงินรวมอย่างเดียว (ปัญหาที่ 2)', () => {
+  test('⭐ Crypto (มี Price Feed) → คำนวณจำนวนหน่วย + ราคาจาก Price Feed สำเร็จ ไม่ VALIDATION_ERROR', async () => {
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([
+      { id: 'asset-1', symbol: 'BTC', type: 'crypto' },
+    ]);
+    transactionRepository.findAllByAsset.mockResolvedValue(holdingHistory(1));
+    priceFeedService.getCurrentPrice.mockResolvedValue(2000000);
+
+    const res = mockRes();
+    await createTransaction(mockReq({ symbol: 'BTC', side: 'sell', amountTotal: 200000 }), res);
+
+    expect(statusOf(res)).toBe(201);
+    expect(transactionRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'sell', quantity: 0.1, pricePerUnit: 2000000, amountThb: 200000 })
+    );
+  });
+
+  // ⚠️ หุ้นไทยไม่มี Price Feed อัตโนมัติ — ต้องได้ Error ที่บอกทางออก (กรอกราคาเอง)
+  // ไม่ใช่ 500 หรือข้อความที่ทำตามไม่ได้ (WEB_ERROR_MESSAGES.PRICE_FEED_NOT_IMPLEMENTED
+  // มีข้อความนี้อยู่แล้ว — ยืนยันว่ายัง Map ถูกหลังเพิ่ม Branch นี้)
+  test('หุ้นไทย (ไม่มี Price Feed) → 503 PRICE_FEED_NOT_IMPLEMENTED พร้อมข้อความชวนกรอกราคาเอง', async () => {
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([
+      { id: 'asset-1', symbol: 'PTT', type: 'stock_th' },
+    ]);
+    transactionRepository.findAllByAsset.mockResolvedValue(holdingHistory(100));
+    // Default ของไฟล์นี้ (beforeEach) ตั้ง getCurrentPrice ให้คืนราคาเสมอ (Mock
+    // ไม่ได้แยกตาม Symbol/Type จริง) — เคสนี้จำลอง "ดึงราคาไม่ได้จริง" (หุ้นไทย
+    // ไม่มี Price Feed) จึง Override เป็น null ตรงๆ (Pattern เดียวกับเทสต์
+    // "ดึงราคาตลาดไม่ได้ → 503" ของฝั่งซื้อด้านบน)
+    priceFeedService.getCurrentPrice.mockResolvedValue(null);
+
+    const res = mockRes();
+    await createTransaction(mockReq({ symbol: 'PTT', side: 'sell', amountTotal: 1000 }), res);
+
+    expect(statusOf(res)).toBe(503);
+    expect(jsonOf(res).error).toBe('PRICE_FEED_NOT_IMPLEMENTED');
+    expect(jsonOf(res).message).toMatch(/กรอกราคาต่อหน่วยเอง/);
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
+
+  // ⭐ ยอดรวมที่คำนวณจำนวนหน่วยออกมาแล้วเกินที่ถืออยู่จริง ยังต้องถูกบล็อกเหมือน
+  // เส้นทาง quantity+price เดิมทุกประการ (INSUFFICIENT_QUANTITY เช็คหลัง Resolve
+  // เสมอ ไม่ว่าจำนวนจะมาจากไหน)
+  test('⭐ ยอดรวมที่หารออกมาเกินยอดคงเหลือจริง → 400 INSUFFICIENT_QUANTITY เหมือนเดิม', async () => {
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([
+      { id: 'asset-1', symbol: 'BTC', type: 'crypto' },
+    ]);
+    // ถืออยู่ 0.05 BTC — ยอดรวมที่ขอขาย (200,000 ÷ 2,000,000 = 0.1) เกินยอดจริง
+    transactionRepository.findAllByAsset.mockResolvedValue(holdingHistory(0.05));
+    priceFeedService.getCurrentPrice.mockResolvedValue(2000000);
+
+    const res = mockRes();
+    await createTransaction(mockReq({ symbol: 'BTC', side: 'sell', amountTotal: 200000 }), res);
+
+    expect(statusOf(res)).toBe(400);
+    expect(jsonOf(res).error).toBe('INSUFFICIENT_QUANTITY');
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
+
+  // Regression — Payload เดิม (quantity + pricePerUnit ครบคู่) ต้องยังทำงานเหมือนเดิม
+  // ทุกประการ ไม่ถูก Branch ใหม่แย่งไปเดินเส้นทาง amount-only โดยไม่ตั้งใจ
+  test('Payload เดิม (quantity + pricePerUnit ครบคู่) → ยังทำงานเหมือนเดิม ไม่แตะ Price Feed เลย', async () => {
+    transactionRepository.findAllByAsset.mockResolvedValue(holdingHistory(10));
+
+    const res = mockRes();
+    await createTransaction(
+      mockReq({ symbol: 'AAPL', side: 'sell', quantity: 4, pricePerUnit: 250 }),
+      res
+    );
+
+    expect(statusOf(res)).toBe(201);
+    expect(priceFeedService.getCurrentPrice).not.toHaveBeenCalled();
+    expect(transactionRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'sell', quantity: 4, pricePerUnit: 250 })
+    );
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ⭐ assetId — Fast-Path Resolution ฝั่งขาย ผ่าน HTTP Layer (ปัญหาที่ 4)
+// ═══════════════════════════════════════════════════════════════════════════
+describe('POST /transactions (side=sell) — assetId ที่ Controller รับมา', () => {
+  test('assetId รูปแบบไม่ใช่ UUID → 400 VALIDATION_ERROR (ไม่ยิง Service เลย)', async () => {
+    const res = mockRes();
+    await createTransaction(
+      mockReq({ symbol: 'AAPL', side: 'sell', quantity: 1, pricePerUnit: 100, assetId: 'not-a-uuid' }),
+      res
+    );
+
+    expect(statusOf(res)).toBe(400);
+    expect(jsonOf(res).error).toBe('VALIDATION_ERROR');
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
+
+  // ⚠️ ซื้อไม่มี Concept นี้ — ส่ง assetId มาตอนซื้อต้องไม่มีผลอะไรเลย (เมินทิ้งเงียบๆ
+  // ไม่ Reject) เพราะ Frontend ส่ง assetId แบบไม่แยกโหมดในบางเคส (State เดียวใช้ร่วม)
+  test('ซื้อ (side=buy) ที่แนบ assetId มาด้วย → เมินทิ้ง ไม่มีผลอะไร ไม่ Reject', async () => {
+    const res = mockRes();
+    await createTransaction(
+      mockReq({ symbol: 'AAPL', amountTotal: 1000, assetId: '11111111-1111-4111-8111-111111111111' }),
+      res
+    );
+
+    expect(statusOf(res)).toBe(201);
+  });
+
+  test('assetId ที่ Query แล้วไม่พบ (ของผู้ใช้อื่น/ไม่มีจริง) → 400 ASSET_NOT_FOUND', async () => {
+    assetRepository.findByIdForUser.mockResolvedValue(null);
+
+    const res = mockRes();
+    await createTransaction(
+      mockReq({
+        symbol: 'AAPL',
+        side: 'sell',
+        quantity: 1,
+        pricePerUnit: 100,
+        assetId: '11111111-1111-4111-8111-111111111111',
+      }),
+      res
+    );
+
+    expect(statusOf(res)).toBe(400);
+    expect(jsonOf(res).error).toBe('ASSET_NOT_FOUND');
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
+
+  test('assetId ถูกต้อง + เป็นเจ้าของจริง → ขายสำเร็จผ่าน Fast-Path', async () => {
+    const ASSET_ID = '11111111-1111-4111-8111-111111111111';
+    assetRepository.findByIdForUser.mockResolvedValue({ id: ASSET_ID, symbol: 'AAPL', type: 'stock_us' });
+    transactionRepository.findAllByAsset.mockResolvedValue(holdingHistory(10));
+
+    const res = mockRes();
+    await createTransaction(
+      mockReq({ symbol: 'AAPL', side: 'sell', assetId: ASSET_ID, quantity: 4, pricePerUnit: 250 }),
+      res
+    );
+
+    expect(statusOf(res)).toBe(201);
+    // Fast-Path ข้าม Heuristic — ไม่ควรยิง findAllByUserAndSymbol เลย
+    expect(assetRepository.findAllByUserAndSymbol).not.toHaveBeenCalled();
+    expect(assetRepository.findByIdForUser).toHaveBeenCalledWith(ASSET_ID, USER_ID);
+    expect(transactionRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ assetId: ASSET_ID, type: 'sell' })
+    );
+  });
+
+  // "ขายทั้งหมด" ส่ง assetId มาด้วย (ตามที่ Frontend ทำ) → ต้อง Resolve ผ่าน assetId
+  // เหมือนกัน ไม่ใช่ตกไปที่ Heuristic เดิม
+  test('"ขายทั้งหมด" + assetId พร้อมกัน → Resolve ผ่าน assetId เหมือนกัน', async () => {
+    const ASSET_ID = '11111111-1111-4111-8111-111111111111';
+    assetRepository.findByIdForUser.mockResolvedValue({ id: ASSET_ID, symbol: 'AAPL', type: 'stock_us' });
+    transactionRepository.findAllByAsset.mockResolvedValue(holdingHistory(2));
+    priceFeedService.getCurrentPrice.mockResolvedValue(250);
+
+    const res = mockRes();
+    await createTransaction(
+      mockReq({ symbol: 'AAPL', side: 'sell', assetId: ASSET_ID, sellAll: true }),
+      res
+    );
+
+    expect(statusOf(res)).toBe(201);
+    expect(assetRepository.findAllByUserAndSymbol).not.toHaveBeenCalled();
+    expect(jsonOf(res).transaction.remainingQuantity).toBe(0);
+  });
+});
+
 // ── Regression (Red-Green): เพิ่มปุ่มขายต้องไม่ทำ Payload เดิมของฝั่งซื้อเพี้ยน ──────
 describe('Regression — Payload เดิมที่ไม่มี side ต้องเป็น "ซื้อ" เหมือนเดิมทุกประการ', () => {
   test('ไม่ส่ง side → type=buy และคง Field เดิมของฝั่งซื้อไว้ครบ', async () => {

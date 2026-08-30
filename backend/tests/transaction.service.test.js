@@ -361,6 +361,116 @@ describe('processSellCommand', () => {
   });
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ⭐ processSellCommand — assetId Fast-Path Resolution (Founder ทดสอบฟอร์มขาย
+// 30 ส.ค. 2569 — ปัญหาที่ 4: AMBIGUOUS_ASSET_PORTFOLIO ทั้งที่เลือกสินทรัพย์
+// เจาะจงจาก Dropdown แล้ว)
+// ═══════════════════════════════════════════════════════════════════════════
+// ── RED-GREEN ────────────────────────────────────────────────────────────
+//   • ถอด `params.assetId ? ... : ...` ใน validateSell กลับไปเรียก
+//     resolveOwnedAsset ตรงๆ เสมอ → เคส "ไม่กำกวมอีก" แดง (กลับไปกำกวมเหมือนเดิม)
+//   • ถอด `if (symbol && asset.symbol !== symbol) return null;` ใน
+//     resolveOwnedAssetById → เคส "Symbol ไม่ตรง" แดง
+describe('⭐ processSellCommand — assetId Fast-Path Resolution (ปัญหาที่ 4)', () => {
+  // EOSE ถืออยู่ 2 โบรกในพอร์ตเดียวกัน — Symbol+Broker Heuristic เดิมจะกำกวม
+  // ถ้าไม่รู้ brokerId ที่ถูกต้องเป๊ะ (บั๊กปัญหาที่ 1 ฝั่ง Frontend) แต่ assetId
+  // ระบุแถวที่แน่นอนแล้ว จึงไม่มีทางกำกวมไม่ว่าจะถืออยู่กี่โบรก/กี่พอร์ตก็ตาม
+  const EOSE_A = { id: 'asset-eose-a', userId: USER_ID, symbol: 'EOSE', type: 'stock_us', brokerId: 'broker-a' };
+  const EOSE_B = { id: 'asset-eose-b', userId: USER_ID, symbol: 'EOSE', type: 'stock_us', brokerId: 'broker-b' };
+
+  test('⭐ เลือกจาก Dropdown (มี assetId) → ไม่กำกวมอีก แม้ถือ Symbol เดียวกันหลายโบรก', async () => {
+    assetRepository.findByIdForUser.mockResolvedValue(EOSE_A);
+    transactionRepository.findAllByAsset.mockResolvedValue([{ type: 'buy', quantity: 100 }]);
+
+    const result = await processSellCommand(USER_ID, {
+      symbol: 'EOSE',
+      assetId: EOSE_A.id,
+      quantity: 10,
+      pricePerUnit: 5,
+    });
+
+    // Fast-Path ข้าม Heuristic ทั้งหมด — findAllByUserAndSymbol ไม่ควรถูกเรียกเลย
+    expect(assetRepository.findAllByUserAndSymbol).not.toHaveBeenCalled();
+    expect(assetRepository.findByIdForUser).toHaveBeenCalledWith(EOSE_A.id, USER_ID);
+    expect(transactionRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ assetId: EOSE_A.id, type: 'sell', quantity: 10 })
+    );
+    expect(result.remainingQuantity).toBe(90);
+  });
+
+  // ⭐⭐ Regression สำคัญที่สุดของชุดนี้ — Path เดิม (ไม่มี assetId, LINE พิมพ์ Symbol
+  // ไม่มีทางมี assetId เลย) ต้องยังกำกวมได้จริงเหมือนเดิมทุกประการ ไม่ใช่ถูก
+  // Fast-Path เผลอครอบไปด้วย
+  test('⭐⭐ ไม่มี assetId (จำลอง Path จาก LINE) → พฤติกรรมเดิมทุกประการ ยัง Throw กำกวมได้', async () => {
+    assetRepository.findAllByUserAndSymbol.mockResolvedValue([
+      { ...EOSE_A, portfolioId: 'pf-1' },
+      { ...EOSE_B, portfolioId: 'pf-2' },
+    ]);
+
+    await expect(
+      processSellCommand(USER_ID, { symbol: 'EOSE', quantity: 10, pricePerUnit: 5 })
+    ).rejects.toMatchObject({ code: 'AMBIGUOUS_ASSET_PORTFOLIO' });
+
+    expect(assetRepository.findByIdForUser).not.toHaveBeenCalled();
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
+
+  // 🔒 IDOR Regression — assetId ของผู้ใช้อื่น (findByIdForUser Scope ด้วย user_id
+  // อยู่แล้วที่ชั้น Repository — คืน null เมื่อไม่ใช่ของ userId นี้ Pattern เดียวกับ
+  // assertOwnedBrokerId/assertOwnedPortfolioId) ต้องโดนบล็อกเป็น ASSET_NOT_FOUND
+  // ธรรมดา ไม่ใช่ยืนยันว่า assetId นี้มีอยู่จริงแล้วขายสำเร็จ
+  test('🔒 assetId ของผู้ใช้อื่น → ASSET_NOT_FOUND ไม่ใช่ขายสำเร็จ', async () => {
+    assetRepository.findByIdForUser.mockResolvedValue(null);
+
+    await expect(
+      processSellCommand(USER_ID, {
+        symbol: 'EOSE',
+        assetId: 'asset-of-another-user',
+        quantity: 10,
+        pricePerUnit: 5,
+      })
+    ).rejects.toMatchObject({ code: 'ASSET_NOT_FOUND' });
+
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
+
+  // ⚠️ assetId เจอจริงแต่ Symbol ไม่ตรง (Client แก้ symbol ในฟอร์มแต่ลืมเคลียร์
+  // assetId เดิม) — ต้องปฏิเสธ ไม่ใช่ขายสินทรัพย์ผิดตัวเงียบๆ
+  test('⚠️ assetId ตรงแต่ symbol ไม่ตรง → ASSET_NOT_FOUND (กัน Client ส่งข้อมูลไม่สอดคล้องกัน)', async () => {
+    assetRepository.findByIdForUser.mockResolvedValue(EOSE_A); // symbol จริง = EOSE
+
+    await expect(
+      processSellCommand(USER_ID, {
+        symbol: 'BTC', // ไม่ตรงกับ assetId ที่ส่งมา
+        assetId: EOSE_A.id,
+        quantity: 10,
+        pricePerUnit: 5,
+      })
+    ).rejects.toMatchObject({ code: 'ASSET_NOT_FOUND' });
+
+    expect(transactionRepository.create).not.toHaveBeenCalled();
+  });
+
+  // ขายทั้งหมด + assetId พร้อมกัน (ปุ่ม "ขายทั้งหมด" ส่ง assetId ไปด้วยตามที่ระบุ) —
+  // ต้อง Resolve ผ่าน assetId เหมือนกัน ไม่กำกวมเช่นกัน
+  test('⭐ ขายทั้งหมด + assetId พร้อมกัน → Resolve ผ่าน assetId ไม่กำกวม', async () => {
+    assetRepository.findByIdForUser.mockResolvedValue(EOSE_A);
+    // ไม่มี currency: 'USD' ในประวัติ → deriveAssetCurrency คืน 'THB' →
+    // sellAll ใช้ getCurrentPrice (ไม่ใช่ getCurrentPriceUsd)
+    transactionRepository.findAllByAsset.mockResolvedValue([{ type: 'buy', quantity: 100 }]);
+    priceFeedService.getCurrentPrice.mockResolvedValue(5);
+
+    const result = await processSellCommand(USER_ID, {
+      symbol: 'EOSE',
+      assetId: EOSE_A.id,
+      sellAll: true,
+    });
+
+    expect(assetRepository.findAllByUserAndSymbol).not.toHaveBeenCalled();
+    expect(result.remainingQuantity).toBe(0);
+  });
+});
+
 describe('calculateHeldQuantity', () => {
   test('Σ(buy) - Σ(sell) พื้นฐาน', () => {
     expect(
