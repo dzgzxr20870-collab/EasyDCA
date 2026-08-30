@@ -745,4 +745,39 @@ describe('⭐ sellAllErrorText', () => {
     expect(sellAllErrorText('SOME_OTHER_CODE')).toBeNull();
     expect(sellAllErrorText(undefined)).toBeNull();
   });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // ⭐ Error จาก Preview (GET /dashboard/profit/:symbol — Founder ทดสอบ UI
+  // Confirm 30 ส.ค. 2569) — คนละ Service กับที่บันทึกขายทั้งหมดจริง (profit.
+  // service ไม่ใช่ transaction.service) จึงใช้ชื่อ Code คนละชุด แต่ความหมาย
+  // ตรงกับ 2 Code ข้างบนเป๊ะ ต้อง Map ให้ผู้ใช้เห็นข้อความเดียวกัน
+  // ═══════════════════════════════════════════════════════════════════════
+  test('⭐ PRICE_FEED_NOT_IMPLEMENTED (จาก Preview) → ข้อความเดียวกับ MARKET_PRICE_UNAVAILABLE', () => {
+    expect(sellAllErrorText('PRICE_FEED_NOT_IMPLEMENTED')).toBe(
+      sellAllErrorText('MARKET_PRICE_UNAVAILABLE')
+    );
+  });
+
+  test('NO_HOLDING_TO_CALCULATE_PROFIT (จาก Preview) → ข้อความเดียวกับ NOTHING_TO_SELL', () => {
+    expect(sellAllErrorText('NO_HOLDING_TO_CALCULATE_PROFIT')).toBe(
+      sellAllErrorText('NOTHING_TO_SELL')
+    );
+  });
+
+  test('GOLD_PRICE_UNAVAILABLE → ข้อความอ่านรู้เรื่อง ไม่ใช่โค้ดดิบ', () => {
+    const text = sellAllErrorText('GOLD_PRICE_UNAVAILABLE');
+    expect(text).toContain('ราคาทองคำ');
+    expect(text).not.toBe('GOLD_PRICE_UNAVAILABLE');
+  });
+
+  test('ASSET_NOT_FOUND (Preview) → บอกให้เลือกสินทรัพย์ใหม่', () => {
+    expect(sellAllErrorText('ASSET_NOT_FOUND')).toContain('เลือกสินทรัพย์');
+  });
+
+  // ⚠️ ไม่ควรเกิดจริง (Preview ส่ง brokerId/portfolioId ของสินทรัพย์ที่เลือกไปด้วย
+  // เสมอ) แต่ต้องไม่หลุดเป็นโค้ดดิบถ้าเกิดขึ้นจริง (ข้อมูลเปลี่ยนระหว่างเปิดฟอร์ม)
+  test('⚠️ AMBIGUOUS_ASSET_BROKER/PORTFOLIO (กันเหนียว) → ไม่หลุดเป็นโค้ดดิบ', () => {
+    expect(sellAllErrorText('AMBIGUOUS_ASSET_BROKER')).not.toBe('AMBIGUOUS_ASSET_BROKER');
+    expect(sellAllErrorText('AMBIGUOUS_ASSET_PORTFOLIO')).not.toBe('AMBIGUOUS_ASSET_PORTFOLIO');
+  });
 });

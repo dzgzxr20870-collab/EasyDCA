@@ -67,6 +67,46 @@ function assetOptionLabel(holding, brokers) {
   return `${holding.symbol} — ${brokerName}`;
 }
 
+// ── ตัวช่วยจัดรูปตัวเลขสำหรับสรุปก่อนลบพอร์ต (Founder ทดสอบ UI Confirm 30 ส.ค.
+// 2569) — Pattern เดียวกับ PortfolioHoldingsTable.jsx (fmtQty/fmtMoney) ไม่ Export
+// ใช้ร่วม เพราะไฟล์นี้ไม่เคยมี Helper ตัวเลขมาก่อน (ถ้าจะรวมเป็น lib/ shared
+// ทีหลังค่อยแยกต่างหาก — เหตุผลเดียวกับที่ RecordTransactionModal.jsx ทำไว้)
+function fmtQty(n) {
+  const num = Number(n);
+  if (!Number.isFinite(num)) return '—';
+  return num.toLocaleString('th-TH', { maximumFractionDigits: 8 });
+}
+
+function fmtMoney(n) {
+  const num = Number(n);
+  if (!Number.isFinite(num)) return '—';
+  return num.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// deletePreviewLines — "สินทรัพย์อะไรบ้าง กี่รายการ มูลค่ารวมเท่าไหร่" ก่อนลบพอร์ต
+// ═══════════════════════════════════════════════════════════════════════════
+// Founder ทดสอบ 30 ส.ค. 2569: Confirm เดิมบอกแค่ข้อความทั่วไป ("ย้ายไปพอร์ตหลัก
+// อัตโนมัติ") ไม่บอกตัวเลขจริง — ใช้ `holdings` ที่หน้าโหลดมาอยู่แล้ว (Prop เดิม
+// ของ Component นี้ ใช้สร้าง Dropdown "ย้ายสินทรัพย์" อยู่แล้วด้านบน) **ไม่ยิง API
+// เพิ่ม** ตามที่ Founder ยืนยัน
+//
+// ⚠️ "มูลค่ารวม" ที่นี่คือ **ต้นทุน (totalInvested)** ไม่ใช่มูลค่าตลาดสด — หน้านี้
+// ไม่ได้โหลดราคาตลาด Real-time มาไว้ล่วงหน้า (ต่างจาก Preview "ขายทั้งหมด" ที่ยิง
+// GET /dashboard/profit ตรงๆ ต่อสินทรัพย์เดียว) การยิง Profit ทีละแถวเพื่อพอร์ต
+// ที่อาจมีหลายสินทรัพย์จะเป็น Query เพิ่มที่ Founder ขอให้เลี่ยงไว้แล้ว — Label ให้
+// ตรงความจริงว่า "(ต้นทุน)" กันผู้ใช้เข้าใจว่าเป็นมูลค่าตลาดปัจจุบัน
+//
+// รวมยอดแยกตามสกุลเงิน (ไม่ถัวข้าม THB/USD) — คืน [{ currency, total }]
+export function deleteSummaryTotals(holdings) {
+  const totals = new Map();
+  for (const h of holdings ?? []) {
+    const currency = h?.currency === 'USD' ? 'USD' : 'THB';
+    totals.set(currency, (totals.get(currency) ?? 0) + Number(h?.totalInvested ?? 0));
+  }
+  return [...totals.entries()].map(([currency, total]) => ({ currency, total }));
+}
+
 function PortfolioSettingsPanel({
   portfolio,
   holdings = [],
@@ -214,6 +254,33 @@ function PortfolioSettingsPanel({
                   การลบนี้ย้อนกลับไม่ได้ สินทรัพย์ที่อยู่ในพอร์ตนี้ (ถ้ามี) จะถูกย้ายไปรวมกับพอร์ตหลักอัตโนมัติ —
                   จำนวนที่ถือ ต้นทุน และประวัติธุรกรรมไม่เปลี่ยนแปลง
                 </p>
+
+                {/* ⭐ เห็นตัวเลขจริงก่อนกดยืนยัน (Founder ทดสอบ UI Confirm
+                    30 ส.ค. 2569) — ใช้ holdings ที่หน้าโหลดมาอยู่แล้ว ไม่ยิง API
+                    เพิ่ม · "มูลค่ารวม" คือต้นทุน ไม่ใช่ราคาตลาดสด (ดู
+                    deleteSummaryTotals หัวไฟล์) */}
+                {holdings.length > 0 ? (
+                  <>
+                    <p>สินทรัพย์ที่จะถูกย้าย ({holdings.length} รายการ):</p>
+                    <ul className="app-note">
+                      {holdings.map((h) => (
+                        <li key={h.assetId ?? `${h.symbol}|${h.brokerId ?? 'none'}`}>
+                          {assetOptionLabel(h, brokers)} — {fmtQty(h.heldQuantity)} หน่วย (ต้นทุนรวม{' '}
+                          {fmtMoney(h.totalInvested)} {h.currency === 'USD' ? 'USD' : 'บาท'})
+                        </li>
+                      ))}
+                    </ul>
+                    <p>
+                      มูลค่ารวม (ต้นทุน):{' '}
+                      {deleteSummaryTotals(holdings)
+                        .map(({ currency, total }) => `${fmtMoney(total)} ${currency === 'USD' ? 'USD' : 'บาท'}`)
+                        .join(' + ')}
+                    </p>
+                  </>
+                ) : (
+                  <p>พอร์ตนี้ไม่มีสินทรัพย์อยู่ — ลบได้โดยไม่กระทบข้อมูลอื่น</p>
+                )}
+
                 <div className="demo-actions">
                   <button
                     type="button"

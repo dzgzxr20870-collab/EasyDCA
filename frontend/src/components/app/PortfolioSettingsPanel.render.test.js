@@ -10,7 +10,11 @@ import { describe, test, expect } from 'vitest';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import PortfolioSettingsPanel, { renameErrorText, deleteErrorText } from './PortfolioSettingsPanel.jsx';
+import PortfolioSettingsPanel, {
+  renameErrorText,
+  deleteErrorText,
+  deleteSummaryTotals,
+} from './PortfolioSettingsPanel.jsx';
 
 const DEFAULT_PORTFOLIO = { id: 'pf-default', name: 'พอร์ตหลัก', isDefault: true, canWrite: true };
 const NORMAL_PORTFOLIO = { id: 'pf-2', name: 'ระยะยาว', isDefault: false, canWrite: true };
@@ -152,5 +156,44 @@ describe('deleteErrorText — ข้อความต่อ Error Code จร�
   test('Error Code ที่ไม่รู้จัก → คืน fallback หรือข้อความ Default', () => {
     expect(deleteErrorText('SOMETHING_NEW', 'ข้อความจากเซิร์ฟเวอร์')).toBe('ข้อความจากเซิร์ฟเวอร์');
     expect(deleteErrorText(undefined, undefined)).toContain('ไม่สำเร็จ');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ⭐ deleteSummaryTotals — สรุปมูลค่ารวม (ต้นทุน) ก่อนยืนยันลบพอร์ต
+// (Founder ทดสอบ UI Confirm 30 ส.ค. 2569)
+// ═══════════════════════════════════════════════════════════════════════════
+// ⚠️ Dialog ยืนยันลบเปิดผ่าน useState ภายใน (confirmingDelete) ไม่ใช่ Prop/URL
+// เหมือน AppDca.jsx จึง SSR-render ให้ตรงสถานะนั้นตรงๆ ไม่ได้ (ต้อง Click จริง) —
+// ทดสอบ Logic คำนวณผ่าน Pure Function นี้แทน (Pattern เดียวกับ renameErrorText/
+// deleteErrorText ข้างบน)
+describe('⭐ deleteSummaryTotals — ต้องรวมถูกสกุล ไม่ถัวข้าม THB/USD', () => {
+  test('⭐ รวมต้นทุนของทุกสินทรัพย์ในพอร์ต (สกุลเดียวกัน)', () => {
+    expect(deleteSummaryTotals(HOLDINGS)).toEqual([{ currency: 'THB', total: 1106 }]);
+  });
+
+  // ⭐⭐ เคสสำคัญที่สุด — ผู้ใช้ Multi-Currency (Round 10) ถือทั้ง THB และ USD ใน
+  // พอร์ตเดียวกันได้ ถ้ารวมข้ามสกุลตัวเลขที่โชว์จะไม่มีความหมายอะไรเลย
+  test('⭐⭐ พอร์ตมีทั้ง THB และ USD → แยกยอดกันคนละสกุล ไม่ถัวรวม', () => {
+    const mixed = [
+      { symbol: 'BTC', totalInvested: 1000, currency: 'THB' },
+      { symbol: 'AAPL', totalInvested: 500, currency: 'USD' },
+      { symbol: 'PTT', totalInvested: 200, currency: 'THB' },
+    ];
+
+    const totals = deleteSummaryTotals(mixed);
+    expect(totals).toContainEqual({ currency: 'THB', total: 1200 });
+    expect(totals).toContainEqual({ currency: 'USD', total: 500 });
+  });
+
+  test('ไม่ระบุ currency (Field เดิมก่อน Round 10) → ถือเป็น THB', () => {
+    expect(deleteSummaryTotals([{ symbol: 'PTT', totalInvested: 500 }])).toEqual([
+      { currency: 'THB', total: 500 },
+    ]);
+  });
+
+  test('พอร์ตว่าง/ไม่ส่ง holdings มา → คืน Array ว่าง ไม่ Throw', () => {
+    expect(deleteSummaryTotals([])).toEqual([]);
+    expect(deleteSummaryTotals(undefined)).toEqual([]);
   });
 });

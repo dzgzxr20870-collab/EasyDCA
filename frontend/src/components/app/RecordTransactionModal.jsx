@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiPost, apiUpload } from '../../lib/api.js';
-import { listAssets, listBrokers, createBroker } from '../../lib/portfolioApi.js';
+import { listAssets, listBrokers, createBroker, getAssetProfit } from '../../lib/portfolioApi.js';
 import { portfolioWriteState } from '../../lib/entitlements.js';
 // Reuse ตัวแปลง Error Code → ข้อความไทยของ § 15.8 ที่มีอยู่แล้ว (ครอบครบทุก Code
 // ในตาราง Error ของ API.md) — ห้ามเขียนตารางข้อความใหม่ซ้ำ
@@ -91,6 +91,22 @@ function todayBangkok() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
 }
 
+// ── ตัวช่วยจัดรูปตัวเลขสำหรับ Preview "ขายทั้งหมด" ──────────────────────────
+// Pattern เดียวกับ PortfolioHoldingsTable.jsx (fmtQty/fmtMoney) — ไฟล์นี้ไม่มี
+// Helper ตัวเลขมาก่อน จึงเขียนสำเนาไว้ในไฟล์นี้เอง (ไม่ Export ใช้ร่วม — ทั้งสอง
+// ไฟล์ Logic เหมือนกันทุกตัวอักษร ถ้าจะรวมเป็น lib/ shared ทีหลังค่อยแยกต่างหาก)
+function fmtQty(n) {
+  const num = Number(n);
+  if (!Number.isFinite(num)) return '—';
+  return num.toLocaleString('th-TH', { maximumFractionDigits: 8 });
+}
+
+function fmtMoney(n) {
+  const num = Number(n);
+  if (!Number.isFinite(num)) return '—';
+  return num.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 // defaultType — แท็บที่เปิดค้างไว้ตอน Modal โผล่ ('buy' | 'sell' | 'dividend')
 //
 // ⚠️ เป็นแค่ **ค่าเริ่มต้น** ไม่ใช่การล็อกโหมด — ผู้ใช้ยังสลับไปแท็บอื่นได้เสมอ
@@ -138,6 +154,16 @@ function RecordTransactionModal({
   // true → ไม่ส่งจำนวน/ราคา/ยอดเงินไปเลย Backend ดึงยอดคงเหลือ + ราคาตลาด ณ
   // ตอนนี้มาคำนวณเอง (validateSell params.sellAll) — เฉพาะโหมดขายเท่านั้น
   const [sellAll, setSellAll] = useState(false);
+  // ── ⭐ Preview ก่อนยืนยัน "ขายทั้งหมด" (Founder ทดสอบ UI Confirm 30 ส.ค. 2569)
+  // ─────────────────────────────────────────────────────────────────────────
+  // ปุ่มที่แก้คืนยากที่สุดของฟอร์มนี้ (ขายทั้งพอร์ตไปแล้ว) ต้องให้เห็นตัวเลขจริง
+  // ก่อนกดยืนยัน ไม่ใช่กดครั้งเดียวจบ — null = ยังไม่ Preview · object =
+  // { symbol, heldQuantity, currentPrice, currentValue, currency } จาก
+  // getAssetProfit() (Reuse GET /dashboard/profit/:symbol ที่มีอยู่แล้ว — Backend
+  // ไม่มี Endpoint Preview แยกและตั้งใจไม่ทำ Preview→Confirm ให้ฝั่งเว็บ แต่
+  // Endpoint นี้ Read-only ล้วนและคำนวณตัวเลขชุดเดียวกับที่ sellAll จะใช้จริง)
+  const [sellAllPreview, setSellAllPreview] = useState(null);
+  const [previewingSellAll, setPreviewingSellAll] = useState(false);
   // ⭐ ค่าธรรมเนียม (ถ้ามี) — งานที่ 3 · Optional เหมือน note ด้านล่าง ไม่กรอก =
   // ไม่ส่ง Key นี้ไป Backend เลย (ดู buildTransactionPayload)
   const [feeThb, setFeeThb] = useState('');
@@ -398,7 +424,46 @@ function RecordTransactionModal({
       }
     }
 
+    // ⭐ ขายทั้งหมด → ต้องเห็นตัวเลขจริงก่อนกดยืนยันเสมอ (ปุ่มที่แก้คืนยากที่สุด
+    // ของฟอร์มนี้) — กด "บันทึก" ครั้งแรกแค่ Preview ยังไม่ยิง § 15.2 จริง
+    // (ดู handlePreviewSellAll) ปุ่ม "ยืนยันขาย" ใน Dialog Preview ต่างหากที่เรียก
+    // submitTransaction() จริง
+    if (type === 'sell' && sellAll) {
+      await handlePreviewSellAll();
+      return;
+    }
+
     await submitTransaction();
+  }
+
+  // ── Preview "ขายทั้งหมด" ก่อนยืนยัน (ปัญหาที่ 3, Founder 30 ส.ค. 2569) ───────
+  // Reuse GET /dashboard/profit/:symbol (Read-only ล้วน ไม่แตะ Ledger) — คำนวณ
+  // heldQuantity/currentPrice/currentValue จากสูตรเดียวกับที่ validateSell's
+  // sellAll Branch จะใช้จริงตอนกดยืนยัน (Price Feed ตัวเดียวกัน) ต่างกันแค่ราคา
+  // อาจขยับเล็กน้อยระหว่าง Preview กับตอนกดยืนยันจริง (Caveat เดียวกับที่ Preview→
+  // Confirm ฝั่ง LINE มีอยู่แล้ว ยอมรับได้เพราะเป็นแค่ตัวเลข "โดยประมาณ")
+  //
+  // ⚠️ ส่ง portfolioId/brokerId ของสินทรัพย์ที่เลือกไปด้วยเสมอ (จาก assets ที่โหลด
+  // ไว้แล้ว) เพื่อระบุแถวที่แน่นอน — กัน AMBIGUOUS_ASSET_BROKER/PORTFOLIO ที่ไม่
+  // ควรเกิดจริงเพราะผู้ใช้เลือกจาก Dropdown มาแล้ว (เหตุผลเดียวกับ assetId
+  // Fast-Path ของ § 15.2 ฝั่งขาย)
+  async function handlePreviewSellAll() {
+    setError(null);
+    setPreviewingSellAll(true);
+    try {
+      const picked = assets.find((a) => a.id === assetId);
+      const profit = await getAssetProfit(symbol, {
+        portfolioId: picked?.portfolioId,
+        brokerId: picked?.brokerId,
+      });
+      setSellAllPreview(profit);
+    } catch (err) {
+      setError(
+        sellAllErrorText(err?.message) ?? err?.message ?? 'ดูตัวอย่างก่อนขายทั้งหมดไม่สำเร็จ'
+      );
+    } finally {
+      setPreviewingSellAll(false);
+    }
   }
 
   // ── ยิงจริง — แยกออกมาเพื่อ "ยิงซ้ำพร้อมคำตอบ" ได้โดยไม่ Validate ใหม่ ────────
@@ -445,6 +510,7 @@ function RecordTransactionModal({
         );
       }
       setSeparatePrompt(null);
+      setSellAllPreview(null);
       onSaved?.();
     } catch (err) {
       // ⭐ **ไม่ใช่ Error ที่บล็อกถาวร** — Backend กำลังถามว่าจะแยกหรือรวมพอร์ต
@@ -548,6 +614,81 @@ function RecordTransactionModal({
     );
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // ⭐ Dialog: ยืนยันขายทั้งหมด — เห็นตัวเลขจริงก่อนกด (Founder 30 ส.ค. 2569)
+  // ═══════════════════════════════════════════════════════════════════════
+  // ⚠️ ปุ่มที่แก้คืนยากที่สุดของฟอร์มนี้ — ขายสินทรัพย์ทั้งหมดไปแล้ว จะย้อนกลับ
+  // ได้ก็ต่อเมื่อกด "ย้อนรายการ" ทันเวลา (คนละ Flow) และราคาตลาด ณ ตอนย้อนก็ไม่ใช่
+  // ราคาเดิมอีกแล้ว — ต้องให้เห็นจำนวน/ราคา/ยอดเงินก่อนกดยืนยันเสมอ ห้ามกดครั้ง
+  // เดียวจบเหมือนก่อนหน้านี้
+  if (sellAllPreview) {
+    return (
+      <div
+        className="demo-modal-backdrop"
+        role="dialog"
+        aria-modal="true"
+        aria-label="ยืนยันขายทั้งหมด"
+      >
+        <div className="demo-modal">
+          <header className="demo-modal__head">
+            <h2>ยืนยันขายทั้งหมด</h2>
+          </header>
+
+          <div className="app-modal__body">
+            <p>
+              คุณกำลังจะขาย <strong>{sellAllPreview.symbol}</strong> ที่ถืออยู่ทั้งหมด —
+              ตรวจสอบตัวเลขก่อนกดยืนยัน:
+            </p>
+
+            <ul className="app-note">
+              <li>จำนวนหน่วยที่จะขาย: {fmtQty(sellAllPreview.heldQuantity)} หน่วย</li>
+              <li>
+                ราคาตลาดโดยประมาณ: {fmtMoney(sellAllPreview.currentPrice)}{' '}
+                {sellAllPreview.currency === 'USD' ? 'USD' : 'บาท'} / หน่วย
+              </li>
+              <li>
+                ยอดเงินโดยประมาณที่จะได้รับ: {fmtMoney(sellAllPreview.currentValue)}{' '}
+                {sellAllPreview.currency === 'USD' ? 'USD' : 'บาท'}
+              </li>
+            </ul>
+
+            {/* ⚠️ ตัวเลขนี้เป็นราคา ณ ตอน Preview — ราคาตลาดขยับได้ตลอดเวลา ยอดที่
+                บันทึกจริงตอนกด "ยืนยันขาย" อาจคลาดเคลื่อนจากที่แสดงนี้เล็กน้อย
+                (Caveat เดียวกับ Preview→Confirm ฝั่ง LINE) */}
+            <p className="app-note">
+              ราคาจริงตอนบันทึกอาจคลาดเคลื่อนเล็กน้อยจากที่แสดงนี้ เพราะราคาตลาดขยับตลอดเวลา
+            </p>
+
+            {error && (
+              <p className="app-state app-state--error" role="alert">
+                {error}
+              </p>
+            )}
+
+            <div className="demo-actions">
+              <button
+                type="button"
+                className="demo-btn demo-btn--primary"
+                disabled={submitting}
+                onClick={() => submitTransaction()}
+              >
+                {submitting ? 'กำลังบันทึก...' : 'ยืนยันขาย'}
+              </button>
+              <button
+                type="button"
+                className="demo-btn"
+                disabled={submitting}
+                onClick={() => setSellAllPreview(null)}
+              >
+                ย้อนกลับไปแก้ฟอร์ม
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="demo-modal-backdrop" role="dialog" aria-modal="true" aria-label="บันทึกรายการ">
       <div className="demo-modal">
@@ -578,7 +719,10 @@ function RecordTransactionModal({
                         // สลับออกจากโหมดขาย → เคลียร์ "ขายทั้งหมด" กันค้างเป็น true
                         // เงียบๆ แล้วกลับมาขายอีกทีโดยไม่ตั้งใจ (ช่องถูกซ่อนไปแล้ว
                         // ตอนไม่ใช่โหมดขาย ผู้ใช้จะไม่เห็นว่ายังติ๊กค้างอยู่)
-                        if (t.value !== 'sell') setSellAll(false);
+                        if (t.value !== 'sell') {
+                          setSellAll(false);
+                          setSellAllPreview(null);
+                        }
                       }}
                     />
                     {t.label}
@@ -857,7 +1001,12 @@ function RecordTransactionModal({
                     <input
                       type="checkbox"
                       checked={sellAll}
-                      onChange={(e) => setSellAll(e.target.checked)}
+                      onChange={(e) => {
+                        setSellAll(e.target.checked);
+                        // เปลี่ยนใจ/ติ๊กใหม่ → Preview เก่า (ถ้ามี) ไม่ตรงกับ
+                        // ฟอร์มปัจจุบันแล้ว ต้อง Preview ใหม่เสมอ ห้ามใช้ตัวเลขเก่า
+                        setSellAllPreview(null);
+                      }}
                     />{' '}
                     ขายทั้งหมด (ระบบคำนวณจำนวน + ราคาตลาดปัจจุบันให้อัตโนมัติ)
                   </span>
@@ -943,9 +1092,15 @@ function RecordTransactionModal({
             <button
               type="submit"
               className="demo-btn demo-btn--primary"
-              disabled={submitting || blocked || loadingRefs}
+              disabled={submitting || blocked || loadingRefs || previewingSellAll}
             >
-              {submitting ? 'กำลังบันทึก...' : 'บันทึก'}
+              {type === 'sell' && sellAll
+                ? previewingSellAll
+                  ? 'กำลังตรวจสอบ...'
+                  : 'ตรวจสอบก่อนขาย'
+                : submitting
+                  ? 'กำลังบันทึก...'
+                  : 'บันทึก'}
             </button>
             <button type="button" className="demo-btn" onClick={onClose} disabled={submitting}>
               ยกเลิก

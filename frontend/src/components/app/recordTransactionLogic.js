@@ -314,17 +314,41 @@ export function assetListParams(scopePortfolioId) {
 // ไทย (ดู buildApiError ใน lib/api.js — ตั้งใจเก็บโค้ดไว้ที่ `.message` ให้ Caller
 // เทียบ === ได้ตรงๆ) Catch-all เดิมของฟอร์มนี้จึงโชว์โค้ดดิบให้ผู้ใช้เห็นสำหรับ
 // Error ที่ไม่ได้ถูก Map ไว้เฉพาะ — เป็นพฤติกรรมเดิมที่มีอยู่ก่อนงานนี้ (นอกขอบเขต
-// ที่จะแก้ทั้งหมด) ที่นี่ Map ให้เฉพาะ 2 Code ที่ปุ่ม "ขายทั้งหมด" คาดว่าจะเจอจริง
+// ที่จะแก้ทั้งหมด) ที่นี่ Map เฉพาะ Code ที่ปุ่ม "ขายทั้งหมด" คาดว่าจะเจอจริง
+//
+// ⭐ ใช้ร่วมกัน 2 เส้นทาง (Founder ทดสอบ UI Confirm ก่อนกด 30 ส.ค. 2569):
+//   1. บันทึกขายทั้งหมดจริง (POST /transactions sellAll:true) — NOTHING_TO_SELL /
+//      MARKET_PRICE_UNAVAILABLE จาก transaction.service.validateSell
+//   2. Preview ก่อนยืนยัน (GET /dashboard/profit/:symbol, Reuse Endpoint เดิม
+//      ไม่แตะ Backend) — Error Code คนละชุดจาก profit.service ที่ความหมาย
+//      ตรงกันเป๊ะกับข้อ 1 แต่ชื่อไม่เหมือนกัน (Endpoint คนละตัว คนละ Convention)
+//      + Ambiguous Resolution ที่ไม่ควรเกิดจริง (ส่ง brokerId/portfolioId ของ
+//      สินทรัพย์ที่เลือกไปด้วยเสมอ) แต่ Map ไว้กันเหนียวไม่ให้หลุดเป็นโค้ดดิบ
 //
 // คืน null เมื่อไม่รู้จัก Code นี้ — Caller ต้อง Fallback เป็นพฤติกรรมเดิม (โชว์
 // err.message ดิบ) เอง ไม่ใช่ปั้นข้อความเดาสุ่มจากที่นี่
 export function sellAllErrorText(code) {
+  const NO_PRICE_FEED_MSG =
+    'ระบบดึงราคาตลาดปัจจุบันของสินทรัพย์นี้ไม่ได้ (เช่น หุ้นไทยที่ยังไม่มีราคาสดอัตโนมัติ) — กรุณายกเลิก "ขายทั้งหมด" แล้วกรอกจำนวนหน่วยและราคาที่ขายได้เองแทน';
+  const NOTHING_TO_SELL_MSG = 'สินทรัพย์นี้ขายออกไปหมดแล้ว ไม่มียอดคงเหลือให้ขาย';
+
   const MAP = {
-    NOTHING_TO_SELL: 'สินทรัพย์นี้ขายออกไปหมดแล้ว ไม่มียอดคงเหลือให้ขาย',
+    NOTHING_TO_SELL: NOTHING_TO_SELL_MSG,
     // หุ้นไทยอย่าง EOSE ไม่มี Price Feed อัตโนมัติ — ต้องบอกทางออกจริงที่ทำได้
     // (กรอกจำนวน/ราคาเอง) ไม่ใช่แค่บอกว่า "ดึงราคาไม่ได้" เฉยๆ
-    MARKET_PRICE_UNAVAILABLE:
-      'ระบบดึงราคาตลาดปัจจุบันของสินทรัพย์นี้ไม่ได้ (เช่น หุ้นไทยที่ยังไม่มีราคาสดอัตโนมัติ) — กรุณายกเลิก "ขายทั้งหมด" แล้วกรอกจำนวนหน่วยและราคาที่ขายได้เองแทน',
+    MARKET_PRICE_UNAVAILABLE: NO_PRICE_FEED_MSG,
+    // ── Error จาก GET /dashboard/profit/:symbol (Preview) — ความหมายเดียวกับ
+    // 2 Code ข้างบนเป๊ะ แค่มาจาก Service คนละตัว (profit.service ไม่ใช่
+    // transaction.service) จึงใช้ชื่อ Code คนละชุด
+    PRICE_FEED_NOT_IMPLEMENTED: NO_PRICE_FEED_MSG,
+    GOLD_PRICE_UNAVAILABLE:
+      'ระบบดึงราคาทองคำปัจจุบันไม่ได้ในขณะนี้ — กรุณายกเลิก "ขายทั้งหมด" แล้วกรอกจำนวนหน่วยและราคาที่ขายได้เองแทน',
+    NO_HOLDING_TO_CALCULATE_PROFIT: NOTHING_TO_SELL_MSG,
+    ASSET_NOT_FOUND: 'ไม่พบสินทรัพย์นี้ในพอร์ต (อาจถูกย้าย/ลบไปแล้ว) กรุณาเลือกสินทรัพย์จากรายการใหม่อีกครั้ง',
+    // ไม่ควรเกิดจริง (Preview ส่ง brokerId/portfolioId ของสินทรัพย์ที่เลือกไปด้วย
+    // เสมอ) — กันเหนียวไว้เผื่อข้อมูลเปลี่ยนระหว่างเปิดฟอร์ม ไม่ให้หลุดเป็นโค้ดดิบ
+    AMBIGUOUS_ASSET_BROKER: 'ระบบระบุสินทรัพย์ที่แน่นอนไม่ได้ กรุณาเลือกสินทรัพย์จากรายการใหม่อีกครั้ง',
+    AMBIGUOUS_ASSET_PORTFOLIO: 'ระบบระบุสินทรัพย์ที่แน่นอนไม่ได้ กรุณาเลือกสินทรัพย์จากรายการใหม่อีกครั้ง',
   };
   return MAP[code] ?? null;
 }

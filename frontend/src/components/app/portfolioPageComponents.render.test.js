@@ -345,6 +345,25 @@ describe('⭐ MoveAssetPortfolioDialog', () => {
     expect(html).toContain('ต้นทุน');
   });
 
+  // ⭐⭐ Founder ทดสอบ UI Confirm 30 ส.ค. 2569 — เห็นตัวเลขจริงก่อนกดยืนยัน
+  // (heldQuantity/totalInvested มาจาก holding Prop ที่หน้าโหลดมาอยู่แล้ว)
+  test('⭐⭐ แสดงจำนวนหน่วย + ต้นทุนรวมของสินทรัพย์ที่กำลังจะย้ายจริง', () => {
+    const html = renderDialog();
+
+    expect(html).toContain('0.5');
+    expect(html).toContain('1,000.00');
+    expect(html).toContain('บาท');
+  });
+
+  test('สกุล USD → แสดงหน่วยเป็น USD ไม่ใช่บาท', () => {
+    const html = renderDialog({
+      holding: { ...HOLDING, totalInvested: 250.5, currency: 'USD' },
+    });
+
+    expect(html).toContain('250.50');
+    expect(html).toContain('USD');
+  });
+
   // ⚠️ พอร์ตที่ถูกล็อกเป็นปลายทางไม่ได้ (จะโดน PORTFOLIO_READ_ONLY อยู่ดี)
   // และพอร์ตปัจจุบันก็ไม่ควรอยู่ในตัวเลือก
   test('⭐ ตัวเลือกปลายทาง = พอร์ตอื่นที่เขียนได้เท่านั้น', () => {

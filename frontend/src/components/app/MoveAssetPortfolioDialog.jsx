@@ -1,6 +1,21 @@
 import { useState } from 'react';
 import { updateAsset } from '../../lib/portfolioApi.js';
 
+// ── ตัวช่วยจัดรูปตัวเลข (Founder ทดสอบ UI Confirm 30 ส.ค. 2569) — Pattern
+// เดียวกับ PortfolioHoldingsTable.jsx/RecordTransactionModal.jsx ไม่ Export
+// ใช้ร่วม (เหตุผลเดียวกัน — ไฟล์นี้ไม่เคยมี Helper ตัวเลขมาก่อน)
+function fmtQty(n) {
+  const num = Number(n);
+  if (!Number.isFinite(num)) return '—';
+  return num.toLocaleString('th-TH', { maximumFractionDigits: 8 });
+}
+
+function fmtMoney(n) {
+  const num = Number(n);
+  if (!Number.isFinite(num)) return '—';
+  return num.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // MoveAssetPortfolioDialog — ย้ายสินทรัพย์ไปพอร์ตอื่น (มติ Founder 29 ส.ค. 2569)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -74,6 +89,16 @@ function MoveAssetPortfolioDialog({ holding, portfolios = [], currentPortfolioId
           <p className="app-note">
             การย้ายพอร์ต<strong>ไม่ใช่การซื้อหรือขาย</strong> — จำนวนหน่วย ต้นทุน และโบรกเดิมยังเท่าเดิมทุกอย่าง
             เปลี่ยนแค่ว่าสินทรัพย์นี้อยู่ในพอร์ตไหน
+          </p>
+
+          {/* ⭐ เห็นตัวเลขจริงก่อนกดยืนยัน (Founder ทดสอบ UI Confirm 30 ส.ค. 2569)
+              — ข้อมูลมีอยู่แล้วใน `holding` Prop (มาจาก holdings ที่หน้าโหลดไว้
+              แล้ว) ไม่ยิง API เพิ่ม · ไม่ทำ 2-Step Confirm เต็มรูปแบบเพราะการย้าย
+              พอร์ตย้อนกลับได้เสมอ (ย้ายกลับได้ทันที ไม่แตะ Ledger เลย) แค่โชว์
+              ตัวเลขแทรกในกล่องเดิมก็พอ */}
+          <p className="app-note">
+            กำลังจะย้าย: {fmtQty(holding.heldQuantity)} หน่วย (ต้นทุนรวม{' '}
+            {fmtMoney(holding.totalInvested)} {holding.currency === 'USD' ? 'USD' : 'บาท'})
           </p>
 
           {targets.length === 0 ? (

@@ -42,6 +42,13 @@ function formatAmount(n) {
   }).format(Number(n ?? 0));
 }
 
+// จำนวนหน่วย — คนละ Precision กับเงิน (Crypto ทศนิยมได้ถึง 8 ตำแหน่ง)
+function formatQty(n) {
+  const num = Number(n);
+  if (!Number.isFinite(num)) return '—';
+  return num.toLocaleString('th-TH', { maximumFractionDigits: 8 });
+}
+
 function AppTransactions() {
   const { selectedPortfolio, reload } = useOutletContext();
   const [transactions, setTransactions] = useState([]);
@@ -50,6 +57,13 @@ function AppTransactions() {
   const [error, setError] = useState(null);
   const [undoing, setUndoing] = useState(false);
   const [undoMessage, setUndoMessage] = useState(null);
+  // ── ⭐ ยืนยันก่อนย้อนรายการ (Founder ทดสอบ UI Confirm 30 ส.ค. 2569) ─────────
+  // null = ยังไม่ได้ถาม · object = รายการที่ "จะถูกย้อนจริง" ถ้ากดยืนยัน — เดิม
+  // ปุ่มนี้กดครั้งเดียวจบไม่มี Confirm เลย ทั้งที่ย้อนรายการผิดตัวแก้คืนยาก
+  // (ต้องย้อนซ้ำอีกที ซึ่งอาจกลายเป็นย้อนรายการอื่นต่อถ้ามีรายการใหม่แทรกเข้ามา)
+  const [undoTarget, setUndoTarget] = useState(null);
+  // กำลังโหลดรายการล่าสุดแบบไม่กรอง (เฉพาะตอนมี symbolFilter — ดู handleAskUndo)
+  const [preparingUndo, setPreparingUndo] = useState(false);
 
   const write = portfolioWriteState(selectedPortfolio);
 
@@ -72,6 +86,35 @@ function AppTransactions() {
     load();
   }, [load]);
 
+  // ── ⭐ เตรียมข้อมูล Preview ก่อนถาม (Founder ทดสอบ UI Confirm 30 ส.ค. 2569) ──
+  // POST /transactions/undo-last ย้อน "รายการล่าสุดของทั้งบัญชี" เสมอ ไม่รู้จัก
+  // symbolFilter ของหน้านี้เลย (undoTransaction.service: findRecentByUser ไม่มี
+  // Filter ใดๆ) — ถ้า Filter ใช้งานอยู่ transactions[0] ที่เห็นบนจออาจ **ไม่ใช่**
+  // รายการที่จะถูกย้อนจริง ต้องยิงแบบไม่กรองมา Preview ให้ตรงเสมอ (มติ Founder:
+  // ยอมแลก Extra Call เพื่อความปลอดภัย ดีกว่าโชว์ตัวเลขผิดรายการ)
+  //
+  // ⚠️ ไม่มี Filter → transactions[0] ตรงกับที่ Backend จะย้อนจริงเป๊ะอยู่แล้ว
+  // (ORDER BY เดียวกัน: date DESC, created_at DESC ทั้ง findAllByUser ที่หน้านี้
+  // ใช้ และ findRecentByUser ที่ undo-last ใช้) ไม่ต้องยิง Request เพิ่มเลย
+  async function handleAskUndo() {
+    setError(null);
+
+    if (!symbolFilter) {
+      setUndoTarget(transactions[0] ?? null);
+      return;
+    }
+
+    setPreparingUndo(true);
+    try {
+      const data = await apiGet('/api/v1/dashboard/history?limit=1');
+      setUndoTarget(data?.transactions?.[0] ?? null);
+    } catch (err) {
+      setError(err?.message ?? 'โหลดรายการล่าสุดไม่สำเร็จ');
+    } finally {
+      setPreparingUndo(false);
+    }
+  }
+
   async function handleUndo() {
     setUndoing(true);
     setUndoMessage(null);
@@ -79,6 +122,7 @@ function AppTransactions() {
     try {
       const res = await apiPost('/api/v1/transactions/undo-last', {});
       setUndoMessage(res?.message ?? 'ย้อนรายการล่าสุดเรียบร้อยแล้ว');
+      setUndoTarget(null);
       await load();
       await reload?.();
     } catch (err) {
@@ -112,12 +156,67 @@ function AppTransactions() {
         <button
           type="button"
           className="demo-btn"
-          onClick={handleUndo}
-          disabled={undoing || !write.canReduce || transactions.length === 0}
+          onClick={handleAskUndo}
+          disabled={preparingUndo || undoing || !write.canReduce || transactions.length === 0}
         >
-          {undoing ? 'กำลังย้อนรายการ...' : '↩️ ย้อนรายการล่าสุด'}
+          {preparingUndo ? 'กำลังตรวจสอบ...' : '↩️ ย้อนรายการล่าสุด'}
         </button>
       </div>
+
+      {/* ⭐ ยืนยันก่อนย้อนรายการ (Founder ทดสอบ UI Confirm 30 ส.ค. 2569) — เห็น
+          รายละเอียดจริงของรายการที่จะถูกย้อนก่อนกดยืนยัน ไม่ใช่กดครั้งเดียวจบ */}
+      {undoTarget && (
+        <div
+          className="app-modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label="ยืนยันย้อนรายการ"
+        >
+          <div className="app-modal">
+            <header className="app-modal__head">
+              <h2>ยืนยันย้อนรายการล่าสุด</h2>
+            </header>
+            <div className="app-modal__body">
+              <p>ระบบจะย้อนรายการนี้ (สร้างรายการหักล้างเข้า Ledger ไม่ใช่ลบทิ้ง):</p>
+              <ul className="app-note">
+                <li>ประเภท: {TYPE_LABEL[undoTarget.side ?? undoTarget.type] ?? (undoTarget.side ?? undoTarget.type)}</li>
+                <li>สินทรัพย์: {undoTarget.symbol}</li>
+                <li>จำนวน: {formatQty(undoTarget.quantity)} หน่วย</li>
+                <li>
+                  ยอดเงิน: {formatAmount(undoTarget.amountTotal ?? undoTarget.amountThb)}{' '}
+                  {undoTarget.currency ?? 'บาท'}
+                </li>
+                <li>วันที่: {undoTarget.date}</li>
+              </ul>
+
+              {error && (
+                <p className="app-state app-state--error" role="alert">
+                  {error}
+                </p>
+              )}
+
+              <div className="demo-actions">
+                <button
+                  type="button"
+                  className="demo-btn demo-btn--primary"
+                  disabled={undoing}
+                  onClick={handleUndo}
+                >
+                  {undoing ? 'กำลังย้อนรายการ...' : 'ยืนยันย้อนรายการ'}
+                </button>
+                <button
+                  type="button"
+                  className="demo-btn"
+                  disabled={undoing}
+                  onClick={() => setUndoTarget(null)}
+                >
+                  ยกเลิก
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {write.isLocked && (
         <p className="app-note">
