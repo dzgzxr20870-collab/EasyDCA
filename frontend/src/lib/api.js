@@ -69,6 +69,34 @@ function redirectToLoginOn401() {
   window.location.href = '/';
 }
 
+// ── รูปร่าง Error กลางของทุก Helper (แก้บั๊กคลาส "อ่าน Error Code ผิดตำแหน่ง") ──
+//
+// ⭐ ก่อนหน้านี้แต่ละ Helper สร้าง Error เองแยกกัน 6 ที่ ทำให้รูปร่างไม่ตรงกัน:
+// `.details` ถูกแนบเฉพาะ apiPost/apiUpload (apiGet/apiPatch/apiDelete/apiDownload
+// ทิ้งหายเงียบๆ) และ **`.code` ไม่เคยถูกแนบเลยแม้แต่ตัวเดียว** — ทั้งที่ชื่อ `.code`
+// เป็นสิ่งที่คนเขียน Component คาดว่าจะมี (Error Code อยู่ใน `.message` แทน ซึ่ง
+// เดาไม่ถูกจากภายนอก)
+//
+// เคสจริงที่เกิดขึ้นแล้ว: `CreatePortfolioModal` เขียน `err?.code` ตามสัญชาตญาณ →
+// ได้ `undefined` เสมอ → Error Mapping ไม่เคยทำงาน ผู้ใช้เห็น **โค้ดดิบ**
+// `"PORTFOLIO_NAME_EXISTS"` แทนข้อความไทย และปุ่ม "ดูแพ็กเกจ Premium" ที่ผูกกับ
+// `errorCode === 'PORTFOLIO_LIMIT_REACHED'` **ไม่เคยโผล่เลย** (กระทบเส้นทางรายได้)
+//
+// ⚠️ **ห้ามเลิกตั้ง `.message` เด็ดขาด** — จุดที่ใช้งานอยู่จริงส่วนใหญ่อ่าน Error Code
+// จาก `err.message` (เช่น MoveAssetPortfolioDialog, PortfolioSettingsPanel,
+// RecordTransactionModal, Premium) การถอดออกจะพังทั้งระบบพร้อมกัน
+// ฟังก์ชันนี้จึงเป็น **Additive ล้วน**: `.message` เหมือนเดิมเป๊ะ แค่เพิ่ม `.code`
+// (และทำให้ `.details` มาครบทุก Helper ไม่ใช่แค่บางตัว)
+function buildApiError(errBody, status) {
+  const error = new Error(errBody?.error || `Request failed: ${status}`);
+  // มี Error Code จาก Backend เท่านั้นถึงตั้ง — Network/Parse Error ที่ไม่มี Body
+  // ต้องได้ `.code === undefined` เพื่อให้ Caller แยก "Backend ปฏิเสธด้วยเหตุผล X"
+  // ออกจาก "ยิงไม่ถึง/ตอบไม่เป็น JSON" ได้จริง
+  if (errBody?.error) error.code = errBody.error;
+  if (errBody?.details) error.details = errBody.details;
+  return error;
+}
+
 async function apiGet(path) {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: { Authorization: `Bearer ${getToken()}` },
@@ -82,7 +110,7 @@ async function apiGet(path) {
 
   if (!response.ok) {
     const body = await response.json().catch(() => null);
-    throw new Error(body?.error || `Request failed: ${response.status}`);
+    throw buildApiError(body, response.status);
   }
 
   return response.json();
@@ -108,14 +136,11 @@ async function apiPost(path, body) {
   }
 
   if (!response.ok) {
+    // `.details` เช่น { status } ของ PAYMENT_NOT_PENDING
+    // (payment.controller.handlePaymentError) ให้ Caller เลือกข้อความตาม status
+    // จริงได้ (บั๊ค "ถูกดำเนินการไปแล้ว" ไม่บอกอนุมัติ/ปฏิเสธ)
     const errBody = await response.json().catch(() => null);
-    const error = new Error(errBody?.error || `Request failed: ${response.status}`);
-    // แนบ details ที่ Backend ส่งมาด้วย (ถ้ามี) — เช่น { status } ของ
-    // PAYMENT_NOT_PENDING (payment.controller.handlePaymentError) ให้ Caller เลือก
-    // ข้อความตาม status จริงได้ (บั๊ค "ถูกดำเนินการไปแล้ว" ไม่บอกอนุมัติ/ปฏิเสธ) —
-    // Additive ล้วน: ไม่กระทบ Caller เดิมที่อ่านแค่ err.message
-    if (errBody?.details) error.details = errBody.details;
-    throw error;
+    throw buildApiError(errBody, response.status);
   }
 
   return response.json();
@@ -140,7 +165,7 @@ async function apiPatch(path, body) {
 
   if (!response.ok) {
     const errBody = await response.json().catch(() => null);
-    throw new Error(errBody?.error || `Request failed: ${response.status}`);
+    throw buildApiError(errBody, response.status);
   }
 
   return response.json();
@@ -161,7 +186,7 @@ async function apiDelete(path) {
 
   if (!response.ok) {
     const errBody = await response.json().catch(() => null);
-    throw new Error(errBody?.error || `Request failed: ${response.status}`);
+    throw buildApiError(errBody, response.status);
   }
 
   return response.json();
@@ -188,12 +213,7 @@ async function apiUpload(path, file) {
 
   if (!response.ok) {
     const errBody = await response.json().catch(() => null);
-    const error = new Error(errBody?.error || `Request failed: ${response.status}`);
-    // แนบ details ที่ Backend ส่งมาด้วย (ถ้ามี) — เช่น { status } ของ
-    // PAYMENT_NOT_PENDING (payment.controller.handlePaymentError) — Pattern เดียวกับ
-    // apiPost ด้านบน (assertPaymentClaimableByUser ก็ throw code เดียวกันนี้ได้)
-    if (errBody?.details) error.details = errBody.details;
-    throw error;
+    throw buildApiError(errBody, response.status);
   }
 
   return response.json();
@@ -215,7 +235,7 @@ async function apiDownload(path) {
   if (!response.ok) {
     // Error Body เป็น JSON ({ error: CODE }) — โยน code ให้ Caller แสดงผลเอง
     const body = await response.json().catch(() => null);
-    throw new Error(body?.error || `Request failed: ${response.status}`);
+    throw buildApiError(body, response.status);
   }
 
   const blob = await response.blob();

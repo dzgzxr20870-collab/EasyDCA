@@ -14,10 +14,14 @@ import { LOCKED_PORTFOLIO_NOTICE } from '../../lib/entitlements.js';
 //   ย้ายสินทรัพย์ → ส่งต่อให้ MoveAssetPortfolioDialog เดิม (PATCH /assets/{id})
 //   ลบพอร์ต  → DELETE /portfolios/{id}                  (portfolios.service.deletePortfolio)
 //
-// ⚠️ **err.code ใช้ไม่ได้จริง** — ตรวจแล้วที่ lib/api.js: apiPatch/apiDelete ไม่เคย
-// แนบ `.code` ให้ Error เลย มีแต่ `err.message` ที่ถูกตั้งเป็น Error Code ดิบจาก
-// Backend ตรงๆ (Pattern เดียวกับที่ MoveAssetPortfolioDialog ใช้จริงอยู่แล้วผ่าน
-// `err.message === 'ASSET_ALREADY_EXISTS'`) — ใช้ `err.message` เป็น Key เท่านั้น
+// ⚠️ ใช้ `err.message` เป็น Key ของ Error Code — เป็น Pattern ที่ใช้อยู่ทั่วทั้ง
+// Frontend (MoveAssetPortfolioDialog, RecordTransactionModal, Dashboard ฯลฯ)
+// เพราะ `lib/api.js` ตั้ง `.message` เป็น Error Code ดิบจาก Backend ตรงๆ
+//
+// 💡 ตั้งแต่ 30 ส.ค. 2569 `buildApiError` แนบ **`.code`** มาให้ด้วยแล้วทุก Helper
+// (เดิมไม่เคยแนบเลย จนทำให้ `CreatePortfolioModal` ที่เขียน `err?.code` พังเงียบๆ)
+// → จะอ่านจาก `.code` ก็ได้เหมือนกัน ทั้งสองช่องมีค่าเท่ากันเสมอสำหรับ Error ที่
+// Backend ตอบมาเป็น JSON · ที่นี่คงใช้ `.message` ไว้เพราะตรงกับไฟล์ข้างเคียง
 //
 // ⚠️ **สิทธิ์เขียนแยกกันคนละกฎต่อฟีเจอร์ในเมนูนี้** (ดู portfolios.service):
 //   แก้ชื่อ    → ผ่าน assertCanAddToPortfolio → พอร์ตที่ถูกล็อก (canWrite:false)

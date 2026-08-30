@@ -12,13 +12,15 @@
 // ⭐ สิ่งที่ชุดนี้ตั้งใจจับเป็นพิเศษ: **กราฟต้องไม่โชว์ตัวเลขมั่วเมื่อไม่มีข้อมูล**
 // (ข้อบังคับของงานที่ 3 — "ต้องบอกว่าราคาไม่พร้อมใช้งาน ไม่ใช่โชว์ 0")
 
-import { describe, test, expect } from 'vitest';
+import { describe, test, expect, afterEach, vi } from 'vitest';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 
 import AllocationDonut from './AllocationDonut.jsx';
 import CreatePortfolioModal, { createPortfolioErrorText } from './CreatePortfolioModal.jsx';
+import { createPortfolio } from '../../lib/portfolioApi.js';
+import { setToken } from '../../lib/api.js';
 import RecordTransactionModal from './RecordTransactionModal.jsx';
 
 function withRouter(element) {
@@ -113,6 +115,61 @@ describe('createPortfolioErrorText — ข้อความต่อ Error Code
       'ข้อความจากเซิร์ฟเวอร์'
     );
     expect(createPortfolioErrorText(undefined, undefined)).toContain('ไม่สำเร็จ');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ⭐⭐ Seam: Error จริงจาก lib/api.js → createPortfolioErrorText (AI_WORK_POLICY § 3.1)
+// ═══════════════════════════════════════════════════════════════════════════
+// ⚠️ ชุดข้างบนเทสต์ Pure Function ด้วย **Argument ที่ถูกต้องอยู่แล้ว** จึงเขียวสนิท
+// ตลอดเวลาที่บั๊กมีอยู่จริง — เพราะบั๊กอยู่ที่ "รอยต่อ" พอดี: Component ส่ง
+// `err?.code` เข้าไป ซึ่ง api.js ไม่เคยแนบมาให้ (undefined) แทนที่จะเป็น Error Code
+//
+// นี่คือ Seam แบบเดียวกับที่ POSTMORTEM_AMOUNT_CONSISTENCY.md เตือนไว้เป๊ะ:
+// ทั้งสองฝั่งมีเทสต์ครบและเขียวหมด แต่ไม่มีใครเทสต์ "ค่าที่ต้องรอดข้ามขอบเขต"
+// → ชุดนี้จึงใช้ Error **ของจริง** จาก createPortfolio (Mock แค่ fetch ซึ่งเป็น
+// ขอบนอกสุด) ไม่ใช่ Error ที่ประกอบขึ้นเอง
+describe('⭐⭐ Seam — Error จาก createPortfolio ต้องแปลเป็นข้อความไทยได้จริง', () => {
+  async function catchCreateError(errorCode) {
+    setToken('t');
+    vi.stubGlobal('fetch', async () => ({
+      ok: false,
+      status: 409,
+      json: async () => ({ error: errorCode }),
+    }));
+    return createPortfolio({ name: 'x', type: 'custom' }).catch((e) => e);
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  // ⭐ อาการจริงที่ผู้ใช้เจอ: เห็น **โค้ดดิบ** "PORTFOLIO_NAME_EXISTS" บนหน้าจอ
+  test('⭐ ชื่อซ้ำ → ผู้ใช้เห็นข้อความไทย ไม่ใช่โค้ดดิบจาก Backend', async () => {
+    const err = await catchCreateError('PORTFOLIO_NAME_EXISTS');
+
+    // เรียกด้วย Expression เดียวกับที่ Component ใช้จริงเป๊ะ
+    const shown = createPortfolioErrorText(err?.code, err?.message);
+
+    expect(shown).toBe('มีพอร์ตชื่อนี้อยู่แล้ว กรุณาใช้ชื่ออื่น');
+    expect(shown).not.toBe('PORTFOLIO_NAME_EXISTS');
+  });
+
+  // ⭐⭐ กระทบเส้นทางรายได้โดยตรง — ปุ่ม "ดูแพ็กเกจ Premium" ผูกกับ
+  // `errorCode === 'PORTFOLIO_LIMIT_REACHED'` ซึ่งเป็น false เสมอตอนบั๊กยังอยู่
+  // → ผู้ใช้ Free ที่ชนเพดานพอร์ต **ไม่เคยเห็น CTA อัปเกรดเลย**
+  test('⭐⭐ Free ชนเพดาน → errorCode ตรงกับเงื่อนไขที่ทำให้ปุ่ม "ดูแพ็กเกจ Premium" โผล่', async () => {
+    const err = await catchCreateError('PORTFOLIO_LIMIT_REACHED');
+
+    expect(err?.code).toBe('PORTFOLIO_LIMIT_REACHED');
+    expect(createPortfolioErrorText(err?.code, err?.message)).toContain('อัปเกรด');
+  });
+
+  // Premium ที่ชน Sanity Cap 50 ต้อง **ไม่** โดนชวนอัปเกรด (เขาจ่ายอยู่แล้ว)
+  test('⭐ Premium ชน Cap → ได้ข้อความของ cap ไม่ใช่ของ limit', async () => {
+    const err = await catchCreateError('PORTFOLIO_CAP_REACHED');
+    const shown = createPortfolioErrorText(err?.code, err?.message);
+
+    expect(shown).not.toContain('อัปเกรด');
+    expect(shown).toContain('ลบพอร์ต');
   });
 });
 
