@@ -101,6 +101,35 @@ describe('buildReminderSetMessage', () => {
 
     expect(allText(message)).toContain('ทุกวันที่ 5');
   });
+
+  // ⚠️ Hotfix 30 ส.ค. 2569 — เดิม Hardcode "บาท" เสมอไม่ดู currency (พบระหว่าง
+  // ตรวจสอบว่าแผน DCA จากเว็บเชื่อมกับ Cron แจ้งเตือนถูกไหม — ยืนยันจาก DB จริงว่า
+  // มีแผน currency='USD' อยู่จริง)
+  test('⭐ currency: THB (หรือไม่ระบุ) → ยังขึ้น "บาท" เหมือนเดิม (Regression)', () => {
+    const message = buildReminderSetMessage({
+      symbol: 'BTC',
+      frequency: 'weekly',
+      dayOfWeek: 1,
+      amountThb: 1000,
+      currency: 'THB',
+    });
+
+    expect(allText(message)).toContain('1,000 บาท');
+  });
+
+  test('⭐ currency: USD → ต้องขึ้น "USD" ไม่ใช่ "บาท"', () => {
+    const message = buildReminderSetMessage({
+      symbol: 'MSFT',
+      frequency: 'monthly',
+      dayOfMonth: 1,
+      amountThb: 100,
+      currency: 'USD',
+    });
+    const text = allText(message);
+
+    expect(text).toContain('100 USD');
+    expect(text).not.toContain('บาท');
+  });
 });
 
 describe('buildReminderListMessage', () => {
@@ -123,6 +152,19 @@ describe('buildReminderListMessage', () => {
     expect(text).toContain('ทุกวันพุธ');
     expect(text).toContain('AAPL');
     expect(text).toContain('ทุกวันที่ 5');
+  });
+
+  // ⭐⭐ แต่ละรายการในลิสต์เดียวกันต้องคิดหน่วยเงินของ "ตัวเอง" ไม่ใช่ตัวเดียวกัน
+  // ทั้งก้อน — เคสที่พลาดง่ายถ้าไปประกาศ unit ไว้นอก .forEach()
+  test('⭐⭐ ผสมสกุลในลิสต์เดียวกัน (THB + USD) → แต่ละแถวได้หน่วยของตัวเอง', () => {
+    const message = buildReminderListMessage([
+      { symbol: 'BTC', frequency: 'weekly', dayOfWeek: 3, amountThb: 1000, currency: 'THB' },
+      { symbol: 'MSFT', frequency: 'monthly', dayOfMonth: 1, amountThb: 100, currency: 'USD' },
+    ]);
+    const text = allText(message);
+
+    expect(text).toContain('1,000 บาท');
+    expect(text).toContain('100 USD');
   });
 });
 
@@ -154,6 +196,45 @@ describe('buildReminderPushMessage — ข้อความ Push ตอน Cron
     expect(text).toContain('BTC');
     expect(text).toContain('ซื้อ BTC 1,000'); // ตัวอย่างคำสั่งที่ให้ไปพิมพ์เอง
     expect(text).toContain('ไม่ได้ซื้อ');
+  });
+
+  // ⚠️⚠️ Hotfix 30 ส.ค. 2569 — เจอระหว่างตรวจสอบว่าแผน DCA จากเว็บ /app/dca
+  // เชื่อมกับ Cron แจ้งเตือน LINE ถูกไหม — ยืนยันจาก DB จริงว่ามีแผน currency=
+  // 'USD' อยู่จริง (เช่น MSFT monthly) นี่คือ Message ที่ Cron Push จริงทุกวัน
+  // 09:00 — ผิดแล้วผู้ใช้เห็นทุกรอบ ไม่ใช่แค่ตอนตั้งแผนครั้งเดียว
+  test('⭐ currency: THB (หรือไม่ระบุ) → ยังขึ้น "บาท" เหมือนเดิม (Regression)', () => {
+    const message = buildReminderPushMessage({
+      symbol: 'BTC',
+      frequency: 'weekly',
+      dayOfWeek: 1,
+      amountThb: 1000,
+      currency: 'THB',
+    });
+    const text = allText(message);
+
+    expect(text).toContain('1,000 บาท');
+    // ⚠️ allText ใช้ JSON.stringify — Assert ด้วย `"` ตรงๆ จะโดน Escape เป็น `\"`
+    // แล้วไม่มีวัน Match (บั๊คหลอกเทสต์เดียวกับที่ POSTMORTEM_AMOUNT_CONSISTENCY.md
+    // เตือนไว้) จึง Assert เนื้อความไม่รวมเครื่องหมายคำพูดแทน
+    expect(text).toContain('ซื้อ BTC 1,000'); // ตัวอย่างคำสั่ง THB ไม่มี "usd" ต่อท้าย
+    expect(text).not.toContain('1,000 usd');
+  });
+
+  test('⭐⭐ currency: USD → ต้องขึ้น "USD" ไม่ใช่ "บาท" ทั้งบรรทัดจำนวนเงินและตัวอย่างคำสั่ง', () => {
+    const message = buildReminderPushMessage({
+      symbol: 'MSFT',
+      frequency: 'monthly',
+      dayOfMonth: 1,
+      amountThb: 100,
+      currency: 'USD',
+    });
+    const text = allText(message);
+
+    expect(text).toContain('100 USD');
+    expect(text).not.toContain('บาท');
+    // ⚠️ ตัวอย่างคำสั่งต้องมี "usd" ต่อท้ายด้วย ไม่งั้นผู้ใช้พิมพ์ตามตัวอย่างแล้ว
+    // Command Parser จะตีความเป็นบาท (Default) ผิดไปจากที่ตั้งใจ ~30 เท่า
+    expect(text).toContain('ซื้อ MSFT 100 usd');
   });
 });
 

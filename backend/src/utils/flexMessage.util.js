@@ -1307,7 +1307,13 @@ function describeSchedule(reminder) {
 
 // ยืนยันว่าตั้งเตือนสำเร็จ — ย้ำว่าเป็นการเตือนให้มาซื้อเอง ไม่ซื้อให้อัตโนมัติ
 // (PROJECT_BRIEF § 17 — ระบบไม่ตัดสินใจ/ทำธุรกรรมลงทุนแทนผู้ใช้)
+//
+// ⚠️ Hotfix 30 ส.ค. 2569 — เดิม Hardcode "บาท" เสมอไม่ดู reminder.currency เลย
+// แผนที่ตั้งเป็น USD (migration 020 อนุญาต crypto/stock_us) จะได้ข้อความ
+// "100.00 บาท" ทั้งที่จริงเป็น 100 USD (ต่างกัน ~30 เท่า) — Pattern เดียวกับที่ไฟล์
+// นี้ใช้อยู่แล้วทั่วทั้งไฟล์ (`const unit = x.currency === 'USD' ? 'USD' : 'บาท'`)
 function buildReminderSetMessage(reminder) {
+  const unit = reminder.currency === 'USD' ? 'USD' : 'บาท';
   return bubble({
     headerText: '⏰ ตั้งเตือน DCA แล้ว',
     headerColor: COLOR.info,
@@ -1315,7 +1321,7 @@ function buildReminderSetMessage(reminder) {
     bodyContents: [
       textLine(reminder.symbol, { size: 'lg', weight: 'bold', color: COLOR.textPrimary }),
       textLine(`รอบเตือน: ${describeSchedule(reminder)}`, { size: 'sm', color: COLOR.textSecondary }),
-      textLine(`จำนวนที่ตั้งใจ: ${formatNumber(reminder.amountThb)} บาท`, {
+      textLine(`จำนวนที่ตั้งใจ: ${formatNumber(reminder.amountThb)} ${unit}`, {
         size: 'sm',
         color: COLOR.textSecondary,
       }),
@@ -1346,9 +1352,12 @@ function buildReminderListMessage(reminders) {
 
   const body = [];
   reminders.forEach((reminder) => {
+    // ⚠️ Hotfix 30 ส.ค. 2569 — ต้องคิดหน่วยเงินต่อรายการ (ไม่ใช่ต่อ List ทั้งก้อน)
+    // เพราะแต่ละแผนในลิสต์เดียวกันอาจเป็นคนละสกุล (เช่น BTC USD + AAPL THB)
+    const unit = reminder.currency === 'USD' ? 'USD' : 'บาท';
     body.push(textLine(reminder.symbol, { size: 'md', weight: 'bold', color: COLOR.textPrimary }));
     body.push(
-      textLine(`${describeSchedule(reminder)} • ${formatNumber(reminder.amountThb)} บาท`, {
+      textLine(`${describeSchedule(reminder)} • ${formatNumber(reminder.amountThb)} ${unit}`, {
         size: 'sm',
         color: COLOR.textSecondary,
       })
@@ -1392,7 +1401,17 @@ function buildReminderDeletedMessage(symbol) {
 // ข้อความที่ Push จริงตอน Cron ครบกำหนด — bubble() คืน Flex Message Object แบบ
 // เดียวกับที่ LINE Push API รับได้ (โครงเดียวกับ Reply) เชิญชวนให้พิมพ์คำสั่งซื้อ
 // เอง ไม่มีการซื้ออัตโนมัติ
+//
+// ⚠️ Hotfix 30 ส.ค. 2569 — เดิม Hardcode "บาท" เสมอ ไม่ดู reminder.currency เลย
+// (พบระหว่างตรวจสอบว่าแผนจากเว็บ /app/dca เชื่อมกับ Cron แจ้งเตือนถูกไหม —
+// ยืนยันจาก DB จริงว่ามีแผน currency='USD' อยู่จริง เช่น MSFT monthly) กระทบทั้ง
+// แผนที่ตั้งจาก LINE และจากเว็บเท่ากัน (Field เดียวกัน คนละหน้าตาแสดงผล)
 function buildReminderPushMessage(reminder) {
+  const unit = reminder.currency === 'USD' ? 'USD' : 'บาท';
+  // ⚠️ ต้องแนบ "usd" ต่อท้ายตัวอย่างคำสั่งด้วยเมื่อเป็น USD ไม่งั้นผู้ใช้พิมพ์ตาม
+  // ตัวอย่างแล้วได้ยอด "บาท" (Default ของ Command Parser) ซึ่งต่างจากที่ตั้งใจ
+  // ~30 เท่า (Pattern เดียวกับ Comment ด้านบนเรื่อง "150 บาท กับ 150 USD")
+  const amountExample = `${formatNumber(reminder.amountThb)}${unit === 'USD' ? ' usd' : ''}`;
   return bubble({
     headerText: '⏰ ถึงรอบ DCA แล้ว',
     headerColor: COLOR.info,
@@ -1403,13 +1422,13 @@ function buildReminderPushMessage(reminder) {
         size: 'sm',
         color: COLOR.textPrimary,
       }),
-      textLine(`จำนวนที่ตั้งใจ: ${formatNumber(reminder.amountThb)} บาท`, {
+      textLine(`จำนวนที่ตั้งใจ: ${formatNumber(reminder.amountThb)} ${unit}`, {
         size: 'md',
         weight: 'bold',
         color: COLOR.textPrimary,
       }),
       textLine(
-        `ถ้าซื้อแล้วพิมพ์บันทึกเองได้เลย เช่น "ซื้อ ${reminder.symbol} ${formatNumber(reminder.amountThb)}"`,
+        `ถ้าซื้อแล้วพิมพ์บันทึกเองได้เลย เช่น "ซื้อ ${reminder.symbol} ${amountExample}"`,
         { size: 'sm', color: COLOR.textSecondary }
       ),
       textLine('* นี่เป็นเพียงการแจ้งเตือน ระบบไม่ได้ซื้อหรือบันทึกรายการให้อัตโนมัติ', {
