@@ -236,6 +236,12 @@ function AppShell() {
              ตั้งแต่ต้น ไม่ต้องยิง GET /portfolios ซ้ำ) · ปุ่มนี้เปิดไม่ได้ตอน
              loading อยู่แล้ว จึงมั่นใจได้ว่า portfolios ถูกเติมค่าแล้วเสมอ */
           portfolios={portfolios}
+          /* ⭐ `selected` เป็น null เมื่อ Switcher = "ทั้งหมด" (ALL_PORTFOLIOS)
+             → scopePortfolioId เป็น undefined → Dropdown สินทรัพย์โหลดทุกพอร์ต
+             เหมือนเดิมทุกประการ (Use Case เดิมที่ต้องไม่พัง) · ถ้า Switcher เจาะจง
+             พอร์ตอยู่แล้ว ก็กรอง Dropdown ตามพอร์ตนั้นด้วยเหตุผลเดียวกับหน้า
+             รายละเอียดพอร์ต (ดู RecordTransactionModal.jsx) */
+          scopePortfolioId={selected?.id}
           onClose={() => setShowRecord(false)}
           onSaved={async () => {
             setShowRecord(false);

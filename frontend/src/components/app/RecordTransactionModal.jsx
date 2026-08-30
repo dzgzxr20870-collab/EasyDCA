@@ -20,6 +20,8 @@ import {
   normalizeBrokerName,
   defaultDestinationPortfolioId,
   needsSymbolFetch,
+  assetOptionLabel,
+  assetListParams,
 } from './recordTransactionLogic.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -100,6 +102,13 @@ function RecordTransactionModal({
   // รายการพอร์ตเต็มจาก GET /portfolios (Shell โหลดไว้แล้ว ส่งลงมาทาง Prop —
   // Modal ไม่ยิงเอง) · [] = ยังไม่รู้ → ไม่แสดงช่องเลือกพอร์ต
   portfolios = [],
+  // ── ⭐ บริบทพอร์ตที่กำลังเปิดดูอยู่ (Founder ทดสอบกดปุ่ม "+ บันทึกรายการขาย"
+  // จากหน้ารายละเอียดพอร์ต 30 ส.ค. 2569) ────────────────────────────────────
+  // undefined = "ไม่รู้บริบทพอร์ต" (เปิดจาก Topbar ที่ Switcher เป็น "ทั้งหมด")
+  // → listAssets ไม่กรอง โหลดทุกพอร์ตเหมือนเดิมทุกประการ (ดู assetListParams)
+  // uuid = เปิดจากหน้ารายละเอียดพอร์ต/Topbar ที่ Switcher เจาะจงพอร์ตแล้ว →
+  // Dropdown สินทรัพย์กรองเหลือเฉพาะพอร์ตนี้ กันผู้ใช้กดขายผิดพอร์ตโดยไม่รู้ตัว
+  scopePortfolioId,
   onClose,
   onSaved,
   defaultType = 'buy',
@@ -181,7 +190,10 @@ function RecordTransactionModal({
     (async () => {
       setLoadingRefs(true);
       try {
-        const [a, b] = await Promise.all([listAssets(), listBrokers()]);
+        const [a, b] = await Promise.all([
+          listAssets(assetListParams(scopePortfolioId)),
+          listBrokers(),
+        ]);
         if (!alive) return;
         setAssets(a);
         setBrokers(b);
@@ -198,7 +210,7 @@ function RecordTransactionModal({
     return () => {
       alive = false;
     };
-  }, []);
+  }, [scopePortfolioId]);
 
   function pickAsset(id) {
     setAssetId(id);
@@ -608,7 +620,7 @@ function RecordTransactionModal({
                 <select value={assetId} onChange={(e) => pickAsset(e.target.value)}>
                   {assets.map((a) => (
                     <option key={a.id} value={a.id}>
-                      {a.symbol} — {a.name}
+                      {assetOptionLabel(a, brokers)}
                     </option>
                   ))}
                 </select>
@@ -703,7 +715,7 @@ function RecordTransactionModal({
                     )}
                     {assets.map((a) => (
                       <option key={a.id} value={a.id}>
-                        {a.symbol} — {a.name}
+                        {assetOptionLabel(a, brokers)}
                       </option>
                     ))}
                     {/* ⭐ ทางเข้า "ซื้อของที่ยังไม่เคยถือ" — เดิมทำได้ทางเดียวคือ

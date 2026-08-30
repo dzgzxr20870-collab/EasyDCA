@@ -479,6 +479,10 @@ function AppPortfolio() {
         <RecordTransactionModal
           selectedPortfolio={opened ?? selectedPortfolio}
           portfolios={portfolios}
+          // ⭐ ปุ่ม "+ บันทึกรายการซื้อ/ขาย" ในไฟล์นี้อยู่ในบล็อกที่ Render เฉพาะ
+          // ตอน `opened` เท่านั้น (มีพอร์ตเจาะจงเปิดอยู่เสมอ) — Dropdown สินทรัพย์
+          // จึงกรองเหลือเฉพาะพอร์ตนี้ กันผู้ใช้กดขายผิดพอร์ต/ผิดโบรกโดยไม่รู้ตัว
+          scopePortfolioId={openedId}
           defaultType={recordType}
           onClose={() => setRecordType(null)}
           onSaved={async () => {

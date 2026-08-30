@@ -262,6 +262,35 @@ export function normalizeBrokerName(raw) {
   return trimmed ? trimmed : null;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// assetOptionLabel — ป้ายกำกับ Option ของ Dropdown "สินทรัพย์" (ซื้อ/ขาย/ปันผล)
+// ═══════════════════════════════════════════════════════════════════════════
+// 🔴 บั๊กที่แก้ (Founder ทดสอบกดปุ่ม "+ บันทึกรายการขาย" 30 ส.ค. 2569): Label เดิม
+// `${symbol} — ${name}` ส่วนใหญ่ name === symbol เป๊ะ (เช่น "EOSE — EOSE") จึง
+// แยกไม่ออกว่าแถวไหนเป็นของโบรกไหน เมื่อ Symbol เดียวกันถืออยู่หลายโบรกในพอร์ต
+// เดียวกัน (migration 046 อนุญาต) — ผู้ใช้เสี่ยงกดขายผิดพอร์ต/ผิดโบรกโดยไม่รู้ตัว
+//
+// ⚠️ Logic เดียวกับ `PortfolioSettingsPanel.jsx`'s assetOptionLabel() เป๊ะ — Copy
+// มาแทนที่จะย้ายเป็น Shared Module เพราะไฟล์นั้นไม่ได้อยู่ในขอบเขตงานนี้ (ทั้งสอง
+// จุด Logic เหมือนกันทุกตัวอักษร ถ้าจะรวมเป็น lib/ shared ทีหลังค่อยทำแยกต่างหาก)
+export function assetOptionLabel(asset, brokers) {
+  const brokerName = asset?.brokerId
+    ? ((brokers ?? []).find((b) => b?.id === asset.brokerId)?.name ?? 'ไม่ระบุ')
+    : 'ไม่ระบุ';
+  return `${asset?.symbol ?? ''} — ${brokerName}`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// assetListParams — Query Param ของ GET /assets ตอนเปิด Modal (งานที่ 1)
+// ═══════════════════════════════════════════════════════════════════════════
+// ⚠️ กรองตาม portfolioId **เฉพาะตอนเปิดจากบริบทพอร์ตเจาะจง** (หน้ารายละเอียด
+// พอร์ต ส่ง `scopePortfolioId` ลงมา) — เปิดจาก Topbar "+ บันทึกรายการ" ที่ไม่ได้
+// ผูกกับพอร์ตไหน (scopePortfolioId เป็น undefined) ต้องเห็นสินทรัพย์ทุกพอร์ต
+// เหมือนเดิมทุกประการ — ห้ามบังคับกรองจนพัง Use Case เดิม
+export function assetListParams(scopePortfolioId) {
+  return scopePortfolioId ? { portfolioId: scopePortfolioId } : {};
+}
+
 // Body ของ POST /api/v1/transactions/dividend — ⚠️ Endpoint นี้ใช้ `amountThb`
 // จริงตาม Contract (controller: `toPositiveNumber(body.amountThb)`) อย่าเปลี่ยน
 // ให้เหมือน § 15.2 · และไม่มีแนวคิดสลิป/ทิศทาง/โบรกในเส้นทางนี้

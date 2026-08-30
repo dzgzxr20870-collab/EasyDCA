@@ -27,6 +27,8 @@ import {
   normalizeBrokerName,
   defaultDestinationPortfolioId,
   needsSymbolFetch,
+  assetOptionLabel,
+  assetListParams,
 } from './recordTransactionLogic.js';
 
 // สลิปตามรูปแบบ Response ของ API.md § 15.8 เป๊ะ
@@ -558,5 +560,74 @@ describe('⭐ confirmSeparatePortfolio ใน Payload', () => {
       confirmSeparatePortfolio: true,
     });
     expect('confirmSeparatePortfolio' in payload).toBe(false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ⭐ assetOptionLabel — ป้ายกำกับ Dropdown สินทรัพย์ (Founder ทดสอบ 30 ส.ค. 2569)
+// ═══════════════════════════════════════════════════════════════════════════
+// บั๊กเดิม: Label เป็น `${symbol} — ${name}` ซึ่ง name === symbol เกือบทุกครั้ง
+// → "EOSE — EOSE" ซ้ำกันหลายแถวเมื่อถือ Symbol เดียวกันหลายโบรก แยกไม่ออกว่า
+// แถวไหนของโบรกไหน ผู้ใช้เสี่ยงกดขายผิดพอร์ต/ผิดโบรกโดยไม่รู้ตัว
+//
+// ── RED-GREEN ────────────────────────────────────────────────────────────
+//   • เปลี่ยน Label กลับเป็น `${asset.symbol} — ${asset.name}` → ทุกเคสข้างล่างแดง
+describe('⭐ assetOptionLabel — ต้องกำกับด้วยชื่อโบรก ไม่ใช่ name ที่มักซ้ำ symbol', () => {
+  const BROKERS = [
+    { id: 'br-1', name: 'Bitkub' },
+    { id: 'br-2', name: 'Binance' },
+  ];
+
+  test('⭐ มีโบรก → Label เป็น "symbol — ชื่อโบรก" ไม่ใช่ "symbol — name"', () => {
+    const asset = { id: 'a1', symbol: 'EOSE', name: 'EOSE', brokerId: 'br-1' };
+    expect(assetOptionLabel(asset, BROKERS)).toBe('EOSE — Bitkub');
+    expect(assetOptionLabel(asset, BROKERS)).not.toBe('EOSE — EOSE');
+  });
+
+  // ⭐⭐ เคสหลักของบั๊กที่ Founder เจอ — Symbol เดียวกันถืออยู่หลายโบรกในพอร์ต
+  // เดียวกัน (migration 046) ต้องเห็น Label แยกกันชัดเจน ไม่ใช่ซ้ำกันเป๊ะ
+  test('⭐⭐ Symbol เดียวกัน 2 โบรก → Label ต้องต่างกัน (ไม่ซ้ำกันเป๊ะเหมือนเดิม)', () => {
+    const atBitkub = { id: 'a1', symbol: 'EOSE', name: 'EOSE', brokerId: 'br-1' };
+    const atBinance = { id: 'a2', symbol: 'EOSE', name: 'EOSE', brokerId: 'br-2' };
+
+    const labelA = assetOptionLabel(atBitkub, BROKERS);
+    const labelB = assetOptionLabel(atBinance, BROKERS);
+
+    expect(labelA).toBe('EOSE — Bitkub');
+    expect(labelB).toBe('EOSE — Binance');
+    expect(labelA).not.toBe(labelB);
+  });
+
+  test('ไม่มีโบรก (brokerId เป็น null) → "ไม่ระบุ" ไม่ใช่ name ที่ซ้ำ symbol', () => {
+    const asset = { id: 'a1', symbol: 'BTC', name: 'BTC', brokerId: null };
+    expect(assetOptionLabel(asset, BROKERS)).toBe('BTC — ไม่ระบุ');
+  });
+
+  // brokerId ชี้ไปโบรกที่ไม่มีในรายการ (ถูกลบไปแล้ว) — ต้องไม่ Throw หรือโชว์ undefined
+  test('⚠️ brokerId ที่หาชื่อไม่เจอ (โบรกถูกลบไปแล้ว) → "ไม่ระบุ" ไม่ใช่ undefined/Throw', () => {
+    const asset = { id: 'a1', symbol: 'BTC', name: 'BTC', brokerId: 'br-deleted' };
+    expect(() => assetOptionLabel(asset, BROKERS)).not.toThrow();
+    expect(assetOptionLabel(asset, BROKERS)).toBe('BTC — ไม่ระบุ');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ⭐ assetListParams — กรอง Dropdown ตามพอร์ตที่กำลังเปิดดูอยู่ (งานที่ 1)
+// ═══════════════════════════════════════════════════════════════════════════
+// ── RED-GREEN ────────────────────────────────────────────────────────────
+//   • เปลี่ยนเป็น `return { portfolioId: scopePortfolioId }` เสมอ → เคส Topbar แดง
+describe('⭐ assetListParams — เปิดจากพอร์ตเจาะจง vs Topbar ที่ไม่ผูกพอร์ต', () => {
+  test('⭐ เปิดจากหน้ารายละเอียดพอร์ต (มี scopePortfolioId) → กรองตามพอร์ตนั้น', () => {
+    expect(assetListParams('pf-weblue')).toEqual({ portfolioId: 'pf-weblue' });
+  });
+
+  // ⭐⭐ Regression กันพัง Use Case เดิม — Topbar "+ บันทึกรายการ" ที่ Switcher
+  // เป็น "ทั้งหมด" ต้องยังเห็นสินทรัพย์ทุกพอร์ตเหมือนเดิมทุกประการ
+  test('⭐⭐ ไม่มี scopePortfolioId (Topbar, Switcher = ทั้งหมด) → ไม่กรอง (เหมือน listAssets() เดิม)', () => {
+    expect(assetListParams(undefined)).toEqual({});
+  });
+
+  test('scopePortfolioId เป็น null → ไม่กรองเช่นกัน (ไม่ใช่ค่า id จริง)', () => {
+    expect(assetListParams(null)).toEqual({});
   });
 });
