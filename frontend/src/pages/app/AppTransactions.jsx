@@ -175,8 +175,14 @@ function AppTransactions() {
               <span className="demo-txitem__amount">
                 {formatAmount(tx.amountTotal ?? tx.amountThb)} {tx.currency ?? 'บาท'}
               </span>
-              <small>{tx.date}</small>
-              {tx.hasSlip ? <small title="มีสลิปแนบ">📎</small> : null}
+              {/* ⭐ รวมวันที่ + ไอคอนสลิปเป็นกลุ่มเดียว (30 ส.ค. 2569) — ให้เป็น
+                  Grid Cell เดียวที่นิยามได้ชัดเจน (.demo-txitem ใช้ CSS Grid 4
+                  คอลัมน์) ไม่งั้นสองก้อนนี้จะหลุดไปเป็นคอลัมน์ที่ 5/6 แยกกัน
+                  ทำให้แถวเอียงเมื่อบางรายการไม่มีสลิปแนบ */}
+              <span className="demo-txitem__meta">
+                <small>{tx.date}</small>
+                {tx.hasSlip ? <small title="มีสลิปแนบ">📎</small> : null}
+              </span>
             </li>
           ))}
         </ul>

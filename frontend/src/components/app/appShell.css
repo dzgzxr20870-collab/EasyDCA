@@ -683,10 +683,49 @@
    ข้อความได้ ไม่ใช่การปรับดีไซน์ทั้งลิสต์ ─────────────────────────────────── */
 .app-dueplan-item { display: flex; align-items: center; gap: 8px; list-style: none; }
 
-/* ── ประวัติธุรกรรม (AppTransactions) — .demo-txitem ไม่เคยมี CSS นิยามไว้เลยมาก่อน
-   (ตรวจแล้วทั้ง Repo) ต้องเพิ่มโครง Flex ขั้นต่ำ ไม่งั้น Avatar (Grid Box) จะดีดตัวเอง
-   ขึ้นบรรทัดใหม่แยกจากข้อความที่เหลือ — ไม่ใช่การปรับดีไซน์ทั้งหน้า Transactions
-   (ยังไม่มี Padding/เส้นคั่นแถว ฯลฯ เหมือนเดิม) ถ้าต้องการดีไซน์เต็มรูปแบบทีหลัง
-   ต้องเป็นงานแยก */
-.demo-txitem { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.demo-txitem__symbol { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; }
+/* ── ประวัติธุรกรรม (AppTransactions) — ปรับซ้ำ 30 ส.ค. 2569 (Founder เจอเบียด/เอียง)
+   ═══════════════════════════════════════════════════════════════════════════
+   รอบแรกเพิ่ม Flex ขั้นต่ำ (display:flex; gap:10px) ให้ Avatar อยู่บรรทัดเดียวกับ
+   ข้อความได้ — แต่ **Flex ขนาดตามเนื้อหา (Content-based Width)** ทำให้แต่ละแถวกว้าง
+   ไม่เท่ากันตามความยาวข้อความ (เช่น "ย้อนปันผล" ยาวกว่า "ซื้อ") คอลัมน์ถัดไปเลย
+   ขยับตามไปด้วยแถวต่อแถว → ดู "เอียง"/ไม่เรียงกัน ทั้งที่ align-items:center ทำงาน
+   ถูกต้องอยู่แล้ว (ปัญหาคือแนวนอน ไม่ใช่แนวตั้ง) — แก้ด้วย **CSS Grid** แทน (Pattern
+   เดียวกับ .demo-recent li ที่ใช้ grid-template-columns คงที่ ทำให้ทุกแถวเริ่ม
+   คอลัมน์ที่ตำแหน่ง x เดียวกันเป๊ะ) ไม่ใช่ Redesign ทั้งหน้า — สีพื้น/เงาไม่แตะ
+   มีแค่เส้นคั่นบางๆ กันแถวติดกัน (เบียด) เท่านั้น */
+.demo-txlist { list-style: none; margin: 0; padding: 0; }
+.demo-txitem {
+  display: grid;
+  grid-template-columns: minmax(56px, auto) 1fr auto auto;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line, #EEF1EC);
+}
+.demo-txitem:last-child { border-bottom: none; }
+.demo-txitem__type { color: var(--muted, #8B9587); font-size: 12.5px; font-weight: 700; }
+/* ⚠️ min-width:0 จำเป็นสำหรับ Grid Item ที่มีข้อความยาว (Symbol ต่างประเทศ) —
+   ไม่งั้น Grid จะไม่ยอมหดคอลัมน์นี้ต่ำกว่าความกว้างเนื้อหาธรรมชาติ ดันคอลัมน์
+   ขวา (จำนวนเงิน/วันที่) ล้นออกนอกแถวบนจอแคบ */
+.demo-txitem__symbol { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; min-width: 0; }
+.demo-txitem__amount { text-align: right; font-weight: 700; white-space: nowrap; }
+.demo-txitem__meta { display: inline-flex; align-items: center; gap: 6px; justify-content: flex-end; white-space: nowrap; }
+.demo-txitem__meta small { color: var(--muted, #8B9587); font-size: 11.5px; }
+
+/* ⭐ Avatar เล็กลงเฉพาะบริบทนี้ (Inline กับข้อความยาวๆ ในแถวเดียว) — 30px (ค่า
+   Default ของ .dh-avatar) ใหญ่เกินไปเมื่อวางเทียบกับตัวอักษร 13.5px ทำให้แถวสูง
+   ไม่สม่ำเสมอ ต่างจากตาราง Holdings ที่ Avatar เป็นคอลัมน์เดี่ยวมีที่ว่างเพียงพอ
+   ⚠️ AssetAvatar.jsx ไม่มี Prop ขนาด (รับแค่ symbol/type) และห้ามแก้ Default —
+   Override เฉพาะ Scope `.demo-txitem__symbol .dh-avatar` เท่านั้น ไม่กระทบ
+   .app-table__asset/.demo-recent__asset/.app-dueplan-item ที่ยังใช้ 30px เดิม */
+.demo-txitem__symbol .dh-avatar { width: 20px; height: 20px; font-size: 8px; flex: none; }
+
+/* ── จอแคบ (≤620px) — คอลัมน์เดิม 4 คอลัมน์แถวเดียวจะแน่นเกินไป (Symbol ประเทศ
+   ยาว + จำนวนเงิน + วันที่ในแถวเดียว) จึงพับเป็น 2 คอลัมน์ × 2 แถวแทน
+   (ประเภท+สินทรัพย์ แถวบน / จำนวนเงิน+วันที่ แถวล่าง) ยังเป็น Grid คงที่เหมือนเดิม
+   ไม่ใช่ flex-wrap ที่พับตำแหน่งไม่แน่นอนตามความยาวข้อความ ─────────────────── */
+@media (max-width: 620px) {
+  .demo-txitem { grid-template-columns: 1fr auto; row-gap: 4px; column-gap: 10px; }
+  .demo-txitem__amount,
+  .demo-txitem__meta { justify-self: end; }
+}
