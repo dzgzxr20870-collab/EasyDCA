@@ -19,6 +19,7 @@
 // จึงต้อง Mock portfolio.repository ด้วย · Automock คืน undefined = "ยังไม่มีพอร์ต"
 // ซึ่งตรงกับสภาพก่อน Apply 044 พอดี → พฤติกรรมของเทสต์เดิมไม่เปลี่ยน
 jest.mock('../src/repositories/portfolio.repository');
+jest.mock('../src/repositories/broker.repository');
 jest.mock('../src/repositories/transaction.repository');
 jest.mock('../src/repositories/asset.repository');
 jest.mock('../src/repositories/pendingTransaction.repository');
@@ -154,6 +155,17 @@ require('../src/repositories/portfolio.repository').findAllByUser.mockResolvedVa
     name: 'พอร์ตของฉัน',
     type: 'custom',
     isDefault: true,
+    createdAt: '2026-01-01T00:00:00.000Z',
+  },
+]);
+
+// ⚠️ ตัวถามเลือกโบรกเชิงรุก (Premium ที่มีโบรก >1) — ไฟล์นี้จำลอง **ผู้ใช้โบรก
+// เดียว** ด้วยเหตุผลเดียวกับพอร์ตข้างบนเป๊ะ (ไฟล์นี้ไม่ได้ทดสอบฟีเจอร์นี้โดยตรง —
+// ดู tests/brokerPickerLineFlow.test.js) Module Scope เหตุผลเดียวกัน
+require('../src/repositories/broker.repository').findAllByUser.mockResolvedValue([
+  {
+    id: 'broker-single-0000-4000-8000-000000000001',
+    name: 'โบรกของฉัน',
     createdAt: '2026-01-01T00:00:00.000Z',
   },
 ]);

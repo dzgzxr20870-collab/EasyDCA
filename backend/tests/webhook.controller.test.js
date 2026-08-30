@@ -47,6 +47,7 @@ jest.mock('../src/services/reportExport.service');
 jest.mock('../src/services/slipOcr.service');
 jest.mock('../src/services/mutualFund.service');
 jest.mock('../src/repositories/asset.repository');
+jest.mock('../src/repositories/broker.repository');
 jest.mock('../src/repositories/portfolio.repository');
 jest.mock('../src/repositories/transaction.repository');
 jest.mock('../src/repositories/lineWebhookEvent.repository');
@@ -154,6 +155,19 @@ require('../src/repositories/portfolio.repository').findAllByUser.mockResolvedVa
     name: 'พอร์ตของฉัน',
     type: 'custom',
     isDefault: true,
+    createdAt: '2026-01-01T00:00:00.000Z',
+  },
+]);
+
+// ⚠️ ตัวถามเลือกโบรกเชิงรุก (Premium ที่มีโบรก >1) — ไฟล์นี้จำลอง **ผู้ใช้โบรก
+// เดียว** ด้วยเหตุผลเดียวกับพอร์ตข้างบนเป๊ะ: ไฟล์นี้ไม่ได้ทดสอบฟีเจอร์นี้โดยตรง
+// (ดูเทสต์เฉพาะที่ tests/brokerPickerLineFlow.test.js) จึงต้องไม่มีการถามโบรก
+// แทรกเข้ามาเปลี่ยนพฤติกรรมเคสอื่นที่มีอยู่ก่อนแล้ว — Mock ที่ Module Scope
+// เหมือนกันเพื่อเหตุผลเดียวกัน (clearAllMocks ไม่ล้าง Implementation)
+require('../src/repositories/broker.repository').findAllByUser.mockResolvedValue([
+  {
+    id: 'broker-single-0000-4000-8000-000000000001',
+    name: 'โบรกของฉัน',
     createdAt: '2026-01-01T00:00:00.000Z',
   },
 ]);

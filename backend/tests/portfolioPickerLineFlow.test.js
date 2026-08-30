@@ -148,7 +148,11 @@ beforeEach(() => {
   assetRepository.findAllByUserAndSymbol.mockResolvedValue([]);
   lineWebhookEventRepository.claimEvent.mockResolvedValue(true);
 
-  brokerRepository.findAllByUser.mockResolvedValue([BROKER_A, BROKER_B]);
+  // ⚠️ Default โบรกเดียวโดยเจตนา — ไฟล์นี้ทดสอบ "ตัวถามพอร์ต" เป็นหลัก ถ้า Default
+  // เป็น 2 โบรก ตัวถามโบรกเชิงรุก (buildBuyBrokerChoiceReply, Wire ก่อนตัวถามพอร์ต
+  // เสมอ) จะดักคำสั่งซื้อ Premium ก่อนถึงตัวถามพอร์ตในแทบทุกเทสต์ของไฟล์นี้ — เทสต์
+  // ที่ต้องการ 2 โบรกจริงๆ (กำกวมทั้งสองมิติ) Override เป็นรายเทสต์เองแล้ว
+  brokerRepository.findAllByUser.mockResolvedValue([BROKER_A]);
   brokerRepository.findByIdForUser.mockImplementation(async (brokerId, userId) => {
     if (userId !== USER.id) return null;
     return [BROKER_A, BROKER_B].find((b) => b.id === brokerId) ?? null;

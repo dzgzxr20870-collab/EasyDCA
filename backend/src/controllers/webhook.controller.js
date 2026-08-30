@@ -413,6 +413,46 @@ async function buildPortfolioPickerReply(user, commandType, symbol, err, buy) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// ⭐ ฝั่ง "ซื้อ": ถามเลือกโบรกเชิงรุกเมื่อผู้ใช้ Premium มีโบรกมากกว่า 1 อัน
+// ═══════════════════════════════════════════════════════════════════════════
+// คู่แฝดของ buildBuyPortfolioChoiceReply ข้างล่างเป๊ะ (มติ Founder เดียวกัน —
+// "ปลายทางเป็นทางเลือกของผู้ใช้เสมอ") ต่างกันมิติเดียว: **ต้องเช็คสิทธิ์ Premium
+// เองตรงๆ ก่อนอันดับแรก** — พอร์ตมีเพดาน Free (สร้างได้พอร์ตเดียว) ตัวถามพอร์ต
+// จึงไม่มีทางขึ้นกับ Free อยู่แล้วโดยธรรมชาติ แต่ **โบรกไม่มีเพดานสำหรับ Free
+// เลย** (สร้างผ่านเว็บได้กี่อันก็ได้ไม่ว่าแพ็กเกจไหน) ถ้าไม่เช็คเอง ผู้ใช้ Free
+// ที่มีโบรก >1 จะโดนถามฟีเจอร์ Premium ทั้งที่ไม่ได้จ่ายเงิน
+//
+// เช็คสิทธิ์ก่อน Query เสมอ (อ่านจาก user ในหน่วยความจำ ไม่มี Query) — ผู้ใช้
+// Free ส่วนใหญ่ของระบบจึงจ่ายต้นทุน Query เพิ่ม "ศูนย์" จากฟีเจอร์นี้ ต่างจาก
+// buildBuyPortfolioChoiceReply ที่ต้อง Query พอร์ตให้ทุกคนเพราะพอร์ตส่วนเกินของ
+// อดีต Premium ทำให้เดาจาก plan ไม่ได้ (ดูเหตุผลเต็มด้านล่าง)
+//
+// คืน null = ไม่ต้องถาม (ให้ Flow เดิมเดินต่อตามปกติทุกประการ)
+async function buildBuyBrokerChoiceReply(user, parsed) {
+  // Free ห้ามถูกถามเด็ดขาด (โบรกไม่มีเพดาน Free) — จุดเดียวในฟีเจอร์นี้ที่ต้อง
+  // เช็คสิทธิ์เอง เพราะ Guard "โบรกเดียว" ด้านล่างไม่ได้ช่วยกรอง Free ออกเลย
+  if (!entitlement.isPremiumActive(user)) return null;
+
+  // ตอบมาแล้ว (undefined = ยังไม่ได้ถาม · null/uuid = ตอบแล้ว) → ห้ามถามซ้ำ
+  if (parsed.params.brokerId !== undefined) return null;
+
+  const brokers = await brokerRepository.findAllByUser(user.id);
+
+  // ⭐ โบรกเดียว/ยังไม่มีโบรกเลย → ไม่ถาม ไม่เปลี่ยนอะไรเลย (บันทึก
+  // brokerId: null เงียบๆ เหมือนเดิมทุกประการที่ createPending)
+  if (brokers.length <= 1) return null;
+
+  const choices = brokers.map((b) => ({ brokerId: b.id, brokerName: b.name }));
+
+  return flexMessage.buildBrokerPickerMessage(
+    'buy',
+    parsed.params.symbol,
+    choices,
+    extractCommandParamsForBrokerPick(parsed.params)
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // ⭐ ฝั่ง "ซื้อ": ถามพอร์ตเมื่อผู้ใช้มีมากกว่า 1 พอร์ต (มติ Founder 27 ส.ค. 2569)
 // ═══════════════════════════════════════════════════════════════════════════
 // ⚠️⚠️ **ซื้อกับขายใช้เกณฑ์คนละอันโดยเจตนา — ห้าม "แก้ให้เหมือนกัน"** ⚠️⚠️
@@ -615,9 +655,23 @@ async function routeCommand(user, parsed) {
       // ถือพอร์ต/โบรกเดียว = ไม่กำกวม = ไม่เข้า catch นี้เลย บันทึกตรงเหมือนเดิม
       // ทุกประการ (กฎยืนข้อ 10 — ไม่มี Query หรือคำถามเพิ่มบน Live Path ปกติ)
 
+      // ⭐ Premium ที่มีโบรก > 1 อัน — ถามเลือกโบรกก่อนพอร์ตเสมอ (ลำดับตาม
+      // Founder ระบุ: โบรก → พอร์ต → บันทึก) ผู้ใช้ Free/โบรกเดียว/ยังไม่มีโบรก
+      // → คืน null → ไม่มีอะไรเปลี่ยนแม้แต่บรรทัดเดียว (ดูเหตุผลเต็มที่
+      // buildBuyBrokerChoiceReply)
+      if (parsed.command === COMMANDS.BUY) {
+        const brokerChoice = await buildBuyBrokerChoiceReply(user, parsed);
+        if (brokerChoice) return brokerChoice;
+      }
+
       // ⭐ มติ Founder 27 ส.ค. 2569 — ฝั่ง "ซื้อ" ถามพอร์ตเมื่อผู้ใช้มี > 1 พอร์ต
       // (ดูเหตุผลเต็ม + ความไม่สมมาตรกับฝั่งขาย ที่ buildBuyPortfolioChoiceReply)
       // ผู้ใช้พอร์ตเดียว → คืน null → ไม่มีอะไรเปลี่ยนแม้แต่บรรทัดเดียว
+      //
+      // ⚠️ Wire หลังตัวถามโบรกเสมอ — ถ้าผู้ใช้เพิ่งตอบโบรกไปแล้ว (brokerId ถูกตั้ง
+      // แล้วจาก routeCommand รอบก่อนหน้าผ่าน case 'pick_broker'/'pick_portfolio')
+      // ตัวถามโบรกด้านบนจะคืน null ทันที (brokerId !== undefined) แล้วไหลมาถาม
+      // พอร์ตต่อในรอบเดียวกันนี้เลย — ไม่ต้องรอ Round-trip ใหม่
       if (parsed.command === COMMANDS.BUY) {
         const choice = await buildBuyPortfolioChoiceReply(user, parsed);
         if (choice) return choice;
