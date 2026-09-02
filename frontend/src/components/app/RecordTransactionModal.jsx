@@ -217,13 +217,19 @@ function RecordTransactionModal({
   const kind = TYPES.find((t) => t.value === type)?.kind ?? 'add';
   const blocked = kind === 'add' && !write.canAdd;
 
+  // ⭐⭐ excludeZeroHolding (E2E Chrome Test — บั๊กที่ 1 ตามจริง, มติ Founder) —
+  // ขาย/ปันผลต้องกรองสินทรัพย์ 0 หน่วยออก ซื้อไม่ต้อง (ดู assetListParams)
+  // แยกเป็น Boolean ต่างหาก (ไม่ผูก Effect กับ `type` ดิบ) เพื่อไม่ Refetch ซ้ำ
+  // ตอนสลับไปมาระหว่าง "ขาย" ↔ "ปันผล" (Filter ผลลัพธ์เหมือนกันทั้งคู่)
+  const excludeZeroHolding = type === 'sell' || type === 'dividend';
+
   useEffect(() => {
     let alive = true;
     (async () => {
       setLoadingRefs(true);
       try {
         const [a, b] = await Promise.all([
-          listAssets(assetListParams(scopePortfolioId)),
+          listAssets(assetListParams(scopePortfolioId, type)),
           listBrokers(),
         ]);
         if (!alive) return;
@@ -242,7 +248,10 @@ function RecordTransactionModal({
     return () => {
       alive = false;
     };
-  }, [scopePortfolioId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- ตั้งใจไม่ใส่ `type`
+    // ตรงๆ (ดู excludeZeroHolding ด้านบน) — Effect ยิงซ้ำเฉพาะตอน Filter ที่ส่ง
+    // ไป Backend จริงๆ เปลี่ยน ไม่ใช่ทุกครั้งที่สลับแท็บ
+  }, [scopePortfolioId, excludeZeroHolding]);
 
   function pickAsset(id) {
     setAssetId(id);

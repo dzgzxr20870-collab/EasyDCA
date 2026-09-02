@@ -85,8 +85,14 @@ function failFromServiceError(res, err, context) {
 // GET /api/v1/assets — สินทรัพย์ที่ถืออยู่ + filter (Free)
 // ═══════════════════════════════════════════════════════════════════════════
 // Query: ?brokerId=<uuid|none>&sector=<ชื่อ|none>&portfolioId=<uuid|none>
+//        &excludeZeroHolding=true
 // 'none' = "แถวที่ไม่ได้ระบุค่ามิตินั้น" (NULL) — ต่างจากไม่ส่ง Key มาเลยที่แปลว่า
 // "ไม่กรองมิตินี้" (Pattern เดียวกับ brokerId ของ GET /dashboard/profit)
+//
+// ⭐ excludeZeroHolding=true (E2E Chrome Test — บั๊กที่ 1 ตามจริง) — รับเฉพาะ
+// String 'true' ตรงตัวเท่านั้น (Query String ทุกค่าเป็น String อยู่แล้ว ไม่มี
+// Boolean จริงจาก HTTP) ค่าอื่น/ไม่ส่งมาเลย = ไม่กรอง (ดู assets.service.listAssets
+// สำหรับเหตุผลที่ต้อง Opt-in ไม่ใช่กรองตายตัว)
 async function listAssets(req, res) {
   const q = req.query ?? {};
 
@@ -102,6 +108,7 @@ async function listAssets(req, res) {
       ...(q.brokerId !== undefined ? { brokerId: q.brokerId } : {}),
       ...(q.sector !== undefined ? { sector: q.sector } : {}),
       ...(q.portfolioId !== undefined ? { portfolioId: q.portfolioId } : {}),
+      ...(q.excludeZeroHolding === 'true' ? { excludeZeroHolding: true } : {}),
     });
     return res.status(200).json({ assets: assets.map(toPublicAsset) });
   } catch (err) {

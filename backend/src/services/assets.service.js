@@ -1,6 +1,11 @@
 const assetRepository = require('../repositories/asset.repository');
 const brokerService = require('./broker.service');
 const portfoliosService = require('./portfolios.service');
+const transactionRepository = require('../repositories/transaction.repository');
+// ⭐ excludeZeroHolding (E2E Chrome Test — บั๊กที่ 1 ตามจริง) — Reuse สูตร
+// "ยอดถือ" เดียวกับที่ portfolio.service.getPortfolioSummary ใช้กรองแถวขายหมด
+// แล้วออกจากตาราง Holdings เป๊ะ ห้ามคิดสูตรใหม่ (ดู listAssets ด้านล่าง)
+const { calculateHeldQuantity } = require('./transaction.service');
 
 // ═══════════════════════════════════════════════════════════════════════════
 // assets.service — จัดการ "ป้ายกำกับ" ของสินทรัพย์ (Stage 8 · Design Doc § 4.4)
@@ -59,12 +64,35 @@ function normalizeSector(raw) {
 // ═══════════════════════════════════════════════════════════════════════════
 // filters.brokerId: '<uuid>' = โบรกนั้น · 'none' = แถวที่ไม่ผูกโบรก (NULL)
 // filters.sector:   '<ชื่อ>' = เทียบแบบไม่สนตัวพิมพ์ · 'none' = แถวที่ไม่ระบุ
+// filters.excludeZeroHolding: true = ตัดแถว "ขายหมดแล้ว" (heldQuantity ≤ 0) ออก
 //
 // ⚠️ กรองในหน่วยความจำหลังดึงมาแล้ว (ไม่ใช่ใน SQL) โดยเจตนา — เพราะการเทียบ
 // sector ต้อง Normalize ให้ตรงกับที่ allocation.service จัดกลุ่มเป๊ะ ถ้าเขียน
 // เงื่อนไขซ้ำใน SQL ด้วยกฎที่ต่างกันแม้นิดเดียว รายการที่กรองได้จะไม่ตรงกับ
 // กลุ่มบนกราฟโดนัท (ผู้ใช้กดกลุ่มบนกราฟแล้วเห็นรายการไม่ครบ)
 // จำนวนสินทรัพย์ต่อผู้ใช้อยู่ในหลักสิบ ไม่ใช่หลักหมื่น จึงไม่มีปัญหาเรื่อง Scale
+//
+// ═══════════════════════════════════════════════════════════════════════════
+// ⭐⭐ excludeZeroHolding (E2E Chrome Test — บั๊กที่ 1 ตามจริง, มติ Founder)
+// ═══════════════════════════════════════════════════════════════════════════
+// Root Cause เดิม: Endpoint นี้ไม่เคยกรอง heldQuantity เลย ต่างจากตาราง Holdings
+// (portfolio.service.getPortfolioSummary บรรทัด 112-114 ที่กรอง heldQuantity ≤ 0
+// ออกอยู่แล้ว) ผลคือ Dropdown เลือกสินทรัพย์ตอน "ขาย/ปันผล" ของฟอร์มบันทึกรายการ
+// (RecordTransactionModal.jsx) เสนอ/Default เป็นสินทรัพย์ที่ขายหมดไปแล้ว (0
+// หน่วย) ได้ ทั้งที่ไม่โผล่ในตาราง Holdings เลยสักแถว
+//
+// ⚠️⚠️ **Query Parameter ควบคุมได้ ไม่กรองตายตัว** — Endpoint เดียวกันนี้ต้อง
+// ให้ฝั่ง "ซื้อ" ยังเห็นสินทรัพย์เก่าที่ 0 หน่วยได้ปกติ (ซื้อกลับเข้าแถวเดิมได้
+// ไม่ต้องถูกบังคับสร้างเป็นสินทรัพย์ใหม่) — ฝั่ง Frontend จึงต้องส่ง
+// `excludeZeroHolding=true` มาเฉพาะตอนขาย/ปันผลเท่านั้น (ดู
+// recordTransactionLogic.assetListParams) ค่า Default ของ Filter นี้ (ไม่ส่งมา
+// เลย) = **ไม่กรอง** เพื่อไม่กระทบ Consumer อื่นที่อาจเรียก Endpoint นี้ในอนาคต
+// โดยไม่รู้ตัว (เช่น หน้ารายงาน/Export ที่ต้องเห็นสินทรัพย์ทั้งหมดรวม 0 หน่วย
+// ด้วยเหตุผลทางบัญชี)
+//
+// ⚠️ ต้องกรอง **หลัง** Filter อื่นทั้งหมด (brokerId/sector/portfolioId) — คำนวณ
+// heldQuantity เฉพาะแถวที่เหลือหลังกรองแล้วเท่านั้น กัน Query Transactions ของ
+// แถวที่ถูกกรองทิ้งไปแล้วโดยเปล่าประโยชน์
 async function listAssets(userId, filters = {}) {
   const assets = await assetRepository.findActiveByUser(userId);
 
@@ -90,6 +118,15 @@ async function listAssets(userId, filters = {}) {
   if (filters.portfolioId !== undefined) {
     const wanted = filters.portfolioId === 'none' ? null : filters.portfolioId;
     result = result.filter((a) => (a.portfolioId ?? null) === wanted);
+  }
+
+  if (filters.excludeZeroHolding === true) {
+    const kept = [];
+    for (const asset of result) {
+      const transactions = await transactionRepository.findAllByAsset(asset.id, userId);
+      if (calculateHeldQuantity(transactions) > 0) kept.push(asset);
+    }
+    result = kept;
   }
 
   return result;

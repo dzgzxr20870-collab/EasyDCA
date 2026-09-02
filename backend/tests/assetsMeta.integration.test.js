@@ -1,10 +1,16 @@
 jest.mock('../src/repositories/asset.repository');
 jest.mock('../src/services/broker.service');
 jest.mock('../src/services/portfolios.service');
+// ⭐ excludeZeroHolding (E2E Chrome Test — บั๊กที่ 1 ตามจริง) — ต้องมีเพื่อให้
+// assets.service.listAssets เรียก calculateHeldQuantity (transaction.service)
+// ได้โดยไม่ยิง Supabase จริง — ไม่กระทบเทสต์อื่นในไฟล์นี้เพราะมีแค่ Describe
+// Block เดียวด้านล่างที่ส่ง excludeZeroHolding: true
+jest.mock('../src/repositories/transaction.repository');
 
 const assetRepository = require('../src/repositories/asset.repository');
 const brokerService = require('../src/services/broker.service');
 const portfoliosService = require('../src/services/portfolios.service');
+const transactionRepository = require('../src/repositories/transaction.repository');
 const assetsController = require('../src/controllers/assets.controller');
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -397,5 +403,51 @@ describe('GET /api/v1/assets — List + filter', () => {
     );
 
     expect(assetRepository.findActiveByUser).toHaveBeenCalledWith('user-real');
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // ⭐⭐ ?excludeZeroHolding=true (E2E Chrome Test — บั๊กที่ 1 ตามจริง, มติ
+  // Founder) — ดู assets.service.js สำหรับ Root Cause เต็ม
+  // ═══════════════════════════════════════════════════════════════════════
+  describe('?excludeZeroHolding=true', () => {
+    beforeEach(() => {
+      // BTC ถืออยู่จริง 1 หน่วย · ETH ขายหมดแล้ว (heldQuantity = 0 — เคสตรงตัว
+      // ของบั๊กที่เจอจริง "EOSE — Weblue") · PTT ไม่เคยมีธุรกรรมเลย
+      transactionRepository.findAllByAsset.mockImplementation(async (assetId) => {
+        if (assetId === 'a1') return [{ type: 'buy', quantity: 1, amountThb: 100, date: '2026-08-01' }];
+        if (assetId === 'a2') {
+          return [
+            { type: 'buy', quantity: 1, amountThb: 100, date: '2026-08-01' },
+            { type: 'sell', quantity: 1, amountThb: 100, date: '2026-08-30' },
+          ];
+        }
+        return [];
+      });
+    });
+
+    test('⭐ ตัดสินทรัพย์ heldQuantity = 0 ออก (ETH ขายหมดแล้ว, PTT ไม่เคยซื้อ)', async () => {
+      const res = mockRes();
+      await assetsController.listAssets(mockReq({ query: { excludeZeroHolding: 'true' } }), res);
+
+      expect(jsonOf(res).assets.map((a) => a.symbol)).toEqual(['BTC']);
+    });
+
+    // ⭐⭐ Regression กันหลุด Scope — ไม่ส่ง Query นี้มาเลย (ฝั่งซื้อ) ต้องเห็น
+    // สินทรัพย์ 0 หน่วยได้ปกติเหมือนเดิมทุกประการ และห้ามยิง Transactions โดย
+    // ไม่จำเป็น (ประหยัด Query เหมือนพฤติกรรมเดิมก่อนมีบั๊กนี้)
+    test('⭐⭐ ไม่ส่ง excludeZeroHolding มาเลย → เห็นทุกสินทรัพย์ (ฝั่งซื้อต้องไม่ถูกกระทบ)', async () => {
+      const res = mockRes();
+      await assetsController.listAssets(mockReq({ query: {} }), res);
+
+      expect(jsonOf(res).assets.map((a) => a.symbol)).toEqual(['BTC', 'ETH', 'PTT']);
+      expect(transactionRepository.findAllByAsset).not.toHaveBeenCalled();
+    });
+
+    test('excludeZeroHolding ค่าอื่นที่ไม่ใช่ "true" ตรงตัว (เช่น "1"/"yes") → ไม่กรอง (Fail-closed)', async () => {
+      const res = mockRes();
+      await assetsController.listAssets(mockReq({ query: { excludeZeroHolding: '1' } }), res);
+
+      expect(jsonOf(res).assets).toHaveLength(3);
+    });
   });
 });

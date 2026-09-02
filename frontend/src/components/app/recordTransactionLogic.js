@@ -303,8 +303,23 @@ export function assetOptionLabel(asset, brokers) {
 // พอร์ต ส่ง `scopePortfolioId` ลงมา) — เปิดจาก Topbar "+ บันทึกรายการ" ที่ไม่ได้
 // ผูกกับพอร์ตไหน (scopePortfolioId เป็น undefined) ต้องเห็นสินทรัพย์ทุกพอร์ต
 // เหมือนเดิมทุกประการ — ห้ามบังคับกรองจนพัง Use Case เดิม
-export function assetListParams(scopePortfolioId) {
-  return scopePortfolioId ? { portfolioId: scopePortfolioId } : {};
+//
+// ═══════════════════════════════════════════════════════════════════════════
+// ⭐⭐ excludeZeroHolding (E2E Chrome Test — บั๊กที่ 1 ตามจริง, มติ Founder)
+// ═══════════════════════════════════════════════════════════════════════════
+// เฉพาะ "ขาย"/"ปันผล" เท่านั้นที่ควรกรองสินทรัพย์ 0 หน่วยออกจาก Dropdown —
+// ทั้งสองโหมดนี้ระบุสินทรัพย์ที่ "มีอยู่จริง" เท่านั้น (ขายของที่ไม่มี/รับปันผล
+// จากของที่ไม่มีไม่สมเหตุสมผล) ตรงข้ามกับ "ซื้อ" ที่ต้องยังเห็นสินทรัพย์เก่าที่
+// 0 หน่วยได้ปกติ (ซื้อกลับเข้าแถวเดิม ไม่ต้องถูกบังคับสร้างสินทรัพย์ใหม่)
+//
+// ⚠️ type = undefined (ไม่รู้จัก/ยังไม่ได้ส่งมา) → **ไม่กรอง** (ปลอดภัยกว่า
+// การกรองผิดโหมดโดยไม่ตั้งใจ — เหมือน Backend Default ที่ไม่กรองเมื่อไม่ส่ง
+// Query Param มา)
+export function assetListParams(scopePortfolioId, type) {
+  return {
+    ...(scopePortfolioId ? { portfolioId: scopePortfolioId } : {}),
+    ...(type === 'sell' || type === 'dividend' ? { excludeZeroHolding: true } : {}),
+  };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

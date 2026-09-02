@@ -635,6 +635,39 @@ describe('⭐ assetListParams — เปิดจากพอร์ตเจา�
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// ⭐⭐ assetListParams — excludeZeroHolding (E2E Chrome Test — บั๊กที่ 1 ตามจริง)
+// ═══════════════════════════════════════════════════════════════════════════
+// Root Cause จริง: GET /assets ไม่กรอง heldQuantity ≤ 0 ออก ต่างจากตาราง
+// Holdings (/dashboard/portfolio) — สินทรัพย์ที่ขายหมดแล้วจึงยังโผล่/กลายเป็น
+// Default ใน Dropdown ขาย/ปันผลได้ ทั้งที่ไม่มีเหลือให้ขาย/รับปันผลจริง
+describe('⭐⭐ assetListParams — excludeZeroHolding เฉพาะโหมดขาย/ปันผล', () => {
+  test('⭐ โหมดขาย → excludeZeroHolding: true', () => {
+    expect(assetListParams('pf-1', 'sell')).toEqual({ portfolioId: 'pf-1', excludeZeroHolding: true });
+  });
+
+  test('⭐ โหมดปันผล → excludeZeroHolding: true เช่นกัน (รับปันผลจากของ 0 หน่วยไม่สมเหตุสมผล)', () => {
+    expect(assetListParams('pf-1', 'dividend')).toEqual({
+      portfolioId: 'pf-1',
+      excludeZeroHolding: true,
+    });
+  });
+
+  // ⭐⭐ Regression กันหลุด Scope — ฝั่งซื้อต้องยังเห็นสินทรัพย์เก่าที่ 0 หน่วย
+  // ได้ปกติ (ซื้อกลับเข้าแถวเดิม ไม่ต้องถูกบังคับสร้างสินทรัพย์ใหม่)
+  test('⭐⭐ โหมดซื้อ → ไม่กรอง (ไม่มี excludeZeroHolding ใน Query เลย)', () => {
+    expect(assetListParams('pf-1', 'buy')).toEqual({ portfolioId: 'pf-1' });
+  });
+
+  test('ไม่ส่ง type มาเลย (undefined) → ไม่กรอง เหมือนพฤติกรรมเดิมก่อนมีบั๊กนี้', () => {
+    expect(assetListParams('pf-1', undefined)).toEqual({ portfolioId: 'pf-1' });
+  });
+
+  test('ไม่มี scopePortfolioId แต่โหมดขาย → ยังกรอง excludeZeroHolding ได้ (สองเงื่อนไขเป็นอิสระต่อกัน)', () => {
+    expect(assetListParams(undefined, 'sell')).toEqual({ excludeZeroHolding: true });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // ⭐ buildTransactionPayload — assetId + sellAll (Founder ทดสอบฟอร์มขาย
 // 30 ส.ค. 2569 — ปัญหาที่ 3 และ 4)
 // ═══════════════════════════════════════════════════════════════════════════

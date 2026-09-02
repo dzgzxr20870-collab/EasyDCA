@@ -106,11 +106,18 @@ export async function getAssetProfit(symbol, { portfolioId, brokerId } = {}) {
 // ── Assets ────────────────────────────────────────────────────────────────
 
 // GET /assets — Free · Filter brokerId / sector / portfolioId ('none' = ไม่ระบุ)
-export async function listAssets({ brokerId, sector, portfolioId } = {}) {
+//
+// ⭐ excludeZeroHolding: true = ตัดสินทรัพย์ที่ขายหมดแล้ว (heldQuantity ≤ 0)
+// ออก (E2E Chrome Test — บั๊กที่ 1 ตามจริง) — Opt-in เท่านั้น ไม่ส่ง/false =
+// พฤติกรรมเดิมเป๊ะ (เห็นสินทรัพย์ 0 หน่วยได้ปกติ — ฝั่งซื้อต้องยังซื้อกลับเข้า
+// แถวเดิมได้โดยไม่ต้องสร้างใหม่) ดู recordTransactionLogic.assetListParams
+// สำหรับตรรกะตัดสินใจว่าตอนไหนควรส่ง true
+export async function listAssets({ brokerId, sector, portfolioId, excludeZeroHolding } = {}) {
   const params = new URLSearchParams();
   if (brokerId !== undefined) params.set('brokerId', brokerId);
   if (sector !== undefined) params.set('sector', sector);
   if (portfolioId !== undefined) params.set('portfolioId', portfolioId);
+  if (excludeZeroHolding === true) params.set('excludeZeroHolding', 'true');
 
   const qs = params.toString();
   const data = await apiGet(`${BASE}/assets${qs ? `?${qs}` : ''}`);
