@@ -105,7 +105,12 @@ describe('buildErrorMessage — Backward Compat กับ Call Site เดิม
   });
 });
 
-describe('ข้อ 2 + 5 — buildUndoMessage: คำว่า "ย้อน" + ผลลัพธ์ขึ้นก่อนกลไก', () => {
+// พรอมต์รวมคำ 30 ส.ค. 2569: Founder ต้องการคำเดียวที่เรียกฟีเจอร์ Undo ทั้งเว็บ/LINE
+// คือ "ยกเลิกรายการล่าสุด" — กลับคำจากมติเดิม (ข้อ 2 fix/misleading-messages) ที่
+// เคยบังคับ buildUndoMessage ใช้ "ย้อน" แยกจาก buildCancelledMessage's "ยกเลิก"
+// ตอนนี้ทั้งคู่ใช้ "ยกเลิก" ร่วมกันได้ เพราะคำว่า "ล่าสุด" ที่ buildUndoMessage มี
+// ต่อท้ายเสมอ (แต่ buildCancelledMessage ไม่มี) เป็นตัวแยกบริบทอยู่แล้ว
+describe('ข้อ 2 + 5 — buildUndoMessage: คำว่า "ยกเลิก" + ผลลัพธ์ขึ้นก่อนกลไก', () => {
   const { buildCancelledMessage, buildUndoMessage } = flexMessage;
 
   const UNDO_RESULT = {
@@ -115,26 +120,28 @@ describe('ข้อ 2 + 5 — buildUndoMessage: คำว่า "ย้อน" +
     amountThb: 1497.6,
   };
 
-  test('Header ใช้คำว่า "ย้อน" ไม่ใช่ "ยกเลิก" (ต่างจาก buildCancelledMessage โดยตั้งใจ)', () => {
+  test('Header ใช้คำว่า "ยกเลิกรายการล่าสุด" (คำเดียวกับ buildCancelledMessage แต่มี "ล่าสุด" แยกบริบท)', () => {
     const text = JSON.stringify(buildUndoMessage(UNDO_RESULT));
-    expect(text).toContain('ย้อนรายการล่าสุดแล้ว');
-    expect(text).not.toContain('ยกเลิกรายการล่าสุดแล้ว');
+    expect(text).toContain('ยกเลิกรายการล่าสุดแล้ว');
+    expect(text).not.toContain('ย้อนรายการล่าสุดแล้ว');
   });
 
-  // buildCancelledMessage (Pending ที่ไม่เคยบันทึก) ใช้ "ยกเลิก" ถูกอยู่แล้ว — ต้อง
-  // ไม่ถูกแก้ไปด้วย (คนละเหตุการณ์กับ buildUndoMessage — มติ Founder: ห้ามใช้คำ
-  // เดียวกัน แปลว่าสองข้อความนี้ต้อง "ต่างกัน" ไม่ใช่ทั้งคู่กลายเป็นคำเดียวกัน)
+  // buildCancelledMessage (Pending ที่ไม่เคยบันทึก) ใช้ "ยกเลิก" ถูกอยู่แล้ว — ไม่ต้อง
+  // แก้ (คนละเหตุการณ์กับ buildUndoMessage แต่ตอนนี้ใช้คำเดียวกันได้ เพราะ "ล่าสุด"
+  // ที่ buildUndoMessage มีต่อท้ายเป็นตัวแยกบริบทแทน)
   test('buildCancelledMessage ยังใช้ "ยกเลิก" เหมือนเดิม (ถูกต้องอยู่แล้ว ไม่ต้องแก้)', () => {
     const text = JSON.stringify(buildCancelledMessage());
     expect(text).toContain('ยกเลิกรายการแล้ว');
   });
 
-  test('buildUndoMessage และ buildCancelledMessage ไม่ใช้คำเดียวกันสื่อผลลัพธ์ (Header ต่างกัน)', () => {
+  test('buildUndoMessage และ buildCancelledMessage Header ต่างกัน (มี/ไม่มี "ล่าสุด" แยกบริบท)', () => {
     const undoHeader = buildUndoMessage(UNDO_RESULT).contents.header.contents[0].text;
     const cancelHeader = buildCancelledMessage().contents.header.contents[0].text;
     expect(undoHeader).not.toBe(cancelHeader);
-    expect(undoHeader).toContain('ย้อน');
+    expect(undoHeader).toContain('ยกเลิก');
+    expect(undoHeader).toContain('ล่าสุด');
     expect(cancelHeader).toContain('ยกเลิก');
+    expect(cancelHeader).not.toContain('ล่าสุด');
   });
 
   // Founder: "เอาผลลัพธ์ขึ้นก่อน เช่น 'ยอด ASTS ในพอร์ตกลับไปเป็นเหมือนก่อนบันทึก
@@ -183,11 +190,15 @@ describe('ข้อ 6 — PRICE_FEED_NOT_IMPLEMENTED ต้องไม่อ้
 
 describe('ข้อ (fix/undo-command-aliases) — buildHelpMessage สอนคำสั่ง Undo ที่ตรงกับ Regex จริง', () => {
   // buildHelpMessage() ไม่รับ Parameter — สอน "คำสั่งที่พิมพ์ตรงได้" ทั้งหมดไว้ที่เดียว
-  // (Expert Path) เดิมสอนแค่ "ยกเลิกล่าสุด" ทั้งที่การ์ดยืนยัน/ปุ่มเว็บพูดคำว่า "ย้อน"
-  // มาตั้งแต่ fix/misleading-messages (d89c2b6) — ต้องสอนคำที่ตรงกับที่ระบบพูดเอง
-  test('สอนคำว่า "ย้อนล่าสุด" (ตรงกับที่การ์ดยืนยันพูด) พร้อมระบุว่า "ยกเลิกล่าสุด" ยังใช้ได้', () => {
+  // (Expert Path) — พรอมต์รวมคำ 30 ส.ค. 2569: การ์ดยืนยัน/ปุ่มเว็บพูดคำว่า "ยกเลิก
+  // รายการล่าสุด" แล้ว (กลับคำจาก fix/misleading-messages เดิม) จึงต้องขึ้นนำด้วย
+  // "ยกเลิกล่าสุด" ก่อน แล้วค่อยระบุ "ย้อนล่าสุด" เป็นทางเลือกที่ยังพิมพ์ได้จริง
+  // (UNDO_LAST regex ใน commandParser.service.js ไม่ถูกแตะ ยังรับครบทั้ง 4 คำ)
+  test('สอนคำว่า "ยกเลิกล่าสุด" ขึ้นก่อน (ตรงกับที่การ์ดยืนยันพูด) พร้อมระบุว่า "ย้อนล่าสุด" ยังใช้ได้', () => {
     const text = JSON.stringify(flexMessage.buildHelpMessage());
-    expect(text).toContain('ย้อนล่าสุด');
     expect(text).toContain('ยกเลิกล่าสุด');
+    expect(text).toContain('ย้อนล่าสุด');
+    // ต้องขึ้นนำด้วยคำหลักใหม่ก่อนเสมอ ไม่ใช่แค่ "มีทั้งคู่" เฉยๆ
+    expect(text.indexOf('ยกเลิกล่าสุด')).toBeLessThan(text.indexOf('ย้อนล่าสุด'));
   });
 });

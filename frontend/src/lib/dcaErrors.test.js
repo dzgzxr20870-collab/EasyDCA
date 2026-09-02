@@ -67,15 +67,16 @@ describe('undoErrorMessage', () => {
     expect(undoErrorMessage('NOT_A_REAL_CODE')).toBe(undoErrorMessage('INTERNAL_ERROR'));
   });
 
-  // ── ข้อ 2 (fix/misleading-messages): "ย้อน" ไม่ใช่ "ยกเลิก" ────────────────
-  // คำสั่งนี้ทำงานกับรายการที่บันทึกลง Ledger ไปแล้วจริง (สร้าง Reversal หักล้าง)
-  // คนละสถานะกับ Pending ที่ยังไม่เคยบันทึก (transactionErrorMessage ใช้ "ยกเลิก"
-  // ถูกแล้วสำหรับกรณีนั้น) — มติ Founder: ห้ามใช้คำเดียวกันสองความหมาย
-  test('ทุก Error Code ในกลุ่มนี้ใช้คำว่า "ย้อน" ไม่ใช่ "ยกเลิก"', () => {
+  // ── พรอมต์รวมคำ 30 ส.ค. 2569: "ยกเลิก" ไม่ใช่ "ย้อน" ─────────────────────────
+  // Founder ต้องการคำเดียวที่เรียกฟีเจอร์นี้ทั้งเว็บ/LINE คือ "ยกเลิกรายการล่าสุด"
+  // — กลับคำจาก fix/misleading-messages เดิม (ตอนนั้นใช้ "ย้อน" กลัวชนกับ "ยกเลิก"
+  // ของ Pending ที่ไม่เคยบันทึก แต่คำว่า "ล่าสุด"/"รายการนี้" ที่ต่อท้ายทุกข้อความ
+  // ในกลุ่มนี้เป็นตัวแยกบริบทอยู่แล้ว)
+  test('ทุก Error Code ในกลุ่มนี้ใช้คำว่า "ยกเลิก" ไม่ใช่ "ย้อน"', () => {
     const codes = ['NO_TRANSACTION_TO_UNDO', 'ALREADY_UNDONE', 'CANNOT_UNDO_QUANTITY_MISMATCH'];
     for (const code of codes) {
-      expect(undoErrorMessage(code)).not.toContain('ยกเลิก');
-      expect(undoErrorMessage(code)).toContain('ย้อน');
+      expect(undoErrorMessage(code)).not.toContain('ย้อน');
+      expect(undoErrorMessage(code)).toContain('ยกเลิก');
     }
   });
 });

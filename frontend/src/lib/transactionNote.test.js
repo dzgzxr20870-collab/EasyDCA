@@ -19,16 +19,17 @@ describe('isReversalNote', () => {
 
 describe('formatTransactionNote', () => {
   test('Reversal note → ข้อความอ่านง่าย ไม่โชว์ UUID ดิบ', () => {
-    expect(formatTransactionNote('UNDO_OF:9f1c2e6a-1234-4bcd-9876-0a1b2c3d4e5f')).toBe('↩︎ ย้อนรายการ');
+    expect(formatTransactionNote('UNDO_OF:9f1c2e6a-1234-4bcd-9876-0a1b2c3d4e5f')).toBe('↩︎ ยกเลิกรายการ');
   });
 
-  // fix/misleading-messages ข้อ 2: รายการนี้บันทึกลง Ledger ไปแล้วจริง (ถูกย้อน
-  // ไม่ใช่ถูกยกเลิก) — ต้องใช้คำเดียวกับข้อความอื่นทั้งระบบ ไม่ใช่ "ยกเลิก" ที่
-  // สงวนไว้สำหรับ Pending ที่ไม่เคยบันทึก
-  test('ไม่ใช้คำว่า "ยกเลิก" กับรายการ Reversal อีกต่อไป', () => {
-    expect(formatTransactionNote('UNDO_OF:9f1c2e6a-1234-4bcd-9876-0a1b2c3d4e5f')).not.toContain(
-      'ยกเลิก'
-    );
+  // พรอมต์รวมคำ 30 ส.ค. 2569: Founder ต้องการคำเดียวที่เรียกฟีเจอร์นี้ทั้งเว็บ/LINE
+  // คือ "ยกเลิกรายการล่าสุด" — กลับคำจาก fix/misleading-messages ข้อ 2 เดิมที่ห้าม
+  // ใช้ "ยกเลิก" กับรายการนี้ (ตอนนั้นกลัวชนกับ Pending ที่ไม่เคยบันทึก แต่คำว่า
+  // "ล่าสุด" ที่ต่อท้ายทุกจุดเป็นตัวแยกความกำกวมอยู่แล้ว)
+  test('ใช้คำว่า "ยกเลิก" กับรายการ Reversal (ไม่ใช่ "ย้อน" อีกต่อไป)', () => {
+    const text = formatTransactionNote('UNDO_OF:9f1c2e6a-1234-4bcd-9876-0a1b2c3d4e5f');
+    expect(text).toContain('ยกเลิก');
+    expect(text).not.toContain('ย้อน');
   });
 
   test('Note ปกติ → แสดงตามที่พิมพ์จริงตรงๆ ไม่แก้ไข', () => {

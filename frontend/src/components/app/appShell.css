@@ -720,6 +720,23 @@
    .app-table__asset/.demo-recent__asset/.app-dueplan-item ที่ยังใช้ 30px เดิม */
 .demo-txitem__symbol .dh-avatar { width: 20px; height: 20px; font-size: 8px; flex: none; }
 
+/* ⭐ แถวหักล้าง (Reversal จากกด "ยกเลิกรายการล่าสุด") — พรอมต์ 30 ส.ค. 2569
+   ═══════════════════════════════════════════════════════════════════════
+   ต้องแยกจากรายการซื้อ/ขายจริงด้วยสายตาโดยไม่ต้องอ่านข้อความ แต่ **ห้ามซ่อน**
+   (ปรัชญาเดิมของหน้านี้ — Ledger เป็น Immutable ผู้ใช้ต้องเห็นทุกแถวตามจริง)
+   จึงใช้แค่จางลง + Italic ไม่ใช่ display:none/ตัวเล็กจนอ่านไม่ออก */
+.demo-txitem--reversal { opacity: 0.65; font-style: italic; }
+.demo-txitem__badge {
+  font-style: normal;
+  font-weight: 700;
+  color: var(--muted, #8B9587);
+  background: var(--line, #EEF1EC);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
 /* ── จอแคบ (≤620px) — คอลัมน์เดิม 4 คอลัมน์แถวเดียวจะแน่นเกินไป (Symbol ประเทศ
    ยาว + จำนวนเงิน + วันที่ในแถวเดียว) จึงพับเป็น 2 คอลัมน์ × 2 แถวแทน
    (ประเภท+สินทรัพย์ แถวบน / จำนวนเงิน+วันที่ แถวล่าง) ยังเป็น Grid คงที่เหมือนเดิม

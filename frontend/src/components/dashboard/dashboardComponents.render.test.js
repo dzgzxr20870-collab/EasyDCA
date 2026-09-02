@@ -233,15 +233,19 @@ describe('Render smoke test (renderToStaticMarkup — no crash given realistic A
     expect(html).toContain('ยกเลิกล่าสุด');
   });
 
-  // Label ของรายการ Reversal ในประวัติถาวรก็ต้องใช้คำเดียวกัน — จุดที่ผู้ใช้เห็น
-  // ซ้ำๆ ทุกครั้งที่เปิดดูรายการ ไม่ใช่แค่ตอนกดปุ่ม
-  test('RecentList — Note ของรายการ Reversal แสดง "ย้อนรายการ" ไม่ใช่ "ยกเลิกรายการ"', () => {
+  // พรอมต์รวมคำ 30 ส.ค. 2569: formatTransactionNote (lib/transactionNote.js) ถูก
+  // แก้ให้ใช้คำว่า "ยกเลิกรายการ" แล้ว (Founder ต้องการคำเดียวทั้งเว็บ/LINE คือ
+  // "ยกเลิกรายการล่าสุด") — RecentList ใช้ Helper ตัวเดียวกันจึงได้คำใหม่ตามไปด้วย
+  // ⚠️ ปุ่ม Undo ข้างๆ ในหน้าเว็บเก่านี้ (title="ย้อนรายการล่าสุด...") ยังไม่ถูกแก้
+  // ตาม — นอกขอบเขตพรอมต์นี้ซึ่งจำกัดแค่ AppTransactions.jsx/flexMessage.util.js
+  // จึงเช็คเฉพาะ Note ("↩︎ ...รายการ") ไม่เช็คทั้งหน้า
+  test('RecentList — Note ของรายการ Reversal แสดง "ยกเลิกรายการ" (Helper กลางที่ใช้ร่วมกับ AppTransactions.jsx)', () => {
     const reversalRecent = [{ ...overviewFull.recent[0], note: 'UNDO_OF:9f1c2e6a-1234-4bcd-9876-0a1b2c3d4e5f' }];
     const html = renderToStaticMarkup(
       React.createElement(RecentList, { recent: reversalRecent, assetTypeBySymbol, onRequestUndo: () => {} })
     );
-    expect(html).toContain('ย้อนรายการ');
-    expect(html).not.toContain('ยกเลิกรายการ');
+    expect(html).toContain('↩︎ ยกเลิกรายการ');
+    expect(html).not.toContain('↩︎ ย้อนรายการ');
   });
 
   test('InvestedChart — มีข้อมูล / ทุกเดือน count=0', () => {
