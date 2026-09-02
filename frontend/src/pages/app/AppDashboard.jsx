@@ -10,6 +10,16 @@ import InvestedChart from '../../components/dashboard/InvestedChart.jsx';
 // ⭐ เชื่อมโลโก้สินทรัพย์เข้าหน้าใหม่ (30 ส.ค. 2569) — Import ตรงจากตำแหน่งเดิม
 // ที่ DashboardHome ใช้อยู่แล้ว ห้าม Copy Logic ไปสร้างไฟล์ซ้ำใน components/app/
 import AssetAvatar from '../../components/dashboard/AssetAvatar.jsx';
+// 🔴 บั๊กที่แก้ (E2E Chrome Test — บั๊กที่ 3): ดู dashboardStats.js สำหรับ Root
+// Cause เต็ม — สรุปสั้น: เดิมอ่าน overview.lifetime.totalThb/thisMonth.totalThb
+// ซึ่งไม่มีจริงใน Response (Backend ส่ง amountByCurrency.THB) ทำให้ขึ้น "—" ค้าง
+import { investedAmount } from '../../lib/dashboardStats.js';
+// ⭐ Widget "รายการล่าสุด" ขาดป้ายกำกับซื้อ/ขาย + ป้าย "ยกเลิกรายการ" (พรอมต์แยก
+// หลัง E2E Chrome Test) — Reuse Logic เดียวกับ AppTransactions.jsx เป๊ะ (ทั้ง
+// TYPE_LABEL และ isReversalNote) ไม่เขียนกฎซ้ำ · ยืนยันแล้วว่า overview.recent[]
+// มี side/note มาให้ครบอยู่แล้ว (dashboardOverview.service.buildRecent บรรทัด
+// 102, 107) จึงไม่ต้องแตะ Backend เลย
+import { isReversalNote } from '../../lib/transactionNote.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // AppDashboard — หน้าแดชบอร์ดต่อ API จริง (Stage 9)
@@ -26,6 +36,17 @@ import AssetAvatar from '../../components/dashboard/AssetAvatar.jsx';
 //
 // ⚠️ **ห้ามใช้ภาษาชี้นำการลงทุน** (กฎเหล็กข้อ 1) — รายงานข้อเท็จจริงเท่านั้น
 // ห้ามมีข้อความประเภท "พอร์ตคุณเสี่ยงเกินไป" / "ควรซื้อเพิ่ม" ที่ใดก็ตาม
+
+// ⭐ Label ประเภทธุรกรรม — สำเนาจาก AppTransactions.jsx เป๊ะ (ทั้งสองจุด Render
+// ธุรกรรมจาก Shape เดียวกัน `{ side | type }` แต่คนละหน้า/คนละ Component จึงไม่
+// รวมเป็น Shared Module ตอนนี้ — Pattern เดียวกับที่ recordTransactionLogic.js
+// อธิบายไว้สำหรับ assetOptionLabel ที่ซ้ำกับ PortfolioSettingsPanel.jsx)
+const TYPE_LABEL = {
+  buy: 'ซื้อ',
+  sell: 'ขาย',
+  dividend: 'ปันผล',
+  dividend_reversal: 'ยกเลิกปันผล',
+};
 
 function formatThb(n) {
   if (n === null || n === undefined) return '—';
@@ -109,6 +130,10 @@ function AppDashboard() {
     }
   }
 
+  // 🔴 บั๊กที่แก้ (E2E Chrome Test — บั๊กที่ 3) — ดู Comment ตรง import ด้านบน
+  const lifetimeInvested = investedAmount(overview?.lifetime);
+  const thisMonthInvested = investedAmount(overview?.thisMonth);
+
   return (
     <section className="demo-page">
       <header className="demo-page__head">
@@ -166,13 +191,21 @@ function AppDashboard() {
       )}
 
       <div className="demo-stats">
-        <StatTile label="เงินลงทุนสะสมทั้งหมด" value={formatThb(overview?.lifetime?.totalThb)} />
+        <StatTile
+          label="เงินลงทุนสะสมทั้งหมด"
+          value={formatThb(lifetimeInvested.thb)}
+          note={lifetimeInvested.usd > 0 ? `+ ${formatThb(lifetimeInvested.usd)} USD` : undefined}
+        />
         <StatTile
           label="จำนวนครั้งที่บันทึก"
           value={overview?.lifetime?.count ?? '—'}
           unit="ครั้ง"
         />
-        <StatTile label="DCA เดือนนี้" value={formatThb(overview?.thisMonth?.totalThb)} />
+        <StatTile
+          label="DCA เดือนนี้"
+          value={formatThb(thisMonthInvested.thb)}
+          note={thisMonthInvested.usd > 0 ? `+ ${formatThb(thisMonthInvested.usd)} USD` : undefined}
+        />
         <StatTile
           label="ต่อเนื่อง"
           value={overview?.streakMonths ?? 0}
@@ -216,16 +249,38 @@ function AppDashboard() {
           <p className="app-note">ยังไม่มีรายการ</p>
         ) : (
           <ul className="demo-recent">
-            {overview.recent.map((tx) => (
-              <li key={tx.id}>
-                <span className="demo-recent__asset">
-                  <AssetAvatar symbol={tx.symbol} type={assetTypeBySymbol.get(tx.symbol)} />
-                  {tx.symbol}
-                </span>
-                <span>{formatThb(tx.amountTotal)} {tx.currency ?? 'บาท'}</span>
-                <small>{tx.date}</small>
-              </li>
-            ))}
+            {overview.recent.map((tx) => {
+              // ⭐ ป้ายกำกับซื้อ/ขาย + ป้าย "ยกเลิกรายการ" (Reuse Logic เดียวกับ
+              // AppTransactions.jsx — ดู Comment ตรง import ด้านบนของไฟล์นี้)
+              const isReversal = isReversalNote(tx.note);
+              return (
+                <li key={tx.id} className={isReversal ? 'demo-txitem--reversal' : undefined}>
+                  {/* ⚠️ Reuse .demo-txitem__type ตรงๆ (ไม่สร้าง Class ใหม่) — .demo-recent
+                      li เดิมเป็น Grid 3 คอลัมน์ (1fr auto auto) ต้องขยายเป็น 4
+                      คอลัมน์ให้ตรงกับ .demo-txitem ของ AppTransactions.jsx เป๊ะ
+                      (ดู appShell.css) ไม่งั้นแถวจะเอียง/ล้นเหมือนบั๊กที่เคยแก้ไปแล้ว */}
+                  <span className="demo-txitem__type">
+                    {/* type ที่ระบบยังไม่รู้จักต้องแสดงเป็นค่าดิบ ห้าม Fallback
+                        เป็น "ขาย" — Pattern เดียวกับ AppTransactions.jsx */}
+                    {TYPE_LABEL[tx.side] ?? tx.side}
+                  </span>
+                  <span className="demo-recent__asset">
+                    <AssetAvatar symbol={tx.symbol} type={assetTypeBySymbol.get(tx.symbol)} />
+                    {tx.symbol}
+                    {isReversal && (
+                      <small
+                        className="demo-txitem__badge"
+                        title="รายการนี้เกิดจากการกดยกเลิกรายการล่าสุด — ระบบสร้างรายการหักล้างเข้า Ledger ไม่ได้ลบรายการเดิม"
+                      >
+                        ↩︎ ยกเลิกรายการ
+                      </small>
+                    )}
+                  </span>
+                  <span>{formatThb(tx.amountTotal)} {tx.currency ?? 'บาท'}</span>
+                  <small>{tx.date}</small>
+                </li>
+              );
+            })}
           </ul>
         )}
         <Link to="/app/transactions" className="demo-btn">

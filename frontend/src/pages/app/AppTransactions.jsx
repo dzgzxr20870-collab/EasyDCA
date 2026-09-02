@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { apiGet, apiPost } from '../../lib/api.js';
 import { portfolioWriteState } from '../../lib/entitlements.js';
@@ -73,18 +73,39 @@ function AppTransactions() {
 
   const write = portfolioWriteState(selectedPortfolio);
 
+  // ── 🔴 บั๊กที่แก้ (E2E Chrome Test — บั๊กที่ 2): กรอง Symbol พังสนิท ──────────
+  // Root Cause จริง (ยืนยันด้วย Network Capture): **ไม่ใช่** Backend กรองผิด และ
+  // **ไม่ใช่** Client เทียบ Symbol ผิด (สองข้อนี้ตรวจแล้วถูกต้องทั้งคู่) — เป็น
+  // Race Condition ล้วนๆ: พิมพ์ทีละตัวอักษร (ไม่มี Debounce) → ทุก Keystroke ยิง
+  // `apiGet` ใหม่ทันที (symbolFilter เปลี่ยน → `load` ถูกสร้างใหม่ → Effect ทำงาน)
+  // โดยไม่มีการยกเลิก/เพิกเฉย Response ของคำขอก่อนหน้าเลย — ถ้า Response ของ
+  // Keystroke ก่อนๆ (เช่น "EOS" ที่ไม่ตรง Symbol ไหนเลย → ได้ [] กลับมา) ตอบกลับมา
+  // **หลัง** Response ของคำขอล่าสุดที่ถูกต้อง (เช่น "EOSE") ผลลัพธ์ที่ถูกต้องจะถูก
+  // เขียนทับด้วย [] ทันที — ผู้ใช้จึงเห็น "ไม่พบรายการ" แม้ Backend ตอบข้อมูลถูก
+  // ต้องมาจริง (พิสูจน์ด้วยการดักจับ Response ตรงๆ: /history?symbol=EOSE คืน 8
+  // รายการ แต่ /history?symbol=EOS ที่ยิงไปก่อนหน้ากลับตอบ **ทีหลัง** แล้วเขียนทับ)
+  //
+  // ⚠️ แก้ด้วย Sequence Guard (Pattern เดียวกับ `alive` flag ของ
+  // RecordTransactionModal.jsx's useEffect) — นับเลขคำขอ แล้ว apply เฉพาะ
+  // Response ของคำขอที่ "ล่าสุดจริง" ตาม **ลำดับที่ส่งออกไป** เท่านั้น ไม่ใช่ตาม
+  // ลำดับที่ตอบกลับมา
+  const requestSeqRef = useRef(0);
+
   const load = useCallback(async () => {
+    const seq = ++requestSeqRef.current;
     setLoading(true);
     setError(null);
     try {
       const qs = symbolFilter ? `?symbol=${encodeURIComponent(symbolFilter)}` : '';
       const data = await apiGet(`/api/v1/dashboard/history${qs}`);
+      if (seq !== requestSeqRef.current) return; // มีคำขอใหม่กว่าแซงไปแล้ว — เพิกเฉย
       setTransactions(data?.transactions ?? []);
     } catch (err) {
+      if (seq !== requestSeqRef.current) return;
       setError(err?.message ?? 'โหลดประวัติธุรกรรมไม่สำเร็จ');
       setTransactions([]);
     } finally {
-      setLoading(false);
+      if (seq === requestSeqRef.current) setLoading(false);
     }
   }, [symbolFilter]);
 
