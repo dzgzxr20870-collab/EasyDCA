@@ -119,13 +119,16 @@ module.exports = {
     subscriptionKey: process.env.SEC_API_SUBSCRIPTION_KEY || null,
     fundMasterListPath: process.env.SEC_FUND_MASTER_LIST_PATH || null,
   },
-  // ⚠️ ชั่วคราวเพื่อ Debug เท่านั้น — Channel Secret ของ LINE OA "EasyDCA Support"
-  // (คนละ Channel กับ Bot หลัก) ใช้เฉพาะที่ routes/debugSupportOaWebhook.routes.js
-  // เพื่อดักหา groupId ของกลุ่มแชททีม — ไม่บังคับใน REQUIRED_ENV_VARS เพราะยังไม่มีค่า
-  // (ถ้าไม่ตั้ง Route จะข้ามการ Validate Signature ไปก่อนชั่วคราว) ต้องลบทั้ง Route และ
-  // Key นี้ทิ้งพร้อมกันหลังใช้เสร็จ
-  supportLine: {
-    channelSecret: process.env.SUPPORT_LINE_CHANNEL_SECRET || null,
+  // LINE OA "EasyDCA Support" (Push API เท่านั้น ไม่มี Webhook ถาวร) — ปลายทาง Push
+  // แจ้ง Support Request เข้ากลุ่มแชททีมงาน แทนที่การ Push หา Admin แต่ละคนทาง Bot
+  // หลัก (ดู supportRequestFlow.service.js) — Channel/Token คนละตัวกับ Bot หลักเสมอ
+  // ⚠️ ไม่บังคับใน REQUIRED_ENV_VARS — ถ้าไม่ตั้งค่า pushSupportRequestToOaGroup จะ
+  // Fail Gracefully (Log แล้วคืน 0) ไม่ Crash ทั้งระบบ
+  //   - SUPPORT_LINE_CHANNEL_ACCESS_TOKEN: Token ของ OA "EasyDCA Support" (Push API พอ)
+  //   - SUPPORT_LINE_GROUP_ID: Group ID ของกลุ่มแชททีมที่เชิญ OA นี้เข้าไปแล้ว
+  support: {
+    lineChannelAccessToken: process.env.SUPPORT_LINE_CHANNEL_ACCESS_TOKEN || null,
+    groupId: process.env.SUPPORT_LINE_GROUP_ID || null,
   },
   // Payment (Phase 2 Step 3 — Premium ผ่าน PromptPay QR + ต่ออายุเอง)
   // ⚠️ ไม่บังคับใน REQUIRED_ENV_VARS (ตามบทเรียน Audit — บังคับเฉพาะ 4 ตัวที่ boot

@@ -79,7 +79,13 @@ async function getProfile(userId) {
 // Caller (Cron) รู้ว่า Push ไม่สำเร็จ แล้ว "ไม่ markNotified" (จะได้ Retry รอบ
 // ถัดไป) — replyMessage ต้องเงียบเพราะ Webhook ต้องตอบ 200 ให้ LINE เสมอ แต่
 // Cron ไม่มีข้อจำกัดนั้น จึงให้ Error ทะลุขึ้นไปให้ Loop ราย Reminder จัดการเอง
-async function pushMessage(to, messages) {
+//
+// accessToken: Override ได้ (Default = Token ของ Bot หลัก) — ใช้ตอน Push ผ่าน OA
+// อื่นที่มี Channel Access Token คนละตัว เช่น OA "EasyDCA Support"
+// (supportRequestFlow.service.js) โดยไม่ต้องเขียน HTTP Call ซ้ำเป็นไฟล์ใหม่ —
+// ทุก Caller เดิมที่ไม่ส่ง Argument ตัวที่ 3 มา ยังใช้ Token ของ Bot หลักเหมือนเดิม
+// ทุกประการ ไม่มีผลกระทบ
+async function pushMessage(to, messages, accessToken = config.line.channelAccessToken) {
   const payload = {
     to,
     messages: Array.isArray(messages) ? messages : [messages],
@@ -89,7 +95,7 @@ async function pushMessage(to, messages) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.line.channelAccessToken}`,
+      Authorization: `Bearer ${accessToken}`,
     },
     body: JSON.stringify(payload),
   });

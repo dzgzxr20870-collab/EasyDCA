@@ -33,10 +33,11 @@ function handleSupportError(res, err, context) {
 }
 
 // POST /api/v1/support/request — Body: { category, message } (requireAuth + requireConsent)
-// ตรวจ Category+ข้อความ+Rate Limit ก่อนเสมอ (ไม่ Push ถ้าไม่ผ่าน) → Push หา Admin
-// (Best-effort) → บันทึก Log ด้วยผลนับจริง (Best-effort — ไม่ Block Response ถ้า
-// Log ล้มเหลว เพราะ Push ถึง Admin คือ Action หลักที่เกิดขึ้นจริงแล้ว) → ตอบผู้ใช้
-// ตามผล Push จริง (notified: true/false) ห้ามตอบ true ถ้า Push ไม่ถึง Admin สักคน
+// ตรวจ Category+ข้อความ+Rate Limit ก่อนเสมอ (ไม่ Push ถ้าไม่ผ่าน) → Push เข้ากลุ่ม
+// แชททีมผ่าน LINE OA "EasyDCA Support" (Best-effort) → บันทึก Log ด้วยผลนับจริง
+// (Best-effort — ไม่ Block Response ถ้า Log ล้มเหลว เพราะ Push ถึงกลุ่มคือ Action
+// หลักที่เกิดขึ้นจริงแล้ว) → ตอบผู้ใช้ตามผล Push จริง (notified: true/false) ห้ามตอบ
+// true ถ้า Push เข้ากลุ่มไม่สำเร็จ
 async function submitRequest(req, res) {
   let category;
   let message;
@@ -58,18 +59,23 @@ async function submitRequest(req, res) {
     console.error(`[support] submitRequest: failed to load display name: ${err.message}`);
   }
 
-  const notifiedCount = await supportRequestFlow.pushSupportRequestToAdmins(
+  const notifiedCount = await supportRequestFlow.pushSupportRequestToOaGroup(
     { id: req.user.id, lineUserId: req.user.lineUserId, displayName },
     message,
     category
   );
 
-  // Best-effort — เขียนไม่สำเร็จไม่ควร Block Response (Push ถึง Admin สำเร็จไปแล้ว)
+  // Best-effort — เขียนไม่สำเร็จไม่ควร Block Response (Push ถึงกลุ่มสำเร็จไปแล้ว)
   // แต่ต้อง Log ให้ชัดว่ากระทบ Rate Limit ด้วย เพราะ checkRateLimit เช็คจากตาราง
   // เดียวกันนี้ (findRecentByUser) — ไม่ใช่แค่ "ประวัติหาย" เฉยๆ
+  //
+  // adminCount เดิมหมายถึง "จำนวน Admin ที่ตั้งใจ Push หา" (config.payment.
+  // adminLineUserIds.length) — ตอนนี้ปลายทางเหลือเป้าหมายเดียวคือกลุ่มแชททีม จึงใช้
+  // 1 (ตั้งค่าครบ) / 0 (ยังไม่ได้ตั้งค่า) แทน ยังคงความหมายเดิม "จำนวนเป้าหมายที่
+  // ตั้งใจ Push" ไม่ใช่แค่ Hardcode
   try {
     await supportRequestFlow.recordRequest(req.user.id, message, {
-      adminCount: config.payment.adminLineUserIds.length,
+      adminCount: config.support.groupId ? 1 : 0,
       notifiedCount,
       category,
       source: 'web',
@@ -77,7 +83,7 @@ async function submitRequest(req, res) {
   } catch (err) {
     console.error(
       `[support] submitRequest: log failed — Rate Limit (1 ครั้ง/ชม.) จะไม่มีผลกับ ` +
-        `user ${req.user.id} จนกว่าจะมีคำขอถัดไปที่ Log สำเร็จ (Push ถึง Admin สำเร็จแล้ว ` +
+        `user ${req.user.id} จนกว่าจะมีคำขอถัดไปที่ Log สำเร็จ (Push ถึงกลุ่มสำเร็จแล้ว ` +
         `ไม่กระทบ): ${err.message}`
     );
   }

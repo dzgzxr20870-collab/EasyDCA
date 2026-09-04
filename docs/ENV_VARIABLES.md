@@ -25,7 +25,9 @@ cp .env.example .env
 | `LINE_CHANNEL_ACCESS_TOKEN` | ✅ | Token สำหรับส่งข้อความกลับไปยังผู้ใช้ผ่าน LINE Messaging API ได้จาก LINE Developers Console |
 | `LINE_NOTIFY_TOKEN` | ❌ | ⚠️ **LINE Notify ปิดบริการแล้ว ขอ Token ใหม่ไม่ได้** — ตัวแปรนี้เหลือไว้เผื่อ Legacy Config เท่านั้น ไม่ถูกใช้จริง ช่องทางแจ้งเตือน Admin ปัจจุบันคือ LINE Push ผ่าน `ADMIN_LINE_USER_IDS` ด้านล่าง (ดู [SECURITY.md § 9.4](./SECURITY.md) และ Infra ก่อน Beta — /health + Error Alert) |
 | `LIFF_ID` | ✅ | ID ของ LIFF App สำหรับ Login ด้วย LINE Account บน Web Dashboard |
-| `ADMIN_LINE_USER_IDS` | ❌ | `line_user_id` ของ Admin ที่รับ LINE Push แจ้งเตือน คั่นด้วย `,` ถ้าหลายคน — Reuse ตัวเดียวกันทั้งแจ้งคำขอชำระเงินเข้าใหม่ (payment.service) และ Critical Alert (`/health` ล่ม, Backup ล้มเหลว — healthAlert.service) ถ้าไม่ตั้งค่า จะไม่มีใครได้รับแจ้งเตือนเลย (Log ไว้เฉยๆ ไม่ Crash) |
+| `ADMIN_LINE_USER_IDS` | ❌ | `line_user_id` ของ Admin ที่รับ LINE Push แจ้งเตือน คั่นด้วย `,` ถ้าหลายคน — Reuse ตัวเดียวกันทั้งแจ้งคำขอชำระเงินเข้าใหม่ (payment.service), Critical Alert (`/health` ล่ม, Backup ล้มเหลว — healthAlert.service) และคำขอ Premium ฟรีจากแคมเปญ Facebook Like (support.controller.js) ถ้าไม่ตั้งค่า จะไม่มีใครได้รับแจ้งเตือนเลย (Log ไว้เฉยๆ ไม่ Crash) — **ไม่ใช่** ปลายทาง Push ของ Support Request ทั่วไปอีกต่อไป (ดู `SUPPORT_LINE_*` ด้านล่าง) |
+| `SUPPORT_LINE_CHANNEL_ACCESS_TOKEN` | ❌ | Channel Access Token ของ LINE OA "EasyDCA Support" (Push API เท่านั้น ไม่มี Webhook ถาวร — คนละ Channel กับ Bot หลัก) ใช้ Push แจ้ง Support Request (หน้าเว็บ `/support`) เข้ากลุ่มแชททีมงาน ถ้าไม่ตั้งค่า จะไม่มีใครได้รับแจ้งเตือน (Log ไว้เฉยๆ ไม่ Crash) — ดู `supportRequestFlow.service.js` |
+| `SUPPORT_LINE_GROUP_ID` | ❌ | Group ID ของกลุ่มแชททีมงานที่เชิญ OA "EasyDCA Support" เข้าไปแล้ว — ปลายทางที่ `SUPPORT_LINE_CHANNEL_ACCESS_TOKEN` Push เข้าไป ต้องตั้งค่าคู่กันทั้ง 2 ตัวถึงจะทำงาน |
 
 ---
 

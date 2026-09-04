@@ -14,14 +14,17 @@ jest.mock('../src/services/supportRequestFlow.service', () => {
     checkRateLimit: jest.fn(),
     validateMessage: jest.fn(),
     validateCategory: jest.fn(),
-    pushSupportRequestToAdmins: jest.fn(),
+    pushSupportRequestToOaGroup: jest.fn(),
     recordRequest: jest.fn(),
   };
 });
 jest.mock('../src/repositories/user.repository');
 jest.mock('../src/config/env', () => {
   const actual = jest.requireActual('../src/config/env');
-  return { ...actual, payment: { ...actual.payment, adminLineUserIds: ['Uadmin1', 'Uadmin2'] } };
+  return {
+    ...actual,
+    support: { lineChannelAccessToken: 'support-oa-token', groupId: 'Cgroup1' },
+  };
 });
 
 const supportRequestFlow = require('../src/services/supportRequestFlow.service');
@@ -48,7 +51,7 @@ beforeEach(() => {
   supportRequestFlow.validateCategory.mockImplementation((c) => c);
   supportRequestFlow.validateMessage.mockImplementation((m) => m);
   supportRequestFlow.checkRateLimit.mockResolvedValue(undefined);
-  supportRequestFlow.pushSupportRequestToAdmins.mockResolvedValue(2);
+  supportRequestFlow.pushSupportRequestToOaGroup.mockResolvedValue(1);
   supportRequestFlow.recordRequest.mockResolvedValue({ id: 'sr-1' });
   userRepository.findById.mockResolvedValue({ id: 'user-1', displayName: 'สมชาย ใจดี' });
 });
@@ -63,7 +66,7 @@ describe('submitRequest — Flow ปกติ', () => {
     expect(supportRequestFlow.validateCategory).toHaveBeenCalledWith('ocr');
     expect(supportRequestFlow.validateMessage).toHaveBeenCalledWith('ข้อความทดสอบ');
     expect(supportRequestFlow.checkRateLimit).toHaveBeenCalledWith('user-1');
-    expect(supportRequestFlow.pushSupportRequestToAdmins).toHaveBeenCalledWith(
+    expect(supportRequestFlow.pushSupportRequestToOaGroup).toHaveBeenCalledWith(
       { id: 'user-1', lineUserId: 'U123', displayName: 'สมชาย ใจดี' },
       'ข้อความทดสอบ',
       'ocr'
@@ -73,18 +76,41 @@ describe('submitRequest — Flow ปกติ', () => {
   });
 
   test('บันทึก Log ด้วย adminCount/notifiedCount จริง + category + source=web', async () => {
-    supportRequestFlow.pushSupportRequestToAdmins.mockResolvedValue(1);
+    supportRequestFlow.pushSupportRequestToOaGroup.mockResolvedValue(1);
     const req = mockReq({ category: 'payment_premium' });
     const res = mockRes();
 
     await supportController.submitRequest(req, res);
 
     expect(supportRequestFlow.recordRequest).toHaveBeenCalledWith('user-1', 'ข้อความทดสอบ', {
-      adminCount: 2,
+      adminCount: 1,
       notifiedCount: 1,
       category: 'payment_premium',
       source: 'web',
     });
+  });
+
+  test('ยังไม่ได้ตั้งค่า SUPPORT_LINE_GROUP_ID → บันทึก adminCount: 0', async () => {
+    const config = require('../src/config/env');
+    const original = config.support;
+    config.support = { lineChannelAccessToken: 'support-oa-token', groupId: null };
+
+    try {
+      supportRequestFlow.pushSupportRequestToOaGroup.mockResolvedValue(0);
+      const req = mockReq();
+      const res = mockRes();
+
+      await supportController.submitRequest(req, res);
+
+      expect(supportRequestFlow.recordRequest).toHaveBeenCalledWith('user-1', 'ข้อความทดสอบ', {
+        adminCount: 0,
+        notifiedCount: 0,
+        category: 'ocr',
+        source: 'web',
+      });
+    } finally {
+      config.support = original;
+    }
   });
 
   test('หา displayName ไม่ได้ (Error) → ยัง Push ต่อได้ด้วยชื่อ null (Non-fatal)', async () => {
@@ -94,7 +120,7 @@ describe('submitRequest — Flow ปกติ', () => {
 
     await supportController.submitRequest(req, res);
 
-    expect(supportRequestFlow.pushSupportRequestToAdmins).toHaveBeenCalledWith(
+    expect(supportRequestFlow.pushSupportRequestToOaGroup).toHaveBeenCalledWith(
       { id: 'user-1', lineUserId: 'U123', displayName: null },
       'ข้อความทดสอบ',
       'ocr'
@@ -115,7 +141,7 @@ describe('submitRequest — Validate ก่อนเสมอ (ไม่ผ่�
 
     expect(res.status).toHaveBeenCalledWith(400);
     expect(res.json).toHaveBeenCalledWith({ error: 'SUPPORT_REQUEST_INVALID_CATEGORY' });
-    expect(supportRequestFlow.pushSupportRequestToAdmins).not.toHaveBeenCalled();
+    expect(supportRequestFlow.pushSupportRequestToOaGroup).not.toHaveBeenCalled();
   });
 
   test('ข้อความว่าง → 400 SUPPORT_REQUEST_EMPTY_MESSAGE ไม่ Push', async () => {
@@ -129,7 +155,7 @@ describe('submitRequest — Validate ก่อนเสมอ (ไม่ผ่�
 
     expect(res.status).toHaveBeenCalledWith(400);
     expect(res.json).toHaveBeenCalledWith({ error: 'SUPPORT_REQUEST_EMPTY_MESSAGE' });
-    expect(supportRequestFlow.pushSupportRequestToAdmins).not.toHaveBeenCalled();
+    expect(supportRequestFlow.pushSupportRequestToOaGroup).not.toHaveBeenCalled();
   });
 
   test('ข้อความยาวเกิน → 400 SUPPORT_REQUEST_MESSAGE_TOO_LONG ไม่ Push', async () => {
@@ -142,7 +168,7 @@ describe('submitRequest — Validate ก่อนเสมอ (ไม่ผ่�
     await supportController.submitRequest(req, res);
 
     expect(res.status).toHaveBeenCalledWith(400);
-    expect(supportRequestFlow.pushSupportRequestToAdmins).not.toHaveBeenCalled();
+    expect(supportRequestFlow.pushSupportRequestToOaGroup).not.toHaveBeenCalled();
   });
 
   test('Rate Limit → 429 SUPPORT_REQUEST_RATE_LIMITED ไม่ Push', async () => {
@@ -156,14 +182,14 @@ describe('submitRequest — Validate ก่อนเสมอ (ไม่ผ่�
 
     expect(res.status).toHaveBeenCalledWith(429);
     expect(res.json).toHaveBeenCalledWith({ error: 'SUPPORT_REQUEST_RATE_LIMITED' });
-    expect(supportRequestFlow.pushSupportRequestToAdmins).not.toHaveBeenCalled();
+    expect(supportRequestFlow.pushSupportRequestToOaGroup).not.toHaveBeenCalled();
     expect(supportRequestFlow.recordRequest).not.toHaveBeenCalled();
   });
 });
 
 describe('submitRequest — ตอบตามผล Push จริงเท่านั้น (ห้ามโกหก)', () => {
   test('Push ล้มเหลวทั้งหมด → 200 { notified: false } (ไม่ใช่ Error — คำขอถูกประมวลผลแล้ว)', async () => {
-    supportRequestFlow.pushSupportRequestToAdmins.mockResolvedValue(0);
+    supportRequestFlow.pushSupportRequestToOaGroup.mockResolvedValue(0);
     const req = mockReq();
     const res = mockRes();
 
@@ -174,7 +200,7 @@ describe('submitRequest — ตอบตามผล Push จริงเท่�
   });
 
   test('บันทึก Log ล้มเหลว (DB ล่ม) → ยังตอบ 200 ตามผล Push จริง ไม่ Error (Best-effort)', async () => {
-    supportRequestFlow.pushSupportRequestToAdmins.mockResolvedValue(2);
+    supportRequestFlow.pushSupportRequestToOaGroup.mockResolvedValue(2);
     supportRequestFlow.recordRequest.mockRejectedValue(new Error('db down'));
     const req = mockReq();
     const res = mockRes();

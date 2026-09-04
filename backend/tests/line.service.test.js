@@ -64,6 +64,52 @@ describe('lineService.getProfile — ล้มเหลว (ต้องคื�
   });
 });
 
+describe('lineService.pushMessage — accessToken Override (Support OA)', () => {
+  const TO = 'Cgroup1';
+  const MESSAGE = { type: 'text', text: 'hi' };
+
+  test('ไม่ส่ง accessToken มา → ใช้ config.line.channelAccessToken (Token ของ Bot หลัก) เหมือนเดิม', async () => {
+    jest.spyOn(global, 'fetch').mockResolvedValue({ ok: true });
+
+    await lineService.pushMessage(TO, MESSAGE);
+
+    const config = require('../src/config/env');
+    expect(global.fetch).toHaveBeenCalledWith(
+      'https://api.line.me/v2/bot/message/push',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: `Bearer ${config.line.channelAccessToken}`,
+        }),
+      })
+    );
+  });
+
+  test('ส่ง accessToken มา (Token ของ OA อื่น) → ใช้ Token ที่ส่งมาแทน ไม่ใช่ Token ของ Bot หลัก', async () => {
+    jest.spyOn(global, 'fetch').mockResolvedValue({ ok: true });
+
+    await lineService.pushMessage(TO, MESSAGE, 'support-oa-token');
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      'https://api.line.me/v2/bot/message/push',
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer support-oa-token' }),
+      })
+    );
+  });
+
+  test('LINE API ตอบ Error Status → throw (Caller ต้องรู้ว่า Push ไม่สำเร็จ)', async () => {
+    jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () => 'Bad Request',
+    });
+
+    await expect(lineService.pushMessage(TO, MESSAGE, 'support-oa-token')).rejects.toThrow(
+      'LINE Push API failed: 400'
+    );
+  });
+});
+
 describe('lineService.getMessageContent', () => {
   const MESSAGE_ID = 'msg-123';
 

@@ -17,7 +17,7 @@ jest.mock('../src/services/supportRequestFlow.service', () => {
     checkRateLimit: jest.fn(),
     validateMessage: jest.fn(),
     validateCategory: jest.fn(),
-    pushSupportRequestToAdmins: jest.fn(),
+    pushSupportRequestToOaGroup: jest.fn(),
     recordRequest: jest.fn(),
   };
 });

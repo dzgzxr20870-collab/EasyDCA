@@ -4,14 +4,18 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // ⚠️ ไม่มี Session/TTL/Cron อีกต่อไป (Migration 027 Drop ตาราง support_request_
 // sessions ทิ้งแล้ว) — Service นี้เหลือแค่: validateMessage/validateCategory (Sync
-// ล้วน) → checkRateLimit (Query ตาราง Log จริง) → pushSupportRequestToAdmins (Push
-// LINE) → recordRequest (บันทึก Log) ให้ Controller (Web/LINE) เรียกประกอบกันเอง
+// ล้วน) → checkRateLimit (Query ตาราง Log จริง) → pushSupportRequestToOaGroup (Push
+// เข้ากลุ่มแชททีมผ่าน LINE OA "EasyDCA Support") → recordRequest (บันทึก Log) ให้
+// Controller (Web/LINE) เรียกประกอบกันเอง
 
 jest.mock('../src/repositories/supportRequest.repository');
 jest.mock('../src/services/line.service');
 jest.mock('../src/config/env', () => {
   const actual = jest.requireActual('../src/config/env');
-  return { ...actual, payment: { ...actual.payment, adminLineUserIds: ['Uadmin1', 'Uadmin2'] } };
+  return {
+    ...actual,
+    support: { lineChannelAccessToken: 'support-oa-token', groupId: 'Cgroup1' },
+  };
 });
 
 const supportRequestRepository = require('../src/repositories/supportRequest.repository');
@@ -115,37 +119,48 @@ describe('validateCategory — Backend ไม่เชื่อ Client เสม
   );
 });
 
-describe('pushSupportRequestToAdmins — Best-effort Push ทีละคน', () => {
-  test('Push สำเร็จทั้ง 2 Admin → คืน 2', async () => {
-    const count = await supportRequestFlow.pushSupportRequestToAdmins(USER, 'ข้อความ', 'other');
-
-    expect(count).toBe(2);
-    expect(lineService.pushMessage).toHaveBeenCalledTimes(2);
-    expect(lineService.pushMessage).toHaveBeenCalledWith('Uadmin1', expect.any(Object));
-    expect(lineService.pushMessage).toHaveBeenCalledWith('Uadmin2', expect.any(Object));
-  });
-
-  test('Push ล้มเหลว 1 ใน 2 คน → คืน 1 (Best-effort ไม่กระทบคนอื่น)', async () => {
-    lineService.pushMessage
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error('blocked'));
-
-    const count = await supportRequestFlow.pushSupportRequestToAdmins(USER, 'ข้อความ', 'other');
+describe('pushSupportRequestToOaGroup — Push ครั้งเดียวเข้ากลุ่มผ่าน OA Support', () => {
+  test('Push สำเร็จ → คืน 1, เรียกด้วย groupId + Token ของ OA Support (ไม่ใช่ Token Bot หลัก)', async () => {
+    const count = await supportRequestFlow.pushSupportRequestToOaGroup(USER, 'ข้อความ', 'other');
 
     expect(count).toBe(1);
+    expect(lineService.pushMessage).toHaveBeenCalledTimes(1);
+    expect(lineService.pushMessage).toHaveBeenCalledWith(
+      'Cgroup1',
+      expect.any(Object),
+      'support-oa-token'
+    );
   });
 
-  test('Push ล้มเหลวทั้งหมด → คืน 0 ไม่ throw', async () => {
+  test('Push ล้มเหลว → คืน 0 ไม่ throw', async () => {
     lineService.pushMessage.mockRejectedValue(new Error('down'));
 
     await expect(
-      supportRequestFlow.pushSupportRequestToAdmins(USER, 'ข้อความ', 'other')
+      supportRequestFlow.pushSupportRequestToOaGroup(USER, 'ข้อความ', 'other')
     ).resolves.toBe(0);
   });
 
   test('category = null (ไม่ระบุ) → ยัง Push ได้ปกติ', async () => {
-    const count = await supportRequestFlow.pushSupportRequestToAdmins(USER, 'ข้อความ');
-    expect(count).toBe(2);
+    const count = await supportRequestFlow.pushSupportRequestToOaGroup(USER, 'ข้อความ');
+    expect(count).toBe(1);
+  });
+
+  test.each([
+    [{ lineChannelAccessToken: null, groupId: 'Cgroup1' }],
+    [{ lineChannelAccessToken: 'support-oa-token', groupId: null }],
+    [{ lineChannelAccessToken: null, groupId: null }],
+  ])('ยังไม่ได้ตั้งค่า Env ครบ (%j) → คืน 0 ไม่เรียก LINE API', async (supportConfig) => {
+    const config = require('../src/config/env');
+    const original = config.support;
+    config.support = supportConfig;
+
+    try {
+      const count = await supportRequestFlow.pushSupportRequestToOaGroup(USER, 'ข้อความ', 'other');
+      expect(count).toBe(0);
+      expect(lineService.pushMessage).not.toHaveBeenCalled();
+    } finally {
+      config.support = original;
+    }
   });
 });
 

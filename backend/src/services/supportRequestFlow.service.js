@@ -13,8 +13,15 @@ const config = require('../config/env');
 // Input ใน Session อีกต่อไป (ดู Migration 027 ที่ Drop ตาราง Session ทิ้ง)
 //
 // Flow ปัจจุบัน: ตรวจ Category+ข้อความ → เช็ค Rate Limit (จากตาราง Log จริง ไม่ใช้
-// In-memory Map) → Push หา Admin → บันทึก Log พร้อมผลนับจริง (adminCount/
-// notifiedCount) → คืนผลให้ Caller (web/LINE) ตอบผู้ใช้ตามจริง
+// In-memory Map) → Push เข้ากลุ่มแชททีมผ่าน LINE OA "EasyDCA Support" → บันทึก Log
+// พร้อมผลนับจริง (adminCount/notifiedCount) → คืนผลให้ Caller (web/LINE) ตอบผู้ใช้ตามจริง
+//
+// ⚠️ เปลี่ยนปลายทาง Push จาก "Admin แต่ละคนทาง LINE ส่วนตัวผ่าน Bot หลัก"
+// (config.payment.adminLineUserIds) เป็น "กลุ่มแชททีม ผ่าน OA แยกต่างหาก
+// EasyDCA Support" (config.support) ทั้งหมดแล้ว ตามมติ Founder — ปิดพร้อมกันไม่มี
+// Push คู่ขนานไปหา Admin ส่วนตัวอีกต่อไป (Facebook-Like Grant Flow ใน
+// support.controller.js ยังคง Push หา Admin ส่วนตัวเหมือนเดิม เป็นคนละ Flow กัน
+// ไม่ถูกกระทบ)
 
 const RATE_LIMIT_HOURS = 1;
 const MAX_MESSAGE_LENGTH = 500;
@@ -83,41 +90,36 @@ function validateCategory(rawCategory) {
   return rawCategory;
 }
 
-// ── Push หา Admin ─────────────────────────────────────────────────────────
-// Push การ์ดแจ้งข้อความหา Admin ทุกคนใน ADMIN_LINE_USER_IDS — Pattern เดียวกับ
-// pushPaymentRequestToAdmins ใน webhook.controller.js (Best-effort ทีละคน คืน
-// จำนวนที่ Push สำเร็จจริง) ย้ายมาอยู่ที่นี่ (เดิมอยู่ใน webhook.controller.js)
-// เพื่อให้เรียกได้ทั้งจาก support.controller.js (เว็บ) และ webhook.controller.js
-// (LINE — ถ้าจำเป็นต้องใช้อีกในอนาคต) โดยไม่ต้องเขียนซ้ำเป็นชุดที่ 3
-async function pushSupportRequestToAdmins(user, message, category = null) {
-  const adminIds = config.payment.adminLineUserIds;
-  if (adminIds.length === 0) {
+// ── Push เข้ากลุ่มแชททีมผ่าน LINE OA "EasyDCA Support" ─────────────────────
+// Push การ์ดแจ้งข้อความ Support Request ครั้งเดียวเข้ากลุ่มแชททีม (ไม่ Loop หา Admin
+// ทีละคนอีกต่อไป) ด้วย Channel Access Token ของ OA "EasyDCA Support" (คนละตัวกับ
+// Bot หลัก — ดู line.service.js § pushMessage accessToken override) — Best-effort
+// เหมือนเดิม (Push ไม่ถึงไม่ throw แค่ Log แล้วคืน 0) คืน 1 ถ้า Push สำเร็จ, 0 ถ้า
+// ไม่สำเร็จหรือยังไม่ได้ตั้งค่า SUPPORT_LINE_CHANNEL_ACCESS_TOKEN/SUPPORT_LINE_GROUP_ID
+// (ค่า Return ยังเป็นตัวเลขเหมือนเดิมเพื่อให้เข้ากับ notifiedCount ที่ recordRequest
+// ใช้อยู่ — ไม่ทุบ Signature ของ recordRequest)
+async function pushSupportRequestToOaGroup(user, message, category = null) {
+  const { lineChannelAccessToken, groupId } = config.support;
+  if (!lineChannelAccessToken || !groupId) {
     console.error(
-      `[supportRequestFlow] no ADMIN_LINE_USER_IDS configured; nobody notified (userId=${user.id})`
+      '[supportRequestFlow] SUPPORT_LINE_CHANNEL_ACCESS_TOKEN/SUPPORT_LINE_GROUP_ID not ' +
+        `configured; nobody notified (userId=${user.id})`
     );
     return 0;
   }
 
-  const adminMessage = flexMessage.buildAdminSupportRequestMessage(user, message, new Date(), category);
+  const groupMessage = flexMessage.buildAdminSupportRequestMessage(user, message, new Date(), category);
 
-  const results = await Promise.all(
-    adminIds.map((adminId) =>
-      lineService
-        .pushMessage(adminId, adminMessage)
-        .then(() => true)
-        .catch((pushErr) => {
-          console.error(
-            `[supportRequestFlow] push to admin ${adminId} failed: ${pushErr.message}`
-          );
-          return false;
-        })
-    )
-  );
-
-  return results.filter(Boolean).length;
+  try {
+    await lineService.pushMessage(groupId, groupMessage, lineChannelAccessToken);
+    return 1;
+  } catch (pushErr) {
+    console.error(`[supportRequestFlow] push to OA group failed: ${pushErr.message}`);
+    return 0;
+  }
 }
 
-// บันทึก Log — เรียก "หลัง" Push หา Admin เสร็จแล้วเท่านั้น (ผลนับจริง
+// บันทึก Log — เรียก "หลัง" Push เข้ากลุ่มเสร็จแล้วเท่านั้น (ผลนับจริง
 // adminCount/notifiedCount ต้องรู้ค่าสุดท้ายก่อน Insert ครั้งเดียว ไม่มี UPDATE ตามมา)
 async function recordRequest(userId, message, { adminCount, notifiedCount, category, source }) {
   return supportRequestRepository.create({ userId, message, adminCount, notifiedCount, category, source });
@@ -131,6 +133,6 @@ module.exports = {
   checkRateLimit,
   validateMessage,
   validateCategory,
-  pushSupportRequestToAdmins,
+  pushSupportRequestToOaGroup,
   recordRequest,
 };
