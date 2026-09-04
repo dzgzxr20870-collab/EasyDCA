@@ -21,6 +21,7 @@ const portfolioRoutes = require('./routes/portfolio.routes');
 const transactionsRoutes = require('./routes/transactions.routes');
 const dcaPlansRoutes = require('./routes/dcaPlans.routes');
 const supportRoutes = require('./routes/support.routes');
+const debugSupportOaWebhookRoutes = require('./routes/debugSupportOaWebhook.routes');
 const healthAlertService = require('./services/healthAlert.service');
 
 // ⚠️ Fail-fast ตั้งแต่ Boot ถ้าไม่ได้ตั้ง FRONTEND_URL — เดิม Fallback เป็น '*'
@@ -144,6 +145,21 @@ app.use(
     },
   }),
   webhookRoutes
+);
+
+// ⚠️⚠️ ชั่วคราวเพื่อ Debug เท่านั้น (ดูรายละเอียดที่ debugSupportOaWebhook.routes.js) —
+// ดักหา groupId ของกลุ่มแชททีมที่เชิญ LINE OA "EasyDCA Support" เข้าไป Channel/Token
+// คนละตัวกับ Bot หลัก จึงแยก Route + JSON Parser (เก็บ Raw Body ไว้คำนวณ HMAC ถ้า
+// SUPPORT_LINE_CHANNEL_SECRET ถูกตั้งค่าแล้ว) ออกจาก Route Webhook หลักข้างบนโดยสิ้นเชิง
+// ต้องลบ Block นี้ทั้งก้อนทันทีที่ได้ groupId แล้ว
+app.use(
+  '/api/v1/debug/support-oa-webhook',
+  express.json({
+    verify: (req, res, buf) => {
+      req.rawBody = buf;
+    },
+  }),
+  debugSupportOaWebhookRoutes
 );
 
 app.use(express.json());
