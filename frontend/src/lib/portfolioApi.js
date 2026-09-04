@@ -145,3 +145,15 @@ export async function createBroker(name) {
   const data = await apiPost(`${BASE}/brokers`, { name });
   return data?.broker ?? null;
 }
+
+// PATCH /brokers/{id} — เปลี่ยนชื่อโบรก
+export async function updateBroker(id, name) {
+  const data = await apiPatch(`${BASE}/brokers/${id}`, { name });
+  return data?.broker ?? null;
+}
+
+// DELETE /brokers/{id} — สินทรัพย์ที่ผูกอยู่ไม่ถูกลบตาม (FK ON DELETE SET NULL)
+// คืน { deleted, message } — ดู brokers.controller.deleteBroker
+export async function deleteBroker(id) {
+  return apiDelete(`${BASE}/brokers/${id}`);
+}

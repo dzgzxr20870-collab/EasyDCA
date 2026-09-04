@@ -9,6 +9,7 @@ import PortfolioCards from '../../components/app/PortfolioCards.jsx';
 import PortfolioHoldingsTable from '../../components/app/PortfolioHoldingsTable.jsx';
 import MoveAssetPortfolioDialog from '../../components/app/MoveAssetPortfolioDialog.jsx';
 import PortfolioSettingsPanel from '../../components/app/PortfolioSettingsPanel.jsx';
+import BrokerSettingsPanel from '../../components/app/BrokerSettingsPanel.jsx';
 import {
   fetchAllocationCached,
   fetchProfitsForPortfolio,
@@ -121,6 +122,8 @@ function AppPortfolio() {
   const [movingHolding, setMovingHolding] = useState(null);
   // เมนู "ตั้งค่าพอร์ต" — เปิดได้เฉพาะระดับ 2 (มีพอร์ตเปิดอยู่) เท่านั้น
   const [showSettings, setShowSettings] = useState(false);
+  // เมนู "จัดการโบรก" — เปิดได้ทุกระดับ (โบรกเป็นของผู้ใช้ ไม่ใช่ของพอร์ตใดพอร์ตหนึ่ง)
+  const [showBrokerSettings, setShowBrokerSettings] = useState(false);
   const [groupBy, setGroupBy] = useState('assetType');
 
   // ── Cache ข้าม Render/ข้ามการสลับพอร์ต ─────────────────────────────────────
@@ -160,6 +163,19 @@ function AppPortfolio() {
       }
       setHoldings(holdingList);
 
+      // ── ชื่อโบรกสำหรับคอลัมน์ "โบรก/Exchange" + เมนู "🏦 จัดการโบรก" ─────────
+      // ⚠️ GET /dashboard/portfolio คืนแค่ brokerId ไม่มีชื่อ (ตรวจแล้วที่
+      // portfolio.service) ต้องยิง GET /brokers แยก — จำไว้ใน Cache เดียวกัน
+      // (คำขอเดียวจบตลอดอายุหน้า ไม่ยิงซ้ำตอนสลับพอร์ตไปมา) ⚠️ ต้องโหลดเสมอ
+      // ไม่ใช่แค่ระดับ 2 — โบรกเป็นของผู้ใช้ ไม่ใช่ของพอร์ตใดพอร์ตหนึ่ง เมนู
+      // "จัดการโบรก" เปิดได้จากทุกระดับของหน้านี้ (ดู BrokerSettingsPanel)
+      let brokerList = cache.get('brokers');
+      if (!brokerList) {
+        brokerList = await listBrokers();
+        cache.set('brokers', brokerList);
+      }
+      setBrokers(brokerList);
+
       // โดนัท: หน้ารวม = ทุกพอร์ต (ไม่ส่ง portfolioId) · ระดับ 2 = พอร์ตนั้นตัวเดียว
       const alloc = await fetchAllocationCached(cache, { portfolioId: openedId, groupBy });
       setAllocation(alloc);
@@ -172,17 +188,6 @@ function AppPortfolio() {
         });
         setProfitBySymbol(profits);
         setProfitCapped(capped);
-
-        // ── ชื่อโบรกสำหรับคอลัมน์ "โบรก/Exchange" ──────────────────────────
-        // ⚠️ GET /dashboard/portfolio คืนแค่ brokerId ไม่มีชื่อ (ตรวจแล้วที่
-        // portfolio.service) ต้องยิง GET /brokers แยก — จำไว้ใน Cache เดียวกัน
-        // (คำขอเดียวจบตลอดอายุหน้า ไม่ยิงซ้ำตอนสลับพอร์ตไปมา)
-        let brokerList = cache.get('brokers');
-        if (!brokerList) {
-          brokerList = await listBrokers();
-          cache.set('brokers', brokerList);
-        }
-        setBrokers(brokerList);
       } else {
         // ── มูลค่ารายพอร์ตสำหรับการ์ด ────────────────────────────────────────
         // ⚠️ ต้องยิง allocation ทีละพอร์ต เพราะ groupBy รองรับแค่
@@ -270,6 +275,13 @@ function AppPortfolio() {
         ) : (
           <h1>พอร์ตของฉัน</h1>
         )}
+
+        {/* ⚠️ ต่างจาก "⚙️ ตั้งค่าพอร์ต" ด้านบน — ปุ่มนี้อยู่นอก `opened ? ... : ...`
+            โดยเจตนา เพราะโบรกเป็นของผู้ใช้ ไม่ใช่ของพอร์ตใดพอร์ตหนึ่ง เปิดได้ทั้ง
+            หน้ารวม (ระดับ 1) และหน้าพอร์ตเดี่ยว (ระดับ 2) */}
+        <button type="button" className="demo-btn" onClick={() => setShowBrokerSettings(true)}>
+          🏦 จัดการโบรก
+        </button>
 
         <label className="demo-field">
           <span>จัดกลุ่มตาม</span>
@@ -456,6 +468,27 @@ function AppPortfolio() {
             cacheRef.current.clear();
             backToOverview();
             await reload?.();
+          }}
+        />
+      )}
+
+      {showBrokerSettings && (
+        <BrokerSettingsPanel
+          brokers={brokers}
+          holdings={holdings}
+          onClose={() => setShowBrokerSettings(false)}
+          onRenamed={async () => {
+            // ชื่อโบรกอยู่ใน cacheRef ('brokers') ของหน้านี้เอง — ต้องล้าง Key นั้น
+            // ก่อนเรียก load() ใหม่ ไม่งั้นจะยังอ่านชื่อเก่าจาก Cache อยู่
+            cacheRef.current.delete('brokers');
+            await load();
+          }}
+          onDeleted={async () => {
+            // ลบโบรกแล้ว → สินทรัพย์ที่เคยผูกอยู่เปลี่ยน brokerId เป็น null (Backend
+            // ทำให้อัตโนมัติ) ซึ่งกระทบทั้ง holdings (คอลัมน์โบรก) และ allocation
+            // (groupBy=broker) — ล้าง Cache ทั้งชุดเหมือน onDeleted ของพอร์ต
+            cacheRef.current.clear();
+            await load();
           }}
         />
       )}

@@ -517,6 +517,12 @@
 .app-modal__body section + section { border-top: 1px solid var(--line2); padding-top: 14px; }
 .app-settings__section-title { margin: 0 0 8px; font-size: 14px; font-weight: 800; }
 
+/* ── รายการโบรก (BrokerSettingsPanel) — Pattern เดียวกับ section + section ด้านบน
+   แต่เป็น <ul>/<li> เพราะจำนวนโบรกไม่คงที่ (1 แถวต่อ 1 โบรก ไม่ใช่ Section ตายตัว) */
+.app-brokerlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.app-brokerlist__item + .app-brokerlist__item { border-top: 1px solid var(--line2); padding-top: 12px; }
+.app-brokerlist__item strong { flex: 1; }
+
 /* ═══════════════════════════════════════════════════════════════════════
    หน้าพอร์ตแบบ 2 ระดับ (เฟส 1) — การ์ดพอร์ต + ตารางสินทรัพย์
    ═══════════════════════════════════════════════════════════════════════ */
