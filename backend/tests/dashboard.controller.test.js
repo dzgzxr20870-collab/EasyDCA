@@ -168,46 +168,149 @@ describe('getHistory', () => {
     hasSlip: Boolean(slipImagePath),
   }));
 
-  test('สำเร็จ (ไม่มี Query Param) → 200 { transactions } ทั้งหมด', async () => {
-    transactionRepository.findAllByUser.mockResolvedValue(ALL_TX);
+  beforeEach(() => {
+    transactionRepository.findFilteredByUser.mockResolvedValue({
+      transactions: ALL_TX,
+      total: ALL_TX.length,
+    });
+  });
 
+  test('สำเร็จ (ไม่มี Query Param) → 200 { transactions, total } + Default limit/offset', async () => {
     const req = mockReq();
     const res = mockRes();
     await getHistory(req, res);
 
-    expect(transactionRepository.findAllByUser).toHaveBeenCalledWith(USER_ID);
+    expect(transactionRepository.findFilteredByUser).toHaveBeenCalledWith(USER_ID, {
+      type: undefined,
+      from: undefined,
+      to: undefined,
+      symbol: undefined,
+      limit: 50,
+      offset: 0,
+    });
     expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith({ transactions: withSlip(ALL_TX) });
+    expect(res.json).toHaveBeenCalledWith({ transactions: withSlip(ALL_TX), total: ALL_TX.length });
   });
 
-  test('Filter ด้วย ?symbol=BTC → คืนเฉพาะรายการ BTC', async () => {
-    transactionRepository.findAllByUser.mockResolvedValue(ALL_TX);
-
+  test('Filter ด้วย ?symbol=BTC → ส่ง symbol ที่ Normalize แล้วให้ Repository (ตัวกรองจริงอยู่ที่ DB)', async () => {
     const req = mockReq({ query: { symbol: 'btc' } });
     const res = mockRes();
     await getHistory(req, res);
 
-    expect(res.json).toHaveBeenCalledWith({
-      transactions: withSlip([ALL_TX[0], ALL_TX[2]]),
-    });
+    expect(transactionRepository.findFilteredByUser).toHaveBeenCalledWith(
+      USER_ID,
+      expect.objectContaining({ symbol: 'BTC' })
+    );
   });
 
-  test('?limit=1 → จำกัดจำนวนผลลัพธ์', async () => {
-    transactionRepository.findAllByUser.mockResolvedValue(ALL_TX);
+  test('?limit=1 → ส่งต่อ limit ให้ Repository ตรงๆ', async () => {
+    const req = mockReq({ query: { limit: '1' } });
+    const res = mockRes();
+    await getHistory(req, res);
+
+    expect(transactionRepository.findFilteredByUser).toHaveBeenCalledWith(
+      USER_ID,
+      expect.objectContaining({ limit: 1 })
+    );
+  });
+
+  // ── ตัวกรองใหม่: type/dateFrom/dateTo/offset ──────────────────────────────
+  test.each(['buy', 'sell', 'dividend', 'dividend_reversal'])(
+    '?type=%s (ค่าที่รู้จักตาม CHECK constraint จริง) → ส่งต่อให้ Repository',
+    async (type) => {
+      const req = mockReq({ query: { type } });
+      const res = mockRes();
+      await getHistory(req, res);
+
+      expect(transactionRepository.findFilteredByUser).toHaveBeenCalledWith(
+        USER_ID,
+        expect.objectContaining({ type })
+      );
+    }
+  );
+
+  test('?type=ไม่รู้จัก → เพิกเฉย (ไม่กรอง ไม่ 400) เหมือน limit ที่ผิดรูป', async () => {
+    const req = mockReq({ query: { type: 'refund' } });
+    const res = mockRes();
+    await getHistory(req, res);
+
+    expect(transactionRepository.findFilteredByUser).toHaveBeenCalledWith(
+      USER_ID,
+      expect.objectContaining({ type: undefined })
+    );
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  test('?dateFrom=2026-07-01&dateTo=2026-07-31 → ส่งต่อ from/to ให้ Repository', async () => {
+    const req = mockReq({ query: { dateFrom: '2026-07-01', dateTo: '2026-07-31' } });
+    const res = mockRes();
+    await getHistory(req, res);
+
+    expect(transactionRepository.findFilteredByUser).toHaveBeenCalledWith(
+      USER_ID,
+      expect.objectContaining({ from: '2026-07-01', to: '2026-07-31' })
+    );
+  });
+
+  test.each(['2026-7-1', '07-01-2026', 'not-a-date', ''])(
+    '?dateFrom=%s รูปแบบไม่ใช่ YYYY-MM-DD → เพิกเฉย (ไม่กรอง ไม่ 400)',
+    async (dateFrom) => {
+      const req = mockReq({ query: { dateFrom } });
+      const res = mockRes();
+      await getHistory(req, res);
+
+      expect(transactionRepository.findFilteredByUser).toHaveBeenCalledWith(
+        USER_ID,
+        expect.objectContaining({ from: undefined })
+      );
+      expect(res.status).toHaveBeenCalledWith(200);
+    }
+  );
+
+  test('?offset=50 → ส่งต่อ offset ให้ Repository (Pagination จริง)', async () => {
+    const req = mockReq({ query: { offset: '50' } });
+    const res = mockRes();
+    await getHistory(req, res);
+
+    expect(transactionRepository.findFilteredByUser).toHaveBeenCalledWith(
+      USER_ID,
+      expect.objectContaining({ offset: 50 })
+    );
+  });
+
+  test('offset ติดลบ/ผิดรูป → Fallback เป็น 0 ไม่ throw', async () => {
+    const req = mockReq({ query: { offset: '-5' } });
+    const res = mockRes();
+    await getHistory(req, res);
+
+    expect(transactionRepository.findFilteredByUser).toHaveBeenCalledWith(
+      USER_ID,
+      expect.objectContaining({ offset: 0 })
+    );
+  });
+
+  test('total จาก Repository ถูกส่งกลับไปที่ Response ตรงๆ (ให้ Frontend รู้ว่ามีอีกกี่แถว)', async () => {
+    transactionRepository.findFilteredByUser.mockResolvedValue({
+      transactions: [ALL_TX[0]],
+      total: 137,
+    });
 
     const req = mockReq({ query: { limit: '1' } });
     const res = mockRes();
     await getHistory(req, res);
 
-    expect(res.json).toHaveBeenCalledWith({ transactions: withSlip([ALL_TX[0]]) });
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ total: 137 }));
   });
 
   // ── แนบรูปสลิป (S8) ────────────────────────────────────────────────────
   test('แถวที่มี slipImagePath → hasSlip:true และ "ไม่" ส่ง path ออกไปให้ Client', async () => {
-    transactionRepository.findAllByUser.mockResolvedValue([
-      { ...ALL_TX[0], slipImagePath: 'user-1-1750000000000.jpg' },
-      ALL_TX[1],
-    ]);
+    transactionRepository.findFilteredByUser.mockResolvedValue({
+      transactions: [
+        { ...ALL_TX[0], slipImagePath: 'user-1-1750000000000.jpg' },
+        ALL_TX[1],
+      ],
+      total: 2,
+    });
 
     const req = mockReq();
     const res = mockRes();
@@ -222,7 +325,7 @@ describe('getHistory', () => {
   });
 
   test('Error ไม่คาดคิด → 500 INTERNAL_ERROR', async () => {
-    transactionRepository.findAllByUser.mockRejectedValue(new Error('db down'));
+    transactionRepository.findFilteredByUser.mockRejectedValue(new Error('db down'));
 
     const req = mockReq();
     const res = mockRes();

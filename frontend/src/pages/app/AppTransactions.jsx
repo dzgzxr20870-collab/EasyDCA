@@ -41,6 +41,23 @@ const TYPE_LABEL = {
   dividend_reversal: 'ยกเลิกปันผล',
 };
 
+// ตัวกรอง "ประเภทธุรกรรม" — ตรงตามที่ Prompt ระบุ (ซื้อ/ขาย/ปันผล/ทั้งหมด) ไม่รวม
+// dividend_reversal เป็นตัวเลือกแยก (ยังกรองเจอได้ผ่าน "ปันผล" ไม่ได้ เพราะเป็นคนละ
+// type — แถว Reversal ของ ซื้อ/ขาย ใช้ type เดิม สลับด้าน (undoTransaction.service
+// reversalTypeFor) จึงกรองเจอได้ผ่าน "ซื้อ"/"ขาย" ตามปกติอยู่แล้ว ไม่ต้องมีตัวเลือก
+// พิเศษ) ค่า '' = ไม่กรอง (ไม่ส่ง Query Param type ไปเลย)
+const TYPE_FILTER_OPTIONS = [
+  { value: '', label: 'ทั้งหมด' },
+  { value: 'buy', label: 'ซื้อ' },
+  { value: 'sell', label: 'ขาย' },
+  { value: 'dividend', label: 'ปันผล' },
+];
+
+// เท่ากับ DEFAULT_HISTORY_LIMIT ฝั่ง Backend (dashboard.controller.js) — กำหนดชัดๆ
+// ที่นี่แทนการพึ่ง Default ฝั่ง Backend เพื่อให้เลข Offset ของ "โหลดเพิ่ม" เดินตรง
+// กับจำนวนที่ขอจริงเสมอ ไม่ผูกกับ Default ที่อาจเปลี่ยนได้ในอนาคต
+const PAGE_SIZE = 50;
+
 function formatAmount(n) {
   return new Intl.NumberFormat('th-TH', {
     minimumFractionDigits: 2,
@@ -55,11 +72,56 @@ function formatQty(n) {
   return num.toLocaleString('th-TH', { maximumFractionDigits: 8 });
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Pure Logic แยกออกมา Export ให้ Test ตรงได้ (Pattern เดียวกับ deleteSummaryTotals
+// ของ PortfolioSettingsPanel / assetsForBroker ของ BrokerSettingsPanel) — หน้านี้
+// เป็น Stateful Page ที่ต้องพึ่ง useOutletContext จึง Render ตรงๆ ด้วย
+// renderToStaticMarkup ไม่ได้ (ไม่มี Router Context ให้) Logic ที่พลาดแล้วกระทบ
+// ผู้ใช้จริง (Query String ที่ยิงจริง + ตัดสินใจว่า "มี Filter อยู่ไหม") จึงถูกดึง
+// ออกมาเป็น Pure Function ทดสอบแยกแทน
+
+// ประกอบ Query String ของ GET /dashboard/history จาก Filter ปัจจุบัน + offset ที่
+// ต้องการ (offset ต่างกันระหว่าง "โหลดหน้าแรก" (0) กับ "โหลดเพิ่ม"
+// (transactions.length) — ดู load()/handleLoadMore() ในคอมโพเนนต์)
+export function buildHistoryQuery({ symbolFilter, typeFilter, dateFrom, dateTo, limit, offset }) {
+  const params = new URLSearchParams();
+  if (symbolFilter) params.set('symbol', symbolFilter);
+  if (typeFilter) params.set('type', typeFilter);
+  if (dateFrom) params.set('dateFrom', dateFrom);
+  if (dateTo) params.set('dateTo', dateTo);
+  params.set('limit', String(limit));
+  params.set('offset', String(offset));
+  return params.toString();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ⭐ hasActiveFilter — ตัดสิน "ต้องยิง Request แยกเพื่อหารายการล่าสุดจริงไหม" ก่อน
+// ยกเลิกรายการล่าสุด (ดู Comment เต็มที่ handleAskUndo ในคอมโพเนนต์)
+// ═══════════════════════════════════════════════════════════════════════════
+// ⚠️ ต้องครอบ **ทั้ง 4 ตัวกรอง** (symbol/type/dateFrom/dateTo) — เดิมก่อนพรอมต์นี้
+// เช็คแค่ symbolFilter ตัวเดียว ถ้าเพิ่ม Filter ใหม่ (type/dateFrom/dateTo) แล้วลืม
+// เติมที่นี่ จะเกิดบั๊กเงียบ: ผู้ใช้กรอง "ขาย" อยู่ transactions[0] เป็นรายการขายที่
+// เห็นบนจอ แต่ระบบยกเลิกรายการ "ล่าสุดของทั้งบัญชี" จริง (อาจเป็นรายการซื้อคนละตัว)
+// ตาม Modal Confirm ที่โชว์ผิด — ผู้ใช้กดยืนยันโดยเข้าใจผิดว่ากำลังยกเลิกรายการที่เห็น
+export function hasActiveFilter({ symbolFilter, typeFilter, dateFrom, dateTo }) {
+  return Boolean(symbolFilter || typeFilter || dateFrom || dateTo);
+}
+
 function AppTransactions() {
   const { selectedPortfolio, reload } = useOutletContext();
   const [transactions, setTransactions] = useState([]);
+  // จำนวนรายการที่ตรงเงื่อนไข Filter ปัจจุบันทั้งหมด (จาก Backend — Exact Count)
+  // ต่างจาก transactions.length ที่เป็น "จำนวนที่โหลดมาแล้วสะสม" — ใช้คู่กันตัดสิน
+  // ว่ายังมี "โหลดเพิ่ม" ให้กดไหม (ดู hasMore ด้านล่าง)
+  const [total, setTotal] = useState(0);
   const [symbolFilter, setSymbolFilter] = useState('');
+  // ตัวกรองใหม่ (Prompt: ตัวกรองเพิ่มเติมในหน้าประวัติธุรกรรม) — ทุกตัวส่งเป็น Query
+  // Param ตรงๆ ให้ GET /dashboard/history กรองที่ DB จริง (ไม่ใช่กรองฝั่ง Client)
+  const [typeFilter, setTypeFilter] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState(null);
   const [undoing, setUndoing] = useState(false);
   const [undoMessage, setUndoMessage] = useState(null);
@@ -68,7 +130,7 @@ function AppTransactions() {
   // ปุ่มนี้กดครั้งเดียวจบไม่มี Confirm เลย ทั้งที่ยกเลิกรายการผิดตัวแก้คืนยาก
   // (ต้องยกเลิกซ้ำอีกที ซึ่งอาจกลายเป็นยกเลิกรายการอื่นต่อถ้ามีรายการใหม่แทรกเข้ามา)
   const [undoTarget, setUndoTarget] = useState(null);
-  // กำลังโหลดรายการล่าสุดแบบไม่กรอง (เฉพาะตอนมี symbolFilter — ดู handleAskUndo)
+  // กำลังโหลดรายการล่าสุดแบบไม่กรอง (เฉพาะตอนมี Filter ใดๆ ทำงานอยู่ — ดู handleAskUndo)
   const [preparingUndo, setPreparingUndo] = useState(false);
 
   const write = portfolioWriteState(selectedPortfolio);
@@ -91,42 +153,84 @@ function AppTransactions() {
   // ลำดับที่ตอบกลับมา
   const requestSeqRef = useRef(0);
 
+  // offset ต่างกันระหว่าง "โหลดหน้าแรก" (0, เรียกจาก load()) กับ "โหลดเพิ่ม"
+  // (transactions.length, เรียกจาก handleLoadMore()) — Filter ชุดเดียวกันเป๊ะ
+  function queryFor(offset) {
+    return buildHistoryQuery({ symbolFilter, typeFilter, dateFrom, dateTo, limit: PAGE_SIZE, offset });
+  }
+
   const load = useCallback(async () => {
     const seq = ++requestSeqRef.current;
     setLoading(true);
     setError(null);
     try {
-      const qs = symbolFilter ? `?symbol=${encodeURIComponent(symbolFilter)}` : '';
-      const data = await apiGet(`/api/v1/dashboard/history${qs}`);
+      const qs = queryFor(0);
+      const data = await apiGet(`/api/v1/dashboard/history?${qs}`);
       if (seq !== requestSeqRef.current) return; // มีคำขอใหม่กว่าแซงไปแล้ว — เพิกเฉย
       setTransactions(data?.transactions ?? []);
+      setTotal(data?.total ?? 0);
     } catch (err) {
       if (seq !== requestSeqRef.current) return;
       setError(err?.message ?? 'โหลดประวัติธุรกรรมไม่สำเร็จ');
       setTransactions([]);
+      setTotal(0);
     } finally {
       if (seq === requestSeqRef.current) setLoading(false);
     }
-  }, [symbolFilter]);
+  }, [symbolFilter, typeFilter, dateFrom, dateTo]);
 
   useEffect(() => {
     load();
   }, [load]);
 
+  // ── "โหลดเพิ่ม" (Pagination) — ต่อท้ายรายการที่มีอยู่ ไม่แทนที่ ─────────────────
+  // ใช้ transactions.length ปัจจุบันเป็น offset ของหน้าถัดไปตรงๆ — ถูกเสมอเพราะ
+  // Backend เรียง date DESC, created_at DESC แบบ Deterministic (ดู
+  // transaction.repository.findFilteredByUser) จำนวนที่โหลดมาแล้วเท่ากับ Offset ที่
+  // ต้องขอต่อพอดี ไม่ต้องเก็บ State offset แยกให้ Sync พลาดกันได้
+  //
+  // ⚠️ ใช้ requestSeqRef ร่วมกับ load() โดยเจตนา — ถ้าผู้ใช้เปลี่ยน Filter ระหว่างที่
+  // "โหลดเพิ่ม" ค้างอยู่ load() ใหม่จะขยับ Seq ขึ้นไปอีก ทำให้ Response ของโหลดเพิ่ม
+  // รอบเก่า (ที่อ้าง Filter ชุดเดิม) ถูกเพิกเฉยแทนที่จะไปต่อท้ายรายการของ Filter ใหม่
+  async function handleLoadMore() {
+    const seq = ++requestSeqRef.current;
+    setLoadingMore(true);
+    setError(null);
+    try {
+      const qs = queryFor(transactions.length);
+      const data = await apiGet(`/api/v1/dashboard/history?${qs}`);
+      if (seq !== requestSeqRef.current) return;
+      setTransactions((prev) => [...prev, ...(data?.transactions ?? [])]);
+      setTotal(data?.total ?? total);
+    } catch (err) {
+      if (seq !== requestSeqRef.current) return;
+      setError(err?.message ?? 'โหลดเพิ่มไม่สำเร็จ');
+    } finally {
+      if (seq === requestSeqRef.current) setLoadingMore(false);
+    }
+  }
+
+  const hasMore = !loading && transactions.length < total;
+
   // ── ⭐ เตรียมข้อมูล Preview ก่อนถาม (Founder ทดสอบ UI Confirm 30 ส.ค. 2569) ──
   // POST /transactions/undo-last ย้อน "รายการล่าสุดของทั้งบัญชี" เสมอ ไม่รู้จัก
-  // symbolFilter ของหน้านี้เลย (undoTransaction.service: findRecentByUser ไม่มี
-  // Filter ใดๆ) — ถ้า Filter ใช้งานอยู่ transactions[0] ที่เห็นบนจออาจ **ไม่ใช่**
-  // รายการที่จะถูกย้อนจริง ต้องยิงแบบไม่กรองมา Preview ให้ตรงเสมอ (มติ Founder:
-  // ยอมแลก Extra Call เพื่อความปลอดภัย ดีกว่าโชว์ตัวเลขผิดรายการ)
+  // Filter ใดๆ ของหน้านี้เลย (undoTransaction.service: findRecentByUser ไม่มี
+  // Filter ใดๆ) — ถ้า Filter ใดใน 4 ตัว (symbol/type/dateFrom/dateTo) ใช้งานอยู่
+  // transactions[0] ที่เห็นบนจออาจ **ไม่ใช่** รายการที่จะถูกย้อนจริง ต้องยิงแบบไม่
+  // กรองมา Preview ให้ตรงเสมอ (มติ Founder: ยอมแลก Extra Call เพื่อความปลอดภัย
+  // ดีกว่าโชว์ตัวเลขผิดรายการ)
   //
-  // ⚠️ ไม่มี Filter → transactions[0] ตรงกับที่ Backend จะย้อนจริงเป๊ะอยู่แล้ว
-  // (ORDER BY เดียวกัน: date DESC, created_at DESC ทั้ง findAllByUser ที่หน้านี้
-  // ใช้ และ findRecentByUser ที่ undo-last ใช้) ไม่ต้องยิง Request เพิ่มเลย
+  // ⚠️ ไม่มี Filter ตัวไหนเลย → transactions[0] ตรงกับที่ Backend จะย้อนจริงเป๊ะอยู่
+  // แล้ว (ORDER BY เดียวกัน: date DESC, created_at DESC ทั้ง findFilteredByUser ที่
+  // หน้านี้ใช้ และ findRecentByUser ที่ undo-last ใช้) ไม่ต้องยิง Request เพิ่มเลย —
+  // "โหลดเพิ่ม" ไม่กระทบข้อสรุปนี้ เพราะ transactions[0] คือแถวจาก offset=0 เสมอ
+  // ไม่ว่าจะกด "โหลดเพิ่ม" ไปกี่ครั้งแล้วก็ตาม (Append ต่อท้าย ไม่ใช่แทนที่)
+  const filterActive = hasActiveFilter({ symbolFilter, typeFilter, dateFrom, dateTo });
+
   async function handleAskUndo() {
     setError(null);
 
-    if (!symbolFilter) {
+    if (!filterActive) {
       setUndoTarget(transactions[0] ?? null);
       return;
     }
@@ -174,6 +278,27 @@ function AppTransactions() {
             placeholder="เช่น BTC"
             onChange={(e) => setSymbolFilter(e.target.value.toUpperCase())}
           />
+        </label>
+
+        <label className="demo-field">
+          <span>ประเภท</span>
+          <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+            {TYPE_FILTER_OPTIONS.map((o) => (
+              <option key={o.value || 'all'} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="demo-field">
+          <span>จากวันที่</span>
+          <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+        </label>
+
+        <label className="demo-field">
+          <span>ถึงวันที่</span>
+          <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
         </label>
       </header>
 
@@ -277,8 +402,8 @@ function AppTransactions() {
         <div className="app-state app-state--empty">
           <strong>ยังไม่มีธุรกรรม</strong>
           <p>
-            {symbolFilter
-              ? `ไม่พบรายการของ ${symbolFilter}`
+            {filterActive
+              ? 'ไม่พบรายการที่ตรงกับตัวกรองที่เลือก'
               : 'เมื่อบันทึกรายการแรกแล้วจะแสดงที่นี่'}
           </p>
         </div>
@@ -326,6 +451,26 @@ function AppTransactions() {
             );
           })}
         </ul>
+      )}
+
+      {/* ── "โหลดเพิ่ม" (Pagination) — โผล่เฉพาะตอนยังมีรายการเหลือจริง (total มาจาก
+          Exact Count ของ Backend ไม่ใช่เดาจากจำนวนที่ได้กลับมา) ───────────────── */}
+      {!loading && !error && transactions.length > 0 && (
+        <div className="demo-actions">
+          <p className="app-note">
+            แสดง {transactions.length} จาก {total} รายการ
+          </p>
+          {hasMore && (
+            <button
+              type="button"
+              className="demo-btn"
+              onClick={handleLoadMore}
+              disabled={loadingMore}
+            >
+              {loadingMore ? 'กำลังโหลด...' : 'โหลดเพิ่ม'}
+            </button>
+          )}
+        </div>
       )}
     </section>
   );

@@ -21,6 +21,17 @@ function roundToTwo(value) {
 // ที่ใช้ 5 สำหรับคำสั่ง LINE "ประวัติ" — Dashboard ต้องการเห็นได้มากกว่านั้น)
 const DEFAULT_HISTORY_LIMIT = 50;
 
+// Allowlist ตรงกับ CHECK constraint จริงของ transactions.type (migration 047) —
+// ค่านอกเหนือจากนี้ถูก "เพิกเฉย" (ไม่กรอง ไม่ Error) ตาม Convention เดิมของไฟล์นี้
+// (ดู limit ด้านล่าง — Query Param จัดหมวดเป็น "ตัวช่วยแสดงผล" ไม่ใช่ Input ที่ต้อง
+// Validate เข้มแบบ Body เขียนข้อมูล ผิดรูปแค่ทำให้ผลลัพธ์ไม่กรอง ไม่ทำให้ระบบพัง)
+const HISTORY_TYPES = ['buy', 'sell', 'dividend', 'dividend_reversal'];
+
+// 'YYYY-MM-DD' เท่านั้น (ตรงกับ transactions.date เป็น DATE Column) — กันส่ง String
+// แปลกๆ เข้า .gte()/.lte() ตรงๆ ซึ่งจะทำให้ Postgres Error "invalid input syntax for
+// type date" หลุดขึ้นมาเป็น 500 ทั้งที่ควรแค่ไม่กรอง (ไม่ใช่ระบบพังจริง)
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 // GET /api/v1/dashboard/portfolio — Reuse portfolioService.getPortfolioSummary
 // ตรงๆ (ใช้ Logic เดียวกับคำสั่ง LINE "พอต" ทุกประการ ไม่คำนวณซ้ำ)
 async function getPortfolio(req, res) {
@@ -58,22 +69,39 @@ async function getPortfolio(req, res) {
   }
 }
 
-// GET /api/v1/dashboard/history?symbol=BTC&limit=50 — ดึงข้อมูลดิบผ่าน
-// transactionRepository.findAllByUser แล้ว Filter/Limit ในชั้นนี้เท่านั้น
-// (ไม่มี Logic คำนวณเงินใดๆ ในฟังก์ชันนี้)
+// GET /api/v1/dashboard/history?symbol=BTC&type=buy&dateFrom=2026-07-01&dateTo=
+// 2026-07-31&limit=50&offset=0 — ดึงข้อมูลผ่าน transactionRepository
+// .findFilteredByUser (Filter/Offset Pagination จริงที่ DB ดู Comment หัวฟังก์ชัน
+// นั้น) คืน { transactions, total } — total เป็น Field ใหม่ (Additive ล้วน ไม่กระทบ
+// Caller เดิมที่อ่านแค่ .transactions — Dashboard.jsx/DashboardHome.jsx เก่ายังใช้
+// ?limit=1000 ไม่มี Filter อื่นได้เหมือนเดิมทุกประการ)
+//
+// ⚠️ ทุก Query Param เป็น "ตัวช่วยแสดงผล" ไม่ใช่ Input ที่ต้อง Validate เข้มแบบ Body
+// เขียนข้อมูล — ค่าที่ผิดรูป/ไม่รู้จัก (type แปลกๆ, วันที่ไม่ใช่ YYYY-MM-DD) แค่ถูก
+// "เพิกเฉย" (ไม่กรองมิตินั้น) เหมือน limit เดิม ไม่ใช่ 400 — Endpoint นี้เป็น GET
+// อ่านอย่างเดียว กรองพลาดก็แค่เห็นแถวไม่ตรงที่คาด ไม่ใช่ข้อมูลเสียหาย
 async function getHistory(req, res) {
   try {
-    let transactions = await transactionRepository.findAllByUser(req.user.id);
+    const q = req.query ?? {};
 
-    if (req.query.symbol) {
-      const normalized = String(req.query.symbol).trim().toUpperCase();
-      transactions = transactions.filter((tx) => tx.symbol === normalized);
-    }
+    const symbol = q.symbol ? String(q.symbol).trim().toUpperCase() : undefined;
+    const type = HISTORY_TYPES.includes(q.type) ? q.type : undefined;
+    const from = DATE_RE.test(q.dateFrom ?? '') ? q.dateFrom : undefined;
+    const to = DATE_RE.test(q.dateTo ?? '') ? q.dateTo : undefined;
 
-    const limit = req.query.limit ? Number(req.query.limit) : DEFAULT_HISTORY_LIMIT;
-    if (Number.isFinite(limit) && limit > 0) {
-      transactions = transactions.slice(0, limit);
-    }
+    const rawLimit = q.limit ? Number(q.limit) : DEFAULT_HISTORY_LIMIT;
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : DEFAULT_HISTORY_LIMIT;
+    const rawOffset = q.offset ? Number(q.offset) : 0;
+    const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
+
+    const { transactions, total } = await transactionRepository.findFilteredByUser(req.user.id, {
+      type,
+      from,
+      to,
+      symbol,
+      limit,
+      offset,
+    });
 
     // แนบรูปสลิป (S8) — คืนแค่ธง hasSlip ไม่ใช่ URL โดยเจตนา: Bucket เป็น Private
     // ต้องใช้ Signed URL ที่หมดอายุ ถ้าจะ Sign ทุกแถวตรงนี้จะกลายเป็นการยิง Storage
@@ -86,7 +114,7 @@ async function getHistory(req, res) {
       hasSlip: Boolean(slipImagePath),
     }));
 
-    return res.status(200).json({ transactions: withSlipFlag });
+    return res.status(200).json({ transactions: withSlipFlag, total });
   } catch (err) {
     console.error(`[dashboard] getHistory failed: ${err.message}`);
     return res.status(500).json({ error: 'INTERNAL_ERROR' });

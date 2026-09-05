@@ -213,6 +213,71 @@ async function findByUserAndDateRange(userId, from, to) {
   }));
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// findFilteredByUser — ประวัติธุรกรรมพร้อม Filter/Offset Pagination จริงที่ DB
+// (หน้า /app/transactions — ตัวกรองประเภท/ช่วงวันที่ + "โหลดเพิ่ม")
+// ═══════════════════════════════════════════════════════════════════════════
+// ⚠️ แยกจาก findAllByUser/findByUserAndDateRange โดยเจตนา — ทั้งสองฟังก์ชันนั้นมี
+// Caller อื่นอยู่แล้ว (findAllByUser: dashboardOverview.service + transactions
+// .controller ใช้คำนวณสถิติเดือนนี้ · findByUserAndDateRange: reportExport.service
+// Export รายงาน) ห้ามเปลี่ยน Signature/พฤติกรรมของสองตัวนั้นเด็ดขาด — ฟังก์ชันนี้จึง
+// เป็นเส้นทางใหม่แยกต่างหากที่ dashboard.controller.getHistory เรียกใช้ตัวเดียว
+//
+// เดิม getHistory ดึง "ทุกแถว" ผ่าน findAllByUser มา Filter Symbol + slice(0,limit)
+// ในชั้น Controller — ใช้ได้กับ Set เล็กแต่ไม่มี Offset จริง (ขอ "หน้าถัดไป" ไม่ได้
+// เลย ทุกครั้งเริ่มนับจากแถวแรกเสมอ) ฟังก์ชันนี้ผลัก Filter/Pagination ทั้งหมดลงไป
+// ที่ DB โดยตรงแทน ผ่าน .range() ของ PostgREST (Pattern การกรองช่วงวันที่ใช้
+// .gte()/.lte() เดียวกับ findByUserAndDateRange ด้านบนเป๊ะ)
+//
+// พารามิเตอร์ (ทุกตัว Optional — ไม่ส่ง = ไม่กรองมิตินั้น):
+//   type   — ค่าเดียวจาก CHECK constraint จริง (migration 047): 'buy'|'sell'|
+//            'dividend'|'dividend_reversal' — Caller (Controller) เป็นคน Allowlist
+//            ก่อนส่งมาที่นี่ ที่นี่แค่ .eq() ตรงๆ
+//   from/to — 'YYYY-MM-DD' Inclusive ทั้งสองฝั่ง (เหมือน findByUserAndDateRange)
+//   symbol — กรองด้วย Symbol ของสินทรัพย์ที่ Join มา ใช้ assets!inner (Force Inner
+//            Join) เฉพาะตอนมีค่านี้เท่านั้น — เพื่อเปิดให้ Filter บน Embedded Resource
+//            ได้ (PostgREST ต้องมี !inner ถึงจะ .eq('assets.symbol', ...) ได้จริง)
+//            Query ที่ไม่กรอง Symbol ยังคง Left Join แบบเดิมเป๊ะ ไม่เปลี่ยนพฤติกรรม
+//            แถวที่ asset ถูกลบไปแล้ว (ถ้ามีวันหนึ่ง) จะไม่หายไปจาก Response
+//   limit/offset — Pagination จริงผ่าน .range(offset, offset+limit-1)
+//
+// คืน { transactions, total } — total มาจาก Exact Count ของ PostgREST (นับตาม
+// Filter เดียวกับที่ใช้ดึงแถว ไม่ใช่นับทั้งตาราง) ให้ Frontend รู้ว่ามีอีกกี่แถว
+// โดยไม่ต้องเดาจากจำนวนที่ได้กลับมาเทียบ limit
+async function findFilteredByUser(userId, { type, from, to, symbol, limit, offset } = {}) {
+  const selectCols = symbol ? '*, assets!inner(symbol)' : '*, assets(symbol)';
+
+  let query = supabaseAdmin
+    .from('transactions')
+    .select(selectCols, { count: 'exact' })
+    .eq('user_id', userId);
+
+  if (type) query = query.eq('type', type);
+  if (from) query = query.gte('date', from);
+  if (to) query = query.lte('date', to);
+  if (symbol) query = query.eq('assets.symbol', symbol);
+
+  const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 50;
+  const safeOffset = Number.isFinite(offset) && offset >= 0 ? offset : 0;
+
+  const { data, error, count } = await query
+    .order('date', { ascending: false })
+    .order('created_at', { ascending: false })
+    .range(safeOffset, safeOffset + safeLimit - 1);
+
+  if (error) {
+    throw new Error(`Failed to find filtered transactions for user ${userId}: ${error.message}`);
+  }
+
+  return {
+    transactions: data.map((row) => ({
+      ...toTransaction(row),
+      symbol: row.assets?.symbol ?? null,
+    })),
+    total: count ?? data.length,
+  };
+}
+
 // เรียง date ASC, created_at ASC (Pattern เดียวกับ findByUserAndDateRange) — จำเป็น
 // สำหรับ Moving Average Cost Basis (portfolio.service.calculateTotalInvested) ที่ต้อง
 // Replay ธุรกรรมตามลำดับเวลาจริง ไม่พึ่ง Row Order ตามธรรมชาติของ Postgres ซึ่งไม่การันตี
@@ -290,6 +355,7 @@ module.exports = {
   create,
   findRecentByUser,
   findAllByUser,
+  findFilteredByUser,
   findByUserAndDateRange,
   findAllByAsset,
   findAllUserIdsWithTransactions,
