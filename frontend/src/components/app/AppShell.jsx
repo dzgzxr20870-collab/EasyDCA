@@ -9,6 +9,7 @@ import {
   LOCKED_PORTFOLIO_NOTICE,
 } from '../../lib/entitlements.js';
 import RecordTransactionModal from './RecordTransactionModal.jsx';
+import PlanBanner from './PlanBanner.jsx';
 import './appShell.css';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -190,6 +191,10 @@ function AppShell() {
           ＋ บันทึกรายการ
         </button>
       </header>
+
+      {/* แบนเนอร์ Free/Premium — แสดงเหนือทุกแท็บเสมอ ไม่ว่าจะสลับไปแท็บไหน
+          (Pattern เดียวกับ .dashboard-plan-banner ของ pages/Dashboard.jsx เดิม) */}
+      <PlanBanner entitlements={entitlements} />
 
       {/* ── Loading / Error state (Demo ไม่มีทั้งคู่เพราะใช้ Mock) ───────── */}
       {loading && (

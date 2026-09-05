@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { apiGet, apiPost } from '../../lib/api.js';
+import { getTransactionSlip } from '../../lib/portfolioApi.js';
 import { portfolioWriteState } from '../../lib/entitlements.js';
 // ⚠️ api.js โยน Error(message = **Error Code ดิบ**) ไม่ใช่ข้อความไทย — ต้องแปลผ่าน
 // ตารางกลางเสมอ ไม่งั้นผู้ใช้จะเห็น "ALREADY_UNDONE" โต้งๆ บนหน้าจอ
@@ -132,6 +133,12 @@ function AppTransactions() {
   const [undoTarget, setUndoTarget] = useState(null);
   // กำลังโหลดรายการล่าสุดแบบไม่กรอง (เฉพาะตอนมี Filter ใดๆ ทำงานอยู่ — ดู handleAskUndo)
   const [preparingUndo, setPreparingUndo] = useState(false);
+  // ── ดูสลิปย้อนหลัง (พรอมต์ ก.ย. 2569) ──────────────────────────────────────
+  // id ของแถวที่กำลังรอ Signed URL กลับมา (null = ไม่มีแถวไหนกำลังรอ) — ใช้กัน
+  // กดปุ่ม 📎 ซ้ำรัวๆ ระหว่าง Round-trip (แต่ละแถวมี id ตัวเองจึงกันเฉพาะแถวนั้น
+  // ไม่ได้ Block ปุ่มแถวอื่น เพราะเป็น Request คนละตัวกันไม่ชนกัน)
+  const [openingSlipId, setOpeningSlipId] = useState(null);
+  const [slipError, setSlipError] = useState(null);
 
   const write = portfolioWriteState(selectedPortfolio);
 
@@ -266,6 +273,27 @@ function AppTransactions() {
     }
   }
 
+  // เปิดสลิปแนบของธุรกรรม — ขอ Signed URL สดๆ ทุกครั้ง (อายุ 5 นาที ตาม
+  // dashboard.controller.getTransactionSlip) แล้วเปิด Tab ใหม่ทันที
+  async function handleOpenSlip(id) {
+    if (openingSlipId) return; // กันกดซ้ำระหว่างรอ Response ของแถวอื่นค้างอยู่
+    setOpeningSlipId(id);
+    setSlipError(null);
+    try {
+      const data = await getTransactionSlip(id);
+      if (data?.signedUrl) window.open(data.signedUrl, '_blank', 'noopener');
+    } catch (err) {
+      const code = err?.message;
+      setSlipError(
+        code === 'SLIP_NOT_FOUND'
+          ? 'ไม่พบสลิปของรายการนี้'
+          : 'เปิดสลิปไม่สำเร็จ ลองใหม่อีกครั้ง',
+      );
+    } finally {
+      setOpeningSlipId(null);
+    }
+  }
+
   return (
     <section className="demo-page">
       <header className="demo-page__head">
@@ -376,6 +404,12 @@ function AppTransactions() {
         </p>
       )}
 
+      {slipError && (
+        <div className="app-state app-state--error" role="alert">
+          <p>{slipError}</p>
+        </div>
+      )}
+
       {undoMessage && (
         <div className="app-state app-state--empty" role="status">
           {undoMessage}
@@ -445,7 +479,17 @@ function AppTransactions() {
                     ทำให้แถวเอียงเมื่อบางรายการไม่มีสลิปแนบ */}
                 <span className="demo-txitem__meta">
                   <small>{tx.date}</small>
-                  {tx.hasSlip ? <small title="มีสลิปแนบ">📎</small> : null}
+                  {tx.hasSlip ? (
+                    <button
+                      type="button"
+                      className="demo-txitem__slip-btn"
+                      title="ดูสลิปที่แนบไว้"
+                      disabled={openingSlipId === tx.id}
+                      onClick={() => handleOpenSlip(tx.id)}
+                    >
+                      {openingSlipId === tx.id ? '...' : '📎'}
+                    </button>
+                  ) : null}
                 </span>
               </li>
             );

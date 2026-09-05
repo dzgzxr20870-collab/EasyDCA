@@ -22,6 +22,8 @@ import CreatePortfolioModal, { createPortfolioErrorText } from './CreatePortfoli
 import { createPortfolio } from '../../lib/portfolioApi.js';
 import { setToken } from '../../lib/api.js';
 import RecordTransactionModal from './RecordTransactionModal.jsx';
+import PlanBanner from './PlanBanner.jsx';
+import { UNKNOWN_ENTITLEMENTS, fromMeResponse } from '../../lib/entitlements.js';
 
 function withRouter(element) {
   return React.createElement(MemoryRouter, null, element);
@@ -464,5 +466,39 @@ describe('SlipUploadField — สถานะต่างๆ ต้อง Render
     );
 
     expect(html).toContain('49');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PlanBanner — แบนเนอร์ Free/Premium ติดตามบนหน้า /app/* (พรอมต์ ก.ย. 2569)
+// ═══════════════════════════════════════════════════════════════════════════
+describe('PlanBanner — แบนเนอร์ Free/Premium ของ /app/*', () => {
+  test('ยังโหลด /me ไม่เสร็จ (loaded: false) → ไม่แสดงอะไรเลย ไม่เดาเป็น Free', () => {
+    const html = renderToStaticMarkup(
+      withRouter(React.createElement(PlanBanner, { entitlements: UNKNOWN_ENTITLEMENTS }))
+    );
+
+    expect(html).toBe('');
+  });
+
+  test('Premium Active → เห็นวันหมดอายุแบบไทย/พ.ศ.', () => {
+    const entitlements = fromMeResponse({
+      plan: 'premium',
+      isPremiumActive: true,
+      planExpiresAt: '2026-10-04T00:00:00Z',
+      assetLimit: null,
+    });
+    const html = renderToStaticMarkup(withRouter(React.createElement(PlanBanner, { entitlements })));
+
+    expect(html).toContain('Premium');
+    expect(html).toContain('2569');
+  });
+
+  test('Free → เห็น assetLimit จริงจาก Backend + ลิงก์ไปหน้า /premium', () => {
+    const entitlements = fromMeResponse({ plan: 'free', isPremiumActive: false, assetLimit: 2 });
+    const html = renderToStaticMarkup(withRouter(React.createElement(PlanBanner, { entitlements })));
+
+    expect(html).toContain('จำกัด 2 สินทรัพย์');
+    expect(html).toContain('href="/premium"');
   });
 });

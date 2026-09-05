@@ -103,6 +103,15 @@ export async function getAssetProfit(symbol, { portfolioId, brokerId } = {}) {
   return apiGet(`${BASE}/dashboard/profit/${encodeURIComponent(symbol)}${qs ? `?${qs}` : ''}`);
 }
 
+// ── Transaction slips ─────────────────────────────────────────────────────
+
+// GET /dashboard/transactions/{id}/slip — คืน Signed URL อายุสั้น (ดู Comment
+// เต็มที่ dashboard.controller.getTransactionSlip) — Error ที่ต้องรับมือ:
+// 404 SLIP_NOT_FOUND · 502 SLIP_UNAVAILABLE
+export async function getTransactionSlip(id) {
+  return apiGet(`${BASE}/dashboard/transactions/${id}/slip`);
+}
+
 // ── Assets ────────────────────────────────────────────────────────────────
 
 // GET /assets — Free · Filter brokerId / sector / portfolioId ('none' = ไม่ระบุ)

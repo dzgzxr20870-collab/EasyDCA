@@ -345,6 +345,31 @@
 
 .app-note { font-size: 13px; color: #64748b; margin: 8px 0; }
 
+/* แบนเนอร์ Free/Premium (PlanBanner.jsx) — แสดงเหนือทุกแท็บของ /app/* เสมอ
+   ⚠️ Free เป็น <NavLink> กดได้ทั้งก้อน (ชวนอัปเกรด) ส่วน Premium เป็น <section>
+   เฉยๆ (ไม่มีอะไรให้กด) — ต้อง Reset text-decoration/color ของ <a> เพราะ Base
+   ไม่ได้ Reset ให้ (Browser Default จะทำให้เป็นตัวหนังสือน้ำเงินขีดเส้นใต้) */
+.app-plan-banner {
+  display: block;
+  border-radius: var(--r-sm, 14px);
+  padding: 12px 16px;
+  font-size: 13.5px;
+  font-weight: 700;
+  text-decoration: none;
+  color: inherit;
+}
+.app-plan-banner p { margin: 0; }
+.app-plan-banner--premium {
+  background: linear-gradient(180deg, var(--cream, #FFF5E6), #fff);
+  color: #7A5A00;
+}
+.app-plan-banner--free {
+  background: var(--green-soft, #E9F6EE);
+  color: var(--leaf-deep, #189146);
+  cursor: pointer;
+}
+.app-plan-banner--free:hover { filter: brightness(1.03); }
+
 /* แถบพอร์ตที่ถูกล็อก — ต้องอ่านแล้วรู้ทันทีว่า "ยังขาย/ย้ายออกได้"
    ไม่ใช่เข้าใจว่าทำอะไรไม่ได้เลย (มติ Founder 24 ส.ค. 2569) */
 .app-locked-banner {
@@ -720,6 +745,22 @@
 .demo-txitem__amount { text-align: right; font-weight: 700; white-space: nowrap; }
 .demo-txitem__meta { display: inline-flex; align-items: center; gap: 6px; justify-content: flex-end; white-space: nowrap; }
 .demo-txitem__meta small { color: var(--muted, #8B9587); font-size: 11.5px; }
+
+/* ปุ่มดูสลิปย้อนหลัง (พรอมต์ ก.ย. 2569) — เดิมเป็น <small> เฉยๆ กดไม่ได้ เปลี่ยน
+   เป็น <button> แต่หน้าตาต้องเหมือน Icon เดิมเป๊ะ (ไม่ให้ดูเป็นปุ่มกดใหญ่โต) */
+.demo-txitem__slip-btn {
+  border: none; background: none; padding: 0; margin: 0; line-height: 1;
+  font-size: 11.5px; cursor: pointer;
+}
+.demo-txitem__slip-btn:disabled { cursor: wait; opacity: .6; }
+
+/* ปุ่ม Icon เล็กทั่วไปในตาราง (เช่น ✏️ แก้หมวดธุรกิจ — พรอมต์ ก.ย. 2569) —
+   Pattern เดียวกับ .demo-txitem__slip-btn แต่ตั้งชื่อกลางๆ ให้ใช้ซ้ำได้ */
+.app-icon-btn {
+  border: none; background: none; padding: 0 2px; margin: 0; line-height: 1;
+  font-size: 12.5px; cursor: pointer;
+}
+.app-icon-btn:hover { opacity: .75; }
 
 /* ⭐ Avatar เล็กลงเฉพาะบริบทนี้ (Inline กับข้อความยาวๆ ในแถวเดียว) — 30px (ค่า
    Default ของ .dh-avatar) ใหญ่เกินไปเมื่อวางเทียบกับตัวอักษร 13.5px ทำให้แถวสูง
