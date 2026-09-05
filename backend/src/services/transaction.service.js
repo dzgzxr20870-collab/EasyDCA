@@ -563,6 +563,55 @@ async function validateBuy(userId, params, options = {}) {
     planExpiresAt,
   });
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // ⭐ ด่านโควตา Symbol ของ Free Plan (มติ Founder 5 ก.ย. 2569)
+  // ═══════════════════════════════════════════════════════════════════════
+  // 🔴 บั๊กที่ปิดตรงนี้: เดิมโค้ด `return` ออกไปที่ Branch `if (existingAsset)`
+  // ด้านล่าง **ก่อน** จะถึงจุดเช็คเพดาน Free (`assetLimit` ท้ายฟังก์ชัน) เสมอ →
+  // เพดาน Free ถูกบังคับใช้เฉพาะตอนสร้าง "Symbol ใหม่เอี่ยมที่ไม่เคยถือมาก่อนเลย"
+  // เท่านั้น · ผลคือผู้ใช้ที่สมัคร Premium 1 เดือน ถือ 20-30 Symbol แล้วยกเลิก
+  // กลับมาเป็น Free **ยังซื้อเพิ่มในทุก Symbol ที่เคยถือได้ไม่จำกัดตลอดไป**
+  // (ช่องทางใช้ประโยชน์ไม่จำกัดด้วยค่าสมาชิกเดือนเดียว — กระทบรายได้จริง)
+  //
+  // ⚠️ วางไว้ **ก่อน** `if (existingAsset)` โดยเจตนา เพื่อให้ครอบทั้งสองเส้นทาง
+  // (Symbol เดิม + Symbol ใหม่) ด้วย Logic ชุดเดียว — ถ้าวางทีหลังจะกลับไปเป็น
+  // บั๊กเดิมเป๊ะ · และวาง **หลัง** assertCanAddToPortfolio เพื่อคงลำดับความสำคัญ
+  // ของ Error เดิมทุกประการ (พอร์ตถูกล็อก → PORTFOLIO_READ_ONLY มาก่อนเสมอ)
+  //
+  // ⚠️ ไม่แทนที่/ไม่แตะด่านเดิมของ "Symbol ใหม่" (assetLimit + RPC
+  // create_asset_locked) แม้แต่บรรทัดเดียว — ด่านนั้นยังเป็นตัวตัดสินจริงใต้ Lock
+  // ที่ Race Condition ข้ามไม่ได้ ที่นี่คือด่าน **เพิ่ม** สำหรับมิติที่ด่านเดิม
+  // ไม่เคยครอบเลย ("Symbol นี้อยู่ในโควตาที่อนุญาตไหม")
+  //
+  // การขาย/ย้อนรายการ/ย้ายพอร์ต **ไม่ผ่านฟังก์ชันนี้** จึงไม่ถูกกระทบเลย
+  // (validateSell คนละเส้นทาง) — ตรงกับกติกา "ห้ามเติมเงินเพิ่ม ไม่ใช่ Read-only"
+  const assetQuota = entitlement.canBuySymbol(
+    { plan, planExpiresAt },
+    // อ่านประวัติเฉพาะตอนเป็น Free เท่านั้น — Premium ที่ยัง Active ไม่ต้องยิง
+    // Query นี้เลยแม้แต่ครั้งเดียว (canBuySymbol คืน allowed ทันทีเมื่อไม่จำกัด)
+    entitlement.getActiveAssetLimit({ plan, planExpiresAt }) === null
+      ? []
+      : await transactionRepository.findBuyHistory(userId),
+    params.symbol
+  );
+  if (!assetQuota.allowed) {
+    throw new TransactionServiceError(
+      'ASSET_LIMIT_REACHED',
+      `Free plan can only add to its first ${assetQuota.limit} symbols`,
+      {
+        limit: assetQuota.limit,
+        symbol: params.symbol,
+        // ⭐ แยก "ตัวนี้ไม่อยู่ในโควตา" ออกจาก "ถือครบเพดานแล้วเพิ่มตัวใหม่ไม่ได้"
+        // ผ่าน details (ไม่สร้าง Error Code ใหม่ — Code ใหม่ต้องไปไล่ Map ข้อความ
+        // ไทยให้ครบทุกช่องทาง LINE/Web/Frontend ซึ่งเป็นรูปแบบบั๊ก "แปะครบ 4 ที่
+        // ลืมที่ 5" ที่โปรเจกต์นี้เจอมาแล้ว) Caller ที่อยากแยกข้อความละเอียดกว่านี้
+        // ในอนาคตอ่าน details.reason ได้ทันทีโดยไม่ต้องแก้ Contract
+        reason: assetQuota.reason,
+        writableSymbols: [...assetQuota.writableSymbols],
+      }
+    );
+  }
+
   if (existingAsset) {
     return {
       asset: existingAsset,

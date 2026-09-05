@@ -119,6 +119,94 @@ function getWritablePortfolioIds(user, portfolios) {
   return new Set(ordered.slice(0, limit).map((p) => p.id));
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// getWritableSymbols — "ซื้อเพิ่มได้ที่ Symbol ไหนบ้าง" (มติ Founder 5 ก.ย. 2569)
+// ═══════════════════════════════════════════════════════════════════════
+// ⭐ ปิดช่องโหว่: ผู้ใช้ที่สมัคร Premium 1 เดือน ถือ 20-30 Symbol แล้วดาวน์เกรด
+// กลับเป็น Free **ยังซื้อเพิ่มในทุก Symbol ที่เคยถือได้ไม่จำกัดตลอดไป** เพราะ
+// transaction.validateBuy เดิมเช็คแค่ "Symbol นี้มีอยู่แล้วไหม" ไม่เคยถามว่า
+// "อยู่ในโควตาที่อนุญาตไหม" — เพดาน Free จึงบังคับใช้แค่ตอนสร้าง Symbol ใหม่
+// เอี่ยมเท่านั้น (RPC create_asset_locked)
+//
+// กติกา: Free ซื้อเพิ่มได้เฉพาะ **N Symbol ที่มีธุรกรรมซื้อครั้งแรกเร็วที่สุดใน
+// ประวัติทั้งหมดของบัญชี** (N = getActiveAssetLimit) — Symbol อื่นยังขาย/ดูประวัติ/
+// ย้ายพอร์ตได้ปกติทุกตัว แค่ "ห้ามเติมเงินเพิ่ม" (สอดคล้องกฎเหล็กข้อ 2 ห้ามลบข้อมูล
+// และมติ 24 ส.ค. 2569 ที่ว่า "ล็อก = โตต่อไม่ได้ ไม่ใช่ออกไม่ได้")
+//
+// ── คุณสมบัติที่ตั้งใจให้เป็นแบบนี้ (อย่าออกแบบใหม่โดยไม่ถาม Founder) ────────
+//   1. **Stateless เต็มรูปแบบ** — คำนวณสดจาก Ledger ที่มีอยู่แล้วทุกครั้ง ไม่มี
+//      Column/Migration/Cron ใหม่ · ไม่แตะข้อมูลเก่าแม้แต่แถวเดียว
+//   2. **ไม่มีการ "ปลด Slot คืน"** — ขายจนเหลือ 0 หน่วยแล้ว Symbol นั้นยังนับเป็น
+//      1 ใน N ตลอดไป (กันหมุนซื้อ-ขายสลับ Symbol ไปเรื่อยๆ ไม่จำกัด)
+//   3. **ไม่ Reset ตอนกลับมา Free รอบใหม่** — เป็น N ตัวแรกของทั้งชีวิตบัญชีเสมอ
+//      ไม่ว่าจะสลับ Premium/Free กี่รอบ (Trade-off ที่ Founder รับทราบแล้ว)
+//
+// buyHistory = [{ symbol, createdAt }] ทุกแถว type='buy' ของ user คนนั้น (ไม่ต้อง
+// เรียง/Dedupe มาก่อน — ดู transactionRepository.findBuyHistory)
+// คืน Set ของ Symbol ที่ซื้อเพิ่มได้ · **null = ไม่จำกัด** (Premium ที่ยัง Active)
+// — Convention เดียวกับ getActiveAssetLimit เป๊ะ Caller จึงเช็ค null ก่อนเสมอ
+function getWritableSymbols(user, buyHistory) {
+  const limit = getActiveAssetLimit(user);
+  if (limit === null) return null;
+
+  // Dedupe ตาม **Symbol ไม่ใช่แถว/asset_id** — ถือ BTC 2 โบรก (migration 046) หรือ
+  // BTC 2 พอร์ต = 1 สินทรัพย์เสมอ ตามมติ Founder 23 ส.ค. 2569 · เก็บ createdAt
+  // ที่เก่าที่สุดของแต่ละ Symbol ไว้เป็นเวลาที่ใช้จัดลำดับ
+  const firstBuyAt = new Map();
+  for (const row of buyHistory ?? []) {
+    if (!row?.symbol) continue;
+    const at = new Date(row.createdAt ?? 0).getTime();
+    // NaN (createdAt เพี้ยน/ไม่มี) → ถือเป็นเก่าสุด (0) แทนการทิ้งแถวนั้นทั้งแถว
+    // ทิ้งแถวจะทำให้ Symbol หายจากลิสต์ = ผู้ใช้ถูกบล็อกจาก Symbol ของตัวเอง
+    const at2 = Number.isFinite(at) ? at : 0;
+    const prev = firstBuyAt.get(row.symbol);
+    if (prev === undefined || at2 < prev) firstBuyAt.set(row.symbol, at2);
+  }
+
+  // ⚠️ Tie-break ด้วยชื่อ Symbol เมื่อ created_at เท่ากันเป๊ะ — จำเป็นจริงไม่ใช่กัน
+  // เหนียว: การนำเข้าพอร์ตแบบหลายบรรทัด (bulkImport) อาจ INSERT หลายแถวด้วย now()
+  // เดียวกันได้ ถ้าไม่ Tie-break ลำดับจะขึ้นกับลำดับแถวที่ Postgres คืนมา ซึ่ง
+  // เปลี่ยนได้ทุกเมื่อ → Slot ของผู้ใช้จะสลับไปมาเองระหว่างคำขอ (เหตุผลเดียวกับ
+  // Tie-break ด้วย id ใน getWritablePortfolioIds)
+  const ordered = [...firstBuyAt.entries()]
+    .sort((a, b) => (a[1] !== b[1] ? a[1] - b[1] : String(a[0]).localeCompare(String(b[0]))))
+    .map(([symbol]) => symbol);
+
+  return new Set(ordered.slice(0, limit));
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// canBuySymbol — "ผู้ใช้คนนี้ซื้อเพิ่มใน Symbol นี้ได้ไหม" (ตัวตัดสินจริง)
+// ═══════════════════════════════════════════════════════════════════════
+// คืน { allowed, reason, limit, writableSymbols } — Pure ล้วน เทสต์ได้โดยไม่ต้องมี DB
+//
+// ⭐ กฎ "ยังมี Slot ว่าง" (writable.size < limit) คือสิ่งที่ทำให้ผู้ใช้ Free ปกติ
+// **ไม่ถูกกระทบเลยแม้แต่นิดเดียว**: ผู้ใช้ใหม่ที่ยังไม่เคยซื้ออะไร (size 0) หรือ
+// เพิ่งซื้อไปตัวเดียว (size 1) ยังซื้อ Symbol ใหม่ได้ตามปกติเหมือนเดิมทุกประการ
+// — ด่านเพดานจำนวนสินทรัพย์ของ "Symbol ใหม่เอี่ยม" ยังเป็นหน้าที่ของ
+// RPC create_asset_locked เหมือนเดิม (ที่นี่ไม่แตะ ไม่ทับซ้อน)
+//
+// ⚠️ เทียบ Symbol แบบตรงตัว (Exact Match) ตรงกับ Convention เดิมของ
+// validateBuy (`activeSymbols.includes(params.symbol)`) — Caller ทุกทางส่ง Symbol
+// ที่ Normalize เป็นตัวพิมพ์ใหญ่มาแล้ว ห้ามเพิ่มการแปลงตัวพิมพ์ที่นี่ให้ต่างจากเดิม
+function canBuySymbol(user, buyHistory, symbol) {
+  const limit = getActiveAssetLimit(user);
+  const writableSymbols = getWritableSymbols(user, buyHistory);
+
+  // Premium ที่ยัง Active → ไม่จำกัด (ไม่ถูกกระทบจากกติกานี้เลย)
+  if (writableSymbols === null) return { allowed: true, reason: null, limit: null };
+
+  if (writableSymbols.has(symbol)) {
+    return { allowed: true, reason: null, limit, writableSymbols };
+  }
+  // ยังไม่ใช้ Slot ครบ → Symbol นี้เข้าไปจับจอง Slot ที่เหลือได้
+  if (writableSymbols.size < limit) {
+    return { allowed: true, reason: null, limit, writableSymbols };
+  }
+
+  return { allowed: false, reason: 'symbol_not_writable', limit, writableSymbols };
+}
+
 // คำนวณวันหมดอายุใหม่หลังต่ออายุ ตามกติกา Stacking:
 //   - ถ้ายังมีอายุเหลือ (currentExpiresAt อยู่ในอนาคต) → ต่อจากวันหมดอายุเดิม
 //     (ไม่เสียวันที่เหลือ) มิฉะนั้น (ไม่มี/หมดอายุแล้ว) → เริ่มนับจาก now
@@ -163,5 +251,7 @@ module.exports = {
   getActiveDcaPlanLimit,
   getActivePortfolioLimit,
   getWritablePortfolioIds,
+  getWritableSymbols,
+  canBuySymbol,
   computeRenewalExpiry,
 };

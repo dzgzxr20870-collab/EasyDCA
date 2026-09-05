@@ -31,6 +31,10 @@ jest.mock('../src/repositories/transaction.repository', () => {
     ...actual,
     findAllByAsset: jest.fn(),
     findRecentByUser: jest.fn(),
+    // ⭐ ด่านโควตา Symbol ของ Free Plan (มติ Founder 5 ก.ย. 2569) — validateBuy อ่าน
+    // ประวัติการซื้อผ่านฟังก์ชันนี้ ซึ่งใช้ .from() เหมือนสองตัวบน (ไม่ได้ Fake ไว้ใน
+    // supabaseAdmin ข้างบนที่มีแต่ rpc) จึงต้อง Mock ด้วยเหตุผลเดียวกันเป๊ะ
+    findBuyHistory: jest.fn(),
   };
 });
 jest.mock('../src/repositories/asset.repository');
@@ -99,6 +103,10 @@ beforeEach(() => {
   installFakeRpc();
   assetRepository.findAllByUserAndSymbol.mockResolvedValue([{ id: ASSET_ID, symbol: 'BTC' }]);
   assetRepository.findByIds.mockResolvedValue([{ id: ASSET_ID, symbol: 'BTC' }]);
+  // ประวัติซื้อว่าง = ผู้ใช้รายนี้ยังไม่เคยใช้ Slot ไหนเลย ตรงกับสภาพ "DB" จำลองของ
+  // ไฟล์นี้ที่เริ่มจาก state.held = 0 → BTC ยังจับจอง Slot ได้ตามปกติ (ด่านโควตา
+  // Free ไม่ใช่สิ่งที่ไฟล์นี้ทดสอบ — มี freeTierSymbolQuota.test.js คุมแยกแล้ว)
+  transactionRepository.findBuyHistory.mockResolvedValue([]);
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

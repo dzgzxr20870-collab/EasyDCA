@@ -1091,7 +1091,7 @@ Section 4 ร่างไว้ว่า Error ต้องเป็น `{ succe
 | `ASSET_NOT_FOUND` | 400 | **ขาย**: ไม่เคยถือสินทรัพย์นี้ (`validateSell`) |
 | `NOTHING_TO_SELL` | 400 | **ขาย**: `sellAll` แต่ยอดคงเหลือ = 0 (เคยมีแต่ขายหมดแล้ว) |
 | `INSUFFICIENT_QUANTITY` | 400 | **ขาย**: เกินยอดคงเหลือจริง — `details: { requested, held }` |
-| `ASSET_LIMIT_REACHED` | 403 | Free Plan ครบ 2 สินทรัพย์ แล้วจะสร้างตัวใหม่ (**ฝั่งซื้อเท่านั้น** — การขายไม่สร้าง Asset จึงไม่โดน Gate) |
+| `ASSET_LIMIT_REACHED` | 403 | **ฝั่งซื้อเท่านั้น** (การขาย/ย้อนรายการ/ย้ายพอร์ตไม่โดน Gate นี้เลย) ครอบ 2 สถานการณ์: (ก) Free ครบ 2 สินทรัพย์แล้วจะสร้างตัวใหม่ (ด่านจริงอยู่ที่ RPC `create_asset_locked`) · (ข) **ตั้งแต่ 5 ก.ย. 2569** — Free ซื้อเพิ่มใน Symbol ที่ **ไม่ติด 2 อันดับแรกของประวัติการซื้อ** (ผู้ใช้ที่เคยเป็น Premium แล้วดาวน์เกรด) แยกสองเคสได้จาก `details.reason === 'symbol_not_writable'` พร้อม `details: { limit, symbol, writableSymbols }` |
 | `PORTFOLIO_NOT_FOUND` | 404 | `portfolioId` ที่ส่งมาไม่มีจริงหรือเป็นของผู้ใช้คนอื่น (`assertOwnedPortfolioId`) |
 | `PORTFOLIO_READ_ONLY` | 403 | พอร์ตปลายทางเพิ่มรายการใหม่ไม่ได้ (Premium หมดอายุ) — **ขายยังทำได้เสมอ** |
 | `ASSET_EXISTS_IN_OTHER_PORTFOLIO` | 409 | **Confirm-Required ไม่ใช่ Error ถาวร** — ซื้อ + ส่ง `portfolioId` + ถือ Symbol นี้อยู่ในพอร์ตอื่น + ยังไม่ตอบ · ยิงซ้ำพร้อม `confirmSeparatePortfolio` (`true` = แยก / `false` = รวม) · `details: { symbol, existingPortfolioId, destinationPortfolioId }` |

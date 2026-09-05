@@ -331,6 +331,48 @@ async function attachSlipImagePath(id, slipImagePath, userId) {
   return toTransaction(data);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// findBuyHistory — "Symbol ที่เคยมีธุรกรรมซื้อ" เรียงตามเวลาที่บันทึก (เก่า→ใหม่)
+// ═══════════════════════════════════════════════════════════════════════════
+// ใช้ตัดสินโควตา "ซื้อเพิ่มได้ที่ Symbol ไหนบ้าง" ของผู้ใช้ Free (มติ Founder
+// 5 ก.ย. 2569 — ดู entitlement.getWritableSymbols) · **อ่านอย่างเดียว ไม่เขียน
+// อะไรทั้งสิ้น** และไม่แตะแถว Ledger เดิมแม้แต่ฟิลด์เดียว
+//
+// ── ทำไมกรอง type = 'buy' อย่างเดียว ──────────────────────────────────────
+// กติกาที่ Founder อนุมัติพูดถึง "ธุรกรรมซื้อครั้งแรก" ตรงๆ — sell/dividend/
+// dividend_reversal ไม่นับเป็นการ "จับจอง Slot" เพราะไม่ใช่การเติมเงินเข้าสินทรัพย์ใหม่
+//
+// ⚠️ แถว Reversal ไม่ทำให้ Symbol ใหม่หลุดเข้ามาในลิสต์นี้: การย้อนรายการ **ซื้อ**
+// สร้างแถว type='sell' (transactionType.reversalTypeFor) จึงถูกกรองออกอยู่แล้ว ·
+// การย้อนรายการ **ขาย** สร้างแถว type='buy' ก็จริง แต่ Symbol นั้นต้องเคยถูกซื้อ
+// มาก่อนอยู่แล้วเสมอ (ขายของที่ไม่เคยมีไม่ได้) ลำดับจึงไม่เปลี่ยน
+//
+// ── ทำไมเรียงด้วย created_at ไม่ใช่ date ──────────────────────────────────
+// `date` เป็นวันที่ "ผู้ใช้ประกาศ" ซึ่งย้อนหลังได้ตามใจ — ถ้าใช้เรียง ผู้ใช้จะสลับ
+// ลำดับ Slot ของตัวเองย้อนหลังได้ด้วยการบันทึกรายการเก่าเพิ่ม (Slot ที่ควรนิ่งจะขยับ)
+// `created_at` เป็นเวลาที่ DB ประทับตอน INSERT จริง — Immutable และย้อนหลังไม่ได้
+// ตรงกับความหมาย "2 ตัวแรกในประวัติของบัญชีนี้" มากที่สุด
+//
+// ⚠️ คืน "ทุกแถว buy" ไม่ได้ Dedupe ที่นี่ (PostgREST ไม่มี DISTINCT ON) — การ
+// Dedupe/Tie-break/ตัดเหลือ N ตัวเป็น **Pure Logic** ที่ entitlement.service ทำแทน
+// เพื่อให้เทสต์ตรรกะตัดสินสิทธิ์ได้โดยไม่ต้องมี DB (Pattern เดียวกับ
+// countActiveSymbolsGroupedByUser ที่ Dedupe ในชั้น App ด้วยเหตุผลเดียวกัน)
+// เลือกมาแค่ 2 คอลัมน์ (created_at + symbol ที่ Join) ไม่ใช่ `*` เพื่อให้ Payload เล็ก
+async function findBuyHistory(userId) {
+  const { data, error } = await queryForUser('transactions', userId, (q) =>
+    q.select('created_at, assets!inner(symbol)').eq('type', 'buy')
+  ).order('created_at', { ascending: true });
+
+  if (error) {
+    throw new Error(`Failed to find buy history for user ${userId}: ${error.message}`);
+  }
+
+  return (data ?? []).map((row) => ({
+    symbol: row.assets?.symbol ?? null,
+    createdAt: row.created_at,
+  }));
+}
+
 // ดึง Transaction แถวเดียวโดยตรวจความเป็นเจ้าของไปพร้อมกัน (userId ต้องตรง) —
 // ใช้โดย Endpoint เปิดรูปสลิปเพื่อกันผู้ใช้ขอ Signed URL ของสลิปคนอื่นด้วยการเดา
 // transaction id คืน null ถ้าไม่พบ "หรือ" ไม่ใช่ของ User คนนั้น (แยกไม่ออกโดยเจตนา
@@ -359,6 +401,7 @@ module.exports = {
   findByUserAndDateRange,
   findAllByAsset,
   findAllUserIdsWithTransactions,
+  findBuyHistory,
   attachSlipImagePath,
   findByIdForUser,
 };
