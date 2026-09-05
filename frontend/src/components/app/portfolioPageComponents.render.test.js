@@ -25,6 +25,7 @@ vi.mock('../dashboard/AssetAvatar.jsx', () => ({
 import PortfolioCards from './PortfolioCards.jsx';
 import PortfolioHoldingsTable from './PortfolioHoldingsTable.jsx';
 import MoveAssetPortfolioDialog from './MoveAssetPortfolioDialog.jsx';
+import EditSectorDialog from './EditSectorDialog.jsx';
 import AssetAvatar from '../dashboard/AssetAvatar.jsx';
 import { profitCacheKey } from './portfolioDetailData.js';
 
@@ -386,5 +387,52 @@ describe('⭐ MoveAssetPortfolioDialog', () => {
     expect(html).toContain('ระยะยาว');
     expect(html).toContain('ย้ายพอร์ต');
     expect(html).not.toContain('ยังไม่มีพอร์ตปลายทางให้ย้าย');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ⭐ กำหนดหมวดธุรกิจ (Sector) ให้สินทรัพย์ (พรอมต์ ก.ย. 2569)
+// ═══════════════════════════════════════════════════════════════════════════
+describe('PortfolioHoldingsTable — คอลัมน์หมวดธุรกิจ', () => {
+  test('มี sector → แสดงชื่อ Sector, ไม่มี → แสดง "ไม่ระบุ"', () => {
+    const html = renderTable({
+      rows: [
+        { symbol: 'BTC', brokerId: null, sector: 'เทคโนโลยี', heldQuantity: 0.5, totalInvested: 1000 },
+        { symbol: 'AAPL', brokerId: null, sector: null, heldQuantity: 10, totalInvested: 200 },
+      ],
+    });
+
+    expect(html).toContain('หมวดธุรกิจ');
+    expect(html).toContain('เทคโนโลยี');
+    expect(html).toContain('ไม่ระบุ');
+  });
+});
+
+describe('⭐ EditSectorDialog', () => {
+  function renderDialog(props) {
+    return renderToStaticMarkup(
+      React.createElement(EditSectorDialog, {
+        holding: { assetId: 'a-1', symbol: 'BTC', sector: null },
+        onClose() {},
+        onSaved() {},
+        ...props,
+      })
+    );
+  }
+
+  test('เปิดฟอร์ม → เห็นชื่อสินทรัพย์และช่องพิมพ์หมวดธุรกิจ', () => {
+    const html = renderDialog();
+
+    expect(html).toContain('BTC');
+    expect(html).toContain('หมวดธุรกิจ');
+  });
+
+  // Sector เดิม → ต้อง Prefill ให้เห็นค่าปัจจุบัน ไม่ใช่ช่องว่างเปล่าให้พิมพ์ใหม่ทั้งหมด
+  test('สินทรัพย์ที่มี Sector อยู่แล้ว → Prefill ค่าเดิมในช่องพิมพ์', () => {
+    const html = renderDialog({
+      holding: { assetId: 'a-1', symbol: 'BTC', sector: 'พลังงาน' },
+    });
+
+    expect(html).toContain('value="พลังงาน"');
   });
 });

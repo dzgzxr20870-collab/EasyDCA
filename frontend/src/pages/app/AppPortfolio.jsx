@@ -8,6 +8,7 @@ import RecordTransactionModal from '../../components/app/RecordTransactionModal.
 import PortfolioCards from '../../components/app/PortfolioCards.jsx';
 import PortfolioHoldingsTable from '../../components/app/PortfolioHoldingsTable.jsx';
 import MoveAssetPortfolioDialog from '../../components/app/MoveAssetPortfolioDialog.jsx';
+import EditSectorDialog from '../../components/app/EditSectorDialog.jsx';
 import PortfolioSettingsPanel from '../../components/app/PortfolioSettingsPanel.jsx';
 import BrokerSettingsPanel from '../../components/app/BrokerSettingsPanel.jsx';
 import {
@@ -120,6 +121,8 @@ function AppPortfolio() {
   const [recordType, setRecordType] = useState(null);
   // สินทรัพย์ที่กำลังจะย้ายพอร์ต (null = ไม่ได้เปิด Dialog)
   const [movingHolding, setMovingHolding] = useState(null);
+  // สินทรัพย์ที่กำลังแก้หมวดธุรกิจ (null = ไม่ได้เปิด Dialog)
+  const [editingSectorHolding, setEditingSectorHolding] = useState(null);
   // เมนู "ตั้งค่าพอร์ต" — เปิดได้เฉพาะระดับ 2 (มีพอร์ตเปิดอยู่) เท่านั้น
   const [showSettings, setShowSettings] = useState(false);
   // เมนู "จัดการโบรก" — เปิดได้ทุกระดับ (โบรกเป็นของผู้ใช้ ไม่ใช่ของพอร์ตใดพอร์ตหนึ่ง)
@@ -365,6 +368,7 @@ function AppPortfolio() {
             profitCapped={profitCapped}
             loadingProfit={loadingProfit}
             onLoadProfit={handleLoadProfit}
+            onEditSector={(holding) => setEditingSectorHolding(holding)}
           />
 
           {/* ⭐ พอร์ตถูกล็อก → เพิ่มไม่ได้ แต่ **ห้ามซ่อนปุ่มขายเด็ดขาด**
@@ -489,6 +493,19 @@ function AppPortfolio() {
             // (groupBy=broker) — ล้าง Cache ทั้งชุดเหมือน onDeleted ของพอร์ต
             cacheRef.current.clear();
             await load();
+          }}
+        />
+      )}
+
+      {editingSectorHolding && (
+        <EditSectorDialog
+          holding={editingSectorHolding}
+          onClose={() => setEditingSectorHolding(null)}
+          onSaved={async () => {
+            // Sector เปลี่ยน → กระทบทั้ง holdings (คอลัมน์ตาราง) และ allocation
+            // groupBy=sector (โดนัท) — ล้าง Cache ทั้งชุดเหมือน onMoved ด้านล่าง
+            cacheRef.current.clear();
+            await Promise.all([load(), reload?.()]);
           }}
         />
       )}

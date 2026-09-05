@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useOutletContext, Link } from 'react-router-dom';
 import { setDefaultPortfolio } from '../../lib/portfolioApi.js';
+import ExportReportPanel from '../../components/app/ExportReportPanel.jsx';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // AppProfile — โปรไฟล์ + จัดการพอร์ต ต่อ API จริง (Stage 9)
@@ -123,6 +124,8 @@ function AppProfile() {
           ข้อมูลเดิมอยู่ครบทุกรายการ ไม่มีอะไรถูกลบ
         </p>
       </section>
+
+      <ExportReportPanel isPremiumActive={entitlements.isPremiumActive} />
 
       {/* หน้า /support (ฟอร์มติดต่อทีมงาน) มีอยู่แล้วและทำงานสมบูรณ์ แต่หน้า /app/profile
           นี้ยังไม่เคยมีลิงก์ไปหาเลย — เพิ่มทางเข้าให้ผู้ใช้ที่ใช้ App Shell ใหม่ (/app/*)

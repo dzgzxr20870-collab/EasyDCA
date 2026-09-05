@@ -89,6 +89,7 @@ function PortfolioHoldingsTable({
   profitCapped = false,
   onLoadProfit,
   loadingProfit = false,
+  onEditSector,
 }) {
   if (rows.length === 0) {
     return (
@@ -123,6 +124,7 @@ function PortfolioHoldingsTable({
                   สินทรัพย์แทน (.app-table__broker-inline ใน td แรก) — CSS ล้วน
                   ไม่ต้องตรวจความกว้างจอด้วย JS (ดู appShell.css) */}
               <th className="app-table__broker">โบรก/Exchange</th>
+              <th>หมวดธุรกิจ</th>
               <th className="app-table__num">จำนวนที่ถือ</th>
               <th className="app-table__num">ต้นทุน</th>
               <th className="app-table__num">กำไร/ขาดทุน</th>
@@ -150,6 +152,19 @@ function PortfolioHoldingsTable({
                   </span>
                 </td>
                 <td className="app-table__broker">{brokerLabel(h.brokerId, brokers)}</td>
+                <td>
+                  {/* ⭐ กำหนดหมวดธุรกิจ (พรอมต์ ก.ย. 2569) — Free-text ที่ผู้ใช้พิมพ์เอง
+                      เข้า /portfolio/allocation?groupBy=sector ตรงๆ (ดู EditSectorDialog) */}
+                  <span className="app-table__sector">{h.sector ?? <span className="app-note">ไม่ระบุ</span>}</span>{' '}
+                  <button
+                    type="button"
+                    className="app-icon-btn"
+                    title="กำหนดหมวดธุรกิจ"
+                    onClick={() => onEditSector?.(h)}
+                  >
+                    ✏️
+                  </button>
+                </td>
                 <td className="app-table__num">{fmtQty(h.heldQuantity)}</td>
                 <td className="app-table__num">
                   {fmtMoney(h.totalInvested)}{' '}
