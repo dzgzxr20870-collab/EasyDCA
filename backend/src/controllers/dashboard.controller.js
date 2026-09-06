@@ -9,9 +9,11 @@ const portfoliosService = require('../services/portfolios.service');
 const fxRateService = require('../services/fxRate.service');
 const dashboardOverviewService = require('../services/dashboardOverview.service');
 const transactionRepository = require('../repositories/transaction.repository');
+const assetRepository = require('../repositories/asset.repository');
 const userRepository = require('../repositories/user.repository');
 const entitlementService = require('../services/entitlement.service');
 const storageService = require('../services/storage.service');
+const dcaStatsService = require('../services/dcaStats.service');
 
 function roundToTwo(value) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
@@ -20,6 +22,12 @@ function roundToTwo(value) {
 // Default เท่ากับที่ Requirement กำหนด (ต่างจาก historyService.getRecentHistory
 // ที่ใช้ 5 สำหรับคำสั่ง LINE "ประวัติ" — Dashboard ต้องการเห็นได้มากกว่านั้น)
 const DEFAULT_HISTORY_LIMIT = 50;
+
+// จำนวนเดือนย้อนหลังของกราฟเงินลงทุนสะสม — เท่ากับ dashboardOverview.service
+// (CHART_MONTHS ที่นั่น) โดยเจตนา ให้กราฟรายพอร์ตกับกราฟทั้งบัญชีมีหน้าต่างเวลา
+// เท่ากันเป๊ะ (ไม่ Export ค่านั้นมาใช้ร่วมเพราะเป็นแค่ Magic Number ของ Query เดียว
+// ไม่ใช่ Logic ที่ต้อง Reuse)
+const PORTFOLIO_GROWTH_CHART_MONTHS = 12;
 
 // Allowlist ตรงกับ CHECK constraint จริงของ transactions.type (migration 047) —
 // ค่านอกเหนือจากนี้ถูก "เพิกเฉย" (ไม่กรอง ไม่ Error) ตาม Convention เดิมของไฟล์นี้
@@ -117,6 +125,50 @@ async function getHistory(req, res) {
     return res.status(200).json({ transactions: withSlipFlag, total });
   } catch (err) {
     console.error(`[dashboard] getHistory failed: ${err.message}`);
+    return res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+}
+
+// GET /api/v1/dashboard/portfolio-growth?portfolioId=<uuid> — กราฟ "เงินลงทุน
+// สะสม" รายเดือน ≤12 เดือน กรองเฉพาะธุรกรรมของพอร์ตเดียว (หน้ารายละเอียดพอร์ต
+// /app/portfolio) — Reuse dcaStatsService.getMonthlyInvestedSeries ตัวเดียวกับ
+// GET /dashboard/overview เป๊ะ (ห้ามคำนวณสูตรใหม่) แค่ป้อน Array ธุรกรรมที่กรอง
+// ด้วยพอร์ตแทน Array ทั้งบัญชี
+//
+// ⚠️ portfolio_id ไม่ได้อยู่ในตาราง transactions (อยู่ที่ assets.portfolio_id
+// ตาม migration 044/045) — จึงต้อง Resolve สินทรัพย์ของพอร์ตนี้ก่อน
+// (assetRepository.findByPortfolio) แล้วค่อยดึงธุรกรรมของสินทรัพย์เหล่านั้น
+// (transactionRepository.findAllByAssets) ไม่ใช่ .eq('portfolio_id', ...) ตรงๆ
+// บน transactions เพราะ Column นั้นไม่มีอยู่จริง
+//
+// ⚠️ portfolioId บังคับต้องส่งมาเสมอ (endpoint นี้ไม่มีความหมายถ้าไม่กรองพอร์ต
+// ต่างจาก getProfit ที่ optional ได้) และต้องผ่าน assertOwnedPortfolioId เพื่อกัน
+// User ขอกราฟของพอร์ตคนอื่นด้วยการเดา UUID (Pattern เดียวกับ getProfit)
+async function getPortfolioGrowth(req, res) {
+  try {
+    const rawPortfolio = req.query.portfolioId;
+    if (!rawPortfolio) {
+      return res.status(400).json({ error: 'VALIDATION_ERROR' });
+    }
+
+    const portfolioId = await portfoliosService.assertOwnedPortfolioId(req.user.id, rawPortfolio);
+
+    const assets = await assetRepository.findByPortfolio(req.user.id, portfolioId);
+    const assetIds = assets.map((asset) => asset.id);
+    const transactions = await transactionRepository.findAllByAssets(assetIds, req.user.id);
+
+    const monthlyInvested = dcaStatsService.getMonthlyInvestedSeries(
+      transactions,
+      PORTFOLIO_GROWTH_CHART_MONTHS
+    );
+
+    return res.status(200).json({ monthlyInvested });
+  } catch (err) {
+    if (err instanceof portfoliosService.PortfolioServiceError) {
+      return res.status(err.code === 'PORTFOLIO_NOT_FOUND' ? 404 : 400).json({ error: err.code });
+    }
+
+    console.error(`[dashboard] getPortfolioGrowth failed: ${err.message}`);
     return res.status(500).json({ error: 'INTERNAL_ERROR' });
   }
 }
@@ -278,4 +330,12 @@ async function getTransactionSlip(req, res) {
   }
 }
 
-module.exports = { getPortfolio, getHistory, getProfit, getMe, getOverview, getTransactionSlip };
+module.exports = {
+  getPortfolio,
+  getHistory,
+  getPortfolioGrowth,
+  getProfit,
+  getMe,
+  getOverview,
+  getTransactionSlip,
+};

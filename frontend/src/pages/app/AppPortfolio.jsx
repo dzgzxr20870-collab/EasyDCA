@@ -11,9 +11,11 @@ import MoveAssetPortfolioDialog from '../../components/app/MoveAssetPortfolioDia
 import EditSectorDialog from '../../components/app/EditSectorDialog.jsx';
 import PortfolioSettingsPanel from '../../components/app/PortfolioSettingsPanel.jsx';
 import BrokerSettingsPanel from '../../components/app/BrokerSettingsPanel.jsx';
+import InvestedChart from '../../components/dashboard/InvestedChart.jsx';
 import {
   fetchAllocationCached,
   fetchProfitsForPortfolio,
+  fetchPortfolioGrowthCached,
   holdingsForPortfolio,
   assetCountByPortfolio,
   MAX_CARD_VALUE_FETCH,
@@ -36,10 +38,15 @@ import {
 // สิ่งเดียวที่ทำเองคือ **กรองแถวตาม holding.portfolioId ที่ Backend ประทับมาให้**
 // และ **นับจำนวนแถว** ซึ่งไม่ใช่การคำนวณเงิน
 //
-// ── ❌ ไม่อยู่ในเฟสนี้: กราฟความเติบโตรายพอร์ตตามเวลา ─────────────────────
+// ── กราฟ "เงินลงทุนสะสม" รายพอร์ต (มติ Founder 5 ก.ย. 2569) ──────────────────
+// Reuse InvestedChart ตัวเดียวกับหน้า Dashboard ทุกประการ แค่กรองธุรกรรมเฉพาะ
+// พอร์ตที่เปิดอยู่ผ่าน GET /dashboard/portfolio-growth?portfolioId= — นี่คือกราฟ
+// "เงินที่ลงไป" ไม่ใช่ "มูลค่าตลาดจริงตามเวลา"
+//
+// ── ❌ ยังไม่อยู่ในเฟสนี้: มูลค่าตลาดจริงรายพอร์ตย้อนหลัง ────────────────────
 // `portfolio_snapshots` เก็บ 1 แถวต่อ (user, วัน) รวมทุกพอร์ตเป็นก้อนเดียว
 // **ยังไม่มีคอลัมน์ portfolio_id** จึงแยกรายพอร์ตย้อนหลังไม่ได้เลย ต้องมี migration
-// ใหม่ + Backfill ก่อน (เฟส 2) — ทางลัดเดียวที่พอมีคือเดาย้อนหลังจากธุรกรรม
+// ใหม่ + Backfill ก่อน (เฟสถัดไป) — ทางลัดเดียวที่พอมีคือเดาย้อนหลังจากธุรกรรม
 // ซึ่งจะได้กราฟที่ผิดแบบเงียบๆ จึงห้ามทำ
 
 const GROUP_BY_OPTIONS = [
@@ -144,6 +151,9 @@ function AppPortfolio() {
   const [profitBySymbol, setProfitBySymbol] = useState({});
   const [profitCapped, setProfitCapped] = useState(false);
   const [loadingProfit, setLoadingProfit] = useState(false);
+  // กราฟเงินลงทุนสะสมของพอร์ตที่เปิดอยู่ ([] = ยังไม่โหลด/ไม่มีรายการ — InvestedChart
+  // เองเป็นคนโชว์ Empty State ให้ ไม่ต้องแยก State null/[] ที่นี่)
+  const [monthlyInvested, setMonthlyInvested] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -191,7 +201,14 @@ function AppPortfolio() {
         });
         setProfitBySymbol(profits);
         setProfitCapped(capped);
+
+        // กราฟเงินลงทุนสะสม — เจาะจงพอร์ตนี้เท่านั้น (Reuse InvestedChart)
+        const growth = await fetchPortfolioGrowthCached(cache, openedId);
+        setMonthlyInvested(growth);
       } else {
+        // กลับไปหน้ารวม (ระดับ 1) — เคลียร์กราฟของพอร์ตก่อนหน้าทิ้ง กันค้างข้าม
+        // พอร์ตตอนเปิดพอร์ตอื่นครั้งถัดไป (Bug Pattern เดิม: Asset Dropdown ค้างพอร์ตเก่า)
+        setMonthlyInvested([]);
         // ── มูลค่ารายพอร์ตสำหรับการ์ด ────────────────────────────────────────
         // ⚠️ ต้องยิง allocation ทีละพอร์ต เพราะ groupBy รองรับแค่
         // broker/sector/assetType — **ไม่มี 'portfolio'** (ตรวจแล้วที่
@@ -355,6 +372,9 @@ function AppPortfolio() {
           )}
         </>
       )}
+
+      {/* ═══ ระดับ 2 — กราฟเงินลงทุนสะสมของพอร์ตนี้ (Reuse InvestedChart) ═══ */}
+      {!busy && !error && opened && <InvestedChart monthlyInvested={monthlyInvested} />}
 
       {/* ═══ ระดับ 2 — ตารางสินทรัพย์ในพอร์ตนี้ ═══════════════════════════ */}
       {!busy && !error && opened && (

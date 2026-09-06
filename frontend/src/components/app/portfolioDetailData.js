@@ -1,4 +1,4 @@
-import { getAllocation, getAssetProfit } from '../../lib/portfolioApi.js';
+import { getAllocation, getAssetProfit, getPortfolioGrowth } from '../../lib/portfolioApi.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // portfolioDetailData — การตัดสินใจ "ยิง API อะไร เมื่อไหร่" ของหน้าพอร์ต
@@ -42,6 +42,10 @@ export function allocationCacheKey(portfolioId, groupBy) {
 // ⚠️ ต้องมี brokerId ด้วย — Symbol เดียวกันต่างโบรกคือคนละแถว คนละต้นทุน
 export function profitCacheKey(portfolioId, symbol, brokerId) {
   return `profit|${portfolioId ?? '__all__'}|${symbol}|${brokerId ?? 'none'}`;
+}
+
+export function portfolioGrowthCacheKey(portfolioId) {
+  return `growth|${portfolioId}`;
 }
 
 // แถวที่อยู่ในพอร์ตนี้ — กรองล้วน ไม่คำนวณอะไรเลย
@@ -104,4 +108,20 @@ export async function fetchProfitsForPortfolio(cache, { portfolioId, rows, force
   }
 
   return { profitBySymbol, capped };
+}
+
+// ── ดึงกราฟ "เงินลงทุนสะสม" รายพอร์ต ─────────────────────────────────────────
+// Reuse Component InvestedChart ตัวเดียวกับหน้า Dashboard — ตรงนี้แค่ตัดสินว่า
+// จะยิง getPortfolioGrowth เมื่อไหร่ + จำผลไว้ไม่ให้ยิงซ้ำตอนสลับพอร์ตไปมา
+// (Pattern เดียวกับ fetchAllocationCached ทุกประการ) **ไม่มี portfolioId** =
+// ยังไม่ได้เปิดพอร์ตไหน (ระดับ 1) ซึ่งกราฟนี้ไม่มีความหมาย — คืน [] ไม่ยิงเลย
+export async function fetchPortfolioGrowthCached(cache, portfolioId) {
+  if (!portfolioId) return [];
+
+  const key = portfolioGrowthCacheKey(portfolioId);
+  if (cache.has(key)) return cache.get(key);
+
+  const data = await getPortfolioGrowth(portfolioId);
+  cache.set(key, data);
+  return data;
 }

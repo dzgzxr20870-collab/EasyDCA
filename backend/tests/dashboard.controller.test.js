@@ -2,26 +2,47 @@ jest.mock('../src/services/portfolio.service');
 jest.mock('../src/services/profit.service');
 jest.mock('../src/services/fxRate.service');
 jest.mock('../src/repositories/transaction.repository');
+jest.mock('../src/repositories/asset.repository');
 jest.mock('../src/repositories/user.repository');
 jest.mock('../src/services/storage.service');
 // Stage 5 (migration 046) — getProfit รับ ?brokerId ได้แล้ว ต้องผ่าน
 // assertOwnedBrokerId ก่อนใช้เสมอ (brokerId มาจาก Query String ที่ผู้ใช้กำหนดเอง)
 jest.mock('../src/services/broker.service');
+// getPortfolioGrowth ต้องผ่าน assertOwnedPortfolioId ก่อนใช้ portfolioId จาก
+// Query String เสมอ (Pattern เดียวกับ brokerId ข้างบน)
+jest.mock('../src/services/portfolios.service');
+jest.mock('../src/services/dcaStats.service');
 
 const portfolioService = require('../src/services/portfolio.service');
 const profitService = require('../src/services/profit.service');
 const fxRateService = require('../src/services/fxRate.service');
 const transactionRepository = require('../src/repositories/transaction.repository');
+const assetRepository = require('../src/repositories/asset.repository');
 const userRepository = require('../src/repositories/user.repository');
 const storageService = require('../src/services/storage.service');
 const brokerService = require('../src/services/broker.service');
+const portfoliosService = require('../src/services/portfolios.service');
+const dcaStatsService = require('../src/services/dcaStats.service');
 const {
   getPortfolio,
   getHistory,
+  getPortfolioGrowth,
   getProfit,
   getMe,
   getTransactionSlip,
 } = require('../src/controllers/dashboard.controller');
+
+// portfolios.service เป็น Automock — ต้องประกาบ PortfolioServiceError เองเพราะ
+// jest.mock automock ทำให้ Class เดิมหายไป (Pattern เดียวกับ ProfitServiceError ด้านล่าง)
+class MockPortfolioServiceError extends Error {
+  constructor(code, message, details = {}) {
+    super(message);
+    this.name = 'PortfolioServiceError';
+    this.code = code;
+    this.details = details;
+  }
+}
+portfoliosService.PortfolioServiceError = MockPortfolioServiceError;
 
 // profit.service เป็น Automock — ต้องประกาบ ProfitServiceError เองเพราะ
 // jest.mock automock ทำให้ Class เดิมหายไป (Pattern เดียวกับที่ต้องระวังใน
@@ -330,6 +351,91 @@ describe('getHistory', () => {
     const req = mockReq();
     const res = mockRes();
     await getHistory(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith({ error: 'INTERNAL_ERROR' });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// getPortfolioGrowth — กราฟเงินลงทุนสะสมรายพอร์ต (หน้ารายละเอียดพอร์ต)
+// ═══════════════════════════════════════════════════════════════════════
+describe('getPortfolioGrowth', () => {
+  test('ไม่ส่ง portfolioId มาเลย → 400 VALIDATION_ERROR ไม่แตะ Service ใดๆ', async () => {
+    const req = mockReq({ query: {} });
+    const res = mockRes();
+    await getPortfolioGrowth(req, res);
+
+    expect(portfoliosService.assertOwnedPortfolioId).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({ error: 'VALIDATION_ERROR' });
+  });
+
+  test('พอร์ตของตัวเอง → ดึงสินทรัพย์ของพอร์ตนั้น รวมธุรกรรม แล้ว Reuse getMonthlyInvestedSeries', async () => {
+    portfoliosService.assertOwnedPortfolioId.mockResolvedValue('portfolio-1');
+    assetRepository.findByPortfolio.mockResolvedValue([
+      { id: 'asset-a' },
+      { id: 'asset-b' },
+    ]);
+    const transactions = [{ id: 'tx-1', type: 'buy' }];
+    transactionRepository.findAllByAssets.mockResolvedValue(transactions);
+    const series = [{ month: '2026-09', count: 1, amountByCurrency: { THB: 1000, USD: 0 } }];
+    dcaStatsService.getMonthlyInvestedSeries.mockReturnValue(series);
+
+    const req = mockReq({ query: { portfolioId: 'portfolio-1' } });
+    const res = mockRes();
+    await getPortfolioGrowth(req, res);
+
+    expect(portfoliosService.assertOwnedPortfolioId).toHaveBeenCalledWith(USER_ID, 'portfolio-1');
+    expect(assetRepository.findByPortfolio).toHaveBeenCalledWith(USER_ID, 'portfolio-1');
+    expect(transactionRepository.findAllByAssets).toHaveBeenCalledWith(
+      ['asset-a', 'asset-b'],
+      USER_ID
+    );
+    expect(dcaStatsService.getMonthlyInvestedSeries).toHaveBeenCalledWith(transactions, 12);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({ monthlyInvested: series });
+  });
+
+  test('พอร์ตที่ยังไม่มีสินทรัพย์เลย → ไม่พังและยังคืนกราฟ (ว่าง)', async () => {
+    portfoliosService.assertOwnedPortfolioId.mockResolvedValue('portfolio-empty');
+    assetRepository.findByPortfolio.mockResolvedValue([]);
+    transactionRepository.findAllByAssets.mockResolvedValue([]);
+    dcaStatsService.getMonthlyInvestedSeries.mockReturnValue([]);
+
+    const req = mockReq({ query: { portfolioId: 'portfolio-empty' } });
+    const res = mockRes();
+    await getPortfolioGrowth(req, res);
+
+    expect(transactionRepository.findAllByAssets).toHaveBeenCalledWith([], USER_ID);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({ monthlyInvested: [] });
+  });
+
+  // ⚠️ Cross-User: portfolioId มาจาก Query String ที่ผู้ใช้กำหนดเองได้ 100% —
+  // ต้องปฏิเสธก่อนแตะสินทรัพย์/ธุรกรรมของพอร์ตนั้นเลย (ไม่ใช่แค่กรองผลลัพธ์ทีหลัง)
+  test('⚠️ portfolioId ของผู้ใช้คนอื่น → 404 PORTFOLIO_NOT_FOUND ไม่แตะ Repository อื่นเลย', async () => {
+    portfoliosService.assertOwnedPortfolioId.mockRejectedValue(
+      new MockPortfolioServiceError('PORTFOLIO_NOT_FOUND', 'not found')
+    );
+
+    const req = mockReq({ query: { portfolioId: 'portfolio-ของคนอื่น' } });
+    const res = mockRes();
+    await getPortfolioGrowth(req, res);
+
+    expect(assetRepository.findByPortfolio).not.toHaveBeenCalled();
+    expect(transactionRepository.findAllByAssets).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith({ error: 'PORTFOLIO_NOT_FOUND' });
+  });
+
+  test('Error ไม่คาดคิด → 500 INTERNAL_ERROR', async () => {
+    portfoliosService.assertOwnedPortfolioId.mockResolvedValue('portfolio-1');
+    assetRepository.findByPortfolio.mockRejectedValue(new Error('db down'));
+
+    const req = mockReq({ query: { portfolioId: 'portfolio-1' } });
+    const res = mockRes();
+    await getPortfolioGrowth(req, res);
 
     expect(res.status).toHaveBeenCalledWith(500);
     expect(res.json).toHaveBeenCalledWith({ error: 'INTERNAL_ERROR' });

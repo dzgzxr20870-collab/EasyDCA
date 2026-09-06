@@ -301,6 +301,26 @@ async function findAllByAsset(assetId, userId) {
   return data.map(toTransaction);
 }
 
+// findAllByAssets — เหมือน findAllByAsset ทุกประการแต่รับหลาย asset_id พร้อมกัน
+// (S8 R? — กราฟเงินลงทุนสะสมรายพอร์ต: พอร์ตหนึ่งมีหลายสินทรัพย์ ต้องรวมธุรกรรม
+// ของทุกสินทรัพย์ในพอร์ตนั้นก่อนป้อนเข้า dcaStatsService.getMonthlyInvestedSeries)
+// ⚠️ portfolio_id ไม่ได้อยู่ในตาราง transactions (อยู่ที่ assets.portfolio_id) —
+// Caller ต้อง Resolve asset ids ของพอร์ตนั้นมาก่อน (asset.repository.findByPortfolio)
+// แล้วส่งเข้ามาที่นี่ ที่นี่แค่กรอง user_id ที่ชั้น Query จริงเหมือน findAllByAsset
+async function findAllByAssets(assetIds, userId) {
+  if (!Array.isArray(assetIds) || assetIds.length === 0) return [];
+
+  const { data, error } = await queryForUser('transactions', userId, (q) =>
+    q.select('*').in('asset_id', assetIds)
+  );
+
+  if (error) {
+    throw new Error(`Failed to find transactions for assets: ${error.message}`);
+  }
+
+  return data.map(toTransaction);
+}
+
 // แนบ Storage path ของรูปสลิปเข้ากับ Transaction ที่ "สร้างสำเร็จไปแล้ว" (S8)
 // — Pattern เดียวกับ payment.repository.updateSlipImageUrl (แนบหลักฐานทีหลัง
 // แบบ Best-effort ไม่ใช่ส่วนหนึ่งของการสร้างรายการ)
@@ -400,6 +420,7 @@ module.exports = {
   findFilteredByUser,
   findByUserAndDateRange,
   findAllByAsset,
+  findAllByAssets,
   findAllUserIdsWithTransactions,
   findBuyHistory,
   attachSlipImagePath,

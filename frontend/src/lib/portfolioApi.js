@@ -103,6 +103,19 @@ export async function getAssetProfit(symbol, { portfolioId, brokerId } = {}) {
   return apiGet(`${BASE}/dashboard/profit/${encodeURIComponent(symbol)}${qs ? `?${qs}` : ''}`);
 }
 
+// GET /dashboard/portfolio-growth?portfolioId= — กราฟ "เงินลงทุนสะสม" รายเดือน
+// ≤12 เดือน กรองเฉพาะพอร์ตนี้ (หน้ารายละเอียดพอร์ต /app/portfolio) — คืนรูปแบบ
+// เดียวกับ overview.monthlyInvested ({ monthlyInvested: [...] }) ใช้กับ
+// <InvestedChart /> ตัวเดียวกับหน้า Dashboard ได้ตรงๆ ไม่ต้องแปลงรูป
+//
+// ⚠️ portfolioId บังคับต้องส่ง (ต่างจาก getAssetProfit ที่ optional) — Endpoint
+// นี้ไม่มีความหมายถ้าไม่กรองพอร์ต
+export async function getPortfolioGrowth(portfolioId) {
+  const params = new URLSearchParams({ portfolioId });
+  const data = await apiGet(`${BASE}/dashboard/portfolio-growth?${params.toString()}`);
+  return data?.monthlyInvested ?? [];
+}
+
 // ── Transaction slips ─────────────────────────────────────────────────────
 
 // GET /dashboard/transactions/{id}/slip — คืน Signed URL อายุสั้น (ดู Comment

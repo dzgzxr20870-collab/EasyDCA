@@ -16,16 +16,19 @@ import { describe, test, expect, vi, beforeEach } from 'vitest';
 vi.mock('../../lib/portfolioApi.js', () => ({
   getAllocation: vi.fn(),
   getAssetProfit: vi.fn(),
+  getPortfolioGrowth: vi.fn(),
 }));
 
-import { getAllocation, getAssetProfit } from '../../lib/portfolioApi.js';
+import { getAllocation, getAssetProfit, getPortfolioGrowth } from '../../lib/portfolioApi.js';
 import {
   allocationCacheKey,
   profitCacheKey,
+  portfolioGrowthCacheKey,
   holdingsForPortfolio,
   assetCountByPortfolio,
   fetchAllocationCached,
   fetchProfitsForPortfolio,
+  fetchPortfolioGrowthCached,
   MAX_PROFIT_FETCH,
 } from './portfolioDetailData.js';
 
@@ -43,6 +46,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   getAllocation.mockResolvedValue({ groups: [], totalValueThb: 0, isEmpty: true });
   getAssetProfit.mockResolvedValue({ profitLoss: 10, profitLossPercent: 1 });
+  getPortfolioGrowth.mockResolvedValue([{ month: '2026-09', count: 1 }]);
 });
 
 describe('กรอง/นับแถวตามพอร์ต — ไม่มีการคำนวณเงินเลย', () => {
@@ -189,5 +193,50 @@ describe('⭐ fetchProfitsForPortfolio — กันแถวตกหล่น�
 
     expect(capped).toBe(false);
     expect(getAssetProfit).toHaveBeenCalledTimes(MAX_PROFIT_FETCH + 1);
+  });
+});
+
+describe('⭐ fetchPortfolioGrowthCached — กราฟเงินลงทุนสะสมต้องเจาะจงพอร์ตที่เปิดอยู่', () => {
+  test('⭐ ยิง getPortfolioGrowth ด้วย portfolioId ที่เปิดอยู่', async () => {
+    await fetchPortfolioGrowthCached(new Map(), P1);
+
+    expect(getPortfolioGrowth).toHaveBeenCalledWith(P1);
+  });
+
+  // ระดับ 1 (ยังไม่เปิดพอร์ตไหน) — กราฟนี้ไม่มีความหมาย ต้องไม่ยิงเลย
+  test('ไม่มี portfolioId → คืน [] ทันที ไม่ยิง API', async () => {
+    const result = await fetchPortfolioGrowthCached(new Map(), null);
+
+    expect(result).toEqual([]);
+    expect(getPortfolioGrowth).not.toHaveBeenCalled();
+  });
+
+  test('⭐ กดเข้าพอร์ตเดิมซ้ำ → ใช้ค่าที่จำไว้ ไม่ยิง API ซ้ำ', async () => {
+    const cache = new Map();
+    await fetchPortfolioGrowthCached(cache, P1);
+    await fetchPortfolioGrowthCached(cache, P1);
+
+    expect(getPortfolioGrowth).toHaveBeenCalledTimes(1);
+  });
+
+  // ⭐ Bug Pattern เดิม (Asset Dropdown ค้างพอร์ตเก่า) — สลับพอร์ตต้องได้กราฟใหม่
+  // ของพอร์ตนั้นจริง ไม่ใช่ Cache ของพอร์ตก่อนหน้าทับมา
+  test('⭐ สลับไปอีกพอร์ต → ยิงใหม่ด้วย portfolioId ของพอร์ตใหม่ (คนละ Cache Key)', async () => {
+    const cache = new Map();
+    getPortfolioGrowth
+      .mockResolvedValueOnce([{ month: '2026-09', count: 1 }])
+      .mockResolvedValueOnce([{ month: '2026-09', count: 2 }]);
+
+    const first = await fetchPortfolioGrowthCached(cache, P1);
+    const second = await fetchPortfolioGrowthCached(cache, P2);
+
+    expect(getPortfolioGrowth).toHaveBeenCalledTimes(2);
+    expect(getPortfolioGrowth).toHaveBeenCalledWith(P1);
+    expect(getPortfolioGrowth).toHaveBeenCalledWith(P2);
+    expect(first).not.toEqual(second);
+  });
+
+  test('Cache Key แยกพอร์ตออกจากกันจริง', () => {
+    expect(portfolioGrowthCacheKey(P1)).not.toBe(portfolioGrowthCacheKey(P2));
   });
 });
