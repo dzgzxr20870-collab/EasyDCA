@@ -88,8 +88,8 @@ function Login() {
         setStatusType('success');
 
         // Hardening: พากลับหน้าที่ผู้ใช้ตั้งใจไปก่อน Token หาย (เช่น /premium) — ไม่มี
-        // ค่าที่จำไว้จึงค่อย Fallback ไป /dashboard ตามเดิม (takeReturnTo อ่านครั้งเดียวแล้วลบ)
-        navigate(takeReturnTo() ?? '/dashboard', { replace: true });
+        // ค่าที่จำไว้จึงค่อย Fallback ไป /app/dashboard ตามเดิม (takeReturnTo อ่านครั้งเดียวแล้วลบ)
+        navigate(takeReturnTo() ?? '/app/dashboard', { replace: true });
       } catch (err) {
         setLoading(false);
         setStatus('เข้าสู่ระบบไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
@@ -110,8 +110,8 @@ function Login() {
     setConsentError(null);
     try {
       await apiPost('/api/v1/auth/pdpa-consent', {});
-      // พากลับหน้าที่ตั้งใจไว้เช่นกัน (ปกติผู้ใช้ใหม่ไม่มีค่าจำไว้ → Fallback /dashboard)
-      navigate(takeReturnTo() ?? '/dashboard', { replace: true });
+      // พากลับหน้าที่ตั้งใจไว้เช่นกัน (ปกติผู้ใช้ใหม่ไม่มีค่าจำไว้ → Fallback /app/dashboard)
+      navigate(takeReturnTo() ?? '/app/dashboard', { replace: true });
     } catch (err) {
       setConsentError('ยืนยันไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
     } finally {
