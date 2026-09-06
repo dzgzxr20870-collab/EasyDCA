@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { useOutletContext, Link } from 'react-router-dom';
+import { useOutletContext, useNavigate, Link } from 'react-router-dom';
+import { clearToken } from '../../lib/api.js';
 import { setDefaultPortfolio } from '../../lib/portfolioApi.js';
 import ExportReportPanel from '../../components/app/ExportReportPanel.jsx';
 
@@ -16,8 +17,17 @@ import ExportReportPanel from '../../components/app/ExportReportPanel.jsx';
 
 function AppProfile() {
   const { portfolios, entitlements, reload } = useOutletContext();
+  const navigate = useNavigate();
   const [busyId, setBusyId] = useState(null);
   const [error, setError] = useState(null);
+
+  // Reuse Logic เดียวกับหน้าเก่า Dashboard.jsx (handleLogout บรรทัด ~290) เป๊ะ —
+  // clearToken() ล้าง Token ใน Memory แล้วพากลับไปหน้า Login ('/' คือ Route จริง
+  // ของ Login ในระบบนี้ ไม่มี Route '/login' แยกต่างหาก — ดู App.jsx)
+  function handleLogout() {
+    clearToken();
+    navigate('/');
+  }
 
   async function handleSetDefault(id) {
     setBusyId(id);
@@ -139,6 +149,14 @@ function AppProfile() {
           🆘 ติดต่อซัพพอร์ต
         </Link>
       </section>
+
+      {/* ⭐ แถบออกจากระบบ — มติ Founder: ต้องเป็นแถบเต็มความกว้างที่ล่างสุดของหน้า
+          จริงๆ (ต่อจาก "ติดต่อทีมงาน") ไม่ใช่ปุ่มเล็กปนกับ Section อื่น — พบจาก
+          E2E Test ว่าหน้า /app/profile ไม่เคยมีทางออกจากระบบเลย (หน้าเก่า
+          /dashboard มี dashboard-logout-btn อยู่แล้ว) */}
+      <button type="button" className="app-logout-bar" onClick={handleLogout}>
+        🚪 ออกจากระบบ
+      </button>
     </section>
   );
 }

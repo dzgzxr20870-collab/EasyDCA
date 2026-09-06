@@ -345,6 +345,26 @@
 
 .app-note { font-size: 13px; color: #64748b; margin: 8px 0; }
 
+/* แถบ "ออกจากระบบ" ที่ล่างสุดของ /app/profile (พรอมต์ ก.ย. 2569) — เจตนาให้เป็น
+   แถบเต็มความกว้าง แยกจาก .demo-card ของ Section อื่นอย่างชัดเจน (ไม่ใช่ปุ่มเล็ก
+   ปนกับ Section) ใช้โทนสีแดง/เตือนเดียวกับ .app-state--error (ธีมเดียวกันทั้ง
+   /app/*) — ไม่ Copy .dashboard-logout-btn ของหน้าเก่าตรงๆ เพราะ CSS คนละชุด */
+.app-logout-bar {
+  display: block;
+  width: 100%;
+  margin: 20px 0 4px;
+  padding: 14px 16px;
+  border: 1px solid #fecaca;
+  border-radius: var(--r-sm, 14px);
+  background: #fef2f2;
+  color: #991b1b;
+  font-size: 14.5px;
+  font-weight: 700;
+  text-align: center;
+  cursor: pointer;
+}
+.app-logout-bar:hover { background: #fde2e2; }
+
 /* แบนเนอร์ Free/Premium (PlanBanner.jsx) — แสดงเหนือทุกแท็บของ /app/* เสมอ
    ⚠️ Free เป็น <NavLink> กดได้ทั้งก้อน (ชวนอัปเกรด) ส่วน Premium เป็น <section>
    เฉยๆ (ไม่มีอะไรให้กด) — ต้อง Reset text-decoration/color ของ <a> เพราะ Base
