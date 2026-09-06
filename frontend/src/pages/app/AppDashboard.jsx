@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useOutletContext, Link } from 'react-router-dom';
 import { apiGet } from '../../lib/api.js';
+import { getPortfolioDividendSummary } from '../../lib/portfolioApi.js';
+import DividendSummaryPanel from '../../components/app/DividendSummaryPanel.jsx';
 // ⚠️ **Reuse ตัวเดิมของ DashboardHome ห้ามเขียนกราฟใหม่** — Component นี้รับ
 // `overview.monthlyInvested` Shape เดียวกันเป๊ะ (API.md §15.4) และมีเรื่องที่ทำถูกไว้
 // แล้วซึ่งเขียนใหม่แล้วมักพลาด: แยกเส้น THB/USD (ไม่มี Historical FX ให้แปลงย้อนหลัง)
@@ -74,6 +76,9 @@ function AppDashboard() {
   const [overview, setOverview] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  // สรุปเงินปันผลทั้งบัญชี (null = ยังไม่โหลด/โหลดไม่สำเร็จ) — DividendSummaryPanel
+  // เองเป็นคนโชว์ Empty State ให้เมื่อยอดเป็น 0/ไม่มี Breakdown
+  const [dividendSummary, setDividendSummary] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -85,6 +90,14 @@ function AppDashboard() {
       setOverview(null);
     } finally {
       setLoading(false);
+    }
+
+    // สรุปเงินปันผล — Best-effort แยกจาก overview หลักโดยเจตนา: เป็นแค่ Section
+    // เสริม ล้มแล้วต้องไม่ทำให้ตัวเลขหลักทั้งหน้า (มูลค่าพอร์ต/กำไรขาดทุน) หายไปด้วย
+    try {
+      setDividendSummary(await getPortfolioDividendSummary());
+    } catch {
+      setDividendSummary(null);
     }
   }, []);
 
@@ -222,6 +235,9 @@ function AppDashboard() {
       {Array.isArray(overview?.monthlyInvested) && overview.monthlyInvested.length > 0 && (
         <InvestedChart monthlyInvested={overview.monthlyInvested} />
       )}
+
+      {/* สรุปเงินปันผลทั้งบัญชี — Best-effort (null = ยังไม่โหลด/โหลดไม่สำเร็จ) */}
+      {dividendSummary && <DividendSummaryPanel summary={dividendSummary} />}
 
       {/* แผน DCA ที่ถึงรอบวันนี้ — ข้อความเป็นข้อเท็จจริงล้วน ไม่ชี้นำว่าควรซื้อไหม */}
       {Array.isArray(overview?.todayDuePlans) && overview.todayDuePlans.length > 0 && (

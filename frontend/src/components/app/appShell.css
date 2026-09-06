@@ -708,6 +708,39 @@
 .dh-avatar { width: 30px; height: 30px; border-radius: 99px; display: grid; place-items: center; font-size: 11px; font-weight: 800; color: #fff; flex: none; overflow: hidden; }
 .dh-avatar img { width: 100%; height: 100%; object-fit: contain; background: #fff; }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   InvestedChart (components/dashboard/InvestedChart.jsx) — เชื่อมเข้าหน้าใหม่
+   ═══════════════════════════════════════════════════════════════════════
+   ปัญหาเดียวกับ .dh-avatar ด้านบนเป๊ะ: Component ฝัง className="dh-card"/"dh-tag"/
+   "dh-tabs" ฯลฯ ไว้ตรงๆ (ห้ามแก้ — ใช้ร่วมกับหน้าเก่า /dashboard) แต่
+   DashboardHome.css ไม่ได้ถูก Import เข้าหน้าใหม่ (/app/*) เลย จึง Copy กฎเดิมมา
+   Scope ไว้ที่นี่แทน (ค่าตรงกันเป๊ะกับ DashboardHome.css) — Component เดียวกันนี้
+   ถูก Reuse ซ้ำใน AppPortfolio.jsx (กราฟรายพอร์ต) และ DividendSummaryPanel.jsx
+   (การ์ด .dh-tag เดียวกัน) ด้วย
+
+   ⚠️ .dh-app ประกาศ --green-ink ไว้ใน Scope ของตัวเอง (DashboardHome.css) แต่
+   /app/* ใช้ .demo-shell เป็นราก (ไม่ใช่ .dh-app) จึงต้องประกาศเพิ่มที่นี่
+   (--green-soft มีอยู่แล้วใน .demo-shell — Pattern เดียวกับ .demo-serious ด้านบน
+   ที่ Override ตัวแปรผ่าน Selector แยกแทนการแก้ Block เดิม)
+
+   ⚠️ .dh-tab-on ต้นฉบับเป็น `.dh-app .dh-tab-on` (ชนะ Specificity ของ
+   `.dh-app button { background: none }`) — ที่นี่ไม่มี Reset แบบนั้นจึงไม่ต้องมี
+   Ancestor แต่ยังคง Scope ด้วย .demo-shell กันชนกับ Class อื่นในอนาคต · เพิ่ม
+   cursor:pointer ให้ .dh-tab ด้วย (ต้นฉบับพึ่ง `.dh-app button` Global Reset ที่
+   ไม่มีในนี้ — ไม่งั้นปุ่มเลือกช่วงเวลาจะขึ้น Cursor เริ่มต้นแทนที่จะเป็นมือชี้) */
+.demo-shell { --green-ink: #0E5233; }
+.dh-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow); }
+.dh-card-h { display: flex; align-items: center; gap: 10px; padding: 16px 20px 0; flex-wrap: wrap; row-gap: 8px; }
+.dh-card-h h2 { font-size: 16.5px; font-weight: 700; }
+.dh-tag { font-size: 10.5px; font-weight: 700; color: var(--green-ink); background: var(--green-soft); padding: 3px 9px; border-radius: 99px; }
+.dh-sp { flex: 1; }
+.dh-empty-msg { padding: 20px; color: var(--muted); font-size: 13.5px; text-align: center; }
+.dh-chart-wrap { padding: 6px 20px 18px; }
+.dh-tabs { display: flex; gap: 5px; }
+.dh-tab { padding: 5.5px 12px; border-radius: 9px; font-size: 12px; font-weight: 700; color: var(--muted); cursor: pointer; }
+.demo-shell .dh-tab-on { background: var(--green-soft); color: var(--green-ink); }
+.dh-chart-note { font-size: 11.5px; color: var(--muted); padding: 0 20px 14px; }
+
 /* ── รายการล่าสุด (AppDashboard) — คอลัมน์แรกของ .demo-recent li (grid 1fr auto auto)
    เปลี่ยนจากข้อความล้วนเป็น Avatar+Symbol โดยยังอยู่ใน Track เดิม ─────────────── */
 .demo-recent__asset { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }

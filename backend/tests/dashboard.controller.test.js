@@ -27,6 +27,7 @@ const {
   getPortfolio,
   getHistory,
   getPortfolioGrowth,
+  getDividendSummary,
   getProfit,
   getMe,
   getTransactionSlip,
@@ -436,6 +437,189 @@ describe('getPortfolioGrowth', () => {
     const req = mockReq({ query: { portfolioId: 'portfolio-1' } });
     const res = mockRes();
     await getPortfolioGrowth(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith({ error: 'INTERNAL_ERROR' });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// getDividendSummary — สรุปเงินปันผลที่เคยได้รับ
+// ═══════════════════════════════════════════════════════════════════════
+// ⚠️ dividend.service **ไม่ Mock** (Pure Logic ไม่มี DB Call — Pattern เดียวกับ
+// entitlement.service ใน describe('getMe')) เพื่อพิสูจน์ว่า Reuse
+// calculateTotalDividend/dividendSign จริง ไม่ใช่คำนวณสูตรใหม่เอง
+describe('getDividendSummary', () => {
+  function makeTx(overrides = {}) {
+    return {
+      id: 'tx-1',
+      symbol: 'PTT',
+      type: 'dividend',
+      amountThb: 100,
+      currency: 'THB',
+      date: '2026-01-01',
+      ...overrides,
+    };
+  }
+
+  test('ไม่ส่ง portfolioId → สรุปทั้งบัญชีผ่าน findAllByUser ไม่แตะ findByPortfolio', async () => {
+    transactionRepository.findAllByUser.mockResolvedValue([
+      makeTx({ id: 'tx-1', symbol: 'PTT', amountThb: 100 }),
+      makeTx({ id: 'tx-2', symbol: 'PTT', amountThb: 50, date: '2026-02-01' }),
+    ]);
+
+    const req = mockReq({ query: {} });
+    const res = mockRes();
+    await getDividendSummary(req, res);
+
+    expect(portfoliosService.assertOwnedPortfolioId).not.toHaveBeenCalled();
+    expect(transactionRepository.findAllByUser).toHaveBeenCalledWith(USER_ID);
+    expect(assetRepository.findByPortfolio).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+    const body = res.json.mock.calls[0][0];
+    expect(body.totalDividendByCurrency).toEqual({ THB: 150, USD: 0 });
+  });
+
+  test('ส่ง portfolioId ของตัวเอง → ผ่าน assertOwnedPortfolioId แล้ว Resolve Asset ก่อนดึงธุรกรรม', async () => {
+    portfoliosService.assertOwnedPortfolioId.mockResolvedValue('portfolio-1');
+    assetRepository.findByPortfolio.mockResolvedValue([{ id: 'asset-a' }, { id: 'asset-b' }]);
+    transactionRepository.findAllByAssets.mockResolvedValue([makeTx({ amountThb: 100 })]);
+
+    const req = mockReq({ query: { portfolioId: 'portfolio-1' } });
+    const res = mockRes();
+    await getDividendSummary(req, res);
+
+    expect(portfoliosService.assertOwnedPortfolioId).toHaveBeenCalledWith(USER_ID, 'portfolio-1');
+    expect(assetRepository.findByPortfolio).toHaveBeenCalledWith(USER_ID, 'portfolio-1');
+    expect(transactionRepository.findAllByAssets).toHaveBeenCalledWith(
+      ['asset-a', 'asset-b'],
+      USER_ID
+    );
+    expect(transactionRepository.findAllByUser).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  // ⭐ ห้ามรวมยอดข้ามสกุล — amount_thb เก็บยอด "ในสกุลของแถวนั้น" จริง (migration 012)
+  test('⭐ แยกยอดตามสกุลเงิน ไม่รวม THB กับ USD เป็นก้อนเดียว', async () => {
+    transactionRepository.findAllByUser.mockResolvedValue([
+      makeTx({ id: 'tx-1', symbol: 'PTT', amountThb: 100, currency: 'THB' }),
+      makeTx({ id: 'tx-2', symbol: 'AAPL', amountThb: 5, currency: 'USD' }),
+    ]);
+
+    const req = mockReq({ query: {} });
+    const res = mockRes();
+    await getDividendSummary(req, res);
+
+    const body = res.json.mock.calls[0][0];
+    expect(body.totalDividendByCurrency).toEqual({ THB: 100, USD: 5 });
+  });
+
+  test('Breakdown ต่อ Symbol ถูกต้อง (หลาย Symbol ไม่ปนกัน)', async () => {
+    transactionRepository.findAllByUser.mockResolvedValue([
+      makeTx({ id: 'tx-1', symbol: 'PTT', amountThb: 100 }),
+      makeTx({ id: 'tx-2', symbol: 'PTT', amountThb: 50 }),
+      makeTx({ id: 'tx-3', symbol: 'KBANK', amountThb: 30 }),
+    ]);
+
+    const req = mockReq({ query: {} });
+    const res = mockRes();
+    await getDividendSummary(req, res);
+
+    const body = res.json.mock.calls[0][0];
+    expect(body.bySymbol).toEqual(
+      expect.arrayContaining([
+        { symbol: 'PTT', currency: 'THB', total: 150 },
+        { symbol: 'KBANK', currency: 'THB', total: 30 },
+      ])
+    );
+    expect(body.bySymbol).toHaveLength(2);
+  });
+
+  // Reuse dividendSign() จริง — พิสูจน์ว่าไม่หลงลืม Sign ติดลบของ Reversal
+  test('มี dividend_reversal → หักออกจากยอดรวมถูกต้อง', async () => {
+    transactionRepository.findAllByUser.mockResolvedValue([
+      makeTx({ id: 'tx-1', symbol: 'PTT', amountThb: 100, type: 'dividend' }),
+      makeTx({ id: 'tx-2', symbol: 'PTT', amountThb: 100, type: 'dividend_reversal', date: '2026-02-01' }),
+    ]);
+
+    const req = mockReq({ query: {} });
+    const res = mockRes();
+    await getDividendSummary(req, res);
+
+    const body = res.json.mock.calls[0][0];
+    expect(body.totalDividendByCurrency).toEqual({ THB: 0, USD: 0 });
+    expect(body.bySymbol).toEqual([{ symbol: 'PTT', currency: 'THB', total: 0 }]);
+  });
+
+  // ธุรกรรมซื้อ/ขายต้องไม่ถูกนับปนเข้ามาในสรุปปันผล
+  test('ธุรกรรม buy/sell ในบัญชี → ไม่ถูกนับเป็นปันผล', async () => {
+    transactionRepository.findAllByUser.mockResolvedValue([
+      makeTx({ id: 'tx-1', symbol: 'BTC', type: 'buy', amountThb: 1000 }),
+      makeTx({ id: 'tx-2', symbol: 'PTT', type: 'dividend', amountThb: 30 }),
+    ]);
+
+    const req = mockReq({ query: {} });
+    const res = mockRes();
+    await getDividendSummary(req, res);
+
+    const body = res.json.mock.calls[0][0];
+    expect(body.totalDividendByCurrency).toEqual({ THB: 30, USD: 0 });
+    expect(body.bySymbol).toEqual([{ symbol: 'PTT', currency: 'THB', total: 30 }]);
+  });
+
+  test('ไม่เคยมีปันผลเลย → สถานะว่างที่เข้าใจง่าย ไม่ Error', async () => {
+    transactionRepository.findAllByUser.mockResolvedValue([]);
+
+    const req = mockReq({ query: {} });
+    const res = mockRes();
+    await getDividendSummary(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({
+      totalDividendByCurrency: { THB: 0, USD: 0 },
+      bySymbol: [],
+      recent: [],
+    });
+  });
+
+  test('รายการล่าสุด → เรียง date DESC และตัดไม่เกินเพดาน', async () => {
+    transactionRepository.findAllByUser.mockResolvedValue([
+      makeTx({ id: 'tx-old', symbol: 'PTT', date: '2026-01-01', amountThb: 10 }),
+      makeTx({ id: 'tx-new', symbol: 'KBANK', date: '2026-03-01', amountThb: 20 }),
+    ]);
+
+    const req = mockReq({ query: {} });
+    const res = mockRes();
+    await getDividendSummary(req, res);
+
+    const body = res.json.mock.calls[0][0];
+    expect(body.recent[0]).toMatchObject({ symbol: 'KBANK', date: '2026-03-01' });
+    expect(body.recent[1]).toMatchObject({ symbol: 'PTT', date: '2026-01-01' });
+  });
+
+  // ⚠️ Cross-User: portfolioId มาจาก Query String ที่ผู้ใช้กำหนดเองได้ 100% —
+  // ต้องปฏิเสธก่อนแตะสินทรัพย์/ธุรกรรมของพอร์ตนั้นเลย (Pattern เดียวกับ Growth Chart)
+  test('⚠️ portfolioId ของผู้ใช้คนอื่น → 404 PORTFOLIO_NOT_FOUND ไม่แตะ Repository อื่นเลย', async () => {
+    portfoliosService.assertOwnedPortfolioId.mockRejectedValue(
+      new MockPortfolioServiceError('PORTFOLIO_NOT_FOUND', 'not found')
+    );
+
+    const req = mockReq({ query: { portfolioId: 'portfolio-ของคนอื่น' } });
+    const res = mockRes();
+    await getDividendSummary(req, res);
+
+    expect(assetRepository.findByPortfolio).not.toHaveBeenCalled();
+    expect(transactionRepository.findAllByAssets).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith({ error: 'PORTFOLIO_NOT_FOUND' });
+  });
+
+  test('Error ไม่คาดคิด → 500 INTERNAL_ERROR', async () => {
+    transactionRepository.findAllByUser.mockRejectedValue(new Error('db down'));
+
+    const req = mockReq({ query: {} });
+    const res = mockRes();
+    await getDividendSummary(req, res);
 
     expect(res.status).toHaveBeenCalledWith(500);
     expect(res.json).toHaveBeenCalledWith({ error: 'INTERNAL_ERROR' });

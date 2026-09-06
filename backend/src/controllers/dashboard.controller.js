@@ -14,6 +14,7 @@ const userRepository = require('../repositories/user.repository');
 const entitlementService = require('../services/entitlement.service');
 const storageService = require('../services/storage.service');
 const dcaStatsService = require('../services/dcaStats.service');
+const dividendService = require('../services/dividend.service');
 
 function roundToTwo(value) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
@@ -28,6 +29,16 @@ const DEFAULT_HISTORY_LIMIT = 50;
 // เท่ากันเป๊ะ (ไม่ Export ค่านั้นมาใช้ร่วมเพราะเป็นแค่ Magic Number ของ Query เดียว
 // ไม่ใช่ Logic ที่ต้อง Reuse)
 const PORTFOLIO_GROWTH_CHART_MONTHS = 12;
+
+// type ที่นับเป็น "ปันผล" ทั้งคู่ (รับ + ยกเลิก) — ตรงกับ dividendSign() ที่ dividend
+// .service ใช้ตัดสิน (buy/sell คืน 0 อยู่แล้วเลยกรองไม่กรองก็ได้ผลรวมเท่ากัน แต่กรอง
+// ก่อนที่นี่ให้ "รายการล่าสุด"/"Breakdown ต่อ Symbol" ไม่ปนแถวซื้อ-ขายที่ไม่เกี่ยวเลย)
+const DIVIDEND_TYPES = ['dividend', 'dividend_reversal'];
+
+// จำนวนแถวของ "รายการปันผลล่าสุด" ในหน้าสรุป — Pattern เดียวกับ RECENT_LIMIT ของ
+// dashboardOverview.service (การ์ด "รายการล่าสุด" ทั้งบัญชี) แค่เป็นค่าคงที่แยก
+// เพราะเป็นคนละหน้าคนละบริบท
+const DIVIDEND_RECENT_LIMIT = 10;
 
 // Allowlist ตรงกับ CHECK constraint จริงของ transactions.type (migration 047) —
 // ค่านอกเหนือจากนี้ถูก "เพิกเฉย" (ไม่กรอง ไม่ Error) ตาม Convention เดิมของไฟล์นี้
@@ -169,6 +180,94 @@ async function getPortfolioGrowth(req, res) {
     }
 
     console.error(`[dashboard] getPortfolioGrowth failed: ${err.message}`);
+    return res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+}
+
+// GET /api/v1/dashboard/dividend-summary?portfolioId=<uuid> — สรุปเงินปันผลที่เคย
+// ได้รับ (หน้า /app/portfolio ตอนเปิดพอร์ต + /app/dashboard ภาพรวมทั้งบัญชี)
+//
+// portfolioId **Optional** (ต่างจาก getPortfolioGrowth ที่บังคับ) — ไม่ส่ง =
+// สรุปทั้งบัญชี (ตรวจสอบกับ findAllByUser ตรงๆ), ส่งมา = เฉพาะพอร์ตนั้น (Resolve
+// สินทรัพย์ก่อนผ่าน findByPortfolio แล้วดึงธุรกรรมด้วย findAllByAssets — Pattern
+// เดียวกับ getPortfolioGrowth เป๊ะ เพราะ portfolio_id อยู่ที่ assets ไม่ใช่
+// transactions) ผ่าน assertOwnedPortfolioId กัน User เดา UUID พอร์ตคนอื่น
+//
+// ⚠️ Reuse dividendService.calculateTotalDividend() ตรงๆ ทุกจุด (Design Doc § 5.3
+// ห้ามคำนวณสูตรใหม่) — สิ่งเดียวที่ทำเองคือ "กรองแถว" (ตาม type/currency/symbol)
+// ก่อนป้อนเข้าฟังก์ชันเดิม ไม่ใช่เขียน Sum เอง
+//
+// ⚠️ แยกยอดตามสกุลเงินเสมอ (totalDividendByCurrency ไม่ใช่ยอดก้อนเดียว) —
+// เหตุผลเดียวกับ dcaStatsService.getMonthlyInvestedSeries: amount_thb เก็บ "ยอด
+// ในสกุลของแถวนั้นตามจริง" (migration 012) หุ้นสหรัฐจ่ายปันผลเป็น USD ได้จริง
+// (ดู dividend.service.recordDividend — currency ตามสินทรัพย์) รวมข้าม THB/USD
+// เป็นก้อนเดียวจะผิดแบบเงียบๆ เหมือนทุกจุดอื่นของระบบที่ห้ามไว้ (fxUnavailableForUsd
+// /amountByCurrency ฯลฯ)
+async function getDividendSummary(req, res) {
+  try {
+    const rawPortfolio = req.query.portfolioId;
+    const portfolioId =
+      rawPortfolio === undefined
+        ? undefined
+        : await portfoliosService.assertOwnedPortfolioId(req.user.id, rawPortfolio);
+
+    let transactions;
+    if (portfolioId !== undefined) {
+      const assets = await assetRepository.findByPortfolio(req.user.id, portfolioId);
+      const assetIds = assets.map((asset) => asset.id);
+      transactions = await transactionRepository.findAllByAssets(assetIds, req.user.id);
+    } else {
+      transactions = await transactionRepository.findAllByUser(req.user.id);
+    }
+
+    const dividendTx = transactions.filter((tx) => DIVIDEND_TYPES.includes(tx.type));
+
+    const totalDividendByCurrency = {
+      THB: dividendService.calculateTotalDividend(
+        dividendTx.filter((tx) => tx.currency !== 'USD')
+      ),
+      USD: dividendService.calculateTotalDividend(
+        dividendTx.filter((tx) => tx.currency === 'USD')
+      ),
+    };
+
+    // Breakdown ต่อ Symbol — Symbol เดียวกันมีสกุลเดียวเสมอ (ผูกกับ asset.currency)
+    // จึงแนบ currency ต่อแถวได้โดยไม่ต้องแยก THB/USD ซ้ำในระดับนี้
+    const bySymbolMap = new Map();
+    for (const tx of dividendTx) {
+      const key = tx.symbol ?? 'UNKNOWN';
+      if (!bySymbolMap.has(key)) bySymbolMap.set(key, []);
+      bySymbolMap.get(key).push(tx);
+    }
+    const bySymbol = Array.from(bySymbolMap.entries())
+      .map(([symbol, txs]) => ({
+        symbol,
+        currency: txs.some((tx) => tx.currency === 'USD') ? 'USD' : 'THB',
+        total: dividendService.calculateTotalDividend(txs),
+      }))
+      .sort((a, b) => b.total - a.total);
+
+    // รายการล่าสุด — เรียง date DESC เอง เพราะ findAllByAssets (ต่างจาก
+    // findAllByUser) ไม่ได้ .order() ที่ DB มาให้ (ดู Comment ของฟังก์ชันนั้น)
+    const recent = dividendTx
+      .slice()
+      .sort((a, b) => (a.date === b.date ? 0 : a.date < b.date ? 1 : -1))
+      .slice(0, DIVIDEND_RECENT_LIMIT)
+      .map((tx) => ({
+        date: tx.date,
+        symbol: tx.symbol,
+        currency: tx.currency,
+        amountThb: Number(tx.amountThb),
+        type: tx.type,
+      }));
+
+    return res.status(200).json({ totalDividendByCurrency, bySymbol, recent });
+  } catch (err) {
+    if (err instanceof portfoliosService.PortfolioServiceError) {
+      return res.status(err.code === 'PORTFOLIO_NOT_FOUND' ? 404 : 400).json({ error: err.code });
+    }
+
+    console.error(`[dashboard] getDividendSummary failed: ${err.message}`);
     return res.status(500).json({ error: 'INTERNAL_ERROR' });
   }
 }
@@ -334,6 +433,7 @@ module.exports = {
   getPortfolio,
   getHistory,
   getPortfolioGrowth,
+  getDividendSummary,
   getProfit,
   getMe,
   getOverview,

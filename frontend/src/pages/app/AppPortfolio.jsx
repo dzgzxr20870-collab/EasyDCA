@@ -12,10 +12,12 @@ import EditSectorDialog from '../../components/app/EditSectorDialog.jsx';
 import PortfolioSettingsPanel from '../../components/app/PortfolioSettingsPanel.jsx';
 import BrokerSettingsPanel from '../../components/app/BrokerSettingsPanel.jsx';
 import InvestedChart from '../../components/dashboard/InvestedChart.jsx';
+import DividendSummaryPanel from '../../components/app/DividendSummaryPanel.jsx';
 import {
   fetchAllocationCached,
   fetchProfitsForPortfolio,
   fetchPortfolioGrowthCached,
+  fetchDividendSummaryCached,
   holdingsForPortfolio,
   assetCountByPortfolio,
   MAX_CARD_VALUE_FETCH,
@@ -154,6 +156,9 @@ function AppPortfolio() {
   // กราฟเงินลงทุนสะสมของพอร์ตที่เปิดอยู่ ([] = ยังไม่โหลด/ไม่มีรายการ — InvestedChart
   // เองเป็นคนโชว์ Empty State ให้ ไม่ต้องแยก State null/[] ที่นี่)
   const [monthlyInvested, setMonthlyInvested] = useState([]);
+  // สรุปเงินปันผล (null = ยังไม่โหลด — DividendSummaryPanel เองเป็นคนโชว์ Empty State
+  // ให้เมื่อยอดเป็น 0/ไม่มี Breakdown จึงไม่ต้องแยก State null/ค่าว่างที่นี่)
+  const [dividendSummary, setDividendSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -205,10 +210,15 @@ function AppPortfolio() {
         // กราฟเงินลงทุนสะสม — เจาะจงพอร์ตนี้เท่านั้น (Reuse InvestedChart)
         const growth = await fetchPortfolioGrowthCached(cache, openedId);
         setMonthlyInvested(growth);
+
+        // สรุปเงินปันผล — เจาะจงพอร์ตนี้เท่านั้น
+        const dividends = await fetchDividendSummaryCached(cache, openedId);
+        setDividendSummary(dividends);
       } else {
-        // กลับไปหน้ารวม (ระดับ 1) — เคลียร์กราฟของพอร์ตก่อนหน้าทิ้ง กันค้างข้าม
+        // กลับไปหน้ารวม (ระดับ 1) — เคลียร์กราฟ/สรุปปันผลของพอร์ตก่อนหน้าทิ้ง กันค้างข้าม
         // พอร์ตตอนเปิดพอร์ตอื่นครั้งถัดไป (Bug Pattern เดิม: Asset Dropdown ค้างพอร์ตเก่า)
         setMonthlyInvested([]);
+        setDividendSummary(null);
         // ── มูลค่ารายพอร์ตสำหรับการ์ด ────────────────────────────────────────
         // ⚠️ ต้องยิง allocation ทีละพอร์ต เพราะ groupBy รองรับแค่
         // broker/sector/assetType — **ไม่มี 'portfolio'** (ตรวจแล้วที่
@@ -375,6 +385,11 @@ function AppPortfolio() {
 
       {/* ═══ ระดับ 2 — กราฟเงินลงทุนสะสมของพอร์ตนี้ (Reuse InvestedChart) ═══ */}
       {!busy && !error && opened && <InvestedChart monthlyInvested={monthlyInvested} />}
+
+      {/* ═══ ระดับ 2 — สรุปเงินปันผลของพอร์ตนี้ ══════════════════════════ */}
+      {!busy && !error && opened && dividendSummary && (
+        <DividendSummaryPanel summary={dividendSummary} />
+      )}
 
       {/* ═══ ระดับ 2 — ตารางสินทรัพย์ในพอร์ตนี้ ═══════════════════════════ */}
       {!busy && !error && opened && (

@@ -116,6 +116,27 @@ export async function getPortfolioGrowth(portfolioId) {
   return data?.monthlyInvested ?? [];
 }
 
+// GET /dashboard/dividend-summary?portfolioId= — สรุปเงินปันผลที่เคยได้รับ
+// portfolioId Optional (ต่างจาก getPortfolioGrowth ที่บังคับ) — ไม่ส่ง = สรุป
+// ทั้งบัญชี, ส่งมา = เฉพาะพอร์ตนั้น
+//
+// ⚠️ ยอดรวมแยกตามสกุลเงินเสมอ (totalDividendByCurrency: { THB, USD }) — ห้าม
+// รวมเป็นก้อนเดียวที่ฝั่ง UI (เหตุผลเดียวกับกราฟเงินลงทุนสะสม — ดู
+// dashboard.controller.getDividendSummary)
+export async function getPortfolioDividendSummary(portfolioId) {
+  const params = new URLSearchParams();
+  if (portfolioId) params.set('portfolioId', portfolioId);
+  const qs = params.toString();
+  const data = await apiGet(`${BASE}/dashboard/dividend-summary${qs ? `?${qs}` : ''}`);
+  return (
+    data ?? {
+      totalDividendByCurrency: { THB: 0, USD: 0 },
+      bySymbol: [],
+      recent: [],
+    }
+  );
+}
+
 // ── Transaction slips ─────────────────────────────────────────────────────
 
 // GET /dashboard/transactions/{id}/slip — คืน Signed URL อายุสั้น (ดู Comment

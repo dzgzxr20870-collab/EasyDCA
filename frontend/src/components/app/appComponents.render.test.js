@@ -24,6 +24,7 @@ import { setToken } from '../../lib/api.js';
 import RecordTransactionModal from './RecordTransactionModal.jsx';
 import PlanBanner from './PlanBanner.jsx';
 import { UNKNOWN_ENTITLEMENTS, fromMeResponse } from '../../lib/entitlements.js';
+import DividendSummaryPanel from './DividendSummaryPanel.jsx';
 
 function withRouter(element) {
   return React.createElement(MemoryRouter, null, element);
@@ -500,5 +501,87 @@ describe('PlanBanner — แบนเนอร์ Free/Premium ของ /app/*'
 
     expect(html).toContain('จำกัด 2 สินทรัพย์');
     expect(html).toContain('href="/premium"');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DividendSummaryPanel — สรุปเงินปันผลที่เคยได้รับ (พรอมต์ ก.ย. 2569)
+// ═══════════════════════════════════════════════════════════════════════════
+describe('DividendSummaryPanel — สรุปเงินปันผล', () => {
+  test('ไม่เคยมีปันผลเลย → Empty State ที่เข้าใจง่าย ไม่ Error', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(DividendSummaryPanel, {
+        summary: { totalDividendByCurrency: { THB: 0, USD: 0 }, bySymbol: [], recent: [] },
+      })
+    );
+
+    expect(html).toContain('ยังไม่มีเงินปันผลที่บันทึกไว้');
+  });
+
+  test('มีปันผลหลาย Symbol (THB ล้วน) → ยอดรวม + Breakdown ต่อ Symbol ถูกต้อง', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(DividendSummaryPanel, {
+        summary: {
+          totalDividendByCurrency: { THB: 150, USD: 0 },
+          bySymbol: [
+            { symbol: 'PTT', currency: 'THB', total: 100 },
+            { symbol: 'KBANK', currency: 'THB', total: 50 },
+          ],
+          recent: [
+            { date: '2026-03-01', symbol: 'PTT', currency: 'THB', amountThb: 100, type: 'dividend' },
+          ],
+        },
+      })
+    );
+
+    expect(html).toContain('150.00');
+    expect(html).not.toContain('USD');
+    expect(html).toContain('PTT');
+    expect(html).toContain('KBANK');
+    expect(html).toContain('ปันผลรับ');
+  });
+
+  // ⭐ ห้ามรวมยอดข้ามสกุล — THB กับ USD ต้องแสดงแยกกันเสมอ ไม่บวกรวมเป็นก้อนเดียว
+  test('⭐ มีปันผลทั้ง THB และ USD → แสดงแยกกันเป็นคนละบรรทัด', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(DividendSummaryPanel, {
+        summary: {
+          totalDividendByCurrency: { THB: 100, USD: 5 },
+          bySymbol: [
+            { symbol: 'PTT', currency: 'THB', total: 100 },
+            { symbol: 'AAPL', currency: 'USD', total: 5 },
+          ],
+          recent: [],
+        },
+      })
+    );
+
+    expect(html).toContain('100.00');
+    expect(html).toContain('บาท');
+    expect(html).toContain('5.00');
+    expect(html).toContain('USD');
+  });
+
+  test('มี dividend_reversal ใน "รายการล่าสุด" → ติดป้าย "ยกเลิกปันผล"', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(DividendSummaryPanel, {
+        summary: {
+          totalDividendByCurrency: { THB: 0, USD: 0 },
+          bySymbol: [{ symbol: 'PTT', currency: 'THB', total: 0 }],
+          recent: [
+            { date: '2026-03-01', symbol: 'PTT', currency: 'THB', amountThb: 100, type: 'dividend' },
+            {
+              date: '2026-03-05',
+              symbol: 'PTT',
+              currency: 'THB',
+              amountThb: 100,
+              type: 'dividend_reversal',
+            },
+          ],
+        },
+      })
+    );
+
+    expect(html).toContain('ยกเลิกปันผล');
   });
 });

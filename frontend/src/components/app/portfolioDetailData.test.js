@@ -17,18 +17,26 @@ vi.mock('../../lib/portfolioApi.js', () => ({
   getAllocation: vi.fn(),
   getAssetProfit: vi.fn(),
   getPortfolioGrowth: vi.fn(),
+  getPortfolioDividendSummary: vi.fn(),
 }));
 
-import { getAllocation, getAssetProfit, getPortfolioGrowth } from '../../lib/portfolioApi.js';
+import {
+  getAllocation,
+  getAssetProfit,
+  getPortfolioGrowth,
+  getPortfolioDividendSummary,
+} from '../../lib/portfolioApi.js';
 import {
   allocationCacheKey,
   profitCacheKey,
   portfolioGrowthCacheKey,
+  dividendSummaryCacheKey,
   holdingsForPortfolio,
   assetCountByPortfolio,
   fetchAllocationCached,
   fetchProfitsForPortfolio,
   fetchPortfolioGrowthCached,
+  fetchDividendSummaryCached,
   MAX_PROFIT_FETCH,
 } from './portfolioDetailData.js';
 
@@ -47,6 +55,11 @@ beforeEach(() => {
   getAllocation.mockResolvedValue({ groups: [], totalValueThb: 0, isEmpty: true });
   getAssetProfit.mockResolvedValue({ profitLoss: 10, profitLossPercent: 1 });
   getPortfolioGrowth.mockResolvedValue([{ month: '2026-09', count: 1 }]);
+  getPortfolioDividendSummary.mockResolvedValue({
+    totalDividendByCurrency: { THB: 0, USD: 0 },
+    bySymbol: [],
+    recent: [],
+  });
 });
 
 describe('กรอง/นับแถวตามพอร์ต — ไม่มีการคำนวณเงินเลย', () => {
@@ -238,5 +251,35 @@ describe('⭐ fetchPortfolioGrowthCached — กราฟเงินลงท�
 
   test('Cache Key แยกพอร์ตออกจากกันจริง', () => {
     expect(portfolioGrowthCacheKey(P1)).not.toBe(portfolioGrowthCacheKey(P2));
+  });
+});
+
+describe('⭐ fetchDividendSummaryCached — สรุปปันผลต้องเจาะจงพอร์ต/ทั้งบัญชีให้ถูก', () => {
+  test('⭐ มี portfolioId → ยิง getPortfolioDividendSummary ด้วยพอร์ตนั้น', async () => {
+    await fetchDividendSummaryCached(new Map(), P1);
+
+    expect(getPortfolioDividendSummary).toHaveBeenCalledWith(P1);
+  });
+
+  // ต่างจาก fetchPortfolioGrowthCached — "ไม่มีพอร์ต" ที่นี่แปลว่า "ทั้งบัญชี"
+  // (ต้องยิงจริง ไม่ใช่คืน [] เฉยๆ)
+  test('⭐ ไม่มี portfolioId → สรุปทั้งบัญชี (ยิงจริง ไม่ใช่ [])', async () => {
+    await fetchDividendSummaryCached(new Map(), undefined);
+
+    expect(getPortfolioDividendSummary).toHaveBeenCalledWith(undefined);
+  });
+
+  test('⭐ กดเข้าพอร์ตเดิมซ้ำ → ใช้ค่าที่จำไว้ ไม่ยิง API ซ้ำ', async () => {
+    const cache = new Map();
+    await fetchDividendSummaryCached(cache, P1);
+    await fetchDividendSummaryCached(cache, P1);
+
+    expect(getPortfolioDividendSummary).toHaveBeenCalledTimes(1);
+  });
+
+  test('Cache Key ของ "ทั้งบัญชี" ต้องแยกจาก Cache Key ของพอร์ตใดๆ', () => {
+    expect(dividendSummaryCacheKey(undefined)).not.toBe(dividendSummaryCacheKey(P1));
+    expect(dividendSummaryCacheKey(null)).toBe(dividendSummaryCacheKey(undefined));
+    expect(dividendSummaryCacheKey(P1)).not.toBe(dividendSummaryCacheKey(P2));
   });
 });

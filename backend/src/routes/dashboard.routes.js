@@ -18,6 +18,8 @@ router.get('/portfolio', dashboardController.getPortfolio);
 router.get('/history', dashboardController.getHistory);
 // S8 — กราฟเงินลงทุนสะสมรายพอร์ต (หน้ารายละเอียดพอร์ต /app/portfolio)
 router.get('/portfolio-growth', dashboardController.getPortfolioGrowth);
+// S8 — สรุปเงินปันผลที่เคยได้รับ (portfolioId Optional — ไม่ส่ง = ทั้งบัญชี)
+router.get('/dividend-summary', dashboardController.getDividendSummary);
 router.get('/profit/:symbol', dashboardController.getProfit);
 router.get('/me', dashboardController.getMe);
 // S8 — เปิดรูปสลิปต้นฉบับของธุรกรรม (302 → Signed URL อายุสั้น) ผ่าน requireAuth +

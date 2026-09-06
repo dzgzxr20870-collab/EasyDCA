@@ -1,4 +1,9 @@
-import { getAllocation, getAssetProfit, getPortfolioGrowth } from '../../lib/portfolioApi.js';
+import {
+  getAllocation,
+  getAssetProfit,
+  getPortfolioGrowth,
+  getPortfolioDividendSummary,
+} from '../../lib/portfolioApi.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // portfolioDetailData — การตัดสินใจ "ยิง API อะไร เมื่อไหร่" ของหน้าพอร์ต
@@ -46,6 +51,13 @@ export function profitCacheKey(portfolioId, symbol, brokerId) {
 
 export function portfolioGrowthCacheKey(portfolioId) {
   return `growth|${portfolioId}`;
+}
+
+// ⚠️ ต่างจาก growth (บังคับ portfolioId เสมอ) — สรุปปันผล portfolioId Optional
+// (undefined = ทั้งบัญชี) จึงต้องมี Key แยกสำหรับ "ทั้งบัญชี" ด้วย ไม่ใช้ portfolioId
+// ตรงๆ เป็น Key เพราะ undefined จะกลายเป็น string "undefined" ที่อ่านสับสน
+export function dividendSummaryCacheKey(portfolioId) {
+  return `dividend|${portfolioId ?? '__all__'}`;
 }
 
 // แถวที่อยู่ในพอร์ตนี้ — กรองล้วน ไม่คำนวณอะไรเลย
@@ -122,6 +134,19 @@ export async function fetchPortfolioGrowthCached(cache, portfolioId) {
   if (cache.has(key)) return cache.get(key);
 
   const data = await getPortfolioGrowth(portfolioId);
+  cache.set(key, data);
+  return data;
+}
+
+// ── ดึงสรุปเงินปันผล แบบจำผล ─────────────────────────────────────────────
+// portfolioId undefined/null = สรุปทั้งบัญชี (ต่างจาก fetchPortfolioGrowthCached
+// ที่คืน [] ทันทีเมื่อไม่มี portfolioId — ที่นี่ "ไม่มีพอร์ต" มีความหมายจริง คือ
+// ภาพรวมทั้งบัญชี ไม่ใช่กรณีที่ยังไม่ได้เปิดพอร์ตแล้วไม่ต้องยิงอะไรเลย)
+export async function fetchDividendSummaryCached(cache, portfolioId) {
+  const key = dividendSummaryCacheKey(portfolioId);
+  if (cache.has(key)) return cache.get(key);
+
+  const data = await getPortfolioDividendSummary(portfolioId ?? undefined);
   cache.set(key, data);
   return data;
 }
