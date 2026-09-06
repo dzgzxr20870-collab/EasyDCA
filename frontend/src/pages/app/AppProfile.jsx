@@ -105,8 +105,10 @@ function AppProfile() {
                   {p.isDefault ? '⭐ ' : ''}
                   {p.name}
                 </strong>
-                <small>{p.type}</small>
-                {p.canWrite === false && <small>เพิ่มรายการใหม่ไม่ได้</small>}
+                <small className="demo-portfolioitem__meta">{p.type}</small>
+                {p.canWrite === false && (
+                  <small className="demo-portfolioitem__locked">เพิ่มรายการใหม่ไม่ได้</small>
+                )}
 
                 {/* ปุ่มโผล่เฉพาะตอนมีพอร์ตมากกว่า 1 อัน — มีพอร์ตเดียวเปลี่ยนไปก็
                     ไม่มีความหมาย (Backend ตอบ VALIDATION_ERROR ในกรณีนั้น) */}

@@ -209,6 +209,24 @@
 .demo-chip { flex: 1; border: 1px solid var(--line2); background: var(--bg); border-radius: 12px; padding: 10px; font-size: 13px; font-weight: 700; color: var(--ink2); cursor: pointer; }
 .demo-chip-on { background: linear-gradient(135deg, var(--mint), var(--leaf-deep)); border-color: transparent; color: #fff; }
 
+/* ── กลุ่มปุ่มเลือกประเภท (ซื้อ/ขาย/ปันผล) — <label>+<input type="radio"> จริง
+   (ไม่ใช่ .demo-chip <button> ด้านบน) — Orphan Class Fix (พรอมต์ ก.ย. 2569):
+   .demo-typegroup/.is-disabled ไม่เคยถูกนิยามมาก่อนเลย ห้ามเปลี่ยนเป็น <button>
+   (กระทบ Accessibility/Form Semantics) จึงจัดหน้าตาให้ใกล้เคียง .demo-chip
+   ที่สุดด้วย CSS ล้วน — Checked ใช้ :has() (รองรับ Chrome/Safari/Firefox
+   เวอร์ชันปัจจุบันทั้งหมดแล้ว ณ ปีนี้) ไฮไลต์ Gradient เดียวกับ .demo-chip-on */
+.demo-typegroup { display: flex; gap: 8px; }
+.demo-typegroup label {
+  flex: 1; display: flex; align-items: center; justify-content: center; gap: 4px;
+  border: 1px solid var(--line2); background: var(--bg); border-radius: 12px;
+  padding: 10px; font-size: 13px; font-weight: 700; color: var(--ink2); cursor: pointer;
+  text-align: center;
+}
+.demo-typegroup label:has(input:checked) {
+  background: linear-gradient(135deg, var(--mint), var(--leaf-deep)); border-color: transparent; color: #fff;
+}
+.demo-typegroup label.is-disabled { opacity: .55; cursor: not-allowed; }
+
 /* ── AddPortfolioModal: Icon/Color pickers ── */
 .demo-icon-picker { display: flex; flex-wrap: wrap; gap: 8px; }
 .demo-icon-swatch { width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--line2); background: var(--bg); font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
@@ -676,6 +694,26 @@
   background: #fffbeb; color: #92400e; border: 1px solid #fde68a;
 }
 .app-dca-item__actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ── ลิสต์ "พอร์ตของฉัน" (/app/profile) — Orphan Class Fix (พรอมต์ ก.ย. 2569) ──
+   .demo-portfoliolist/.demo-portfolioitem ไม่เคยถูกนิยามมาตั้งแต่ Commit b530d2c
+   (วันเปิด Stage 9) จึงเรนเดอร์เป็น Bullet List Default ของ Browser ล้วนๆ —
+   Pattern เดียวกับ .app-dca-list/.app-dca-item เป๊ะ (การ์ดย่อยเรียงแถว) และ Badge
+   "เพิ่มรายการใหม่ไม่ได้" ใช้โทน Warning เดียวกับ .app-dca-item__flag (ไม่ใช่ตัว
+   เทาจางที่มองไม่เห็น) */
+.demo-portfoliolist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.demo-portfolioitem {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  background: var(--card, #fff); border-radius: var(--r, 20px);
+  padding: 14px 18px; box-shadow: var(--shadow-sm, 0 4px 12px rgba(40,45,49,.05));
+}
+.demo-portfolioitem strong { font-size: 15px; font-weight: 800; }
+.demo-portfolioitem__meta { color: var(--muted, #8B9587); font-weight: 600; }
+.demo-portfolioitem__locked {
+  font-size: 11.5px; font-weight: 800; padding: 3px 10px; border-radius: 999px;
+  background: #fffbeb; color: #92400e; border: 1px solid #fde68a;
+}
+.demo-portfolioitem .demo-btn { margin-left: auto; }
 
 /* ── โดนัทสัดส่วนพอร์ต ───────────────────────────────────────────────────
    ⚠️ .app-donut--empty ต้องสูงพอให้เห็นว่า "มีพื้นที่กราฟอยู่แต่ยังไม่มีข้อมูล"

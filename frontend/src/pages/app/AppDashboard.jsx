@@ -61,8 +61,8 @@ function formatThb(n) {
 function StatTile({ label, value, unit = 'บาท', note }) {
   return (
     <div className="demo-stat">
-      <span className="demo-stat__label">{label}</span>
-      <strong className="demo-stat__value">
+      <span className="demo-stat-t">{label}</span>
+      <strong className="demo-stat-v">
         {value}
         {unit ? <small> {unit}</small> : null}
       </strong>
