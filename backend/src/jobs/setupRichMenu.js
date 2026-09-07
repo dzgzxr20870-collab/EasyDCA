@@ -51,7 +51,7 @@ function buildRichMenuPayload() {
   // ลิงก์ตรงเข้าหน้าในแอปได้เลย ถ้า JWT ใน Memory ยังไม่มี Route Guard ของแต่ละหน้า
   // จะ stashReturnTo + เด้งไป Login ให้เอง แล้ว Login พากลับมาหน้าเดิมหลัง Verify
   // เสร็จ (Return-To Pattern เดียวกับที่ใช้อยู่แล้วทั่วเว็บ)
-  const dashboardUrl = buildExternalUrl('/dashboard');
+  const dashboardUrl = buildExternalUrl('/app/dashboard');
   const premiumUrl = buildExternalUrl('/premium');
   if (!dashboardUrl || !premiumUrl) {
     // Fail-fast ก่อนยิง LINE API เลย — ดีกว่าสร้าง Rich Menu ที่มีปุ่มลิงก์พังค้าง

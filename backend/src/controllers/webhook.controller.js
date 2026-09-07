@@ -379,7 +379,7 @@ function buildPortfolioPickerFrom(user, commandType, symbol, portfolioIds, portf
   return flexMessage.buildPortfolioPickerMessage(commandType, symbol, choices, buy, {
     reason,
     // null ได้ (ยังไม่ตั้ง FRONTEND_URL) — ตัวสร้างข้อความรองรับไว้แล้ว
-    manageUrl: buildExternalUrl('/dashboard'),
+    manageUrl: buildExternalUrl('/app/portfolio'),
   });
 }
 
@@ -1250,7 +1250,7 @@ async function routePostback(user, data) {
     // "ใช้ไม่ได้เลย" กับ liff.line.me ตาม LINE Docs จึงต้องเลิกใช้ Domain นั้นด้วย)
     // Login/JWT ยังทำงานถูกต้องเหมือนเดิม (Login.jsx ไม่ได้พึ่งการเปิดผ่าน LIFF)
     case 'open_dashboard': {
-      const dashboardUrl = buildExternalUrl('/dashboard');
+      const dashboardUrl = buildExternalUrl('/app/dashboard');
       if (!dashboardUrl) {
         // FRONTEND_URL ไม่ได้ตั้งค่า — throw ให้ replyWithError จับแล้ว Log +
         // ตอบข้อความ Error ทั่วไปแทน (Pattern เดียวกับ Error อื่นทั้งไฟล์นี้ ไม่ตอบ
