@@ -337,6 +337,7 @@
 }
 @media (max-width: 620px) {
   .demo-stats { grid-template-columns: 1fr 1fr; }
+  .demo-stat-v { font-size: 20px; }
   .demo-alloc-body { flex-direction: column; align-items: stretch; }
   .demo-donut-wrap { align-self: center; }
 }
