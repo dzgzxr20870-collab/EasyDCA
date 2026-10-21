@@ -336,7 +336,9 @@ async function findPremiumExpiringBefore(cutoff, now = new Date()) {
     throw new Error(`Failed to find premium users expiring soon: ${error.message}`);
   }
 
-  return (data ?? []).map(toUser);
+  // ตัดผู้ใช้ที่ถูกลบข้อมูลทิ้ง — line_user_id ของเขาเป็น `anonymized-<id>` ไม่ใช่ null
+  // (ผลตรวจระบบ 21 ต.ค. 2569 ข้อ 2) Job เช็คแค่ `!lineUserId` จึงกันไม่ได้
+  return (data ?? []).map(toUser).filter((u) => !u.anonymizedAt);
 }
 
 // ปั๊มว่าเตือนแล้ว — เรียก "หลัง" Push สำเร็จเท่านั้น (ถ้าปั๊มก่อนแล้ว Push พัง ผู้ใช้

@@ -1,4 +1,5 @@
 const { supabaseAdmin } = require('../config/supabase');
+const { requireUserId } = require('../utils/ownership.util');
 
 // ตารางเก็บการตั้งเตือน DCA (migrations/002_create_dca_reminders.sql)
 // ทุก Query ใช้ supabaseAdmin (service_role) เพราะ RLS เปิดแบบ service_role
@@ -87,10 +88,15 @@ async function findActiveByUser(userId) {
 // เพื่อได้ line_user_id ไว้ Push ได้เลย การกรองว่าตรง "วันนี้" จริงไหม (day_of_week
 // /day_of_month + สิ้นเดือน) ทำต่อที่ Service Layer เพราะ Logic สิ้นเดือนไม่เหมาะ
 // เขียนใน SQL (migration 002 ระบุให้ App Layer จัดการ)
+//
+// ⚠️ ตัดแถวของผู้ใช้ที่ถูกลบข้อมูล (users.anonymized_at ไม่ใช่ null) ทิ้งที่นี่ — ห้ามพึ่ง
+// `!lineUserId` ที่ Job: anonymize() เขียน line_user_id เป็น `anonymized-<id>` (NOT NULL)
+// ไม่ใช่ null จึงหลุดไปถึง LINE Push API ทุกวัน (ผลตรวจระบบ 21 ต.ค. 2569 ข้อ 2) กรองใน
+// App หลัง Query (ไม่ใช่ใน PostgREST) เพื่อให้ Regression Test พิสูจน์ได้ด้วยข้อมูลจริง
 async function findActiveDueCandidates(dateStr) {
   const { data, error } = await supabaseAdmin
     .from('dca_reminders')
-    .select('*, users(line_user_id)')
+    .select('*, users(line_user_id, anonymized_at)')
     .eq('active', true)
     .or(`last_notified_date.is.null,last_notified_date.neq.${dateStr}`);
 
@@ -98,7 +104,26 @@ async function findActiveDueCandidates(dateStr) {
     throw new Error(`Failed to find due reminder candidates for ${dateStr}: ${error.message}`);
   }
 
-  return data.map(toReminder);
+  return data.filter((row) => !row.users?.anonymized_at).map(toReminder);
+}
+
+// Soft-delete Reminder ที่ยัง active "ทั้งหมด" ของ user — ใช้ตอน PDPA Erasure
+// (userErasure.service) ไม่ลบแถวจริง (DATABASE.md § 8) คืนจำนวนแถวที่ถูกปิด
+async function deactivateAllForUser(userId) {
+  requireUserId(userId, 'dcaReminder.deactivateAllForUser');
+
+  const { data, error } = await supabaseAdmin
+    .from('dca_reminders')
+    .update({ active: false })
+    .eq('user_id', userId)
+    .eq('active', true)
+    .select('id');
+
+  if (error) {
+    throw new Error(`Failed to deactivate reminders for user ${userId}: ${error.message}`);
+  }
+
+  return data ? data.length : 0;
 }
 
 // ── Web DCA Planner (S8 R3) — CRUD by id สำหรับ /api/v1/dca-plans ────────────
@@ -204,6 +229,7 @@ module.exports = {
   deactivateActive,
   findActiveByUser,
   findActiveDueCandidates,
+  deactivateAllForUser,
   findLatestPerSymbolByUser,
   findByIdForUser,
   updateByIdForUser,

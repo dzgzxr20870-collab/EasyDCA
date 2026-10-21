@@ -5,6 +5,7 @@ const portfolioRepository = require('../repositories/portfolio.repository');
 const brokerRepository = require('../repositories/broker.repository');
 const storageService = require('../services/storage.service');
 const erasureLogRepository = require('../repositories/erasureLog.repository');
+const dcaReminderRepository = require('../repositories/dcaReminder.repository');
 const logger = require('../utils/logger.util');
 
 // PDPA Self-Service Erasure — orchestrate ทั้ง Flow หลัง User ยืนยัน 2-Step Confirm
@@ -24,6 +25,7 @@ const logger = require('../utils/logger.util');
 // ── ⚠️ อะไรถูกล้าง อะไรถูกเก็บ และทำไม (มติ Founder 27 ส.ค. 2569) ────────────
 //   ล้าง: users (line_user_id/display_name/picture_url) · รูปสลิปทั้งหมดใน Storage
 //         · **ชื่อ portfolios/brokers** ← เพิ่มรอบนี้
+//   ปิด:  dca_reminders ที่ active ทั้งหมด (Soft-delete — ผลตรวจระบบ 21 ต.ค. 2569)
 //   เก็บ: transactions/assets/payments แถวจริง (Immutable Ledger — เป็นหลักฐาน
 //         ทางบัญชีและเป็นฐานของยอดเงินที่ผู้ใช้เคยตกลงไว้)
 //
@@ -85,6 +87,21 @@ async function eraseUserData(userId, { hadPendingPayment = false } = {}) {
   const anonymizedPortfolioCount = await portfolioRepository.anonymizeNamesForUser(userId);
   const anonymizedBrokerCount = await brokerRepository.anonymizeNamesForUser(userId);
 
+  // ── ปิดการแจ้งเตือน DCA ทั้งหมด (ผลตรวจระบบ 21 ต.ค. 2569 ข้อ 2) ─────────────
+  // เดิมไม่ได้ปิด → cron:dca-reminder ยัง Push หา `anonymized-<id>` ทุกวัน
+  // Error Isolated โดยเจตนา (ต่างจากการล้างชื่อด้านบน): แถว Reminder ไม่ใช่ PII และ
+  // dcaReminder.findActiveDueCandidates ตัดผู้ใช้ที่ถูกลบทิ้งอยู่แล้วอีกชั้น — ไม่ควรทำให้
+  // คำขอลบข้อมูลตาม PDPA ทั้งคำขอล้มเพราะขั้นนี้
+  let deactivatedReminderCount = 0;
+  try {
+    deactivatedReminderCount = await dcaReminderRepository.deactivateAllForUser(userId);
+  } catch (err) {
+    logger.error('failed to deactivate dca reminders during erasure', {
+      userId,
+      error: err.message,
+    });
+  }
+
   await userRepository.anonymize(userId);
 
   try {
@@ -104,6 +121,7 @@ async function eraseUserData(userId, { hadPendingPayment = false } = {}) {
     deletedFacebookProofCount,
     anonymizedPortfolioCount,
     anonymizedBrokerCount,
+    deactivatedReminderCount,
     hadPendingPayment,
   });
 

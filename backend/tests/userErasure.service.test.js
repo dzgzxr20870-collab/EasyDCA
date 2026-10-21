@@ -9,6 +9,7 @@ jest.mock('../src/repositories/erasureLog.repository');
 // tests/erasureAnonymizeLabels.regression.test.js
 jest.mock('../src/repositories/portfolio.repository');
 jest.mock('../src/repositories/broker.repository');
+jest.mock('../src/repositories/dcaReminder.repository');
 
 const userRepository = require('../src/repositories/user.repository');
 const paymentRepository = require('../src/repositories/payment.repository');
@@ -16,6 +17,7 @@ const storageService = require('../src/services/storage.service');
 const erasureLogRepository = require('../src/repositories/erasureLog.repository');
 const portfolioRepository = require('../src/repositories/portfolio.repository');
 const brokerRepository = require('../src/repositories/broker.repository');
+const dcaReminderRepository = require('../src/repositories/dcaReminder.repository');
 const userErasureService = require('../src/services/userErasure.service');
 
 const USER_ID = 'user-1';
@@ -26,6 +28,7 @@ beforeEach(() => {
   storageService.deleteAllTransactionSlipsForUser.mockResolvedValue(0);
   portfolioRepository.anonymizeNamesForUser.mockResolvedValue(0);
   brokerRepository.anonymizeNamesForUser.mockResolvedValue(0);
+  dcaReminderRepository.deactivateAllForUser.mockResolvedValue(0);
 });
 
 describe('eraseUserData', () => {
@@ -180,5 +183,37 @@ describe('eraseUserData', () => {
 
     await expect(userErasureService.eraseUserData(USER_ID)).rejects.toThrow('db blip');
     expect(erasureLogRepository.create).not.toHaveBeenCalled();
+  });
+  // ผลตรวจระบบ 21 ต.ค. 2569 ข้อ 2 — ปิด Reminder ก่อน Anonymize (ระหว่างนั้นยังรู้ user_id เดิม)
+  test('ปิด dca_reminders ของ user นี้ "ก่อน" Anonymize', async () => {
+    const callOrder = [];
+    paymentRepository.findAllByUserId.mockResolvedValue([]);
+    storageService.deleteAllSlipsForUser.mockResolvedValue(0);
+    dcaReminderRepository.deactivateAllForUser.mockImplementation(async (id) => {
+      callOrder.push(`deactivateAllForUser:${id}`);
+      return 2;
+    });
+    userRepository.anonymize.mockImplementation(async () => {
+      callOrder.push('anonymize');
+      return { id: USER_ID };
+    });
+    erasureLogRepository.create.mockResolvedValue({ id: 'log-1' });
+
+    await userErasureService.eraseUserData(USER_ID);
+
+    expect(callOrder).toEqual([`deactivateAllForUser:${USER_ID}`, 'anonymize']);
+  });
+
+  test('deactivateAllForUser ล้มเหลว → ไม่ Throw ยัง Anonymize + บันทึก Log ต่อ (Error Isolated)', async () => {
+    paymentRepository.findAllByUserId.mockResolvedValue([]);
+    storageService.deleteAllSlipsForUser.mockResolvedValue(0);
+    dcaReminderRepository.deactivateAllForUser.mockRejectedValue(new Error('reminders down'));
+    userRepository.anonymize.mockResolvedValue({ id: USER_ID });
+    erasureLogRepository.create.mockResolvedValue({ id: 'log-1' });
+
+    await expect(userErasureService.eraseUserData(USER_ID)).resolves.toBeDefined();
+
+    expect(userRepository.anonymize).toHaveBeenCalledWith(USER_ID);
+    expect(erasureLogRepository.create).toHaveBeenCalled();
   });
 });

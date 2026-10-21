@@ -149,6 +149,14 @@ function seed() {
 
     payments: [],
     erasure_logs: [],
+
+    // ผลตรวจระบบ 21 ต.ค. 2569 ข้อ 2 — Reminder ของ A ต้องถูกปิดทั้งหมด (ทั้ง 2 Symbol)
+    // ส่วนของ B ต้อง active เหมือนเดิม (Fake บังคับ .eq('user_id') จริง)
+    dca_reminders: [
+      { id: 'ra000000-0000-4000-8000-000000000001', user_id: USER_A, symbol: 'BTC', active: true },
+      { id: 'ra000000-0000-4000-8000-000000000002', user_id: USER_A, symbol: 'SET', active: true },
+      { id: 'rb000000-0000-4000-8000-000000000009', user_id: USER_B, symbol: 'BTC', active: true },
+    ],
   });
 }
 
@@ -253,6 +261,23 @@ describe('⭐ ล้างชื่อ portfolios / brokers ตอน Erasure', 
 
     expect(result.anonymizedPortfolioCount).toBe(0);
     expect(result.anonymizedBrokerCount).toBe(0);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+describe('ปิดการแจ้งเตือน DCA ตอน Erasure (ผลตรวจระบบ 21 ต.ค. 2569 ข้อ 2)', () => {
+  test('Reminder ของผู้ขอลบต้องถูกปิด (active=false) ทุกแถว — ไม่ลบแถวทิ้ง', async () => {
+    await userErasureService.eraseUserData(USER_A);
+
+    const mine = rowsOf('dca_reminders', USER_A);
+    expect(mine).toHaveLength(2);
+    expect(mine.every((r) => r.active === false)).toBe(true);
+  });
+
+  test('🔒 Reminder ของผู้ใช้คนอื่นต้องยัง active เหมือนเดิม', async () => {
+    await userErasureService.eraseUserData(USER_A);
+
+    expect(rowsOf('dca_reminders', USER_B)[0].active).toBe(true);
   });
 });
 

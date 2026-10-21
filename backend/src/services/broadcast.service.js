@@ -47,7 +47,10 @@ async function sendBroadcast(
   { targetGroup, messageType, message, sentBy },
   { delayMs = DEFAULT_DELAY_MS } = {}
 ) {
-  const allUsers = await userRepository.findAll();
+  // ตัดผู้ใช้ที่ถูกลบข้อมูล (PDPA) ออกก่อนแบ่งกลุ่ม — ไม่ใช่แค่ Push ไม่ผ่าน แต่ต้องไม่ถูก
+  // นับเป็นผู้รับเลย (line_user_id ของเขาเป็น `anonymized-<id>` ไม่ใช่ null) กรองที่นี่
+  // แทน findAll เพราะหน้า Admin ยังต้องเห็นบัญชีที่ถูกลบ (ผลตรวจระบบ 21 ต.ค. 2569 ข้อ 2)
+  const allUsers = (await userRepository.findAll()).filter((u) => !u.anonymizedAt);
   const recipients = filterByTargetGroup(allUsers, targetGroup);
 
   const lineMessage = { type: 'text', text: message };

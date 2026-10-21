@@ -30,8 +30,11 @@ async function runPlanDowngrade(now = new Date()) {
       downgraded += 1;
 
       // Push แจ้งผู้ใช้แบบ Best-effort — ล้มเหลวไม่ Rollback การลดชั้น (DB เปลี่ยนแล้ว)
+      // ⚠️ ข้ามผู้ใช้ที่ถูกลบข้อมูล (PDPA) — line_user_id ของเขาเป็น `anonymized-<id>` ไม่ใช่
+      // null จึงเช็ค `lineUserId` อย่างเดียวไม่พอ กรองตรงนี้ ไม่ใช่ที่ findExpiredPremiumUsers
+      // เพราะการลดชั้นใน DB ยังต้องเกิดกับทุกคน (ผลตรวจระบบ 21 ต.ค. 2569 ข้อ 2)
       try {
-        if (user.lineUserId) {
+        if (user.lineUserId && !user.anonymizedAt) {
           await lineService.pushMessage(user.lineUserId, flexMessage.buildPlanDowngradedMessage());
         }
       } catch (pushErr) {

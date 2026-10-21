@@ -227,10 +227,14 @@ async function findByIds(assetIds, userId) {
 //
 // PostgREST ไม่มี DISTINCT ตรงๆ — ดึงทุกแถว Asset Active แล้ว Dedupe ราย user_id
 // ในชั้น App (จำนวน Asset ต่อ User น้อย ไม่กระทบ Performance อย่างมีนัยสำคัญ)
+//
+// ⚠️ ตัดผู้ใช้ที่ถูกลบข้อมูล (users.anonymized_at ไม่ใช่ null) ทิ้งที่นี่ — Asset ของเขายังอยู่
+// (Immutable Ledger) แต่ line_user_id เป็น `anonymized-<id>` ไม่ใช่ null จึงห้ามพึ่ง
+// `!lineUserId` ที่ Job (ผลตรวจระบบ 21 ต.ค. 2569 ข้อ 2 — ดู dcaReminder.repository)
 async function findUserIdsWithActiveAssets() {
   const { data, error } = await supabaseAdmin
     .from('assets')
-    .select('user_id, users(line_user_id)')
+    .select('user_id, users(line_user_id, anonymized_at)')
     .eq('is_active', true);
 
   if (error) {
@@ -239,6 +243,7 @@ async function findUserIdsWithActiveAssets() {
 
   const seen = new Map();
   for (const row of data) {
+    if (row.users?.anonymized_at) continue;
     if (seen.has(row.user_id)) continue;
     seen.set(row.user_id, {
       userId: row.user_id,

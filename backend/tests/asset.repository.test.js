@@ -123,13 +123,13 @@ describe('create — เรียกผ่าน RPC create_asset_locked (migrat
 });
 
 describe('findUserIdsWithActiveAssets', () => {
-  test('Query assets ที่ is_active = true พร้อม Join users(line_user_id)', async () => {
+  test('Query assets ที่ is_active = true พร้อม Join users(line_user_id, anonymized_at)', async () => {
     __query.eq.mockResolvedValue({ data: [], error: null });
 
     await assetRepository.findUserIdsWithActiveAssets();
 
     expect(supabaseAdmin.from).toHaveBeenCalledWith('assets');
-    expect(__query.select).toHaveBeenCalledWith('user_id, users(line_user_id)');
+    expect(__query.select).toHaveBeenCalledWith('user_id, users(line_user_id, anonymized_at)');
     expect(__query.eq).toHaveBeenCalledWith('is_active', true);
   });
 
