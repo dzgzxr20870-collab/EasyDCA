@@ -1416,7 +1416,7 @@ describe('handleEvent — Dashboard Postback', () => {
     await handleEvent(postbackEvent('action=open_dashboard'));
 
     const reply = lastReplyText();
-    expect(reply).toContain('https://app.easydca.test/dashboard?openExternalBrowser=1');
+    expect(reply).toContain('https://app.easydca.test/app/dashboard?openExternalBrowser=1');
   });
 
   test('open_dashboard: ไม่มี liff.line.me ปนอยู่เลย (สาเหตุเดิมของบั๊ก — ต้องไม่กลับมา)', async () => {
